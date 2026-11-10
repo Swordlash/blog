@@ -5,12 +5,14 @@
 -- of each backing.
 module Test.Server.WaysIn (unitSpec, spec) where
 
+import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Database.Beam (insert, insertValues, runInsert)
 import Protolude
 import Test.Database (Backing, placeOptionsOf, withConnectionTo)
 import Test.Hspec
+import Test.Server.Program (cLocale, placeArgsOf, runBytes, wikiServerProgram)
 import Test.Storage.Fixture (decodableRecord, withPlaceIn)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Login (..), Password (..))
@@ -126,6 +128,11 @@ summarySpec = describe "wiki-server check, how the accounts sign in" $ do
     length lines' `shouldBe` 5 + listedNoWayIn + 1
     -- Twenty, and no line for none more.
     waysInLines (waysIn [] (take listedNoWayIn crowd)) `shouldSatisfy` all (not . T.isInfixOf "more")
+  it "writes a line break or another control character in a login or a provider's name as an escape, keeping one line for each" $ do
+    let odd' = accountWith "old\nlogin" noColumns False ["git\rlab"] False
+    waysInLines (waysIn [] [odd']) `shouldSatisfy` elem "    old\\u000alogin: only a provider the settings no longer name (git\\u000dlab)"
+    brokenCredentials [accountWith "old\nlogin" (columns (Just decodableRecord) Nothing Nothing) False [] False]
+      `shouldSatisfy` all (\l -> not ("\n" `T.isInfixOf` l) && "old\\u000alogin" `T.isInfixOf` l)
   it "says there are none of each on a wiki with no accounts" $
     waysInLines (waysIn [] [])
       `shouldBe` [ "Accounts: 0 (0 enabled, 0 disabled). How the enabled ones sign in:"
@@ -148,6 +155,24 @@ spec backing = describe "wiki-server check, the accounts" $ do
           lines' `shouldSatisfy` any (\l -> ("The account broken.one (u-x) has " <> line) `T.isPrefixOf` l)
           lines' `shouldSatisfy` all (not . T.isInfixOf "anna")
         other -> expectationFailure ("expected the check to refuse the account, got " <> show other)
+  it "prints a login and a name beyond ASCII as UTF-8 in the C locale, in check, a refusal and users list" $ withPlaceIn backing $ \at -> do
+    _ <- migrateDatabase at
+    -- A login from before logins were ASCII, with no password; a name
+    -- beyond ASCII with one; and a login beyond ASCII whose record lacks
+    -- its stretch.
+    withConnectionTo at $ \c -> runDb c (users [("u-lucja", "łucja", False, noColumns), ("u-zofia", "Zażółć", False, columns (Just decodableRecord) (Just goodStretch) Nothing)])
+    program <- wikiServerProgram
+    environment <- cLocale
+    (checked, out, _) <- runBytes environment program ("check" : placeArgsOf at)
+    checked `shouldBe` ExitSuccess
+    out `shouldSatisfy` BS.isInfixOf (encodeUtf8 "\n    łucja: no password set\n")
+    (listed, table, _) <- runBytes environment program (["users", "list"] <> placeArgsOf at)
+    listed `shouldBe` ExitSuccess
+    table `shouldSatisfy` BS.isInfixOf (encodeUtf8 "Zażółć  ")
+    withConnectionTo at $ \c -> runDb c (users [("u-jerzy", "jerzy-żółw", False, columns (Just decodableRecord) Nothing Nothing)])
+    (refused, _, err) <- runBytes environment program ("check" : placeArgsOf at)
+    refused `shouldBe` ExitFailure 5
+    err `shouldSatisfy` BS.isInfixOf (encodeUtf8 "The account jerzy-żółw (u-jerzy) has an OPAQUE record without its stretch")
   it "passes a wiki with one account of each kind, and says how each signs in" $ withPlaceIn backing $ \at -> do
     _ <- migrateDatabase at
     withConnectionTo at $ \c -> runDb c $ do

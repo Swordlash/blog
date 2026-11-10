@@ -33,11 +33,15 @@ module Wiki.Server.WaysIn
   , waysIn
   , waysInLines
   , listedNoWayIn
+
+    -- * Text in a line of output
+  , printable
   )
 where
 
 import Data.Text qualified as T
 import Protolude
+import Text.Printf (printf)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Login (..))
 import Wiki.Server.Opaque (decodeStored)
@@ -82,7 +86,7 @@ credentialProblem columns = case readPasswordColumns columns of
 -- check reports beside the other rules' lines.
 brokenCredentials :: [AccountWays] -> [Text]
 brokenCredentials accounts =
-  [ "The account " <> a.login.text <> " (" <> a.id.text <> ") has " <> why <> "."
+  [ "The account " <> printable a.login.text <> " (" <> printable a.id.text <> ") has " <> why <> "."
   | a <- accounts
   , Just why <- [credentialProblem a.password]
   ]
@@ -177,15 +181,24 @@ waysInLines w =
   , "  with a passkey alone: " <> show w.passkey
   , "  no way in: " <> show (length w.none)
   ]
-    <> ["    " <> l.text <> ": " <> reason why | (l, why) <- take listedNoWayIn w.none]
+    <> ["    " <> printable l.text <> ": " <> reason why | (l, why) <- take listedNoWayIn w.none]
     <> ["    and " <> show unnamed <> " more" | unnamed > 0]
   where
     unnamed = length w.none - listedNoWayIn
     enabled = w.password + w.provider + w.passkey + length w.none
     reason = \case
       NoPasswordSet -> "no password set"
-      OnlyRemovedProviders ps -> "only a provider the settings no longer name (" <> T.intercalate ", " ps <> ")"
+      OnlyRemovedProviders ps -> "only a provider the settings no longer name (" <> T.intercalate ", " (map printable ps) <> ")"
 
 -- | How many accounts with no way in 'waysInLines' names: 20.
 listedNoWayIn :: Int
 listedNoWayIn = 20
+
+-- | A login, an id or a provider's name as a line of output shows it: a
+-- control character, a line break above all, written as @\\uXXXX@, so
+-- that text from the database cannot split a line of the output in two.
+-- Logins have held no control character since the rule of
+-- 'Wiki.Core.User.parseLogin', and providers' names are letters, digits
+-- and dashes; this is for a row written before those rules, or by hand.
+printable :: Text -> Text
+printable = T.concatMap (\c -> if isControl c then T.pack (printf "\\u%04x" (ord c)) else T.singleton c)

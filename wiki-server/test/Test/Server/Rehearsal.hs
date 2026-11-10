@@ -19,6 +19,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Database (Backing (..), choiceOf, placeOptionsOf, withConnectionTo, withEmptyPlace)
 import Test.Hspec
 import Test.Server.Fixture (Reply (status), Running (..), cookie, givePassword, send, signInAs, withDemoMoved, withDemoPlace, withDemoRunning)
+import Test.Server.Program (cLocale, placeArgsOf, wikiServerProgram)
 import Wiki.Api.Account (Account (..))
 import Wiki.Api.Types (PersonalSpaceSwitch (..))
 import Wiki.Core.Id (UserId (..))
@@ -28,7 +29,7 @@ import Wiki.Server.Console (listing, runUsers, usersParser)
 import Wiki.Server.CopyDatabase (CopyOptions (..), CopyOutcome (..), runCopy)
 import Wiki.Server.Options (DatabaseChoice (..))
 import Wiki.Server.Password (hashWith, parameters)
-import Wiki.Server.Rehearsal (Check (..), PageAt (..), PageRead (..), PagesRead (..), Seeding (..), Server (..), SpaceRead (..), checks, compareHomes, comparePages, compareWaysIn, isolateCopy, pathAsBuilt, readPages, readSpaces, readUsersList)
+import Wiki.Server.Rehearsal (Check (..), PageAt (..), PageRead (..), PagesRead (..), Seeding (..), Server (..), SpaceRead (..), checks, compareHomes, comparePages, compareWaysIn, consoleEnvironment, isolateCopy, pathAsBuilt, readPages, readSpaces, readUsersList, runConsoleIn)
 import Wiki.Server.Storage (Place (..), migrateDatabase, withStorageAside)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (settingsLike, storeSetting)
@@ -69,6 +70,21 @@ waysInUnitSpec = describe "the upgrade's rehearsal, the ways in check" $ do
       `shouldBe` Right (Map.fromList [("ada", "yes"), ("bea", "no (no password)"), ("cat", "no (disabled)"), ("dot", "no (no password)"), ("zed", "yes")])
   it "reads a wiki with no users as no logins" $
     readUsersList (T.unlines ["There are no users yet: make the first administrator with", "  wiki-server users add --data /x LOGIN --admin"]) `shouldBe` Right Map.empty
+  it "counts a name's width in characters, not in the bytes of UTF-8" $
+    readUsersList (printed [("zofia", "Zażółć Gęślą", False, yes), ("ala", "Ala", True, noPassword)])
+      `shouldBe` Right (Map.fromList [("zofia", "yes"), ("ala", "no (no password)")])
+  it "gives a program it runs a UTF-8 locale when the environment names none, and keeps one that does" $ do
+    consoleEnvironment [("LANG", "C"), ("PATH", "/bin")] `shouldBe` [("LC_ALL", "C.UTF-8"), ("LANG", "C"), ("PATH", "/bin")]
+    consoleEnvironment [("LC_ALL", "POSIX"), ("LANG", "pl_PL.UTF-8")] `shouldBe` [("LC_ALL", "C.UTF-8"), ("LANG", "pl_PL.UTF-8")]
+    consoleEnvironment [] `shouldBe` [("LC_ALL", "C.UTF-8")]
+    consoleEnvironment [("LANG", "pl_PL.UTF-8")] `shouldBe` [("LANG", "pl_PL.UTF-8")]
+    consoleEnvironment [("LC_ALL", ""), ("LC_CTYPE", "en_US.utf8")] `shouldBe` [("LC_ALL", ""), ("LC_CTYPE", "en_US.utf8")]
+  it "reads what a program writes as UTF-8 whatever the locale, and says why one that could not write it failed" $ do
+    environment <- cLocale
+    runConsoleIn environment "sh" [] ["-c", "printf '%s\\n' \"$LC_ALL\"; printf 'Za\\305\\274\\303\\263\\305\\202\\304\\207\\n'"] ""
+      `shouldReturn` Right "C.UTF-8\nZażółć\n"
+    runConsoleIn environment "sh" [] ["-c", "echo '<stdout>: commitAndReleaseBuffer: invalid argument (cannot encode character)' >&2; exit 1"] ""
+      >>= (`shouldSatisfy` either (\why -> "no UTF-8 locale" `T.isInfixOf` why && "--no-rehearsal" `T.isInfixOf` why) (const False))
   it "refuses output that is not the table, rather than guess: another heading, nothing, a row off its columns, an unknown value, a login twice" $ do
     let heading = "LOGIN  NAME  ADMINISTRATOR  SIGNS IN"
     readUsersList "LOGIN  NAME  ROLE\nadmin  Admin  owner\n" `shouldSatisfy` isLeft
@@ -265,6 +281,20 @@ checksSpec backing = describe "the upgrade's rehearsal, its checks" $ do
     withConnectionTo at $ \c -> runDb c (runUpdate (update wikiDb.users (\u -> u.display_name <-. val_ "One  yes\nTwo") (\u -> u.login ==. val_ "editor")))
     verdict <- rehearseCheck "ways in" at serve (withConnectionTo at $ \c -> runDb c (setColumns "editor" Nothing Nothing Nothing))
     verdict `shouldBe` Left "the login editor signed in with a password before the upgrade, and after it users list says no (no password)"
+  it "passes the ways in check, and fails it naming the login, for a login and a name beyond ASCII, with the program's consoles as children in the C locale" $ do
+    program <- wikiServerProgram
+    environment <- cLocale
+    let console at = runConsoleIn environment program (placeArgsOf at)
+        prepare at = do
+          withConnectionTo at $ \c -> runDb c (runUpdate (update wikiDb.users (\u -> (u.login <-. val_ "łucja") <> (u.display_name <-. val_ "Zażółć Gęślą")) (\u -> u.login ==. val_ "editor")))
+          consoleOn at ["users", "password", "łucja"] "łucja's password\n" >>= (`shouldSatisfy` isRight)
+    withDemoPlace backing $ \at serve -> do
+      prepare at
+      rehearseWith console "ways in" at serve pass serve `shouldReturn` Right ()
+    withDemoPlace backing $ \at serve -> do
+      prepare at
+      verdict <- rehearseWith console "ways in" at serve (withConnectionTo at $ \c -> runDb c (setColumns "łucja" Nothing Nothing Nothing)) serve
+      verdict `shouldBe` Left "the login łucja signed in with a password before the upgrade, and after it users list says no (no password)"
   it "cannot drive an old program whose users list is not the table, which the rehearsal ends with 7" $ withDemoRunning backing identity $ \r -> do
     manager <- newManager defaultManagerSettings
     let server = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public, console = \_ _ -> pure (Right "LOGIN  NAME\nadmin  Admin\n")}
@@ -312,16 +342,21 @@ rehearseCheck wanted at serve between = rehearseAcross wanted at serve between s
 -- | 'rehearseCheck' with the after on a server of its own, which serves
 -- what the action between made: the moved wiki, for a move.
 rehearseAcross :: Text -> Place -> (forall a. (Running -> IO a) -> IO a) -> IO () -> (forall a. (Running -> IO a) -> IO a) -> IO (Either Text ())
-rehearseAcross wanted at serve between serveAfter = do
+rehearseAcross = rehearseWith consoleOn
+
+-- | 'rehearseAcross' with this console on a place, in place of the test's
+-- own ('consoleOn'): a program run as a child, as the rehearsal runs one.
+rehearseWith :: (Place -> [Text] -> Text -> IO (Either Text Text)) -> Text -> Place -> (forall a. (Running -> IO a) -> IO a) -> IO () -> (forall a. (Running -> IO a) -> IO a) -> IO (Either Text ())
+rehearseWith consoleAt wanted at serve between serveAfter = do
   manager <- newManager defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro 120_000_000}
   -- Each server's console runs on the database it serves: for a move, the
   -- after's is the moved database.
-  let serverOf r = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public, console = consoleOn r.place}
+  let serverOf r = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public, console = consoleAt r.place}
       orFail :: Text -> Either Text x -> IO x
       orFail what = either (\why -> panic (what <> " of the " <> wanted <> " check failed: " <> why)) pure
   case [c | c@Check {name} <- checks, name == wanted] of
     [Check {holding, seed, before = beforeIt, after = afterIt}] -> holding $ \held -> do
-      seeded <- seed held Seeding {copy = at, console = consoleOn at} >>= orFail "the seed"
+      seeded <- seed held Seeding {copy = at, console = consoleAt at} >>= orFail "the seed"
       fixture <- serve (\r -> beforeIt held seeded manager (serverOf r)) >>= orFail "the before"
       between
       serveAfter (\r -> afterIt held fixture manager (serverOf r))

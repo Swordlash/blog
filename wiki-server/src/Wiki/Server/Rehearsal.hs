@@ -67,6 +67,8 @@ module Wiki.Server.Rehearsal
   , Seeding (..)
   , Server (..)
   , checks
+  , runConsoleIn
+  , consoleEnvironment
 
     -- * The pages check, for its tests
   , PageRead (..)
@@ -90,6 +92,7 @@ module Wiki.Server.Rehearsal
   )
 where
 
+import Control.Concurrent.Async qualified as Async
 import Crypto.Random (getRandomBytes)
 import Data.Aeson (Value (..), eitherDecode)
 import Data.Aeson.Key qualified as Key
@@ -110,10 +113,10 @@ import Options.Applicative
 import Protolude
 import Servant.Client.Core qualified as Servant
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, listDirectory, removePathForcibly)
-import System.Environment (getExecutablePath)
+import System.Environment (getEnvironment, getExecutablePath)
 import System.IO (hClose)
 import System.Posix.Files (setFileMode)
-import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getProcessExitCode, proc, readCreateProcessWithExitCode, terminateProcess, waitForProcess)
+import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getProcessExitCode, proc, terminateProcess, waitForProcess, withCreateProcess)
 import System.Timeout (timeout)
 import Wiki.Api.ServerSettings (ProviderKind (..), kindName)
 import Wiki.App.Account (MonadAccount (..))
@@ -134,6 +137,7 @@ import Wiki.Server.Storage.Layout (PgPrograms (..))
 import Wiki.Server.Storage.Migrate.Code.Step0013 (step0013)
 import Wiki.Server.Storage.Migrate.CodeStep (CodeStep (..))
 import Wiki.Server.Storage.Rows (deleteSettingsLike, storeSetting)
+import Wiki.Server.WaysIn (printable)
 
 --------------------------------------------------------------------------------
 -- The command
@@ -319,14 +323,18 @@ data Server = Server
 -- action ends. The place's options (@--data@ and the database's) are
 -- those the server is started with, and those its console is run with.
 -- What the server writes goes to a log file in the scratch directory, not
--- a pipe: a pipe nobody reads fills up and stops the server. A server that exits, or does not answer within a minute, is
+-- a pipe: a pipe nobody reads fills up and stops the server. The log is
+-- bytes, read as UTF-8; the server runs with a UTF-8 locale
+-- ('consoleEnvironment'), so that an old one does not fail on a name it
+-- logs. A server that exits, or does not answer within a minute, is
 -- reported to @failed@ with the end of its log.
 withServer :: FilePath -> FilePath -> [[Char]] -> (Int -> Int -> [[Char]]) -> (Text -> ExceptT RehearsalOutcome IO a) -> (Server -> ExceptT RehearsalOutcome IO a) -> ExceptT RehearsalOutcome IO a
 withServer logFile program placeArgs args failed act = do
   listen <- liftIO freePort
   admin <- liftIO freePort
   logHandle <- liftIO (openFile logFile WriteMode)
-  (_, _, _, process) <- liftIO (createProcess (proc program (args listen admin)) {std_in = NoStream, std_out = UseHandle logHandle, std_err = UseHandle logHandle})
+  environment <- liftIO (consoleEnvironment <$> getEnvironment)
+  (_, _, _, process) <- liftIO (createProcess (proc program (args listen admin)) {env = Just environment, std_in = NoStream, std_out = UseHandle logHandle, std_err = UseHandle logHandle})
   let server = Server {adminApi = "http://127.0.0.1:" <> show admin <> "/admin/api/v1", public = "http://127.0.0.1:" <> show listen, console = runConsole program placeArgs}
       stop = do
         terminateProcess process
@@ -437,13 +445,52 @@ holdAll (Check name holding seed before after : rest) act =
   ExceptT $ holding $ \h -> runExceptT $ holdAll rest $ \others -> act (Held name (seed h) (before h) (after h) : others)
 
 -- | Run a program's console command on the copy: the arguments, then the
--- copy's place options, with the text on standard input.
+-- copy's place options, with the text on standard input. The program runs
+-- in this process's environment with a UTF-8 locale ('consoleEnvironment'),
+-- and what it writes is read as UTF-8 bytes, whatever this process's
+-- locale is: an old program from before wiki-server set its own encoding
+-- writes in its locale's, and in the C locale it cannot write a name
+-- beyond ASCII at all.
 runConsole :: FilePath -> [[Char]] -> [Text] -> Text -> IO (Either Text Text)
-runConsole program placeArgs args input =
-  try (readCreateProcessWithExitCode (proc program (map toS args <> placeArgs)) (toS input)) <&> \case
+runConsole program placeArgs args input = do
+  environment <- getEnvironment
+  runConsoleIn environment program placeArgs args input
+
+-- | 'runConsole' with this environment in place of this process's: for
+-- the tests, which give it a C locale.
+runConsoleIn :: [([Char], [Char])] -> FilePath -> [[Char]] -> [Text] -> Text -> IO (Either Text Text)
+runConsoleIn environment program placeArgs args input =
+  try run <&> \case
     Left (e :: SomeException) -> Left (show e)
-    Right (ExitSuccess, out, _) -> Right (toS out)
-    Right (ExitFailure code, out, err) -> Left (T.unwords (map toS args) <> " exited with " <> show code <> ": " <> T.strip (toS err <> toS out))
+    Right (ExitSuccess, out, _) -> Right out
+    Right (ExitFailure code, out, err) ->
+      Left (T.unwords args <> " exited with " <> show code <> ": " <> T.strip (err <> out) <> (if "cannot encode character" `T.isInfixOf` err then noUtf8 else ""))
+  where
+    child = (proc program (map toS args <> placeArgs)) {env = Just (consoleEnvironment environment), std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe}
+    run = withCreateProcess child $ \toChild fromChild errors process -> do
+      -- The input is a line or two: it fits in the pipe, and a program
+      -- that exits without reading it is not an error.
+      for_ toChild $ \h -> void (try @IOException (BS.hPut h (encodeUtf8 input) >> hClose h))
+      (out, err) <- Async.concurrently (maybe (pure "") BS.hGetContents fromChild) (maybe (pure "") BS.hGetContents errors)
+      code <- waitForProcess process
+      pure (code, decodeUtf8With lenientDecode out, decodeUtf8With lenientDecode err)
+    noUtf8 =
+      " (the program could not write a character beyond ASCII, such as a name's: this machine has no UTF-8 locale for it, though C.UTF-8 was asked for. Install one or set LANG to one, or deploy with --no-rehearsal)"
+
+-- | The environment a program the rehearsal runs gets: this one, with
+-- @LC_ALL=C.UTF-8@ when the locale it names (@LC_ALL@, else @LC_CTYPE@,
+-- else @LANG@) is not a UTF-8 one. A GHC program in the C or POSIX locale
+-- fails on the first character beyond ASCII it writes, and the old
+-- program, deployed already, cannot be changed to set its own encoding.
+-- glibc has C.UTF-8 built in since 2.35, and Debian, Ubuntu and RHEL 8 ship
+-- it. A locale that names UTF-8 already is kept, with the rest of the
+-- environment.
+consoleEnvironment :: [([Char], [Char])] -> [([Char], [Char])]
+consoleEnvironment environment
+  | any (`T.isInfixOf` T.toLower (toS locale)) ["utf-8", "utf8"] = environment
+  | otherwise = ("LC_ALL", "C.UTF-8") : filter ((/= "LC_ALL") . fst) environment
+  where
+    locale = fromMaybe "" (find (not . null) (mapMaybe (`lookup` environment) ["LC_ALL", "LC_CTYPE", "LANG"]))
 
 -- | Every check, in the order they run.
 checks :: [Check]
@@ -1072,7 +1119,7 @@ signsInValues = ["yes", "no (disabled)", "no (no password)"]
 compareWaysIn :: Map Text Text -> Map Text Text -> Either Text ()
 compareWaysIn was now =
   listProblems
-    [ "the login " <> login <> " signed in with a password before the upgrade, and after it users list says " <> after
+    [ "the login " <> printable login <> " signed in with a password before the upgrade, and after it users list says " <> after
     | (login, "yes") <- Map.toList was
     , Just after <- [Map.lookup login now]
     , after /= "yes"
