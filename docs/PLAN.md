@@ -1547,6 +1547,14 @@ needs. Each was true when its package merged; check before relying on one.
   export may then find the two placeholders in different lists and write
   both lines as written; not tested. `docs/screenshots/page.png` shows
   the Markdown guide before its contents panel gained two headings.
+  Fixed after the merge (#226, found by the Codex CLI on the merged
+  change): an end marker right after indented code or a one-line block of
+  HTML was not read, and a marker line indented with a tab was exported
+  as text (the export split the line by commonmark's column, which is
+  not an index where a tab comes before it). Left: a marker after a tab
+  that follows a quotation's `>` is a block on the page and not in an
+  export, where pandoc appears to read the tab as code, so the content
+  differs there too.
 - **The rehearsal and encrypted spaces (found 2026-11-10, by reading the
   code; not run).** The `pages` check lists every space's pages through
   the admin listener and leaves a space out only on 404. Listing the
