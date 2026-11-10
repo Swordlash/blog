@@ -62,6 +62,7 @@ readEveryTable c =
     , counted "comments" wikiDb.comments
     , counted "watches" wikiDb.watches
     , counted "stars" wikiDb.stars
+    , counted "page_links" wikiDb.page_links
     , counted "notifications" wikiDb.notifications
     , counted "settings" wikiDb.settings
     , counted "sign_in_providers" wikiDb.sign_in_providers

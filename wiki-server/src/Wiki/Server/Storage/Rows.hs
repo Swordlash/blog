@@ -147,8 +147,7 @@ module Wiki.Server.Storage.Rows
   , insertPage
   , updatePageText
   , setPagePosition
-  , placePage
-  , setPageSpace
+  , movePages
   , setPageTemplateRow
   , deletePageRow
   , insertVersion
@@ -177,12 +176,23 @@ module Wiki.Server.Storage.Rows
     -- * The server's own settings
   , loadServerSettings
   , storeServerSettings
+
+    -- * Links
+  , linksVersion
+  , linksVersionSetting
+  , writeLinks
+  , markAllLinks
+  , resolvePendingLinks
+  , ensureLinks
+  , linkingPages
+  , loadLinkEnds
   )
 where
 
 import Control.Monad.UUID (generateV4)
 import Data.Aeson (decodeStrict', encode)
 import Data.ByteString.Lazy qualified as BSL
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -225,6 +235,7 @@ import Database.Beam
   , update
   , val_
   , (&&.)
+  , (/=.)
   , (<-.)
   , (<.)
   , (==.)
@@ -242,6 +253,8 @@ import Wiki.Api.Admin (Invitation (..), UserQuery (..), WikiSettings (..), defau
 import Wiki.Api.Security (AccountEmail (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, defaultMailPort, kindName, legacyService, readKind, readSecurity, securityFor, securityName)
 import Wiki.Api.ServerSettings qualified as SS
+import Wiki.App.Backlinks qualified as Links
+import Wiki.App.Route (linkName)
 import Wiki.Core.Access (Access (..), accessName, readAccess)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Draft (Draft (..))
@@ -250,7 +263,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (numberingName, readNumbering)
 import Wiki.Core.Order (ChildOrder (..), Sibling (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
-import Wiki.Core.Path (TreeNode (..))
+import Wiki.Core.Path (TreeNode (..), ancestry)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (bodyText, foldText)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
@@ -933,11 +946,13 @@ ensureHomeDocument = do
       let document = Home.HomeDocument {space = sid, page = pid}
           slug = either (panic . show) identity (mkSlug ("wiki-home-" <> sid.text))
           (space, page) = Home.makeHomeDocument document slug time server.homePage
+      -- The settings name the front page's space first, so that the
+      -- page's links are not counted ("Links").
+      storeServerSettings server {SS.homePage = server.homePage {Home.document = Just document}}
       insertSpace space {Space.homePage = Nothing, Space.public = space.public}
       insertPage page
       insertVersion page Nothing
       updateSpace space
-      storeServerSettings server {SS.homePage = server.homePage {Home.document = Just document}}
 
 -- | Each blob the attachments name, with its size as their rows record
 -- it: two attachments with the same bytes share one blob, of one size.
@@ -1582,40 +1597,48 @@ insertSpace s = insertSpaces [s]
 
 -- | Add spaces, in the order given, so that a space can come after its
 -- parent: one statement for each 500, which the databases check the
--- foreign keys of at its end.
+-- foreign keys of at its end. A path from the top may lead into a new
+-- space, so every link is marked to be followed again.
 insertSpaces :: (Backend be) => [Space] -> Db be ()
-insertSpaces ss = for_ (chunksOf 500 ss) $ \chunk -> runInsert (insert wikiDb.spaces (insertValues (map spaceRow chunk)))
+insertSpaces ss = do
+  for_ (chunksOf 500 ss) $ \chunk -> runInsert (insert wikiDb.spaces (insertValues (map spaceRow chunk)))
+  unless (null ss) markAllLinks
 
--- | Overwrite the space with this id: every column of it.
+-- | Overwrite the space with this id: every column of it. A space given
+-- another parent, slug or home page reads paths otherwise, so every link
+-- is then marked to be followed again.
 updateSpace :: (Backend be) => Space -> Db be ()
-updateSpace s =
+updateSpace s = do
   let r = spaceRow s
-   in runUpdate $
-        update
-          wikiDb.spaces
-          ( \x ->
-              mconcat
-                [ x.parent <-. val_ r.parent
-                , x.name <-. val_ r.name
-                , x.slug <-. val_ r.slug
-                , x.public <-. val_ r.public
-                , x.math_macros <-. val_ r.math_macros
-                , x.created_at <-. val_ r.created_at
-                , x.position <-. val_ r.position
-                , x.subspace_order <-. val_ r.subspace_order
-                , x.page_order <-. val_ r.page_order
-                , x.home_page <-. val_ r.home_page
-                , x.icon <-. val_ r.icon
-                , x.description <-. val_ r.description
-                , x.blog <-. val_ r.blog
-                , x.box_numbering <-. val_ r.box_numbering
-                , x.sealed <-. val_ r.sealed
-                , x.owner <-. val_ r.owner
-                , x.active <-. val_ r.active
-                , x.personal_container <-. val_ r.personal_container
-                ]
-          )
-          (\x -> x.id ==. val_ r.id)
+      place x = (x.parent, x.slug, x.home_page)
+  before <- runSelectReturningOne (select (place <$> filter_ (\x -> x.id ==. val_ r.id) (all_ wikiDb.spaces)))
+  when (before /= Just (r.parent, r.slug, r.home_page)) markAllLinks
+  runUpdate $
+    update
+      wikiDb.spaces
+      ( \x ->
+          mconcat
+            [ x.parent <-. val_ r.parent
+            , x.name <-. val_ r.name
+            , x.slug <-. val_ r.slug
+            , x.public <-. val_ r.public
+            , x.math_macros <-. val_ r.math_macros
+            , x.created_at <-. val_ r.created_at
+            , x.position <-. val_ r.position
+            , x.subspace_order <-. val_ r.subspace_order
+            , x.page_order <-. val_ r.page_order
+            , x.home_page <-. val_ r.home_page
+            , x.icon <-. val_ r.icon
+            , x.description <-. val_ r.description
+            , x.blog <-. val_ r.blog
+            , x.box_numbering <-. val_ r.box_numbering
+            , x.sealed <-. val_ r.sealed
+            , x.owner <-. val_ r.owner
+            , x.active <-. val_ r.active
+            , x.personal_container <-. val_ r.personal_container
+            ]
+      )
+      (\x -> x.id ==. val_ r.id)
 
 -- | Give a space a position among its siblings.
 setSpacePosition :: (Backend be) => SpaceId -> Int -> Db be ()
@@ -1623,9 +1646,17 @@ setSpacePosition sid n = runUpdate (update wikiDb.spaces (\x -> x.position <-. v
 
 -- | Delete a space: its subspaces, their pages, the pages' versions,
 -- attachments and drafts, and the grants on all of them go with it, as the
--- schema's foreign keys cascade.
+-- schema's foreign keys cascade. The pages' links are deleted here,
+-- whatever the foreign keys do, and every other link is marked to be
+-- followed again.
 deleteSpaceRow :: (Backend be) => SpaceId -> Db be ()
-deleteSpaceRow sid = runDelete (delete wikiDb.spaces (\x -> x.id ==. val_ sid.text))
+deleteSpaceRow sid = do
+  spaces <- loadSpaces
+  let gone = [x.id | x <- Map.elems spaces, any (\c -> c.id == sid) (fromMaybe [] (ancestry (`Map.lookup` spaces) x.id))]
+  pages <- inChunks gone $ \chunk -> map (\n -> n.id) <$> nodesWhere (\p -> p.space_id `in_` map (\x -> val_ x.text) chunk)
+  markAllLinks
+  deleteLinksFrom pages
+  runDelete (delete wikiDb.spaces (\x -> x.id ==. val_ sid.text))
 
 -- | Give a space its default home page ('Space.defaultHomePage'), made at
 -- this time among the space's top-level pages, with its first version by
@@ -1661,9 +1692,9 @@ searchFold :: Text -> Text -> Text
 searchFold title searchText = foldText title <> "\n" <> foldText searchText
 
 -- | Add a page, without its attachments, with its search text and its
--- fold prepared from its title and body.
+-- fold prepared from its title and body, and its links ('writeLinks').
 insertPage :: (Backend be) => Page -> Db be ()
-insertPage p =
+insertPage p = do
   runInsert . insert wikiDb.pages $
     insertValues
       [ S.PageRow
@@ -1681,13 +1712,18 @@ insertPage p =
           , search_fold = searchFold p.title searchText
           }
       ]
+  writeLinks p.id p.body
+  -- The links a new page may lead to, now that it is there.
+  markNamed [slugText p.slug, p.id.text]
   where
     searchText = bodyText p.body
 
 -- | Change a page's title and body, as a save does, with its search text
--- and its fold made again from them, and its @updated_at@.
+-- and its fold made again from them, its @updated_at@, and its links
+-- ('writeLinks').
 updatePageText :: (Backend be) => PageId -> Text -> Text -> UTCTime -> Db be ()
-updatePageText pid title body updatedAt =
+updatePageText pid title body updatedAt = do
+  writeLinks pid body
   runUpdate $
     update
       wikiDb.pages
@@ -1708,8 +1744,22 @@ updatePageText pid title body updatedAt =
 setPagePosition :: (Backend be) => PageId -> Int -> Db be ()
 setPagePosition pid n = runUpdate (update wikiDb.pages (\p -> p.position <-. val_ (fromIntegral n)) (\p -> p.id ==. val_ pid.text))
 
+-- | Move a page and the pages under it (the set given, the page among
+-- them): the page to a space, under a parent, with a slug and a position,
+-- and the pages under it to that space, where they keep their places. The
+-- links of the pages moved, the links that led to them and the links
+-- named as one of them are marked to be followed again.
+movePages :: (Backend be) => PageId -> SpaceId -> Maybe PageId -> Slug -> Int -> Set PageId -> Db be ()
+movePages pid sid parent slug position subtree = do
+  placePage pid sid parent slug position
+  setPageSpace sid (Set.toList (Set.delete pid subtree))
+  moved <- pageNodesWithIds (Set.toList subtree)
+  markOfAndTo (Set.toList subtree)
+  markNamed (concat [[slugText n.slug, n.id.text] | n <- moved])
+
 -- | Put a page in a space, under a parent, with a slug and a position:
--- where a move takes it.
+-- where a move takes it ('movePages'), and where a new home page takes a
+-- space's top-level pages ('insertHomePage').
 placePage :: (Backend be) => PageId -> SpaceId -> Maybe PageId -> Slug -> Int -> Db be ()
 placePage pid sid parent slug position =
   runUpdate $
@@ -1737,9 +1787,14 @@ setPageTemplateRow pid template = runUpdate (update wikiDb.pages (\p -> p.templa
 
 -- | Delete a page: the pages under it, and the versions, attachments and
 -- drafts of all of them, go with it, as the schema's foreign keys
--- cascade.
+-- cascade. Their links are deleted here, whatever the foreign keys do, and
+-- the links that led to them are marked to be followed again.
 deletePageRow :: (Backend be) => PageId -> Db be ()
-deletePageRow pid = runDelete (delete wikiDb.pages (\p -> p.id ==. val_ pid.text))
+deletePageRow pid = do
+  gone <- Set.toList <$> subtreeIds pid
+  markOfAndTo gone
+  deleteLinksFrom gone
+  runDelete (delete wikiDb.pages (\p -> p.id ==. val_ pid.text))
 
 -- | Store a version of a page: its title and body as of its @updatedAt@,
 -- and who saved it, if known.
@@ -2003,3 +2058,228 @@ storeServerSettings s = do
   for_ (zip [0 :: Int32 ..] s.providers) $ \(position, p) ->
     runInsert . insert wikiDb.sign_in_providers $
       insertValues [S.ProviderRow {name = p.name, position, kind = kindName p.kind, client_id = p.clientId, issuer = (\u -> u.text) <$> p.issuer, secret = revealed <$> p.secret}]
+
+--------------------------------------------------------------------------------
+-- Links
+
+-- A page's backlinks (issue #189) are read from @page_links@: a row for
+-- each link on a page that may lead to a page, with the page it leads to
+-- now ("Wiki.App.Backlinks" says what counts). The rows must always say
+-- what following the links would say now: the demo, which keeps no table,
+-- answers that, and the contract tests compare the two.
+--
+-- The writes of the rows a link depends on keep them so, here, so that no
+-- caller can leave it out. Each marks the links it may change as
+-- @pending@, without following any:
+--
+
+-- * A write of a page's text ('insertPage', 'updatePageText') writes the
+
+--   page's links again from its text, all pending ('writeLinks'). Every
+--   writer of a page's text (a save, a restore, both imports, the guide,
+--   a template's copy) goes through those two.
+--
+
+-- * A page created ('insertPage') marks the links named as it is
+
+--   ('Wiki.App.Route.linkName': the slug the path ends in, or the id a
+--   permanent address names). A path that named nothing, or named another
+--   page only through the rule for old addresses, can lead to the new
+--   page only if its last slug is the new page's.
+--
+
+-- * Pages moved ('movePages') mark their own links (a relative path
+
+--   starts where its page is), the links that led to them (an old path no
+--   longer does), and the links named as one of them (a path may now).
+--
+
+-- * Pages deleted ('deletePageRow') lose their links, and mark the links
+
+--   that led to them, which may now lead nowhere or, through the rule for
+--   old addresses, to another page.
+--
+
+-- * A space added, deleted, moved or given another slug, or whose home
+
+--   page or encryption changes, marks every link ('markAllLinks'): a path
+--   from the top is read against every space's path, and a space's root
+--   decides how every path into it is read. Spaces change seldom.
+--
+-- Every write transaction then ends, before it commits, by resolving the
+-- pending links ('resolvePendingLinks'), each space's pages read once for
+-- all of them. A write that marks many links (an import of a thousand
+-- pages, whose spaces get their home pages last) resolves them once, as
+-- the tree is at its end. No committed link is pending, which
+-- @wiki-server check@ reports otherwise.
+--
+-- The table is derived from the pages' text, as the search's text is. It
+-- is filled whole when the program opens a database whose links another
+-- version of how links are read filled, or none did ('ensureLinks'): the
+-- schema's step that made the table could not parse a page, since a step
+-- must keep meaning what it meant whatever the parser becomes (decision 64
+-- of docs/PLAN.md).
+
+-- | 'linksVersion' is the version of how a page's links are read and
+-- followed (the parser, 'Wiki.App.Backlinks.pageLinks' and
+-- 'Wiki.App.Backlinks.linkTarget'). A database whose @page_links@ another
+-- version filled is filled again when it is opened ('ensureLinks'). A
+-- change to what counts as a link, or to where one leads, adds one.
+linksVersion :: Int
+linksVersion = 1
+
+-- | The setting that says which 'linksVersion' filled @page_links@.
+linksVersionSetting :: Text
+linksVersionSetting = "links-version"
+
+-- | 'Linking' is what following links reads, at the end of a write: the
+-- front page's settings (its space is not linked), every other space, and
+-- the pages of each, read from the database the first time they are
+-- needed and kept until the 'Linking' is dropped.
+data Linking = Linking
+  { home :: Home.HomePage
+  , spaces :: Map SpaceId Space
+  , kept :: IORef (Map SpaceId (Links.LinkedSpace PageNode))
+  }
+
+-- | A 'Linking' of the database as it is now.
+startLinking :: (Backend be) => Db be Linking
+startLinking = do
+  server <- loadServerSettings
+  spaces <- Map.filter (\s -> not (Home.isHomeSpace server.homePage s.id)) <$> loadSpaces
+  kept <- liftIO (newIORef mempty)
+  pure Linking {home = server.homePage, spaces, kept}
+
+-- | A space's pages, as 'Linking' keeps them; 'Nothing' for the front
+-- page's space and a space that is not there.
+linkedPages :: (Backend be) => Linking -> SpaceId -> Db be (Maybe (Links.LinkedSpace PageNode))
+linkedPages l sid = for (Map.lookup sid l.spaces) $ \s ->
+  (Map.lookup sid <$> liftIO (readIORef l.kept)) >>= \case
+    Just pages -> pure pages
+    Nothing -> do
+      pages <- Links.linkedSpace s <$> pageNodes sid
+      liftIO (modifyIORef' l.kept (Map.insert sid pages))
+      pure pages
+
+-- | The 'LinkWorld' of a 'Linking'.
+linkWorld :: (Backend be) => Linking -> Links.LinkWorld (Db be) PageNode
+linkWorld l =
+  Links.LinkWorld
+    { Links.spaces = Map.elems l.spaces
+    , Links.pagesIn = linkedPages l
+    , Links.exists = \pid -> any (\n -> Map.member n.space l.spaces) <$> pageNode pid
+    }
+
+-- | A link's name as the table keeps it: its first 200 characters, so
+-- that the index on it holds any name. Two names that start alike only
+-- mark one more link to resolve.
+keptName :: Text -> Text
+keptName = T.take 200
+
+-- | 'writeLinks' is the one writer of a page's links: it deletes them and
+-- writes them again from the page's text ('Wiki.App.Backlinks.pageLinks'),
+-- pending, to be followed at the end of the write. The two writers of a
+-- page's text call it ('insertPage', 'updatePageText').
+writeLinks :: (Backend be) => PageId -> Text -> Db be ()
+writeLinks pid body = do
+  deleteLinksFrom [pid]
+  let rows =
+        [ S.PageLinkRow
+            { source_id = pid.text
+            , ordinal
+            , destination
+            , name = keptName <$> linkName destination
+            , target_id = Nothing
+            , pending = True
+            }
+        | (ordinal, destination) <- zip [0 ..] (Links.pageLinks body)
+        ]
+  for_ (chunksOf 100 rows) $ \chunk -> runInsert (insert wikiDb.page_links (insertValues chunk))
+
+-- | Delete the links of these pages.
+deleteLinksFrom :: (Backend be) => [PageId] -> Db be ()
+deleteLinksFrom pids = for_ (chunksOf 500 pids) $ \chunk ->
+  runDelete (delete wikiDb.page_links (\r -> r.source_id `in_` map (\p -> val_ p.text) chunk))
+
+-- | Mark the links a condition picks as pending.
+markLinks :: (Backend be) => (forall s. S.PageLinks (QExpr be s) -> QExpr be s Bool) -> Db be ()
+markLinks cond = runUpdate (update wikiDb.page_links (\r -> r.pending <-. val_ True) (\r -> cond r &&. r.pending ==. val_ False))
+
+-- | Mark the links named as one of these ('keptName').
+markNamed :: (Backend be) => [Text] -> Db be ()
+markNamed names = for_ (chunksOf 500 (ordNub (map keptName names))) $ \chunk ->
+  markLinks (\r -> r.name `in_` map (just_ . val_) chunk)
+
+-- | Mark the links of these pages, and the links that lead to them.
+markOfAndTo :: (Backend be) => [PageId] -> Db be ()
+markOfAndTo pids = for_ (chunksOf 500 pids) $ \chunk -> do
+  markLinks (\r -> r.source_id `in_` map (\p -> val_ p.text) chunk)
+  markLinks (\r -> r.target_id `in_` map (\p -> just_ (val_ p.text)) chunk)
+
+-- | 'markAllLinks' marks every link as pending: what a change to the
+-- tree of spaces does, which changes how a path from the top is read, or
+-- how every path into a space is.
+markAllLinks :: (Backend be) => Db be ()
+markAllLinks = markLinks (const (val_ True))
+
+-- | 'resolvePendingLinks' follows the links marked pending again
+-- ('Wiki.App.Backlinks.linkTarget'), and unmarks them: each one's page
+-- found from its id, and each space's pages read once. A link of a page
+-- whose space is not Links.counted ('Wiki.App.Backlinks.counted': the front
+-- page's, an encrypted space's) is deleted instead. Every write
+-- transaction ends with it, before its commit ("Wiki.Server.Storage").
+resolvePendingLinks :: (Backend be) => Db be ()
+resolvePendingLinks = do
+  rows <- runSelectReturningList (select ((\r -> (r.source_id, r.ordinal, r.destination, r.target_id)) <$> filter_ (\r -> r.pending ==. val_ True) (all_ wikiDb.page_links)))
+  unless (null rows) $ do
+    l <- startLinking
+    nodes <- Map.fromList . map (\n -> (n.id, n)) <$> pageNodesWithIds [PageId s | (s, _, _, _) <- rows]
+    for_ rows $ \(source, ordinal, destination, before) -> do
+      linked <- maybe (pure Nothing) (\n -> fmap (n,) <$> linkedPages l n.space) (Map.lookup (PageId source) nodes)
+      case linked of
+        Just (n, pages) | Links.counted l.home pages.space -> do
+          after <- fmap (\t -> t.text) <$> Links.linkTarget (linkWorld l) pages n.id destination
+          runUpdate $
+            update
+              wikiDb.page_links
+              (\r -> mconcat ([r.pending <-. val_ False] <> [r.target_id <-. val_ after | after /= before]))
+              (\r -> r.source_id ==. val_ source &&. r.ordinal ==. val_ ordinal)
+        _ -> runDelete (delete wikiDb.page_links (\r -> r.source_id ==. val_ source &&. r.ordinal ==. val_ ordinal))
+
+-- | 'ensureLinks' fills @page_links@ from every page's text, unless this
+-- version of how links are read ('linksVersion') filled it: once after
+-- the schema's step 14 made it, and again whenever a later program reads
+-- links otherwise. The pages' texts are read one space at a time. It says
+-- how many pages it read, or 'Nothing' when the table was this version's.
+ensureLinks :: (Backend be) => Db be (Maybe Int)
+ensureLinks = do
+  filled <- settingValue linksVersionSetting
+  if filled == Just (show linksVersion)
+    then pure Nothing
+    else do
+      runDelete (delete wikiDb.page_links (\_ -> val_ True))
+      spaces <- Map.keys <$> loadSpaces
+      counts <- for spaces $ \sid -> do
+        bodies <- runSelectReturningList (select ((\p -> (p.id, p.body)) <$> filter_ (\p -> p.space_id ==. val_ sid.text) (all_ wikiDb.pages)))
+        for_ bodies $ \(pid, body) -> writeLinks (PageId pid) body
+        pure (length bodies)
+      resolvePendingLinks
+      storeSetting linksVersionSetting (show linksVersion)
+      pure (Just (sum counts))
+
+-- | The pages whose links lead to a page, but the page itself, each with
+-- its space: what a page's backlinks are made of, before who may view
+-- them is checked.
+linkingPages :: (Backend be) => PageId -> Db be [(PageId, SpaceId)]
+linkingPages pid = do
+  rows <- runSelectReturningList . select $ do
+    r <- filter_ (\r -> r.target_id ==. val_ (Just pid.text) &&. r.source_id /=. val_ pid.text) (all_ wikiDb.page_links)
+    p <- join_ wikiDb.pages (\p -> p.id ==. r.source_id)
+    pure (p.id, p.space_id)
+  pure (ordNub [(PageId i, SpaceId s) | (i, s) <- rows])
+
+-- | Every link as its page, its place among the page's links, the page
+-- it leads to and whether it is pending: what @wiki-server check@ reads
+-- of the table.
+loadLinkEnds :: (Backend be) => Db be [(PageId, Int32, Maybe PageId, Bool)]
+loadLinkEnds = map (\(s, o, t, p) -> (PageId s, o, PageId <$> t, p)) <$> runSelectReturningList (select ((\r -> (r.source_id, r.ordinal, r.target_id, r.pending)) <$> all_ wikiDb.page_links))

@@ -50,6 +50,7 @@ module Wiki.App.Backend.Mem.State
   , postDetailsIn
   , getPageIn
   , pageLocationIn
+  , backlinksIn
   , searchPagesIn
   , getDraftIn
   , listVersionsIn
@@ -194,9 +195,11 @@ import Wiki.Api.Stars qualified as Star
 import Wiki.Api.WhatsNew (WhatsNew, newestEntry)
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
+import Wiki.App.Backlinks qualified as Links
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), parseFileName, uploadedMimeType)
+import Wiki.Core.Backlink (Backlink (..), backlinkOrder)
 import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (Comment), Thread (Thread), absentAuthor, checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
@@ -958,6 +961,47 @@ pageLocationIn pid st = do
   if Home.isHomeSpace st.server.homePage s.id
     then pure PageLocation {space = [], page = []}
     else maybe (Left NotFound) (\path -> pure PageLocation {space = map (\x -> x.slug) c, page = path}) (Space.pagePath s (`Map.lookup` st.pages) p.id)
+
+-- | The pages that link to a page ('Wiki.App.Backend.pageBacklinks'),
+-- found by resolving every page's links now ("Wiki.App.Backlinks"): the
+-- demo keeps no table of links, and its wiki is small. The page is
+-- checked as 'pageLocationIn' checks it. Every link is followed among
+-- every space, whoever asks, and the pages the current user may not view
+-- are then left out.
+backlinksIn :: PageId -> MemState -> Either WikiError [Backlink]
+backlinksIn pid st = do
+  target <- findPage st pid
+  (s, c) <- findSpace st target.space
+  requireView st c
+  pure $
+    if not (Links.counted st.server.homePage s)
+      then []
+      else
+        backlinkOrder
+          [ Backlink {page = p.id, title = p.title, location = PageLocation {space = map (\x -> x.slug) chain, page = path}}
+          | (source, chain, pages) <- sources
+          , p <- Map.elems pages.byId
+          , p.id /= pid
+          , pid `elem` mapMaybe (runIdentity . Links.linkTarget world pages p.id) (Links.pageLinks p.body)
+          , Just path <- [Space.pagePath source (`Map.lookup` pages.byId) p.id]
+          ]
+  where
+    -- Every space but the front page's, each with its pages.
+    linked = Map.filter (\x -> not (Home.isHomeSpace st.server.homePage x.space.id)) (Map.mapWithKey (\sid x -> Links.linkedSpace x (pagesOf sid st)) st.spaces)
+    world =
+      Links.LinkWorld
+        { Links.spaces = map (\x -> x.space) (Map.elems linked)
+        , Links.pagesIn = \sid -> Identity (Map.lookup sid linked)
+        , Links.exists = \i -> Identity (any (\p -> Map.member p.space linked) (Map.lookup i st.pages))
+        }
+    -- The spaces whose pages are counted, and the current user may view.
+    sources =
+      [ (x.space, chain, x)
+      | x <- Map.elems linked
+      , Links.counted st.server.homePage x.space
+      , let chain = chainOf st x.space.id
+      , canView (currentPrincipal st) st.grants chain
+      ]
 
 -- | A page with who wrote it ('Page.createdBy', 'Page.updatedBy'): the
 -- authors of its first version and of the version it is now, as the

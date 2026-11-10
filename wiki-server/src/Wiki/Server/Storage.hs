@@ -232,11 +232,13 @@ import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
+import Wiki.App.Backlinks (counted)
 import Wiki.Core.Access (Access (..), accessName)
 import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), parseFileName, uploadedMimeType)
 import Wiki.Core.Audit (Actor (..))
 import Wiki.Core.Audit qualified as Audit
+import Wiki.Core.Backlink (Backlink (..), backlinkOrder)
 import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentBody, formerAuthor, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
@@ -468,7 +470,10 @@ openWith collect config place = do
         (settings, serverKept, newestGeneration) <- case engine of
           Engine p -> withResource p.writer $ \c -> do
             _ <- migrate c
-            withTransaction True c (runDb c ensureHomeDocument)
+            -- The links are filled, if this version did not fill them,
+            -- in the same transaction ("Wiki.Server.Storage.Rows",
+            -- "Links").
+            withTransaction True c (runDb c (ensureHomeDocument >> void ensureLinks >> resolvePendingLinks))
             when collect $ do
               collectGarbage c place.dataDir
               -- Uploads and exports left by a server that stopped: nothing
@@ -665,7 +670,8 @@ checkConnection c = do
             [ AccountWays {id = u, login, disabled, password, providers = Map.findWithDefault [] u identities, passkey = Set.member u passkeys}
             | (u, login, disabled, password) <- columns
             ]
-      pure (rootProblems spaces pages <> brokenCredentials accounts, waysIn (providerNames kept) accounts)
+      links <- loadLinkEnds
+      pure (rootProblems spaces pages <> linkProblems pages links <> brokenCredentials accounts, waysIn (providerNames kept) accounts)
     -- Each space with a home page has that page as the only one with no
     -- parent.
     rootProblems spaces pages =
@@ -674,6 +680,17 @@ checkConnection c = do
       , let stray = strayRoots s [p | p <- pages, p.space == s.id]
       , not (null stray)
       ]
+    -- Each link is on a page there is, and leads to a page there is or to
+    -- none, and none is left pending ("Wiki.Server.Storage.Rows", "Links").
+    linkProblems pages links =
+      let there = Set.fromList (map (\p -> p.id) pages)
+       in [ "The link " <> show ordinal <> " of the page " <> source.text <> " " <> problem <> "."
+          | (source, ordinal, target, pending) <- links
+          , problem <-
+              ["is on no page there is" | Set.notMember source there]
+                <> ["leads to the page " <> t.text <> ", which is not there" | Just t <- [target], Set.notMember t there]
+                <> ["is still waiting to be followed" | pending]
+          ]
     forced :: (Show a, MonadIO m) => a -> m ()
     forced a = liftIO (void (evaluate (length (show a :: [Char]))))
 
@@ -719,12 +736,13 @@ writingThen st action committed = case st.engine of
       runTraced tracer c (withGeneration (Right <$> action))
     either absurd (\(a, generation) -> a <$ (committed a >> noticeGeneration st generation)) outcome
 
--- | A write's statements, then the generation of the permission context
+-- | A write's statements, then its pending links followed
+-- ('resolvePendingLinks'), then the generation of the permission context
 -- they leave, read in the same transaction: the triggers have bumped it if
 -- the write changed the permission context. Nothing is read for a write
 -- that is rolled back.
 withGeneration :: (Backend be) => Db be (Either e a) -> Db be (Either e (a, Maybe Int64))
-withGeneration action = action >>= traverse (\a -> (a,) <$> permissionsGeneration)
+withGeneration action = action >>= traverse (\a -> resolvePendingLinks >> (a,) <$> permissionsGeneration)
 
 -- | Tell the live channel that who may read which page may have changed
 -- ('Config' @permissionsChanged@) if this generation of the permission
@@ -994,9 +1012,9 @@ transactThenFrom st who address mode (Tx body) committed = case st.engine of
       let conn = Conn tracer c
       ctx <- context st (mode == Writes) conn who address
       result <- runExceptT (runReaderT body ctx)
-      -- A write that succeeded reads the generation it leaves, as
-      -- 'withGeneration' does.
-      generation <- if mode == Writes && isRight result then viaConn conn permissionsGeneration else pure Nothing
+      -- A write that succeeded follows its pending links and reads the
+      -- generation it leaves, as 'withGeneration' does.
+      generation <- if mode == Writes && isRight result then viaConn conn (resolvePendingLinks >> permissionsGeneration) else pure Nothing
       pure ((ctx,generation,) <$> result)
     -- Committed: the action and the notifications come after the commit,
     -- still on the connection, so before any other write may begin. The
@@ -1442,6 +1460,7 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
   postDetails = run Reads . postDetailsTx
   getPage sid = run Reads . (withWriters <=< getPageTx sid)
   pageLocation = run Reads . pageLocationTx
+  pageBacklinks = run Reads . backlinksTx
   createPage sid parent title = run Writes . (withWriters <=< createPageTx sid parent title)
   savePage pid base title = saving . (withWriters <=< savePageTx pid base title)
   movePage pid sid = run Writes . (withWriters <=< movePageTx pid sid)
@@ -1995,6 +2014,32 @@ pageLocationTx pid = do
       nodes <- lineageOf p.id
       spaces <- asks (\x -> x.spaces)
       maybe (failWith NotFound) (\path -> pure PageLocation {space = map (\x -> x.slug) c, page = path}) (pathIn spaces p.space (`Map.lookup` nodes) p.id)
+
+-- | The pages that link to a page ('Wiki.App.Backend.pageBacklinks'), as
+-- @page_links@ holds them ("Wiki.Server.Storage.Rows", "Links"). The
+-- page is checked as 'pageLocationTx' checks it, before anything else is
+-- read. Of the pages that link to it, only those in a space the caller may
+-- view are read further, and listed.
+backlinksTx :: PageId -> Tx [Backlink]
+backlinksTx pid = do
+  p <- findNode pid
+  (s, c) <- findSpace p.space
+  when (null c) (failWith NotFound)
+  requireView c
+  ctx <- ask
+  if not (counted ctx.server.homePage s)
+    then pure []
+    else do
+      linking <- db (linkingPages pid)
+      let viewable sid = let chain = chainOf ctx sid in not (null chain) && canView ctx.principal ctx.grants chain && all (counted ctx.server.homePage) (lastMay chain)
+      nodes <- db (pageNodesWithIds [source | (source, sid) <- linking, viewable sid])
+      above <- withAncestors nodes
+      pure . backlinkOrder $
+        [ Backlink {page = n.id, title = n.title, location = PageLocation {space = map (\x -> x.slug) (chainOf ctx n.space), page = path}}
+        | n <- nodes
+        , viewable n.space
+        , Just path <- [pathIn ctx.spaces n.space (`Map.lookup` above) n.id]
+        ]
 
 -- | The search over the pages the user may view in the spaces the query
 -- asks for. The database picks the pages, of the spaces searched only
@@ -2714,9 +2759,7 @@ movePageTx pid destination asked = do
   let (slug, position)
         | destination == p.space && parent == p.parent = (p.slug, p.position)
         | otherwise = (freshSlug (isJust . findChild others parent) p.slug, nextPosition (childrenOf others parent))
-  db $ do
-    placePage pid destination parent slug position
-    setPageSpace destination (Set.toList (Set.delete pid subtree))
+  db (movePages pid destination parent slug position subtree)
   requireOneRoot destination
   when (destination /= p.space) pagesMoved
   findPage pid

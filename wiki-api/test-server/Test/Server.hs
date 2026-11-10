@@ -48,6 +48,7 @@ import Wiki.Api.Version (PageVersion (..), VersionTime (..), pageVersion)
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Assistant.Vault (CredentialId (..))
 import Wiki.Core.Attachment qualified as Attachment
+import Wiki.Core.Backlink (Backlink (..))
 import Wiki.Core.Comment (Comment, Thread)
 import Wiki.Core.Comment qualified as Comment
 import Wiki.Core.Draft (Draft)
@@ -217,6 +218,7 @@ stubs =
                 else pure (versioned Sample.page {Page.id = p, Page.title = edit.title, Page.body = edit.body, Page.updatedAt = Sample.later})
           , move = \p body -> pure Sample.page {Page.id = p, Page.space = body.space, Page.parent = body.parent}
           , location = \p -> if p == Sample.page.id then pure PageLocation {space = [Sample.slug "docs"], page = [Sample.slug "tour"]} else refuse NotFound
+          , backlinks = \p -> if p == Sample.page.id then pure [Backlink {page = PageId "p2", title = "Glossary", location = PageLocation {space = [Sample.slug "docs"], page = [Sample.slug "glossary"]}}] else refuse NotFound
           , shift = \p body -> pure Sample.page {Page.id = p, Page.position = fromEnum body.shift}
           , template = \p body -> pure Sample.page {Page.id = p, Page.template = body.template}
           , delete = \p -> if p == Sample.page.id then pure NoContent else refuse Forbidden
@@ -672,6 +674,10 @@ spec = describe "a server of the API's type" $ do
     it "says where one is now, by its id, or that no page has it" $ do
       answers (getAt (links.pages.location p)) 200 PageLocation {space = [Sample.slug "docs"], page = [Sample.slug "tour"]}
       answers (getAt (links.pages.location (PageId "other"))) 404 NotFound
+
+    it "lists the pages that link to one, or says that no page has its id" $ do
+      answers (getAt (links.pages.backlinks p)) 200 [Backlink {page = PageId "p2", title = "Glossary", location = PageLocation {space = [Sample.slug "docs"], page = [Sample.slug "glossary"]}}]
+      answers (getAt (links.pages.backlinks (PageId "other"))) 404 NotFound
 
   describe "drafts" $ do
     it "gives the user's draft of a page, or null" $ do
