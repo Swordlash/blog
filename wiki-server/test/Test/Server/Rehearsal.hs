@@ -10,6 +10,7 @@ module Test.Server.Rehearsal (unitSpec, spec) where
 import Data.Aeson (encode)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Database.Beam (runUpdate, update, val_, (<-.), (==.))
 import Network.HTTP.Client (defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutMicro)
 import Network.HTTP.Types (hContentType)
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, info)
@@ -25,16 +26,51 @@ import Wiki.Server.Accounts (listAccounts)
 import Wiki.Server.Console (runUsers, usersParser)
 import Wiki.Server.CopyDatabase (CopyOptions (..), CopyOutcome (..), runCopy)
 import Wiki.Server.Options (DatabaseChoice (..))
-import Wiki.Server.Rehearsal (Check (..), PageAt (..), PageRead (..), PagesRead (..), Seeding (..), Server (..), SpaceRead (..), checks, compareHomes, comparePages, isolateCopy, pathAsBuilt, readPages, readSpaces)
+import Wiki.Server.Password (hashWith, parameters)
+import Wiki.Server.Rehearsal (Check (..), PageAt (..), PageRead (..), PagesRead (..), Seeding (..), Server (..), SpaceRead (..), checks, compareHomes, comparePages, compareWaysIn, isolateCopy, pathAsBuilt, readPages, readSpaces, readUsersList)
 import Wiki.Server.Storage (Place (..), migrateDatabase, withStorageAside)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (settingsLike, storeSetting)
+import Wiki.Server.Storage.Schema (Users (..), WikiDb (..), wikiDb)
 
 unitSpec :: Spec
 unitSpec = do
   pagesUnitSpec
   homesUnitSpec
   pathsUnitSpec
+  waysInUnitSpec
+
+-- | @wiki-server users list@'s table as the ways in check reads it, and its
+-- comparison of the table before the upgrade with the table after.
+waysInUnitSpec :: Spec
+waysInUnitSpec = describe "the upgrade's rehearsal, the ways in check" $ do
+  let table =
+        T.unlines
+          [ "LOGIN            NAME              ADMINISTRATOR  SIGNS IN"
+          , "admin            The Administrator yes            yes"
+          , "ann              Ann Lee  yes      no             no (disabled)"
+          , "bo               Bo                no             no (no password)"
+          , "carl.the.second  Carl             no             yes"
+          ]
+  it "reads SIGNS IN by login, by what each row ends with, whatever the names hold" $
+    readUsersList table
+      `shouldBe` Right (Map.fromList [("admin", "yes"), ("ann", "no (disabled)"), ("bo", "no (no password)"), ("carl.the.second", "yes")])
+  it "reads a display name with a line break in it as one row" $
+    readUsersList (T.unlines ["LOGIN  NAME   ADMINISTRATOR  SIGNS IN", "dee    Dee", "Two    no             yes", "eve    Eve    no             no (no password)"])
+      `shouldBe` Right (Map.fromList [("dee", "yes"), ("eve", "no (no password)")])
+  it "reads a wiki with no users as no logins" $
+    readUsersList "There are no users yet: make the first administrator with\n  wiki-server users add --data /x LOGIN --admin\n" `shouldBe` Right Map.empty
+  it "refuses output that is not the table: another heading, nothing, or a row that ends with no value of SIGNS IN" $ do
+    readUsersList "LOGIN  NAME  ROLE\nadmin  Admin  owner\n" `shouldSatisfy` isLeft
+    readUsersList "" `shouldSatisfy` isLeft
+    readUsersList "Usage: wiki-server users COMMAND\n" `shouldSatisfy` isLeft
+    readUsersList (T.unlines ["LOGIN  NAME   ADMINISTRATOR  SIGNS IN", "dee    Dee    no             maybe"]) `shouldSatisfy` isLeft
+  it "fails for each login that signed in before and does not after, naming it, and for nothing else" $ do
+    let was = Map.fromList [("admin", "yes"), ("ann", "yes"), ("bo", "no (no password)"), ("gone", "yes"), ("off", "no (disabled)")]
+        now = Map.fromList [("admin", "yes"), ("ann", "no (no password)"), ("bo", "yes"), ("new", "no (no password)"), ("off", "yes")]
+    compareWaysIn was now `shouldBe` Left "the login ann signed in with a password before the upgrade, and after it users list says no (no password)"
+    compareWaysIn was was `shouldBe` Right ()
+    compareWaysIn (Map.fromList [("ann", "yes")]) (Map.fromList [("ann", "no (disabled)")]) `shouldSatisfy` either (T.isInfixOf "ann") (const False)
 
 -- | A page's path as a program before step 13 of the schema builds it, and
 -- as one after it does: from the top of the space, or from under its home
@@ -118,7 +154,7 @@ copySpec :: Backing -> Spec
 copySpec backing = describe "the upgrade's rehearsal, its copy of the wiki" $ do
   it "reads every page an administrator may read, and leaves out the spaces nobody may" $ withDemoRunning backing identity $ \r -> do
     manager <- newManager defaultManagerSettings
-    let server = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public}
+    let server = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public, console = consoleOn r.place}
     withoutPersonal <- readPages manager server
     withoutPersonal `shouldSatisfy` isRight
     -- The editor's personal space makes the container of personal spaces,
@@ -138,7 +174,7 @@ copySpec backing = describe "the upgrade's rehearsal, its copy of the wiki" $ do
       commitTransaction c
     manager <- newManager defaultManagerSettings
     serve $ \r -> do
-      let server = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public}
+      let server = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public, console = consoleOn r.place}
       read' <- readPages manager server >>= either (\why -> panic ("not read: " <> why)) pure
       spaces <- readSpaces manager server >>= either (\why -> panic ("not read: " <> why)) pure
       let team = [s.space | s <- spaces, s.name == "Team"]
@@ -183,6 +219,23 @@ checksSpec backing = describe "the upgrade's rehearsal, its checks" $ do
             logins -> expectationFailure ("expected one canary account with a password, found " <> show logins)
     verdict <- rehearseCheck "accounts" at serve changePassword
     verdict `shouldSatisfy` either (T.isPrefixOf "the password's first sign-in: not signed in") (const False)
+  it "passes the ways in check when an account's hash from before OPAQUE becomes a record between the two halves" $ withDemoPlace backing $ \at serve -> do
+    withConnectionTo at $ \c -> runDb c (setColumns "editor" Nothing Nothing (Just (hashWith parameters "salt of the test" (Password "editor's old password"))))
+    rehearseCheck "ways in" at serve (consoleOn at ["users", "password", "editor"] "editor's new password\n" >>= (`shouldSatisfy` isRight)) `shouldReturn` Right ()
+  it "fails the ways in check, naming the login, when a step between the two halves takes an account's password away" $ withDemoPlace backing $ \at serve -> do
+    consoleOn at ["users", "password", "editor"] "editor's password\n" >>= (`shouldSatisfy` isRight)
+    verdict <- rehearseCheck "ways in" at serve (withConnectionTo at $ \c -> runDb c (setColumns "editor" Nothing Nothing Nothing))
+    verdict `shouldBe` Left "the login editor signed in with a password before the upgrade, and after it users list says no (no password)"
+  it "cannot drive an old program whose users list is not the table, which the rehearsal ends with 7" $ withDemoRunning backing identity $ \r -> do
+    manager <- newManager defaultManagerSettings
+    let server = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public, console = \_ _ -> pure (Right "LOGIN  NAME\nadmin  Admin\n")}
+    case [c | c@Check {name = "ways in"} <- checks] of
+      [Check {holding, seed, before = beforeIt}] -> holding $ \held -> do
+        seeded <- seed held Seeding {copy = r.place, console = consoleOn r.place} >>= either (panic . ("the seed failed: " <>)) pure
+        -- A 'Left' of a check's before is an old program the rehearsal
+        -- cannot drive ('OldNotDriven'), not a failed check.
+        beforeIt held seeded manager server >>= either (`shouldSatisfy` T.isInfixOf "did not print its table") (const (expectationFailure "the before read the output as the table"))
+      _ -> expectationFailure "there is no check named ways in"
   it "fails the roots check, naming the space, when a space no longer answers at its address" $ withDemoPlace backing $ \at serve -> do
     let moveBlog = withConnectionTo at $ \c -> do
           begin True c
@@ -222,7 +275,9 @@ rehearseCheck wanted at serve between = rehearseAcross wanted at serve between s
 rehearseAcross :: Text -> Place -> (forall a. (Running -> IO a) -> IO a) -> IO () -> (forall a. (Running -> IO a) -> IO a) -> IO (Either Text ())
 rehearseAcross wanted at serve between serveAfter = do
   manager <- newManager defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro 120_000_000}
-  let serverOf r = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public}
+  -- Each server's console runs on the database it serves: for a move, the
+  -- after's is the moved database.
+  let serverOf r = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public, console = consoleOn r.place}
       orFail :: Text -> Either Text x -> IO x
       orFail what = either (\why -> panic (what <> " of the " <> wanted <> " check failed: " <> why)) pure
   case [c | c@Check {name} <- checks, name == wanted] of
@@ -232,6 +287,12 @@ rehearseAcross wanted at serve between serveAfter = do
       between
       serveAfter (\r -> afterIt held fixture manager (serverOf r))
     _ -> panic ("no check is named " <> wanted)
+
+-- | Set the password columns of the user with this login, as a step of a
+-- migration might.
+setColumns :: (Backend be) => Text -> Maybe Text -> Maybe Text -> Maybe Text -> Db be ()
+setColumns login record stretch phc =
+  runUpdate (update wikiDb.users (\u -> mconcat [u.opaque_record <-. val_ record, u.opaque_stretch <-. val_ stretch, u.password_hash <-. val_ phc]) (\u -> u.login ==. val_ login))
 
 -- | The console as the rehearsal runs the old program's ('Seeding'), here
 -- this program's, in the test: a @users@ command, parsed as the program

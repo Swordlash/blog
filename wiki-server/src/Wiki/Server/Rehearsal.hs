@@ -26,7 +26,8 @@
 -- the rehearsal starts it with is not a failed check.
 --
 -- So what the checks drive on the old program is stable: the options of
--- @serve@ and of the database, @users add@, @\/healthz@ (its schema
+-- @serve@ and of the database, @users add@, @users list@ and its table
+-- (beside the running server), @\/healthz@ (its schema
 -- version), the admin listener's API
 -- (@info@, the spaces, a space at a path, their pages and a page at a path, and the routes
 -- toolchain/rehearse-ci.sh seeds a wiki with: making a space and a page,
@@ -77,6 +78,10 @@ module Wiki.Server.Rehearsal
   , SpaceRead (..)
   , readSpaces
   , compareHomes
+
+    -- * The ways in check, for its tests
+  , readUsersList
+  , compareWaysIn
 
     -- * Paths as a program builds them
   , rootedPaths
@@ -218,14 +223,14 @@ rehearse o = either identity identity <$> runExceptT steps
       holdAll checks $ \held -> do
         -- What each check makes in the copy before the old program serves
         -- it, through the old program's console or in the copy's settings.
-        let seeding = Seeding {copy = scratchPlace, console = runConsole o.old (["--data", o.scratch] <> databaseArgs scratchChoice)}
+        let seeding = Seeding {copy = scratchPlace, console = runConsole o.old (placeArgs scratchChoice)}
         seeded <- for held $ \(Held name seed before after) ->
           liftIO (try (seed seeding)) >>= \case
             Left (e :: SomeException) -> broken ("The check of " <> name <> " could not prepare the copy: " <> show e)
             Right (Left why) -> throwError (OldNotDriven ("The check of " <> name <> " could not prepare the copy with the old program: " <> why))
             Right (Right s) -> pure (Seeded name (before s) after)
         -- The old program on the copy, and what each check keeps of it.
-        fixtures <- withServer (o.scratch </> "old.log") o.old (serveArgs scratchChoice []) (throwError . OldNotDriven) $ \server ->
+        fixtures <- withServer (o.scratch </> "old.log") o.old (placeArgs scratchChoice) (serveArgs scratchChoice []) (throwError . OldNotDriven) $ \server ->
           for seeded $ \(Seeded name before after) ->
             liftIO (try (before manager server)) >>= \case
               Left (e :: SomeException) -> throwError (OldNotDriven ("The check of " <> name <> " could not use the old program's wiki: " <> show e))
@@ -257,15 +262,16 @@ rehearse o = either identity identity <$> runExceptT steps
             CopyFailed why -> broken ("The copy could not be moved to PostgreSQL: " <> why)
       -- This program on the migrated copy, and each check's verdict.
       self <- liftIO getExecutablePath
-      results <- withServer (o.scratch </> "new.log") self (serveArgs servedChoice ["--no-guide"]) (broken . ("The new program did not serve the migrated copy: " <>)) $ \server ->
+      results <- withServer (o.scratch </> "new.log") self (placeArgs servedChoice) (serveArgs servedChoice ["--no-guide"]) (broken . ("The new program did not serve the migrated copy: " <>)) $ \server ->
         for fixtures $ \(name, after) -> (name,) <$> liftIO (after server)
       let lines' = [either (\why -> name <> ": failed: " <> why) (const (name <> ": passed")) r | (name, r) <- results]
       pure (if all (isRight . snd) results then Rehearsed lines' else ChecksFailed lines')
     serveArgs choice extra listen admin =
-      ["serve", "--data", o.scratch]
-        <> databaseArgs choice
+      ["serve"]
+        <> placeArgs choice
         <> ["--listen", "127.0.0.1:" <> show listen, "--admin-listen", "127.0.0.1:" <> show admin]
         <> extra
+    placeArgs choice = ["--data", o.scratch] <> databaseArgs choice
     databaseArgs = \case
       SqliteChosen file -> ["--sqlite", file]
       PostgresChosen url passwordFile -> ["--database", toS url] <> maybe [] (\f -> ["--database-password-file", f]) passwordFile
@@ -292,28 +298,36 @@ a </> b = a <> "/" <> b
 -- Servers
 
 -- | 'Server' is a server the rehearsal started: the base of its
--- administration listener's API, which answers as an administrator, and
--- the address of its public listener, where people sign in.
+-- administration listener's API, which answers as an administrator, the
+-- address of its public listener, where people sign in, and its program's
+-- console on the same database.
 data Server = Server
   { adminApi :: Text
   -- ^ @http:\/\/127.0.0.1:\<port>\/admin\/api\/v1@.
   , public :: Text
   -- ^ @http:\/\/127.0.0.1:\<port>@, with no slash at the end.
+  , console :: [Text] -> Text -> IO (Either Text Text)
+  -- ^ The server's program's console on the database the server serves,
+  -- as 'Seeding''s console runs it: the arguments, then the place's
+  -- options, with the text on standard input; its output, or what it said
+  -- when it failed. The console opens the database beside the running
+  -- server, as @wiki-server users@ always may.
   }
 
 -- | Run a program's server on two loopback ports the system gives, wait
 -- until it answers, run the action, and stop the server however the
--- action ends. What the server writes goes to a log file in the scratch
--- directory, not a pipe: a pipe nobody reads fills up and stops the
--- server. A server that exits, or does not answer within a minute, is
+-- action ends. The place's options (@--data@ and the database's) are
+-- those the server is started with, and those its console is run with.
+-- What the server writes goes to a log file in the scratch directory, not
+-- a pipe: a pipe nobody reads fills up and stops the server. A server that exits, or does not answer within a minute, is
 -- reported to @failed@ with the end of its log.
-withServer :: FilePath -> FilePath -> (Int -> Int -> [[Char]]) -> (Text -> ExceptT RehearsalOutcome IO a) -> (Server -> ExceptT RehearsalOutcome IO a) -> ExceptT RehearsalOutcome IO a
-withServer logFile program args failed act = do
+withServer :: FilePath -> FilePath -> [[Char]] -> (Int -> Int -> [[Char]]) -> (Text -> ExceptT RehearsalOutcome IO a) -> (Server -> ExceptT RehearsalOutcome IO a) -> ExceptT RehearsalOutcome IO a
+withServer logFile program placeArgs args failed act = do
   listen <- liftIO freePort
   admin <- liftIO freePort
   logHandle <- liftIO (openFile logFile WriteMode)
   (_, _, _, process) <- liftIO (createProcess (proc program (args listen admin)) {std_in = NoStream, std_out = UseHandle logHandle, std_err = UseHandle logHandle})
-  let server = Server {adminApi = "http://127.0.0.1:" <> show admin <> "/admin/api/v1", public = "http://127.0.0.1:" <> show listen}
+  let server = Server {adminApi = "http://127.0.0.1:" <> show admin <> "/admin/api/v1", public = "http://127.0.0.1:" <> show listen, console = runConsole program placeArgs}
       stop = do
         terminateProcess process
         void (timeout 20_000_000 (waitForProcess process))
@@ -433,7 +447,7 @@ runConsole program placeArgs args input =
 
 -- | Every check, in the order they run.
 checks :: [Check]
-checks = [pagesCheck, accountsCheck, homesCheck, rootsCheck]
+checks = [pagesCheck, accountsCheck, homesCheck, rootsCheck, waysInCheck]
 
 -- | A check that holds nothing and makes nothing before the old program
 -- serves the copy.
@@ -958,3 +972,77 @@ httpTransport manager base jar sent = Transport $ \r -> do
           , Servant.responseHttpVersion = responseVersion response
           , Servant.responseBody = responseBody response
           }
+
+--------------------------------------------------------------------------------
+-- The ways in check
+
+-- | The ways in check (WP5.85 of docs/PLAN.md, issue #205): every account
+-- that signed in with a password before the upgrade still does after it.
+-- The accounts check proves that a password made for the rehearsal signs
+-- in; this one looks at the accounts people have, so that a migration
+-- that loses their passwords fails the rehearsal.
+--
+-- Before, the old program's @wiki-server users list@ runs on the copy it
+-- serves; after, the new program's on the copy it serves (for a move, the
+-- PostgreSQL database). Both read the column SIGNS IN of each login
+-- ('readUsersList'). The check fails for each login that read @yes@ before
+-- and reads anything else after, naming it, and for nothing else: a login
+-- that is new, one that is gone and one that went from no to yes are not
+-- failures. Old output that is not that table is an old program the
+-- rehearsal cannot drive, not a failed check.
+--
+-- What the check does not see: SIGNS IN knows of passwords alone. An
+-- account that signs in only through a provider or with a passkey reads
+-- @no (no password)@ before and after, whatever the upgrade did to it. The
+-- canaries of the accounts check cover the provider's sign-in; nothing
+-- here covers a passkey's. Nor does the column decode a password:
+-- @wiki-server check@, which the rehearsal runs on the migrated copy,
+-- refuses a password no sign-in can use ("Wiki.Server.WaysIn").
+waysInCheck :: Check
+waysInCheck = simpleCheck "ways in" (const listed) (\was _ server -> listed server <&> (>>= compareWaysIn was))
+  where
+    listed server = server.console ["users", "list"] "" <&> (>>= readUsersList)
+
+-- | The column SIGNS IN of @wiki-server users list@'s output
+-- ("Wiki.Server.Console"'s @listing@), by login, or why the output is not
+-- that table. The first line must be the heading, whose words are LOGIN,
+-- NAME, ADMINISTRATOR and SIGNS IN; or the output must say there are no
+-- users yet. The login is the heading's first column, as wide as the
+-- space before NAME. SIGNS IN is what a row ends with, after two spaces:
+-- @yes@, @no (disabled)@ or @no (no password)@. A display name may hold a
+-- line break, which splits its row over two lines: a line that ends with
+-- none of the three is read with the lines after it, until one does. The
+-- output may not end in such a line.
+readUsersList :: Text -> Either Text (Map Text Text)
+readUsersList out = case dropWhile T.null (map T.stripEnd (T.lines out)) of
+  [] -> Left "users list printed nothing"
+  heading : rest
+    | "There are no users yet" `T.isPrefixOf` heading -> Right Map.empty
+    | T.words heading == ["LOGIN", "NAME", "ADMINISTRATOR", "SIGNS", "IN"] ->
+        let loginWidth = T.length (fst (T.breakOn "NAME" heading)) - 2
+         in Map.fromList <$> rows loginWidth Nothing rest
+    | otherwise -> Left ("users list did not print its table: its first line is " <> show heading)
+  where
+    rows _ Nothing [] = Right []
+    rows _ (Just pending) [] = Left ("a row of users list ends with none of SIGNS IN's values: " <> show pending)
+    rows width pending (line : more) =
+      let row = maybe line (<> "\n" <> line) pending
+       in case find (\v -> ("  " <> v) `T.isSuffixOf` row) signsInValues of
+            Just v -> ((T.stripEnd (T.take width row), v) :) <$> rows width Nothing more
+            Nothing -> rows width (Just row) more
+
+-- | The values of the column SIGNS IN of @wiki-server users list@.
+signsInValues :: [Text]
+signsInValues = ["yes", "no (disabled)", "no (no password)"]
+
+-- | Whether every login that signed in before the upgrade (SIGNS IN read
+-- @yes@) still does after it. Why not names the first few that do not,
+-- with what they read now. A login no longer listed is left out.
+compareWaysIn :: Map Text Text -> Map Text Text -> Either Text ()
+compareWaysIn was now =
+  listProblems
+    [ "the login " <> login <> " signed in with a password before the upgrade, and after it users list says " <> after
+    | (login, "yes") <- Map.toList was
+    , Just after <- [Map.lookup login now]
+    , after /= "yes"
+    ]

@@ -109,7 +109,14 @@ data Users = Users
   deriving stock (Eq, Show)
 
 data UsersCommand
-  = -- | Every user, with what they may do.
+  = -- | Every user, with what they may do: the table 'listing' writes.
+    --
+    -- Stable for the upgrade's rehearsal: its check "ways in" runs
+    -- @users list@ with the place's options after it on the old program and
+    -- on the new one ("Wiki.Server.Rehearsal"), and reads the table. So the
+    -- command changes only compatibly: the heading line's words, the login
+    -- first, and SIGNS IN last with one of its three values, as 'listing'
+    -- says, and the two lines of a wiki with no users.
     ListUsers
   | -- | Create a user: their login, their display name (the login if not
     -- given), whether they are an administrator, and whether they sign in
@@ -217,7 +224,17 @@ found st login = maybe (throwError ("There is no user with the login " <> login 
 describe :: User -> Text
 describe user = user.login.text <> " (" <> user.displayName <> ")"
 
--- | The users as a table: login, name, and what they may do.
+-- | The users as a table: login, name, and what they may do. The first line
+-- is the heading, LOGIN, NAME, ADMINISTRATOR and SIGNS IN; each other line
+-- is a user, their login first and SIGNS IN last: @yes@, @no (disabled)@
+-- or @no (no password)@. SIGNS IN knows of passwords alone: an account
+-- that signs in only through a provider or with a passkey reads
+-- @no (no password)@.
+--
+-- Stable for the upgrade's rehearsal (see 'ListUsers'): its check "ways
+-- in" finds the login by the heading's columns and SIGNS IN by what a line
+-- ends with, and fails for a login that read @yes@ before an upgrade and
+-- does not after it.
 listing :: [(Account, Bool)] -> [Text]
 listing accounts = row heading : map (row . cells) accounts
   where
