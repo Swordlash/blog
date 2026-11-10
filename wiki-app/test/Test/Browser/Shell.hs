@@ -18,6 +18,7 @@ import Halogen.Router.Duplex (encodeComponent)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, start, startChanged, startOn, startWith)
+import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
@@ -32,8 +33,9 @@ import Wiki.Core.Page (Page (body, id, space, title, updatedAt))
 
 -- The address the test page is at (test/jsbits/test-location.js).
 $( browserJS
-     ["jsbits/test-location.js"]
+     ["jsbits/test-location.js", "jsbits/test-live.js"]
      [ ("js_location_hash", "wiki_test_location_hash", Safe, [t|IO JSText|])
+     , ("js_history_go", "wiki_test_history_go", Safe, [t|Int -> IO ()|])
      ]
  )
 
@@ -228,6 +230,31 @@ spec m = do
     find ui (".page-body a[href$='#/l/" <> mathematics.text <> "/#macros']") >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Mathematics")
     eventually $ location `shouldReturn` "#/s/docs/p/markdown-guide/mathematics/"
+  -- The application puts the page's address in place of a permanent one in
+  -- the same history entry, which keeps its number: staying in an editor
+  -- with unsaved changes goes back to it through the history by those
+  -- numbers, across that entry too.
+  it "keeps the history's entries numbered across a permanent link followed, so that staying in the editor comes back to it" $ runPage $ do
+    let mathematics = demoPage "Mathematics"
+        written st = st {pages = Map.adjust (\p -> p {body = "# Hello, world\n\n[the macros](/l/" <> mathematics.text <> "/)"}) (demoPage "Hello, world") st.pages}
+    ui <- startChanged m written (Just "user-admin") (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    find ui (".page-body a[href$='#/l/" <> mathematics.text <> "/']") >>= click
+    find ui ".page-body h1" >>= (`shouldHaveText` "Mathematics")
+    eventually $ location `shouldReturn` "#/s/docs/p/markdown-guide/mathematics/"
+    clickButton ui ".page-actions a" "Edit"
+    text <- editorText ui
+    typeText text " More."
+    eventually $ location `shouldReturn` "#/s/docs/p/markdown-guide/mathematics/edit/"
+    -- Two entries back, across the one the permanent link was replaced in,
+    -- to the post: the editor asks, and staying comes back to it.
+    unsafeIOToPageM (js_history_go (-2))
+    _ <- find ui ".leave-confirm"
+    eventually $ location `shouldReturn` "#/s/blog/p/hello-world/"
+    clickButton ui ".leave-confirm button" "Stay"
+    eventually $ location `shouldReturn` "#/s/docs/p/markdown-guide/mathematics/edit/"
+    length <$> findAll ui ".leave-confirm" `shouldReturn` 0
+    markdown ui >>= (`shouldSatisfy` T.isInfixOf "More.")
+
   -- "Copy permanent link" copies the address of the version shown, which
   -- keeps showing that text after the page is edited (WP5.81).
   it "copies the permanent link of the version shown, which shows that version after the page is edited" $ runPage $ do

@@ -269,7 +269,8 @@ markFragment place = when inBrowser . liftIO $ do
     w.history.replaceState kept "" (Just (here <> "#" <> encodeComponent place))
 
 -- | Go to a route in place of the address the page is at
--- ('Router.redirect'), keeping the address's fragment: a page's
+-- ('Router.redirect'), keeping the entry's number ('replacingEntry')
+-- and the address's fragment: a page's
 -- permanent address (@\/l\/17\/#setup@) becomes the page's own
 -- (@\/s\/docs\/p\/guide\/#setup@), and the page scrolls to the place
 -- once shown ('revealFragment'). The router writes the route's address
@@ -280,7 +281,9 @@ markFragment place = when inBrowser . liftIO $ do
 redirectKeepingFragment :: (MonadIO m) => Router Route -> Route -> m ()
 redirectKeepingFragment router r = liftIO $ do
   fragment <- if inBrowser then Window.window >>= \w -> w.location.hash else pure ""
-  Router.redirect router r
+  -- The router writes no state into the entry it replaces: the entry's
+  -- number, which 'historyGo' counts the history by, is written back.
+  replacingEntry (Router.redirect router r)
   keepFragment fragment
 
 -- | Put a fragment (@#setup@) on the address the page is at now, in the
