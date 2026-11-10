@@ -73,7 +73,6 @@ import {
   currentCompletions,
   insertCompletionText,
   pickedCompletion,
-  selectedCompletionIndex,
 } from "@codemirror/autocomplete";
 import { ChangeSet, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
@@ -704,7 +703,8 @@ const mentionSource = (people) => {
 // code, math, a link or HTML, where a mention does not count either.
 //
 // Enter chooses an emoji only once two letters of a name are typed, or
-// once an entry was chosen with the arrows: a colon, or a smiley such as
+// once the reader moved in the list with the arrows or Page Up and Page
+// Down (to any entry, the first too): a colon, or a smiley such as
 // ":p", at the end of a line, then Enter, is a new line. Tab and a click
 // choose at once. Escape closes the list and writes a backslash before its
 // colon ("\:", "-\:"), as one step of the undo: the colon is then text,
@@ -787,13 +787,32 @@ const emojiOfOption = {
 const completions = (host) => {
   const people = asker(host, "wiki-mention");
   const names = asker(host, "wiki-emoji");
+  // Whether the reader moved in the emoji's list with the keys (an arrow,
+  // Page Up or Page Down) since it was shown for the letters typed: what
+  // was typed then ({from, letters}), or null. A move counts whichever
+  // entry it lands on, the first too (ArrowDown in a list of one, or down
+  // and back up). It is forgotten when the list closes, and does not count
+  // once other letters are typed.
+  let moved = null;
+  const moving = (binding) => ({
+    ...binding,
+    run: (view) => {
+      const done = binding.run(view);
+      if (done && emojiShown(view.state)) moved = emojiTyped(view.state, view.state.selection.main.head);
+      return done;
+    },
+  });
+  const forgetMoves = EditorView.updateListener.of((update) => {
+    if (moved !== null && completionStatus(update.state) !== "active") moved = null;
+  });
   // Enter chooses a mention at once, and an emoji as said above; when it
   // chooses nothing, it is a new line.
   const enter = (view) => {
     if (!emojiShown(view.state)) return acceptCompletion(view);
     const typed = emojiTyped(view.state, view.state.selection.main.head);
     if (typed === null) return false;
-    if (typed.letters.length < enterAfter && (selectedCompletionIndex(view.state) ?? 0) === 0) return false;
+    const chosen = moved !== null && moved.from === typed.from && moved.letters === typed.letters;
+    if (typed.letters.length < enterAfter && !chosen) return false;
     return acceptCompletion(view);
   };
   // Escape acts only on a list that is shown: the library's closes a
@@ -819,8 +838,9 @@ const completions = (host) => {
   // Tab does not indent and Escape does not close a menu. A key the list
   // does not act on goes on as before.
   const own = new Set(["Enter", "Escape"]);
+  const moves = new Set(["ArrowDown", "ArrowUp", "PageDown", "PageUp"]);
   const keys = [
-    ...completionKeymap.filter((binding) => !own.has(binding.key)),
+    ...completionKeymap.filter((binding) => !own.has(binding.key)).map((binding) => (moves.has(binding.key) ? moving(binding) : binding)),
     { key: "Enter", run: enter },
     { key: "Escape", run: escape },
     { key: "Tab", run: acceptCompletion },
@@ -833,6 +853,7 @@ const completions = (host) => {
         defaultKeymap: false,
         addToOptions: [emojiOfOption],
       }),
+      forgetMoves,
       Prec.highest(keymap.of(keys.map((binding) => ({ ...binding, stopPropagation: true })))),
     ],
     mentioned: people.answer,
