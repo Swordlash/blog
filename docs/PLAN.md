@@ -420,7 +420,9 @@ confirms it against reality and the plan is amended if it does not hold.
     header is a literal in the wizard and the other way round, checked by a test, so
     the two cannot drift; `--args-from FILE` runs the answers without screens for the
     tests (`toolchain/test-configure.sh`, run by the deploy test with
-    `WIKI_TEST_WIZARD=1`, not in CI: it compiles brick).
+    `WIKI_TEST_WIZARD=1`, which CI's `deploy` group sets since #234: brick
+    comes from the cabal store the `unit` group saves, and on CI a missing
+    `script(1)` fails the screens case instead of skipping it).
 36. **Links to pages, sections, boxes and selected text; the home page's options in
     its editor** (the owner, 2026-11-03, issue #120, built by WP5.53). The editor's
     "Link to a page" (Ctrl+Shift+K) picks a page through the search's picker (the
@@ -1412,16 +1414,6 @@ repository, which the wiki pins since #227.
   id, and an id written by hand (`## Title {#setup}`) is the one that
   survives a rename; the guide says so. #194 stays open until this is
   built or the owner drops it.
-- **WP5.83 The editor's help lists "Emoji"; CI runs the wizard's test.**
-  The guide has a section "Emoji" since #231, and the editor's help dialog
-  (`Wiki.App.Help.helpSections`) does not list it. `toolchain/test-configure.sh`
-  runs nowhere but by hand (`WIKI_TEST_WIZARD=1`), though CI's `unit` job
-  already compiles brick into the store the `deploy` job restores: the
-  `deploy` job runs it. The maker's test variables
-  (`WIKI_TEST_MOVE_FAILPOINT`, `WIKI_TEST_MOVE_OPERATIONS`) stay as they
-  are, with no build flag: a flag would mean the tests run another program
-  than the one deployed, and a failpoint set by mistake only makes a move
-  fail and switch back, which is what the tests show.
 - **WP5.84 Plugins, the first package (#186, decision 69; stage 4).** The
   registry of plugins in the application and the two interfaces of the
   first step, an editing agent and diagnostics. The assistant moves behind
@@ -1761,11 +1753,13 @@ needs. Each was true when its package merged; check before relying on one.
   a switch back that stopped part way with the state back on SQLite,
   `--rollback` leaves PostgreSQL's container running with the copy. The
   guard needs `sha256sum`.
-- **The wizard's screen test is not in CI.** `toolchain/test-configure.sh`
-  builds brick and vty and drives the screens through `script(1)` with
-  timed keys (decision 35 keeps it out), so CI passed on #233 while its
-  last case was broken by the new action. It runs locally, 23 cases; one
-  line in the unit job would run it, if its timed case holds on a runner.
+- **The maker's test variables stay in the deployed program (WP5.83,
+  #234; left to the session by the owner, 2026-11-10).**
+  `WIKI_TEST_MOVE_FAILPOINT` and `WIKI_TEST_MOVE_OPERATIONS` have no
+  build flag: a flag would mean the tests run another program than the one
+  deployed, and a failpoint set by mistake only makes a move fail and
+  switch back. The README's paragraph on native CI's "three independent
+  hosted jobs" is from before the `deploy` group.
 - **Stage 0's small fixes.** The server does not refuse turning on a second
   factor for an account without a password; only the panel's button is
   disabled (#216). `.editor-pending-note` and the problems count are still
