@@ -168,7 +168,13 @@ spaceLeftOut sel path = path `Set.member` sel.skippedSpaces || spaceAbove sel pa
 
 -- | Whether a page above this one in its space is left out.
 pageAbove :: Selection -> PageRef -> Bool
-pageAbove sel ref = any (\p -> PageRef {space = ref.space, page = p} `Set.member` sel.skippedPages) (properPrefixes ref.page)
+pageAbove sel ref = any (\p -> PageRef {space = ref.space, page = p} `Set.member` sel.skippedPages) (pagesAbove ref.page)
+
+-- | The paths of the pages above a page: its proper prefixes, the empty
+-- path of its space's home page, the root of its pages, among them. The
+-- home page itself has none.
+pagesAbove :: [a] -> [[a]]
+pagesAbove path = [take n path | n <- [0 .. length path - 1]]
 
 -- | Whether a page is imported.
 pageIncluded :: Selection -> PageRef -> Bool

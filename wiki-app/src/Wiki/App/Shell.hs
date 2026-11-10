@@ -153,7 +153,7 @@ import Wiki.App.Islands qualified as Islands
 import Wiki.App.Live (Feed (..), Live (..))
 import Wiki.App.Offline (browserOnline, install, installAvailable, installChanges, offlineCopy)
 import Wiki.App.Recent (rememberVisit)
-import Wiki.App.Route (AdminSection, Route (..), adminSections, sectionName, sectionTitle)
+import Wiki.App.Route (AdminSection, Route (..), adminSections, sectionName, sectionTitle, settledRoute)
 import Wiki.App.Route qualified as R
 import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Access qualified as AccessView
@@ -471,7 +471,7 @@ component =
         -- On a backend that would wait, it is loaded in 'Initialize'
         -- instead, unless the backend has it cached.
         initialState = \Input {router, welcome, demo, migration, accounts, live} -> do
-          route <- Router.current router
+          route <- settledRoute <$> Router.current router
           -- The tab's live channel, made before any view: a page shown from
           -- the first render watches its page from its own initializer,
           -- which runs before the shell's.
@@ -1532,7 +1532,7 @@ component =
       -- The questions and results about the wiki's data are not shown
       -- again on coming back to the administration.
       shut <- (.) <$> shutMenu <*> shutSwitcher
-      modify (shut . \st -> st {route = r, settled = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
+      modify (shut . \st -> st {route = settledRoute r, settled = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
       canonicalAdmin
       whatsNewSeen
       loadHere False
@@ -1545,7 +1545,7 @@ component =
       when (isJust next) (lift endPreload)
       loadWorld
       modify (\st -> st {generation = st.generation + 1})
-      for_ next $ \r -> modify (\st -> st {route = r, settled = False, leaving = Nothing})
+      for_ next $ \r -> modify (\st -> st {route = settledRoute r, settled = False, leaving = Nothing})
       loadHere True
       -- The router is told last, so that the route it announces is the one
       -- already shown, which 'Arrived' ignores. From the editor's preview

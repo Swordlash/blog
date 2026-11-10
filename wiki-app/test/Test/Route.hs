@@ -216,6 +216,9 @@ spec = describe "Wiki.App.Route" $ do
       -- The route of a page from its path: the space's own for the home page.
       pageRoute docs [] `shouldBe` Space docs
       pageRoute docs (slugs ["tour"]) `shouldBe` Page docs (slugs ["tour"])
+      -- A route made with the empty path is shown as the space's.
+      settledRoute (Page docs []) `shouldBe` Space docs
+      settledRoute (EditPage docs []) `shouldBe` EditPage docs []
 
     it "reads an address without its last slash too" $ do
       parse route "/s/docs" `shouldBe` Right (Space (slugs ["docs"]))

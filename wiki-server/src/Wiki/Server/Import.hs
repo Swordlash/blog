@@ -91,7 +91,7 @@ import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Permission (spaceChain)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), hasHome, pageAt, pagePath, parentOrRoot, spaceTreeOrder, withHome, withProfile)
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), hasHome, pageAtExactly, pagePath, parentOrRoot, spaceTreeOrder, withHome, withProfile)
 import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Secret (Kept)
 import Wiki.Server.Storage (Storage, administratorUser, cacheServerSettings, reading, storageDataDir, writingThen)
@@ -158,7 +158,7 @@ matchArchive serverSpaces serverPages a =
     matchPages serverSpace theirs s =
       let ours = Map.findWithDefault [] s.id pagesOf
           byId = Map.fromList [(p.id, p) | p <- ours]
-       in [ PageMatch {archived = p, path, server = serverSpace >>= \t -> pageAt t theirs path}
+       in [ PageMatch {archived = p, path, server = serverSpace >>= \t -> pageAtExactly t theirs path}
           | p <- pageTreeOrder s.pageOrder ours
           , Just path <- [pagePath s (`Map.lookup` byId) p.id]
           ]

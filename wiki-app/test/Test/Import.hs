@@ -97,6 +97,14 @@ spec = describe "Wiki.App.Import" $ do
     pageMark sel (ref "docs/notes" "n1/sub") `shouldBe` fixed
     choicesOf plan sel `shouldBe` importEverything {skipPages = [ref "docs/notes" "n1"]}
 
+  it "leaves out every page of a space whose home page, at the empty path, is unchecked" $ do
+    let rooted = ImportPlan [SpacePlan {path = slugs "docs", name = "Docs", status = SpaceNew, pages = [newPage "" "Home", newPage "tour" "Tour", newPage "tour/more" "More"]}]
+        sel = everything & setPage (ref "docs" "") False
+    pageMark sel (ref "docs" "") `shouldBe` off'
+    pageMark sel (ref "docs" "tour") `shouldBe` fixed
+    pageMark sel (ref "docs" "tour/more") `shouldBe` fixed
+    choicesOf rooted sel `shouldBe` importEverything {skipPages = [ref "docs" ""]}
+
   it "leaves out a page unchecked with the pages under it" $ do
     let sel = everything & setPage (ref "docs" "tour/more") False & setPage (ref "docs" "tour") False
     pageMark sel (ref "docs" "tour") `shouldBe` off'

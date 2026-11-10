@@ -81,6 +81,7 @@ module Wiki.App.Route
   , routeOfHref
   , spaceRouteOf
   , pageRoute
+  , settledRoute
 
     -- * Links in pages
   , PageLink (..)
@@ -531,6 +532,15 @@ pageRoute :: [Slug] -> [Slug] -> Route
 pageRoute sp = \case
   [] -> Space sp
   path -> Page sp path
+
+-- | 'settledRoute' is a route as the application shows it: a 'Page' with
+-- the empty path, the home page's, is its space's own route ('pageRoute'),
+-- which shows a blog's posts where the page alone would not. A route made
+-- from a page's path goes through it before it is shown.
+settledRoute :: Route -> Route
+settledRoute = \case
+  Page sp [] -> Space sp
+  r -> r
 
 -- | A link in a page to another place in the wiki: the route, and the
 -- fragment the link names there (with its @#@, or empty).

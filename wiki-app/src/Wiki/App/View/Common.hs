@@ -168,6 +168,7 @@ homeSpace ctx = Home.isHomeSpace ctx.session.homePage
 documentRoute :: Context -> SpaceId -> Route -> Route
 documentRoute ctx sid r | not (homeSpace ctx sid) = r
 documentRoute _ _ r = case r of
+  Space {} -> Home
   Page {} -> Home
   EditPage {} -> EditHome
   PageSource {} -> HomeSource

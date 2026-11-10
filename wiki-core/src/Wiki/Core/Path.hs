@@ -33,6 +33,7 @@ module Wiki.Core.Path
   , pathUnder
   , resolveUnder
   , resolveUnderM
+  , resolveFromRoot
 
     -- * Paths as text
   , renderPath
@@ -173,6 +174,17 @@ resolveUnderM (Just root) child path =
     found -> pure found
   where
     under p = bimap (\e -> PathError {resolved = root : e.resolved, missing = e.missing}) (root :) <$> walkFrom child (Just (nodeId root)) p
+
+-- | The nodes a path goes through in a tree whose root has no segment
+-- ('pathUnder'), the root first, read exactly as written: 'resolveUnder'
+-- without its rule for old addresses. What compares a path with another,
+-- or matches one page with another by path, reads it so: an old address
+-- is for a person who typed it, and could name another page than the one
+-- the path is now. With no root, it is 'resolvePath'.
+resolveFromRoot :: (TreeNode a) => Maybe a -> (Maybe (NodeId a) -> Slug -> Maybe a) -> [Slug] -> Either (PathError a) [a]
+resolveFromRoot Nothing child path = resolvePath child path
+resolveFromRoot (Just root) child path =
+  bimap (\e -> PathError {resolved = root : e.resolved, missing = e.missing}) (root :) (runIdentity (walkFrom (\p s -> Identity (child p s)) (Just (nodeId root)) path))
 
 -- | A path as written in an address: its slugs separated by slashes, with
 -- no slash at either end: @a\/b@.

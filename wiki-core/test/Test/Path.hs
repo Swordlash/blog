@@ -177,6 +177,11 @@ spec = describe "Path" $ do
     it "reads an old address, with the home page's slug first, without that segment" $ do
       pageAt rootedSpace rooted (slugs ["home", "tour"]) `shouldBe` Just tour
       pageAt rootedSpace rooted (slugs ["home"]) `shouldBe` Just home
+    it "reads a path exactly as written, without the rule for old addresses, for what matches pages" $ do
+      pageAtExactly rootedSpace rooted (slugs ["home"]) `shouldBe` Nothing
+      pageAtExactly rootedSpace rooted (slugs ["tour"]) `shouldBe` Just tour
+      pageAtExactly rootedSpace rooted [] `shouldBe` Just home
+      pageAtExactly rootedSpace (homeChild : rooted) (slugs ["home"]) `shouldBe` Just homeChild
     it "prefers the path as written to the old address" $ do
       let withChild = homeChild : rooted
       pageAt rootedSpace withChild (slugs ["home"]) `shouldBe` Just homeChild

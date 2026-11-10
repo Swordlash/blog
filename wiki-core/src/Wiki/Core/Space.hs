@@ -47,6 +47,7 @@ module Wiki.Core.Space
   , pagePath
   , pagesAt
   , pageAt
+  , pageAtExactly
   , parentOrRoot
   , strayRoots
   , rootedPages
@@ -75,7 +76,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..), Sibling (..), childrenInOrder, treeOrder)
 import Wiki.Core.Page qualified as Page
-import Wiki.Core.Path (PathError, TreeNode (..), findChild, pathUnder, resolveUnder)
+import Wiki.Core.Path (PathError, TreeNode (..), findChild, pathUnder, resolveFromRoot, resolveUnder)
 import Wiki.Core.Slug
 import Wiki.Core.User (Avatar (..))
 import Wiki.Core.Vault (KeyId)
@@ -496,6 +497,14 @@ pagesAt space pages = resolveUnder (rootPage space >>= \r -> find (\p -> nodeId 
 -- | 'pageAt' is the page a path names in a space ('pagesAt'), if any.
 pageAt :: (TreeNode p, NodeId p ~ PageId) => Space -> [p] -> [Slug] -> Maybe p
 pageAt space pages path = rightToMaybe (pagesAt space pages path) >>= lastMay
+
+-- | 'pageAtExactly' is the page at a path in a space, the path read as
+-- written, from under the space's root, without the rule for old
+-- addresses ('Wiki.Core.Path.resolveFromRoot'). An import and the guide's
+-- update match pages by path with it: a path of theirs is a page's path as
+-- it is now, and an old address could name another page.
+pageAtExactly :: (TreeNode p, NodeId p ~ PageId) => Space -> [p] -> [Slug] -> Maybe p
+pageAtExactly space pages path = rightToMaybe (resolveFromRoot (rootPage space >>= \r -> find (\p -> nodeId p == r) pages) (findChild pages) path) >>= lastMay
 
 -- | 'parentOrRoot' is the parent a page created or moved in a space gets
 -- when it is given this one: the one given, or the space's root

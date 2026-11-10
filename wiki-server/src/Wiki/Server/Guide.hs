@@ -69,7 +69,7 @@ import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..), savedAs)
 import Wiki.Core.Slug (Slug, slugText)
-import Wiki.Core.Space (Space (..), pageAt, pagePath, rootPage)
+import Wiki.Core.Space (Space (..), pageAtExactly, pagePath, rootPage)
 import Wiki.Server.Import (attach, mergeArchive)
 import Wiki.Server.Storage (Storage, publishing, reading, storageDataDir, writingEither, writingThen)
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, operator)
@@ -344,7 +344,7 @@ updateGuide st actor address = do
           -- How a line names the page: by its path, and the tour, at the
           -- empty path, as the home page.
           shown = if null r.path then "home page" else at
-          found = pageAt g pages r.path
+          found = pageAtExactly g pages r.path
           recorded = Map.lookup at record.pages
           release = writtenHash r.page.title r.page.body
           hashOf p = writtenHash p.title p.body
@@ -369,7 +369,7 @@ updateGuide st actor address = do
               Just (parentPath, _) -> do
                 -- Under the tour, the root, for a page at the top of the
                 -- release's paths.
-                let parent = maybe (Left ()) (Right . Just) (pageAt g pages parentPath)
+                let parent = maybe (Left ()) (Right . Just) (pageAtExactly g pages parentPath)
                 case parent of
                   Left () -> pure [LeftAlone (shown <> ": new in this release, but the page it goes under is not at " <> pathText parentPath <> ", so not added")]
                   Right under -> [Added shown, Wrote at (writtenHash r.page.title r.page.body)] <$ addPage now archive g under r

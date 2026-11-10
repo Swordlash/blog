@@ -701,7 +701,9 @@ data RootsRead = RootsRead
 -- ("Wiki.Server.Storage.Migrate.Code.Step0013", WP5.78 of docs/PLAN.md):
 -- after the migration, every page that was at the top of its space's
 -- pages answers at the address it had, and every space answers at its
--- own, with its home page at the space's address (the empty path). A
+-- own, with its home page at the space's address (the empty path). The
+-- home page is checked there and not at its old address, which a page
+-- under it with the home page's slug rightly takes over. A
 -- space whose pages answer 404 or 409 is left out, as the pages check
 -- leaves it out.
 rootsCheck :: Check
@@ -726,7 +728,10 @@ readRoots manager server = runExceptT $ do
       Nothing -> pure Nothing
       Just listed -> do
         at <- pagesAtOf <$> asList ("the pages of space " <> i) listed
-        pure (Just ((i, path, home), [(i, p.page, built) | p <- at, isNothing p.parent, Just built <- [pathAsBuilt rooted home at p.page]]))
+        -- The home page is checked at the space's address, where it is
+        -- after the step: its old address may now name a page under it
+        -- with the same slug, which the path as written reaches first.
+        pure (Just ((i, path, home), [(i, p.page, built) | p <- at, isNothing p.parent, Just p.page /= home, Just built <- [pathAsBuilt rooted home at p.page]]))
   pure RootsRead {spaces = map fst (catMaybes read'), tops = concatMap snd (catMaybes read')}
 
 -- | Whether every space and every page that was at the top answers where
