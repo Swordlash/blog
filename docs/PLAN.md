@@ -1318,7 +1318,13 @@ repository, which the wiki pins since #227.
     between; not two clients.
   - The export key is imported for `deriveKey` only, as the wiki's binding
     imports it. Where the page has no WebCrypto the sign-in still succeeds
-    and gives no key, as now.
+    and gives no key, as now. This is not a corner: the owner's
+    production wiki at work is served over plain HTTP, where a browser
+    gives no `crypto.subtle` (the owner, 2026-11-10). Signing in and
+    setting a password over plain HTTP are part of the package's
+    acceptance, with a browser test that takes `crypto.subtle` away and
+    signs in; what needs WebCrypto there (the vault, encrypted spaces) is
+    unavailable as before, and passkeys need HTTPS as before.
   - opaque-hs's client finds serenity-kit through
     `globalThis.opaqueHsSerenity`. The page sets it to the island's loader
     (`wikiIslands.opaque`), so that the library is still fetched the first
