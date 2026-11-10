@@ -468,7 +468,9 @@ runMigrate options =
 
 -- | What @wiki-server check@ found, and how the program ends: 0 when
 -- everything read, 4 for a database not at this program's version of the
--- schema, 5 for one that does not read, 1 when it could not be opened.
+-- schema, 5 for one that does not read or breaks a rule the wiki keeps (a
+-- second root in a space, a password no sign-in can use), 1 when it could
+-- not be opened.
 data CheckOutcome
   = -- | Everything read: a line per table, with its rows, then how the
     -- accounts sign in ('Wiki.Server.WaysIn.waysInLines'). An account

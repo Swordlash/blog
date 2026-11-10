@@ -10,7 +10,12 @@ title: The upgrade's check looks at how people sign in
   password's record missing, one that does not decode, or an old-style
   hash the server cannot read), and names each such account. A deploy
   that finds one rolls back by itself, and a copy to PostgreSQL refuses
-  to copy it.
+  to copy it:
+
+  ```text
+  wiki-server: The account anna (3f0c…) has an OPAQUE record without its stretch (opaque_stretch is empty), which no sign-in can use.
+  wiki-server: Every record read, but some break a rule of the wiki's (above).
+  ```
 
 - When the check passes, it ends by saying how the accounts sign in, and
   which enabled accounts have no way in at all:
@@ -33,4 +38,8 @@ title: The upgrade's check looks at how people sign in
 - The rehearsal before a deploy has a new check, "ways in": every account
   that could sign in with a password before the upgrade must still be
   able to after it. If one cannot, the deploy stops before it touches the
-  running wiki, and says which login.
+  running wiki, and says which login:
+
+  ```text
+  wiki-server: ways in: failed: the login anna signed in with a password before the upgrade, and after it users list says no (no password)
+  ```

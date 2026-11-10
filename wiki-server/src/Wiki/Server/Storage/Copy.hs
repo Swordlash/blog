@@ -180,7 +180,9 @@ copyDatabase source target =
       Left (UnreadableTables tables) -> throwError (SourceUnreadable [t.table <> ": " <> why | t <- tables, Left why <- [t.rows]])
       Left (UnreadableRecords why) -> throwError (SourceUnreadable [why])
       -- A rule of the wiki's broken in the source (a space with a second
-      -- page at the top of its pages) is refused as the check refuses it.
+      -- page at the top of its pages, an account whose password no sign-in
+      -- can use) is refused as the check refuses it. An account with no
+      -- way in breaks no rule, and is copied.
       Left (BrokenRecords broken) -> throwError (SourceUnreadable broken)
       Right _ -> pass
     held <- liftIO (runDb source tableNames)
