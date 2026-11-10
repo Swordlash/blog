@@ -19,7 +19,7 @@ import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
 import Test.Browser.Mount (clickButton, slugs, startChanged, startWith)
-import Test.Browser.Text (clearBody, completing, editorSelection, editorText, markdown, mathIn, setMarkdown)
+import Test.Browser.Text (clearBody, completing, editorSelection, editorText, markdown, mathIn, setMarkdown, utf16Length)
 import Test.Hspec.Halogen
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.App.Assistant (MonadAssistant)
@@ -804,9 +804,13 @@ spec m = do
     press "Control+End"
     typeText text "\n\nTyped last."
     for_ [1 .. 5 :: Int] (const (press "ArrowLeft"))
+    -- The cursor five characters from the end: 'at' counts characters, to
+    -- cut the text; the selection counts UTF-16 units, as the browser
+    -- does, and the guide has characters of two units (🤔) before it.
     let typed = original <> "\n\nTyped last."
         at = T.length typed - 5
-    editorSelection ui `shouldReturn` (at, at)
+        atUnits = utf16Length typed - 5
+    editorSelection ui `shouldReturn` (atUnits, atUnits)
     scroller <- find ui ".editor-cm .cm-scroller"
     scrolled <- getProperty scroller "scrollTop"
     scrolled `shouldNotBe` "0"
@@ -818,7 +822,7 @@ spec m = do
     shouldBeVisible text
     shouldBeHidden =<< find ui ".editor-preview"
     markdown ui `shouldReturn` typed
-    editorSelection ui `shouldReturn` (at, at)
+    editorSelection ui `shouldReturn` (atUnits, atUnits)
     getProperty scroller "scrollTop" `shouldReturn` scrolled
     -- The focus is back at the cursor: the next key goes there.
     press "X"

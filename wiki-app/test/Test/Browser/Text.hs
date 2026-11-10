@@ -10,6 +10,7 @@ module Test.Browser.Text
   ( editorText
   , markdown
   , editorSelection
+  , utf16Length
   , movedBy
   , completing
   , setMarkdown
@@ -57,6 +58,14 @@ editorSelection :: Mounted s q o m -> PageM s (Int, Int)
 editorSelection ui = do
   _ <- editorText ui
   unsafeIOToPageM ((,) <$> js_selection_start <*> js_selection_end)
+
+-- | The length of a text in UTF-16 units, as the browser counts it and
+-- 'editorSelection' reports it: a character outside the Basic Multilingual
+-- Plane (most emoji, such as 🤔) is two units, every other one is one.
+-- 'Data.Text.length' counts characters, so the two differ in a text with
+-- such a character.
+utf16Length :: Text -> Int
+utf16Length t = sum [if c > '\xFFFF' then 2 else 1 | c <- toS t :: [Char]]
 
 -- | How CodeMirror's box differs from the textarea's it took the place of:
 -- nothing (the empty text) if the page did not move as it took over.
