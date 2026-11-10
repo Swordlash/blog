@@ -1242,6 +1242,35 @@ confirms it against reality and the plan is amended if it does not hold.
     13's rule (`rootedPages`). The rehearsal builds each path as the
     program it asks builds it, told by the schema version on `/healthz`,
     which is stable; its `roots` check is step 13's.
+69. **Plugins: one interface, built-in plugins in the page and external
+    ones in a sandboxed frame (#186; the owner, 2026-11-10).** The plan is
+    the session's first comment on #186, and the owner's answers the same
+    day settle its six questions. A plugin is a manifest (id, name,
+    version, the API version it speaks, what it contributes, its options,
+    the permissions it asks for) and code. The application has one small
+    interface for each thing a plugin can contribute. A built-in plugin is
+    Haskell compiled into the application, trusted, and implements the
+    interface as Haskell values. An external plugin implements the same
+    interface over versioned JSON messages, and runs in an
+    `<iframe sandbox="allow-scripts">` without `allow-same-origin`: an
+    origin of its own, so no cookie, no storage of the wiki's, no key and
+    no DOM of the page; it talks with `postMessage` to a bridge that
+    answers only what the plugin was granted, and a Content-Security-Policy
+    on the frame closes its network but for the hosts its manifest names
+    and the user approved. A sandboxed frame needs no secure context, so
+    this works over plain HTTP. The answers: (1) the wiki's administrator
+    turns external plugins on and may install some for everyone, and a user
+    may add their own, with a warning before an external one is added;
+    (2) a user may turn a built-in plugin off, and the administrator may
+    turn one off for the whole wiki; (3) the first package is the interface
+    and the two built-in plugins, with no external code; (4) a plugin's
+    options are kept per user on the server in the clear, and its secrets
+    (an assistant's API key) in the vault; (5) an external plugin's code is
+    an uploaded bundle, kept by the server and pinned by its hash, before
+    any loading from a URL; (6) a plugin sees only the page being edited,
+    and only while its editor is open, and anything more is a permission of
+    its own, which may be as fine as a contribution needs. The packages are
+    under "Open work".
 
 ## Repository layout
 
@@ -1323,8 +1352,10 @@ and the PostgreSQL tests copying a migrated template (#221). Stage 2,
 the content's structure, on #202: #195 is done (decision 65, #224) and
 #197 was closed, since comments worked already; #201 (one home page per
 space, the root of its pages) is done (decision 68, #225 and #229). So
-stage 2 is done. Stage 3, the editor, is next: #187 (autocompletion),
-#189 (backlinks), #194 (persistent links). Stage 4, plugins: #186, then
+stage 2 is done. Stage 3, the editor, is next: #194 (persistent links)
+first, WP5.81 and WP5.82, since what a link names is what #187
+(autocompletion) completes and #189 (backlinks) records. Stage 4,
+plugins: #186 (decision 69, WP5.84 first), then
 #196 and #200 (inline HTML and SVG, with the plugins' sandbox), #188
 (emojis: shortcodes such as `:tada:` render already, through
 commonmark-extensions; what is left is the editor's part, a toolbar
@@ -1336,6 +1367,72 @@ Alongside, when there is room: #213 (WP5.74b3, after #201). #203
 opaque-hs, is done (#230, decision 59). #212 (WP5.74a2b) was closed in opaque-hs's own
 repository, which the wiki pins since #227.
 
+- **WP5.81 Persistent links: a page's address by its id (#194, the first
+  of two).** A page's id never changes, and every answer of the API
+  carries it, but no address uses it: a link is a path, read when the page
+  is rendered, and a moved page's old address leads nowhere. Goal: an
+  address that names a page by its id, `/l/<page id>/` (another prefix if
+  the route's grammar has that one taken), with a fragment. The server
+  answers it with a redirect to the page's address of the moment when the
+  reader may view the page, and otherwise exactly as it answers an address
+  that names nothing; the application, reading it (the demo, a link
+  followed inside the wiki), asks where the page is and replaces the
+  address, the fragment kept, through signing in too. The read by id says
+  nothing of a page its reader may not view, a sealed one and one in the
+  container of personal spaces included: the same answer as for an id no
+  page has. An id is any text (the demo's are numbers), so nothing parses
+  one. Markdown: `classifyDestination` in wiki-core knows the form, so
+  that #187 and #189 can use it; a link by id to a page of the space being
+  read goes straight to that page, and one to a page the reader's browser
+  does not hold is a link all the same, resolved when followed, never
+  shown as unresolved. Who writes the form: the page's menu gets "Copy
+  permanent link"; the hover `#` of a heading and of a box copies the
+  permanent address with its fragment; the editor's "Link to a page" gets
+  a box "Permanent link", off by default, since the path reads better in
+  the source. The selection's "Copy link" stays as it is until WP5.82.
+  The PDF and Word exports read the form as they read a path. An import
+  that gives a page a new id, because the wiki uses the archive's id
+  already, leaves links by the old id in the imported text leading to the
+  page that holds that id: documented, not rewritten. The guide says how
+  to make a permanent link. Tests: the route's round trip; the server's
+  redirect and its refusals (a hidden page, a sealed one, signed out); a
+  link by id after a move to another parent and to another space; the
+  three ways of copying, in the browser.
+- **WP5.82 Persistent links: a place on the page that survives edits
+  (#194, the second of two; to be confirmed by the owner).** A heading's
+  generated id changes when the heading is renamed or one with the same
+  text is written above it, and a box's number when a box is added above;
+  the selection's "Copy link" writes the browser's text fragment, which
+  the wiki does not read and which the application's own navigation loses.
+  Proposal: the selection's "Copy link" writes a quote in the fragment in
+  the wiki's own form (the exact text with a little before and after, as a
+  comment's anchor has), on the permanent address; the page view finds it
+  with `Wiki.Core.Anchor.locate`, scrolls to it and marks it, and says so
+  when the text is no longer on the page. A heading stays linked by its
+  id, and an id written by hand (`## Title {#setup}`) is the one that
+  survives a rename; the guide says so. #194 stays open until this is
+  built or the owner drops it.
+- **WP5.83 The editor's help lists "Emoji"; CI runs the wizard's test.**
+  The guide has a section "Emoji" since #231, and the editor's help dialog
+  (`Wiki.App.Help.helpSections`) does not list it. `toolchain/test-configure.sh`
+  runs nowhere but by hand (`WIKI_TEST_WIZARD=1`), though CI's `unit` job
+  already compiles brick into the store the `deploy` job restores: the
+  `deploy` job runs it. The maker's test variables
+  (`WIKI_TEST_MOVE_FAILPOINT`, `WIKI_TEST_MOVE_OPERATIONS`) stay as they
+  are, with no build flag: a flag would mean the tests run another program
+  than the one deployed, and a failpoint set by mistake only makes a move
+  fail and switch back, which is what the tests show.
+- **WP5.84 Plugins, the first package (#186, decision 69; stage 4).** The
+  registry of plugins in the application and the two interfaces of the
+  first step, an editing agent and diagnostics. The assistant moves behind
+  the first and the errors of KaTeX, TikZ and Mermaid behind the second,
+  with no change in what either does. Which plugins are on and their
+  options are kept per user on the server, and the administrator can turn
+  a built-in plugin off for the whole wiki. Settings gets a tab "Plugins"
+  that lists the built-in plugins, turns them on and off and shows their
+  options. No external code yet: that is the package after (the manifest,
+  the upload, the sandboxed frame, the bridge and protocol version 1, an
+  example plugin and a page of the guide on writing one).
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
