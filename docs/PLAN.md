@@ -1155,8 +1155,8 @@ done. Stage 1,
 foundations, is done: #207 (compile times, #220, decision 63), #202
 (migrations in code, with the rest of #205: #222, decisions 58 and 64),
 and the PostgreSQL tests copying a migrated template (#221). Stage 2,
-the content's structure, on #202, is next: #195 (the marker pair for
-every block of the wiki's own, reduced by the owner on 2026-11-10 from
+the content's structure, on #202, is next: #195 (one marker pair,
+`[[!name]]` … `[[/name]]`, for every block of the wiki's own, reduced by the owner on 2026-11-10 from
 "one syntax for extensions and styles": WP5.77 below), #197 (comments:
 they work already, so the owner closed it on 2026-11-10; the guide's
 section on them comes with WP5.77), #201
@@ -1173,40 +1173,45 @@ Alongside, when there is room: #213 (WP5.74b3, after #201), #212
   (#195; the owner, 2026-11-10). The issue asked for every
   extension, boxes and code blocks included, in one new syntax, with a
   rewrite of the existing pages. The owner reduced it: what annoyed was
-  `:::` in presentations. So the spoiler's marker pair becomes the form of
-  every block of the wiki's own, the fenced div and pandoc's pause are
-  removed, and nothing else changes: boxes stay `> [!KIND]` (GitHub's
-  syntax, exported as pandoc's alerts), code fences and headings keep their
-  attributes.
-  - **The form.** `[[name]]{attributes}(Title)` on a line of its own, the
+  `:::` in presentations. So the spoiler's marker pair, with an
+  exclamation mark in its start, becomes the form of every block of the
+  wiki's own, the fenced div and pandoc's pause are removed, and nothing
+  else changes: boxes stay `> [!KIND]` (GitHub's syntax, exported as
+  pandoc's alerts), code fences and headings keep their attributes.
+  - **The form.** `[[!name]]{attributes}(Title)` on a line of its own, the
     blocks, then `[[/name]]` on a line of its own, for a fixed list of
-    names; any other `[[…]]` is a wiki link as before, and a marker in the
-    middle of a line is one too. The braces hold pandoc's attributes, the
-    ones a code fence and a heading take: `#id`, `.class`, `key=value`.
-    The names: `spoiler` (as today, with its description in the
-    parentheses); `notes` and `incremental` (a deck's speaker notes and
-    its lists shown item by item); `div` (a box with the classes its
-    braces give, what `::: summary` was: `[[div]]{.summary}`); and two that
-    are one line, with no end marker: `[[slides]]{theme=dark aspect=4:3}`
-    (the deck's look) and `[[pause]]` (the next step of a slide). Only a
-    spoiler takes parentheses.
-  - **The names against wiki links.** The names are read in lower case
-    only. `[[notes]]`, `[[incremental]]`, `[[div]]` and `[[pause]]` at the
-    start of a line are markers from now on, in a list item too, and
-    never a link to a page of that name; `[[slides]]` is the marker only
-    with braces after it, and a link without. A link to such a page, alone
-    on a line, is written with its text, `[[notes|Notes]]`, or among other
-    words. A page that has such a link today shows a block never closed,
-    in red, whose reason names that way out: the changelog says so, as a
-    change that breaks.
+    names. The braces hold pandoc's attributes, the ones a code fence and
+    a heading take: `#id`, `.class`, `key=value`. The names: `spoiler`
+    (with its description in the parentheses, and on a heading as today:
+    `## [[!spoiler]] Question`); `notes` and `incremental` (a deck's
+    speaker notes and its lists shown item by item); `div` (a box with the
+    classes its braces give, what `::: summary` was: `[[!div]]{.summary}`);
+    and three that are one line, with no end marker:
+    `[[!slides]]{theme=dark aspect=4:3}` (the deck's look), `[[!pause]]`
+    (the next step of a slide) and `[[!toc]]` (the page's contents, in
+    place of `[[toc]]`). Only a spoiler takes parentheses.
+  - **The exclamation mark keeps blocks apart from wiki links** (the
+    owner, 2026-11-10: every name added later, a plugin's too, would
+    otherwise take a page's name from `[[page]]`). A page's address cannot
+    hold `!`, so `[[!name]]` is never a link that worked, and `[[notes]]`
+    is always a link. It reads as a box's marker does: `> [!NOTE]`,
+    `[[!notes]]`. At the start of a line `[[!…]]` is always a marker, and
+    one with a name the wiki does not have (names are lower case) is an
+    error line; in the middle of a line it is what the inline parser makes
+    of it, a link that leads nowhere. An end marker has no exclamation
+    mark: `[[/name]]` ends the innermost open block when it is of that
+    name, is an error when another block is open inside one of that name,
+    and is the wiki link it always was when no block of that name is open.
+    The forms without the mark, `[[spoiler]]…`, `[[toc]]` and `[[TOC]]`,
+    are no longer read: nobody uses them yet (the owner), so they are wiki
+    links like any other.
   - **A spoiler's name stays its name.** `{answer}` as today, and
     `{#answer}` reads as the same: the name the browser remembers the
     spoiler by (`data-spoiler`), not an HTML id, so two spoilers may share
     one and no link leads to it. The heading's form takes both spellings
     too. A spoiler takes no class and no other attribute. The name in an
-    end marker is optional for every name (`[[/spoiler]]`); when written,
-    it must be the open block's, as today. An end marker ends the
-    innermost open block and only when it is of the same name.
+    end marker's braces is optional (`[[/spoiler]]`); when written, it
+    must be the open spoiler's, as today.
   - **What goes.** `:::` fenced divs and `. . .` as a pause are no longer
     read: nobody has a presentation in production (the owner), so no page
     is rewritten, there is no step of the schema, and the old forms show
@@ -1220,8 +1225,9 @@ Alongside, when there is room: #213 (WP5.74b3, after #201), #212
   - **Errors** show in red where they are, with the reason, in the page
     and through the editor's problems (decision 49), as a spoiler's do: a
     marker that is not a whole one, parentheses on a name that takes none,
-    an end marker with nothing open or of another name, a block never
-    closed, a pause where none is read.
+    a name the wiki does not have, an end marker that crosses another
+    block or carries another spoiler's name, a block never closed, a pause
+    where none is read.
   - **Everything that writes the old forms**: the guide and the Markdown
     reference, the demo's pages, the README's examples (`Test.Readme`),
     the built-in templates, the toolbar if it writes any, the tests, the
@@ -1239,10 +1245,11 @@ Alongside, when there is room: #213 (WP5.74b3, after #201), #212
     tests on the new forms, steps counted as before; the export's tests
     (Beamer's `\pause` and `[<+->]`, notes, the deck's options) passing on
     the new forms; the guide's and the README's tests.
-  - Left for later, when wanted: `[[box]]{.warning}(Title)` beside
+  - Left for later, when wanted: `[[!box]]{.warning}(Title)` beside
     `> [!WARNING]` and kinds of box with a look given on the page (the
-    issue's `color`, `title`, `numbering`); completion of names and
-    attributes after `[[` and `{` (#187); the rest of #191.
+    issue's `color`, `title`, `numbering`); completion of pages after
+    `[[`, of blocks after `[[!` and of attributes after `{` (#187); the
+    rest of #191.
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
