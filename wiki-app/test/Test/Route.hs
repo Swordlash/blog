@@ -2,6 +2,7 @@
 -- written as, and the addresses are the ones the plan names.
 module Test.Route (spec) where
 
+import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Halogen.Router qualified as Router
 import Halogen.Router.Duplex (parse, print)
@@ -84,7 +85,7 @@ genPageId = oneof [elements awkwardIds, toS <$> listOf (elements ("ab9-~./ %#?&(
 
 -- | Ids a path segment cannot hold as they are, or holds only encoded.
 awkwardIds :: [Text]
-awkwardIds = ["4f1c9a2e-7b3d-4c11-9e0a-5d2f6b8c1a3e", "17", "", ".", "..", "~", "~x", "a/b", "a b", "100% ?#&", "zażółć", "(x)", "l"]
+awkwardIds = ["4f1c9a2e-7b3d-4c11-9e0a-5d2f6b8c1a3e", "17", "", ".", "..", "~", "~x", "a/b", "a b", "100% ?#&", "zażółć", "(x)", "l", "a\\b", "t\tu\1v\0w", T.replicate 300 "l"]
 
 -- | A section of the administration, the users' with any listing.
 genSection :: Gen AdminSection
@@ -324,6 +325,10 @@ spec = describe "Wiki.App.Route" $ do
       routeOfHref router "/wiki/" `shouldBe` Just Home
       routeOfHref router "/wiki/search/?q=x" `shouldBe` Just (Search (Just "x") Nothing True)
       routeOfHref router "/wiki/l/17/#setup" `shouldBe` Just (PermanentLink (PageId "17") Nothing)
+      -- A page's id of any text, as the copied link writes it and a click
+      -- on it reads it.
+      for_ awkwardIds $ \t ->
+        routeOfHref router (Router.href router (PermanentLink (PageId t) (Just demoTime)) <> "#setup") `shouldBe` Just (PermanentLink (PageId t) (Just demoTime))
 
     it "leaves everything else alone" $ do
       router <- runMemDOM (Router.newRouter "/wiki/" Unknown route)

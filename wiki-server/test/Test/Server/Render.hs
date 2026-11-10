@@ -18,12 +18,14 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Network.HTTP.Types (Header, hContentType, methodPost, methodPut)
+import Numeric (showHex)
 import Protolude
 import System.FilePath ((</>))
 import Test.Database (Backing, withConnectionTo)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
+import Test.Storage.Fixture (demoArchive)
 import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.ContentPolicy (headerPolicy, pagePolicy)
 import Wiki.Api.Encrypted (EncryptSpace (..), NewGrant (..), NewSealedPage (..), SealedPage (..))
@@ -36,6 +38,7 @@ import Wiki.App.Backend.Http.Client (sessionInfo)
 import Wiki.App.Backend.Http.Preload
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.Core.Encrypted (Encapsulated (..), PageKey (..), SealedContent (..), VersionTag (..))
+import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Path (parsePath)
@@ -334,6 +337,36 @@ permanentAddresses backing = describe "a page's permanent address" $ do
     missingStatus `shouldBe` 404
     appIn missing `shouldSatisfy` T.isInfixOf "error-not-found"
 
+  -- A page's id is any text: an archive imported into an empty server
+  -- keeps its ids, whatever they hold. The address is read from the raw
+  -- path, never as a file's path.
+  it "leads to a page whose id a path segment cannot hold, and answers a hidden one as a missing one, byte for byte" $
+    withArchiveRunning backing awkwardDemo $ \r -> do
+      let address pid = routeAddress "/" (PermanentLink (PageId pid) Nothing)
+          request pid = address pid >>= getRawPath r r.public . encodeUtf8
+      for_ visibleIds $ \(_, pid) -> do
+        reply <- request pid
+        (pid, reply.status, maybe False ("/s/docs/" `BS.isPrefixOf`) (header "Location" reply)) `shouldBe` (pid, 302, True)
+        -- The API takes the id as its other addresses of a page do.
+        located <- getRawPath r r.public ("/api/v1/pages/" <> encodeUtf8 (pathSegment pid) <> "/location")
+        (pid, located.status) `shouldBe` (pid, 200)
+      for_ hiddenIds $ \(_, pid) -> do
+        -- An id no page has, as long and with the same characters.
+        let missing = T.reverse pid <> "-gone"
+        hiddenAddress <- address pid
+        missingAddress <- address missing
+        hidden <- request pid
+        nothing <- request missing
+        (pid, hidden.status, nothing.status) `shouldBe` (pid, 404, 404)
+        -- The id is in the address, as it is, and in the preload's JSON.
+        let inJson i = T.dropEnd 1 (T.drop 1 (decodeUtf8 (BSL.toStrict (encode i))))
+            pageOf addr i reply = T.replace (inJson i) "ID" (T.replace i "ID" (T.replace addr "ADDRESS" (decodeUtf8 (BSL.toStrict reply.body))))
+        appIn (pageOf hiddenAddress pid hidden) `shouldSatisfy` T.isInfixOf "error-not-found"
+        (pid, pageOf hiddenAddress pid hidden) `shouldBe` (pid, pageOf missingAddress missing nothing)
+        hiddenAnswer <- getRawPath r r.public ("/api/v1/pages/" <> encodeUtf8 (pathSegment pid) <> "/location")
+        missingAnswer <- getRawPath r r.public ("/api/v1/pages/" <> encodeUtf8 (pathSegment missing) <> "/location")
+        (pid, hiddenAnswer.status, hiddenAnswer.body) `shouldBe` (pid, 404, missingAnswer.body)
+
   it "follows a page moved to another space" $ withAdminSession backing identity $ \r session -> do
     diagrams <- pageIdAt r [session] "docs" "markdown-guide/diagrams"
     blog <- ok200 (getUrlWith r (r.public <> "/" <> links.spaces.atPath (slugs "blog")) [session]) :: IO S.Space
@@ -372,6 +405,33 @@ permanentAddresses backing = describe "a page's permanent address" $ do
       found <- ok200 (getUrlWith r (r.public <> "/" <> links.spaces.atPath (slugs space)) hs) :: IO S.Space
       p <- ok200 (getUrlWith r (r.public <> "/" <> links.spaces.pageAt found.id (if T.null path then [] else slugs path)) hs) :: IO P.Page
       pure p.id
+
+-- | Pages of the demo's Docs, which anyone reads, with ids a path segment
+-- cannot hold as they are: a slash, a percent sign, a question mark, a
+-- hash, a space, a backslash, two dots, a control character, text
+-- outside ASCII, and a long one. (Not a NUL: PostgreSQL's text holds none.)
+visibleIds :: [(Text, Text)]
+visibleIds = [("Diagrams", "a/b"), ("Mathematics", "x y%?#\\é"), ("Presentations", ".."), ("Markdown guide", "t\1u"), ("Tour", T.replicate 300 "l")]
+
+-- | Pages of the private Team, with ids of the same kinds.
+hiddenIds :: [(Text, Text)]
+hiddenIds = [("On-call", "c/d"), ("Team handbook", "..\\%é? #\1")]
+
+-- | The demo's wiki with those pages' ids changed, everywhere the archive
+-- names them.
+awkwardDemo :: Archive
+awkwardDemo = either (panic . ("the demo with other ids: " <>)) identity (readArchive (Map.fromList [(path, if ".json" `T.isSuffixOf` path then renamed bytes else bytes) | (path, bytes) <- writeArchive demoArchive]))
+  where
+    renamed bytes = encodeUtf8 (foldl' (\t (old, new) -> T.replace (quoted old) (quoted new) t) (decodeUtf8 bytes) changes)
+    changes = [(idOf title, PageId new) | (title, new) <- visibleIds <> hiddenIds]
+    idOf title = maybe (panic ("no page " <> title)) (\p -> p.id) (find (\p -> p.title == title) demoArchive.pages)
+    quoted (PageId t) = decodeUtf8 (BSL.toStrict (encode t))
+
+-- | A page's id as one segment of an API address, percent-encoded.
+pathSegment :: Text -> Text
+pathSegment = T.concatMap (\c -> if isAscii c && isAlphaNum c then T.singleton c else T.concat [toS ('%' : hex b) | b <- BS.unpack (encodeUtf8 (T.singleton c))])
+  where
+    hex b = let h = showHex b "" in if length h == 1 then '0' : h else h
 
 failures :: Backing -> Spec
 failures backing = describe "when a render fails" $ do

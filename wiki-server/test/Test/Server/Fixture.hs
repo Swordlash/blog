@@ -11,6 +11,7 @@ module Test.Server.Fixture
   , withDemoRestarted
   , withDemoPlace
   , withDemoMoved
+  , withArchiveRunning
   , site
   , template
   , serverInfoOn
@@ -85,6 +86,7 @@ import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), 
 import Wiki.Api.Opaque qualified as Opaque
 import Wiki.Api.ServerSettings (ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types (SessionInfo (..))
+import Wiki.Core.Export (Archive)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Password (..), Standing (..))
 import Wiki.Server (Server (..), withServerUsing)
@@ -185,9 +187,20 @@ withDemoRunningUsing backing sending test =
 -- | The directories of a server whose build is the server's, over the
 -- demo's wiki.
 demoPrepared :: Place -> FilePath -> IO ()
-demoPrepared at staticDir = do
+demoPrepared = archivePrepared demoArchive
+
+-- | The directories of a server whose build is the server's, over a wiki
+-- imported from an archive, ids and all.
+archivePrepared :: Archive -> Place -> FilePath -> IO ()
+archivePrepared archive at staticDir = do
   BS.writeFile (staticDir </> "template.html") template
-  withStorage defaultConfig at (\st -> importArchive st demoArchive) >>= either (\e -> assertFailure ("the demo does not import: " <> toS e)) pure
+  withStorage defaultConfig at (\st -> importArchive st archive) >>= either (\e -> assertFailure ("the archive does not import: " <> toS e)) pure
+
+-- | 'withDemoRunning', over the wiki of an archive instead of the demo's:
+-- for a test that needs content the demo does not have, such as pages with
+-- ids of their own.
+withArchiveRunning :: Backing -> Archive -> (Running -> IO a) -> IO a
+withArchiveRunning backing archive = withRunningPrepared backing identity (archivePrepared archive)
 
 -- | A server with the default options but for its addresses (free ports
 -- of 127.0.0.1), its directories and its database, run while the test
