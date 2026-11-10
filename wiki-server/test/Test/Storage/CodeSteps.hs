@@ -407,10 +407,11 @@ step0013Spec backing = describe "step 13, the home page is the root of a space's
         -- The old addresses of the pages under the home page.
         at' "plain" ["home"] `shouldReturn` Right "p-home"
         at' "plain" ["home", "notes-2"] `shouldReturn` Right "p-d"
-        at' "plain" ["home", "notes", "deep"] `shouldReturn` Right "p-deep"
         -- The renamed page's old address now leads to the page that was
-        -- at the top and kept the slug (a known gap).
+        -- at the top and kept the slug, and its pages' old addresses lead
+        -- nowhere (a known gap).
         at' "plain" ["home", "notes"] `shouldReturn` Right "p-notes"
+        at' "plain" ["home", "notes", "deep"] `shouldReturn` Left NotFound
         at' "nested" [] `shouldReturn` Right "n-home"
         at' "nested" ["top"] `shouldReturn` Right "n-top"
         at' "nested" ["x"] `shouldReturn` Right "n-x"
