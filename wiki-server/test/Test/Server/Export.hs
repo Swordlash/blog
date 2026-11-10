@@ -320,6 +320,11 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
                    , "[[!notes]] — the [[!notes]] block is not closed: add [[/notes]] after its last line"
                    , "x"
                    ]
+    it "finds a pause and a line in red that are a list's items" $ do
+      bs <- blocksOf ToBeamer place "## A\n\n- one\n- [[!pause]]\n- [[!oops]]\n"
+      length (query pauses bs) `shouldBe` 1
+      show bs `shouldNotSatisfy` T.isInfixOf "wikibox"
+      paragraphs bs `shouldSatisfy` any (T.isPrefixOf "[[!oops]] — ")
     it "leaves the forms without the exclamation mark, an end marker with nothing open and a link written with its text as the links they are" $ do
       bs <- blocksOf ToOther place "[[notes|Notes]]\n\n[[spoiler]]{a}(b)\n\n[[/div]]\n"
       divClasses bs `shouldBe` []

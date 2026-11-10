@@ -344,9 +344,10 @@ data PageRead = PageRead
   { source :: Text
   , blocks :: Either ParseError [Block]
   , markers :: [BoxMarker]
-  , spoilers :: Map Int (Int, MarkerEdit)
-  -- ^ What becomes of each of the page's spoiler marker lines, by its
-  -- line, with the column its marker starts at ('spoilerEdits').
+  , lineEdits :: Map Int (Int, MarkerEdit)
+  -- ^ What becomes of each of the page's marker lines (those of its
+  -- spoilers and of its other blocks of the wiki's own), by its line, with
+  -- the column its marker starts at ('markerEdits').
   , written :: WrittenIds
   -- ^ The identifiers written in the page's source, and which of its
   -- headings have one written ('reidentified').
@@ -362,7 +363,7 @@ readPage raw =
     { source
     , blocks = (\(bs, _, _, _) -> bs) <$> parsedPage
     , markers = either (const []) (\(_, ms, _, _) -> ms) parsedPage
-    , spoilers = either (const mempty) (\(bs, _, ss, _) -> spoilerEdits bs ss) parsedPage
+    , lineEdits = either (const mempty) (\(bs, _, ss, _) -> markerEdits bs ss) parsedPage
     , written = either (const (WrittenIds [] [])) (\(_, _, _, w) -> w) parsedPage
     , bars = either (const []) (\(_, _, ss, _) -> [((s.lineAt, s.columnAt), (l, c)) | s <- ss, InlineBars l c <- [s.role]]) parsedPage
     }
@@ -398,8 +399,8 @@ data MarkerEdit
 -- ('SpoilerHead''s @problem@) is its blocks, after its marker and the
 -- reason as text; another block is a div, a pause a pause, and a broken
 -- marker line is its text and the reason.
-spoilerEdits :: [Block] -> [MarkerLine] -> Map Int (Int, MarkerEdit)
-spoilerEdits doc markers = Map.fromList [(m.lineAt, (m.columnAt, e)) | m <- markers, Just e <- [edit m]]
+markerEdits :: [Block] -> [MarkerLine] -> Map Int (Int, MarkerEdit)
+markerEdits doc markers = Map.fromList [(m.lineAt, (m.columnAt, e)) | m <- markers, Just e <- [edit m]]
   where
     -- The lines of the blocks other than spoilers that are closed.
     divs = Set.fromList [m.lineAt | m <- markers, Opens _ <- [m.role]]
@@ -442,16 +443,16 @@ normalLines = T.replace "\r" "\n" . T.replace "\r\n" "\n"
 -- again without it, so the document shows the marker as written, and no
 -- placeholder.
 withBoxesRead :: [BoxKind] -> Numbering -> PageRead -> Either PandocError [P.Block]
-withBoxesRead defined numbering page = go page.markers page.spoilers
+withBoxesRead defined numbering page = go page.markers page.lineEdits
   where
-    go markers spoilers = do
-      let (marked, boxes, spoilerBoxes, bars) = withBoxes page.source markers spoilers page.bars
+    go markers edits = do
+      let (marked, boxes, markedLines, bars) = withBoxes page.source markers edits page.bars
       -- Without pandoc's automatic identifiers, so that a heading's
       -- identifier is one written in the source ('reidentified').
       P.Pandoc _ read' <- runPure (readMarkdown def {readerExtensions = disableExtension Ext_auto_identifiers wikiExtensions} marked)
       -- The three dots an author wrote are text before the pauses are
       -- made, so that only the wiki's pauses are pandoc's.
-      let boxed = walk (markedBlocks spoilerBoxes) (walk (boxesOf defined boxes (numbersOf numbering boxes read')) (walk dotsAsText read'))
+      let boxed = walk (markedBlocks markedLines) (walk (boxesOf defined boxes (numbersOf numbering boxes read')) (walk dotsAsText read'))
           found = texts boxed
           stray = Set.fromList (concatMap (\t -> [m | (placeholder, (m, _)) <- Map.toList boxes, placeholder `T.isInfixOf` t]) found)
           -- A block whose start or end pandoc did not read as a paragraph
@@ -459,10 +460,10 @@ withBoxesRead defined numbering page = go page.markers page.spoilers
           -- both marker lines as written, and so does a line shown as
           -- text or a pause that pandoc did not read as a paragraph of
           -- its own.
-          strayLines = [(line, e) | (placeholder, (line, e)) <- Map.toList spoilerBoxes, any (placeholder `T.isInfixOf`) found]
-          straySpoilers = Set.fromList (map fst strayLines <> [start | (_, CloseBox start) <- strayLines])
-          unmarked = Map.filterWithKey (\line (_, e) -> line `Set.notMember` straySpoilers && (case e of CloseBox start -> start `Set.notMember` straySpoilers; _ -> True)) spoilers
-      if Set.null stray && Set.null straySpoilers
+          strayLines = [(line, e) | (placeholder, (line, e)) <- Map.toList markedLines, any (placeholder `T.isInfixOf`) found]
+          strayMarked = Set.fromList (map fst strayLines <> [start | (_, CloseBox start) <- strayLines])
+          unmarked = Map.filterWithKey (\line (_, e) -> line `Set.notMember` strayMarked && (case e of CloseBox start -> start `Set.notMember` strayMarked; _ -> True)) edits
+      if Set.null stray && Set.null strayMarked
         then pure (reidentified page.written (maybe boxed (\b -> restoreBars b (walk (hiddenSpans b) boxed)) bars))
         else go (filter (`Set.notMember` stray) markers) unmarked
     -- Every text a document holds where a placeholder could end up.
@@ -526,7 +527,7 @@ type Boxes = Map Text (BoxMarker, Text)
 -- never decides what is a spoiler either: bars it would read as text
 -- once it has decoded them (@\\|@, @&#124;@) stay text.
 withBoxes :: Text -> [BoxMarker] -> Map Int (Int, MarkerEdit) -> [((Int, Int), (Int, Int))] -> (Text, Boxes, Map Text (Int, MarkerEdit), Maybe Bars)
-withBoxes source markers spoilers bars = case family of
+withBoxes source markers edits bars = case family of
   Nothing -> (source, mempty, mempty, Nothing)
   Just prefix ->
     let placed =
@@ -536,7 +537,7 @@ withBoxes source markers spoilers bars = case family of
             , Just text <- [atMay lines' (m.markerLine - 1)]
             , Just start <- [markerStart m text]
             ]
-        spoilerPlaceholders = Map.fromList [(line, prefix <> "s" <> show n <> "z") | (n, line) <- zip [1 :: Int ..] (Map.keys spoilers)]
+        linePlaceholders = Map.fromList [(line, prefix <> "s" <> show n <> "z") | (n, line) <- zip [1 :: Int ..] (Map.keys edits)]
         -- Each pair of bars, by its line, with its column and its
         -- placeholder.
         barPlaceholders =
@@ -553,11 +554,11 @@ withBoxes source markers spoilers bars = case family of
         place text (i, placeholder) = T.take i text <> placeholder <> T.drop (i + 2) text
         rewrite n written =
           let text = withPlaceholders n written
-           in case (Map.lookup n placed, Map.lookup n spoilers) of
+           in case (Map.lookup n placed, Map.lookup n edits) of
                 (Just (placeholder, m, start, _), _) -> [T.take start text <> placeholder <> maybe "" (const (" " <> titleIn (T.drop start text))) m.boxTitle, quoteOnly (T.take start text)]
                 (Nothing, Just (column, e)) ->
                   let before = T.take (column - 1) text
-                      placeholder = fromMaybe "" (Map.lookup n spoilerPlaceholders)
+                      placeholder = fromMaybe "" (Map.lookup n linePlaceholders)
                       around ls = [quoteOnly before] <> ls <> [quoteOnly before]
                    in case e of
                         OpenBox _ -> around [before <> placeholder <> " " <> descriptionIn (T.drop (column - 1) text)]
@@ -569,7 +570,7 @@ withBoxes source markers spoilers bars = case family of
                 (Nothing, Nothing) -> [text]
      in ( T.intercalate "\n" (concat (zipWith rewrite [1 ..] lines'))
         , Map.fromList [(placeholder, (m, original)) | (placeholder, m, _, original) <- Map.elems placed]
-        , Map.fromList [(placeholder, (line, e)) | (line, placeholder) <- Map.toList spoilerPlaceholders, Just (_, e) <- [Map.lookup line spoilers]]
+        , Map.fromList [(placeholder, (line, e)) | (line, placeholder) <- Map.toList linePlaceholders, Just (_, e) <- [Map.lookup line edits]]
         , Bars (prefix <> "h") <$ guard (not (null bars))
         )
   where
@@ -628,23 +629,35 @@ markedBlocks placeholders = go
   where
     go = \case
       [] -> []
-      P.Para (P.Str placeholder : title) : more
-        | Just (line, e) <- Map.lookup placeholder placeholders
+      b : more
+        | Just (placeholder, title) <- placed b
+        , Just (line, e) <- Map.lookup placeholder placeholders
         , Just made <- opened e title
         , (inside, _ : after) <- break (closes line) more ->
             made (go inside) : go after
-      P.Para [P.Str placeholder] : more
-        | Just (_, PauseHere) <- Map.lookup placeholder placeholders -> pause : go more
-        | Just (_, ShowLine shown) <- Map.lookup placeholder placeholders -> P.Para (B.toList (B.text shown)) : go more
+      b : more
+        | Just (placeholder, []) <- placed b
+        , Just (_, e) <- Map.lookup placeholder placeholders
+        , Just made <- alone e ->
+            made : go more
       b : more -> b : go more
+    -- A placeholder and what follows it on its line: a paragraph, or the
+    -- text of a tight list's item, which pandoc reads as plain text.
+    placed = \case
+      P.Para (P.Str placeholder : rest) -> Just (placeholder, rest)
+      P.Plain (P.Str placeholder : rest) -> Just (placeholder, rest)
+      _ -> Nothing
     opened e title = case e of
       OpenBox _ -> Just (P.Div ("", ["alert-spoiler"], []) . (P.Div ("", ["title"], []) [P.Para (dropWhile (== P.Space) title)] :))
       OpenDiv attrs | null title -> Just (P.Div (pandocAttributes attrs))
       _ -> Nothing
-    closes line = \case
-      P.Para [P.Str placeholder] | Just (_, CloseBox start) <- Map.lookup placeholder placeholders -> start == line
+    alone = \case
+      PauseHere -> Just (P.Para [P.Str ".", P.Space, P.Str ".", P.Space, P.Str "."])
+      ShowLine shown -> Just (P.Para (B.toList (B.text shown)))
+      _ -> Nothing
+    closes line b = case placed b of
+      Just (placeholder, []) | Just (_, CloseBox start) <- Map.lookup placeholder placeholders -> start == line
       _ -> False
-    pause = P.Para [P.Str ".", P.Space, P.Str ".", P.Space, P.Str "."]
 
 -- | The wiki's attributes as pandoc's: the identifier, the classes and
 -- the other attributes.
