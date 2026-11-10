@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+`PUT spaces/<space>/profile` takes no `homePage` (WP5.78a, #201): one in
+the body is ignored, and the space keeps its home page. It is stable for
+the upgrade's rehearsal now, which CI seeds a space with no home page
+through. A space's home page cannot be deleted or moved (400), and only an
+administrator of its space saves it (403 for someone who only edits it).
+
 Encrypted spaces (WP5.74b2). `WikiApi` gains `encrypted`, the routes under
 `encrypted/` (`EncryptedApi`): a space's key as its reader sees it, turning
 a space encrypted, grants of its key, and its pages as ciphertext (listed,

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+Every space has a home page, and it is its administrators' (WP5.78a,
+#201). The space settings no longer have the home page's select, and a
+page no longer has "Set as home page" (`.set-home` and `.space-home-field`
+are gone); `Wiki.App.View.SpaceSettings.Input` no longer has `pages`. The
+new `Wiki.App.View.Common.mayEditPage` hides Edit and Rename on a space's
+home page, the editor and the history's Restore from whoever edits the
+space without administering it; Move, Delete and "Use as template" are
+never shown on it. The blog's view leaves out a home page whose text is the
+one it was made with. The in-memory backend refuses to delete or move a
+home page, and to delete or move to another space a page with it under it;
+it checks `canEditPage` for saves, restores, drafts and attachments. Its
+`Wiki.App.Backend.Mem.State` gains `setHome`, `giveHomePage` and
+`ensureHomePages`, which give the demo's blog its home page and a space
+without one its own when a wiki is read from the browser's storage or
+imported. `Wiki.App.Guide.guideProfile` is a `SpaceProfile`, no longer a
+function of the tour's page.
+
 The native OPAQUE client from opaque-hs. `Wiki.App.Backend.Opaque` and the
 tests' server (`Test.Opaque`) use the package `opaque-hs`, from a
 repository of its own at a commit `cabal.project` pins, in place of the

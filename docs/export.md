@@ -196,8 +196,10 @@ the import is then recorded itself. The demo's import leaves the log out.
   space is taken to have been made when its first page was, or, without
   pages, when the archive was written.
   A space's profile came after that: `homePage`, the id of the page the
-  space opens at, which has to be one of its own pages (missing: none, and
-  the space opens at its list of pages); `icon`, how it is pictured,
+  space opens at, which has to be one of its own pages (missing: none, as
+  an older wiki allowed; an import then gives the space the home page a new
+  space is made with, titled "Home", unless the space is the container of
+  personal spaces); `icon`, how it is pictured,
   `{"emoji": "📘"}`, `{"colour": "teal"}` (one of the colours
   `Wiki.Core.Space.iconColours` names) or `{"image": blob, "mediaType":
   "image/png", "file": "icon.png"}` with the image's bytes in that file

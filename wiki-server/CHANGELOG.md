@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+Every space has a home page (WP5.78a, #201). The first step of the schema
+in code, `Wiki.Server.Storage.Migrate.Code.Step0012`, gives every space
+with none but the container of personal spaces and an encrypted space the
+default home page, with one version by no user, at the next free slug
+among the space's top-level pages and before them. `CodeStep` moves to
+`Wiki.Server.Storage.Migrate.CodeStep`, which `Migrate.Code` re-exports.
+Creating a space, a personal space, a full import and a merge import give
+a space its home page through `Rows.insertHomePage`, which replaces
+`clearHomePage`. Deleting a home page, moving it, and deleting or moving to
+another space a page with it under it are refused (400); saving it,
+restoring a version of it, its drafts, its attachments and the live
+channel's "is editing" need `AdministerSpace` (`requireEditPage`). The
+audit of `space.profile` no longer names a home page. The rehearsal's
+`pages` check accepts a new page only as the home page given to a space
+that had none, and leaves out an encrypted space, whose pages answer 409;
+`readPages` returns `PagesRead` and `comparePages` takes two. The new
+check `home pages` (`readSpaces`, `compareHomes`) says that every space but
+the two kinds has a home page after the migration, the one it had if it
+had one.
+
 OPAQUE from opaque-hs. The server's side of OPAQUE is the package
 `opaque-hs`, from a repository of its own (Swordlash/opaque-hs) at a
 commit `cabal.project` pins, in place of the package `opaque` this
