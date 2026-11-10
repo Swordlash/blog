@@ -14,11 +14,16 @@
 # WIKI_TEST_PSQL), and makes two databases there, the wiki's and the copy's,
 # dropped first. The wiki OLD makes has a space with a page and a page
 # under it, written through OLD's administration listener, and the guide
-# OLD installs itself, which the rehearsal leaves out of its comparison.
-# What this script sends OLD (serve's options, POST spaces and POST
-# spaces/ID/pages) is part of what the rehearsal keeps stable (the README's
-# CI section): OLD is the base branch's program, which this script, from the
-# pull request, must still drive.
+# OLD installs itself, which the rehearsal leaves out of its comparison. It
+# also has a space set to have no home page, as a program from before
+# WP5.78 (docs/PLAN.md) allowed, which still holds the page it was made
+# with: the migration gives it a home page of its own beside that page. A
+# later OLD ignores the profile's homePage and keeps the space's home page,
+# which the rehearsal accepts as well.
+# What this script sends OLD (serve's options, POST spaces, POST
+# spaces/ID/pages and PUT spaces/ID/profile) is part of what the rehearsal
+# keeps stable (the README's CI section): OLD is the base branch's program,
+# which this script, from the pull request, must still drive.
 set -eu
 old=${1:?usage: rehearse-ci.sh OLD NEW [--postgres]}
 new=${2:?usage: rehearse-ci.sh OLD NEW [--postgres]}
@@ -69,12 +74,17 @@ done
 post() {
   curl -fsS -X POST -H 'Content-Type: application/json' -H 'X-Wiki-Request: 1' --data "$2" "$api/$1"
 }
+put() {
+  curl -fsS -X PUT -H 'Content-Type: application/json' -H 'X-Wiki-Request: 1' --data "$2" "$api/$1"
+}
 id_of() {
   node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)); process.stdin.on("end", () => console.log(JSON.parse(s).id));'
 }
 space=$(post spaces '{"parent":null,"name":"Rehearsal"}' | id_of)
 page=$(post "spaces/$space/pages" '{"parent":null,"title":"First page","body":"# First page\n\nA **page** of the rehearsal, with $x^2$ and a [link](https://example.org)."}' | id_of)
 post "spaces/$space/pages" "{\"parent\":\"$page\",\"title\":\"A page under it\",\"body\":\"Some text under the first page.\"}" >/dev/null
+homeless=$(post spaces '{"parent":null,"name":"No home page"}' | id_of)
+put "spaces/$homeless/profile" '{"description":"","icon":null,"homePage":null,"blog":false,"boxNumbering":"in-page"}' >/dev/null
 kill "$pid"
 wait "$pid" 2>/dev/null || true
 pid=''

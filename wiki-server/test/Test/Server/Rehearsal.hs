@@ -7,6 +7,7 @@
 module Test.Server.Rehearsal (unitSpec, spec) where
 
 import Data.Aeson (encode)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Client (defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutMicro)
 import Network.HTTP.Types (hContentType)
@@ -22,32 +23,61 @@ import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (listAccounts)
 import Wiki.Server.Console (runUsers, usersParser)
 import Wiki.Server.Options (DatabaseChoice (..))
-import Wiki.Server.Rehearsal (Check (..), PageRead (..), Seeding (..), Server (..), checks, comparePages, isolateCopy, readPages)
+import Wiki.Server.Rehearsal (Check (..), PageRead (..), PagesRead (..), Seeding (..), Server (..), SpaceRead (..), checks, compareHomes, comparePages, isolateCopy, readPages, readSpaces)
 import Wiki.Server.Storage (Place (..), migrateDatabase, withStorageAside)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (settingsLike, storeSetting)
 
 unitSpec :: Spec
-unitSpec = describe "the upgrade's rehearsal, the pages check" $ do
+unitSpec = do
+  pagesUnitSpec
+  homesUnitSpec
+
+-- | Pages read from spaces s1 and s2, whose home pages are p1 and none.
+readOf :: [PageRead] -> PagesRead
+readOf pages = PagesRead {pages, homes = Map.fromList [("s1", Just "p1"), ("s2", Nothing)]}
+
+pagesUnitSpec :: Spec
+pagesUnitSpec = describe "the upgrade's rehearsal, the pages check" $ do
   let first' = PageRead {space = "s1", page = "p1", title = "First", body = "# First\n\nText."}
       second' = PageRead {space = "s1", page = "p2", title = "Second", body = "More."}
   it "passes when every page reads the same, in whatever order" $
-    comparePages [first', second'] [second', first'] `shouldBe` Right ()
+    comparePages (readOf [first', second']) (readOf [second', first']) `shouldBe` Right ()
   it "names a page whose source changed, one whose title changed, one gone and one new" $ do
     let changed = first' {body = "# First\n\nOther text."}
         renamed = second' {title = "Second, renamed"}
         third = PageRead {space = "s2", page = "p3", title = "Third", body = ""}
-        why = either identity (const "") (comparePages [first', second'] [changed, renamed, third])
+        why = either identity (const "") (comparePages (readOf [first', second']) (readOf [changed, renamed, third]))
     why `shouldSatisfy` T.isInfixOf "page p1 (First) has another source"
     why `shouldSatisfy` T.isInfixOf "page p2 (Second) has another title: Second, renamed"
     why `shouldSatisfy` T.isInfixOf "page p3 (Third) is new"
-    comparePages [first', second'] [first'] `shouldSatisfy` isLeft
+    comparePages (readOf [first', second']) (readOf [first']) `shouldSatisfy` isLeft
   it "tells the same page id in two spaces apart" $
-    comparePages [first'] [first' {space = "s2"}] `shouldSatisfy` isLeft
+    comparePages (readOf [first']) (readOf [PageRead {space = "s2", page = first'.page, title = first'.title, body = first'.body}]) `shouldSatisfy` isLeft
   it "names five differences and counts the rest" $ do
     let pages = [PageRead {space = "s", page = show i, title = "t", body = "b"} | i <- [1 .. 8 :: Int]]
-        why = either identity (const "") (comparePages pages [])
+        why = either identity (const "") (comparePages (readOf pages) (readOf []))
     why `shouldSatisfy` T.isInfixOf "and 3 more"
+  it "takes a new page only as the home page given to a space that had none" $ do
+    let home = PageRead {space = "s2", page = "p9", title = "Home", body = "Welcome to **Two**.\n"}
+        given = PagesRead {pages = [first', home], homes = Map.fromList [("s1", Just "p1"), ("s2", Just "p9")]}
+    comparePages (readOf [first']) given `shouldBe` Right ()
+    -- Not a page that is not the space's home page, nor a new home page
+    -- of a space that had one.
+    comparePages (readOf [first']) given {homes = Map.fromList [("s1", Just "p1"), ("s2", Just "p8")]} `shouldSatisfy` isLeft
+    let elsewhere = PageRead {space = "s1", page = home.page, title = home.title, body = home.body}
+    comparePages (readOf [first']) PagesRead {pages = [first', elsewhere], homes = Map.fromList [("s1", Just "p9"), ("s2", Nothing)]} `shouldSatisfy` isLeft
+
+homesUnitSpec :: Spec
+homesUnitSpec = describe "the upgrade's rehearsal, the home pages check" $ do
+  let space i home = SpaceRead {space = i, name = "Space " <> i, homePage = home, withoutHome = False}
+      container = (space "c" Nothing) {withoutHome = True}
+  it "passes when every space has a home page, the one it had if it had one, but the two kinds" $
+    compareHomes [space "a" (Just "p1"), space "b" Nothing, container] [space "a" (Just "p1"), space "b" (Just "p2"), container] `shouldBe` Right ()
+  it "names a space with no home page, and one whose home page changed" $ do
+    let why = either identity (const "") (compareHomes [space "a" (Just "p1"), space "b" Nothing] [space "a" (Just "p3"), space "b" Nothing])
+    why `shouldSatisfy` T.isInfixOf "space b (Space b) has no home page"
+    why `shouldSatisfy` T.isInfixOf "space a (Space a) has another home page"
 
 -- | The copy is cut off from the outside before a server starts on it: no
 -- scheduled backup to the running wiki's destination, no notification
@@ -72,6 +102,24 @@ copySpec backing = describe "the upgrade's rehearsal, its copy of the wiki" $ do
     turnedOn.status `shouldBe` 200
     withPersonal <- readPages manager server
     withPersonal `shouldSatisfy` isRight
+  it "leaves out an encrypted space, whose pages answer 409, and reads the rest" $ withDemoPlace backing $ \at serve -> do
+    -- An encrypted space as the server knows one: its key's id set. Its
+    -- pages are then not listed as plain text.
+    withConnectionTo at $ \c -> do
+      begin True c
+      runScript c "UPDATE spaces SET key_id = 'k1' WHERE slug = 'team';"
+      commitTransaction c
+    manager <- newManager defaultManagerSettings
+    serve $ \r -> do
+      let server = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public}
+      read' <- readPages manager server >>= either (\why -> panic ("not read: " <> why)) pure
+      spaces <- readSpaces manager server >>= either (\why -> panic ("not read: " <> why)) pure
+      let team = [s.space | s <- spaces, s.name == "Team"]
+          blog = [s.space | s <- spaces, s.name == "Blog"]
+      length team `shouldBe` 1
+      [p | p <- read'.pages, p.space `elem` team] `shouldBe` []
+      [p | p <- read'.pages, p.space `elem` blog] `shouldNotBe` []
+      (\s -> s.withoutHome) <$> find (\s -> s.name == "Team") spaces `shouldBe` Just True
   it "loses its backup and mail settings, and keeps the rest" $
     withSystemTempDirectory "wiki-rehearsal" $ \dir -> withEmptyPlace backing dir $ \place -> do
       _ <- migrateDatabase place
