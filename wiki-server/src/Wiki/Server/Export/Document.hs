@@ -556,17 +556,23 @@ withBoxes source markers edits bars = case family of
           let text = withPlaceholders n written
            in case (Map.lookup n placed, Map.lookup n edits) of
                 (Just (placeholder, m, start, _), _) -> [T.take start text <> placeholder <> maybe "" (const (" " <> titleIn (T.drop start text))) m.boxTitle, quoteOnly (T.take start text)]
-                (Nothing, Just (column, e)) ->
-                  let before = T.take (column - 1) text
-                      placeholder = fromMaybe "" (Map.lookup n linePlaceholders)
-                      around ls = [quoteOnly before] <> ls <> [quoteOnly before]
-                   in case e of
-                        OpenBox _ -> around [before <> placeholder <> " " <> descriptionIn (T.drop (column - 1) text)]
-                        DropLine -> [quoteOnly before]
-                        DropMarker end -> case (indexAt text column, indexAt text end) of
-                          (Just i, Just j) | markerAt (T.drop i text) == Just (Opening SpoilerName) -> [T.take i text <> T.drop j text]
-                          _ -> [text]
-                        _ -> around [before <> placeholder]
+                (Nothing, Just (column, e)) -> case indexAt text column of
+                  -- No character at the marker's column, which the
+                  -- wiki's parser never gives: the line stays as
+                  -- written, and 'withBoxesRead' then reads the other
+                  -- marker line of its block as written too.
+                  Nothing -> [text]
+                  Just i ->
+                    let before = T.take i text
+                        placeholder = fromMaybe "" (Map.lookup n linePlaceholders)
+                        around ls = [quoteOnly before] <> ls <> [quoteOnly before]
+                     in case e of
+                          OpenBox _ -> around [before <> placeholder <> " " <> descriptionIn (T.drop i text)]
+                          DropLine -> [quoteOnly before]
+                          DropMarker end -> case indexAt text end of
+                            Just j | markerAt (T.drop i text) == Just (Opening SpoilerName) -> [before <> T.drop j text]
+                            _ -> [text]
+                          _ -> around [before <> placeholder]
                 (Nothing, Nothing) -> [text]
      in ( T.intercalate "\n" (concat (zipWith rewrite [1 ..] lines'))
         , Map.fromList [(placeholder, (m, original)) | (placeholder, m, _, original) <- Map.elems placed]
@@ -574,13 +580,16 @@ withBoxes source markers edits bars = case family of
         , Bars (prefix <> "h") <$ guard (not (null bars))
         )
   where
-    -- The index in a line of the bars at a column, if they are there. A
-    -- tab counts to the next multiple of four columns, as CommonMark
-    -- counts it.
+    -- The index in a line of the bars at a column, if they are there.
     barsAt text column = do
       i <- indexAt text column
       i <$ guard ("||" `T.isPrefixOf` T.drop i text)
-    -- The index in a line of the character at a column, counted so.
+    -- The index in a line of the character at a column, if one is
+    -- there. The wiki's parser gives columns as CommonMark counts them:
+    -- a tab counts to the next multiple of four columns. So a column is
+    -- not an index into the line where a tab comes before it (a tab
+    -- after a list item's marker, or before the lines of the item), and
+    -- every column is turned into an index here.
     indexAt text column = go 0 1 (T.unpack text)
       where
         go i c rest
@@ -605,14 +614,11 @@ withBoxes source markers edits bars = case family of
     -- line continues the same list item and quotation instead of starting
     -- another item.
     quoteOnly = T.stripEnd . T.map (\c -> if c == '>' || c == '\t' then c else ' ')
-    -- The marker starts at its column and runs to the end of the line. A
-    -- tab before it counts to a tab stop, so the column is checked, and
-    -- the line searched where it does not hold the marker.
-    markerStart m text
-      | "[!" `T.isPrefixOf` T.drop (m.markerColumn - 1) text = Just (m.markerColumn - 1)
-      | otherwise = case T.breakOn "[!" text of
-          (_, "") -> Nothing
-          (before, _) -> Just (T.length before)
+    -- Where a box's marker starts in its line: at its column, as
+    -- 'indexAt' counts it. It runs to the end of the line.
+    markerStart m text = do
+      i <- indexAt text m.markerColumn
+      i <$ guard ("[!" `T.isPrefixOf` T.drop i text)
 
 -- | Some blocks with the paragraphs of the placeholders 'withBoxes' wrote
 -- for marker lines made what the lines stand for. The blocks between the

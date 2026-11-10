@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+A marker line indented with a tab is exported as its block. The wiki's
+parser gives a marker's column as CommonMark counts it, a tab to the next
+multiple of four columns, and `withBoxes` took it as an index into the
+line, so a tab before a marker of the wiki's own blocks cut the line in
+the wrong place and the document showed the markers as text. Every
+column is now turned into an index by `indexAt`, which the bars of inline
+spoilers and the heading spoiler's marker already used; a box's marker
+(`markerStart`) uses it too, instead of searching the line for `[!`.
+
 The export of the wiki's own blocks (WP5.77). `Wiki.Server.Export.Document`
 no longer reads pandoc's fenced divs (`Ext_fenced_divs` is out of
 `wikiExtensions`): every marker line of a block of the wiki's own becomes a
