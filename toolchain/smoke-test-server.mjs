@@ -910,6 +910,22 @@ try {
   assert.equal((await fetch(url("/api/v1/admin/directory"))).status, 403, "the administration's API, to a visitor");
   console.log("ok: a visitor who is not signed in sees the public space and nothing else, and no administration");
 
+  // A page's permanent address (WP5.81) sends the visitor to the page's own
+  // address, which the browser keeps the fragment on; one of a private
+  // page answers as an address that names nothing, as an id no page has.
+  const hidden = (await pagesOf("smoke-space"))[0];
+  assert.ok(hidden, "a page of the private space");
+  const redirected = await fetch(url(`/l/${encodeURIComponent(post.body.id)}/`), { redirect: "manual" });
+  assert.deepEqual([redirected.status, redirected.headers.get("location")], [302, "/s/smoke-public/p/smoke-post/"], "the post's permanent address");
+  await visitor.goto(url(`/l/${encodeURIComponent(post.body.id)}/#first`));
+  await eventually(async () => assert.equal(here(visitor), "/s/smoke-public/p/smoke-post/", "the post's address"), "a permanent address followed");
+  assert.equal(new URL(visitor.url()).hash, "#first", "the permanent address's fragment");
+  const privately = await fetch(url(`/l/${encodeURIComponent(hidden.id)}/`), { redirect: "manual" });
+  const nowhere = await fetch(url(`/l/${"x".repeat(hidden.id.length)}/`), { redirect: "manual" });
+  assert.deepEqual([privately.status, nowhere.status], [404, 404], "a private page's permanent address, to a visitor");
+  assert.equal((await privately.text()).replaceAll(hidden.id, "ID"), (await nowhere.text()).replaceAll("x".repeat(hidden.id.length), "ID"), "a private page's permanent address, as an id no page has");
+  console.log("ok: a page's permanent address leads a visitor to the page, the fragment kept, and a private page's to nothing, as a missing one's");
+
   // The public blog, as a visitor and a feed reader find it: its page
   // adopted with nothing to repair, the head announcing its feeds and
   // describing it, its Atom and RSS feeds with the post whole, the sitemap
