@@ -18,7 +18,8 @@ title: The upgrade's check looks at how people sign in
   ```
 
 - When the check passes, it ends by saying how the accounts sign in, and
-  which enabled accounts have no way in at all:
+  which enabled accounts have no way in at all (the first twenty, then
+  how many more):
 
   ```text
   Every table and every record read.

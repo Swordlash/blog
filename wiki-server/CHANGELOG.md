@@ -28,12 +28,17 @@ accounts included; a hash beside a whole record is not read. It also
 holds the summary of a check that passes, `waysIn` and `waysInLines`:
 `checkDatabase` and `checkConnection` return `Checked` (the tables and
 `WaysIn`), and `runCheck` prints the summary after "Every table and
-every record read.". The rehearsal has a fifth check, `ways in`: before
-and after, the program's `users list` on the database its server serves
-(`Server` gains `console`, `withServer` the place's options), read by
-`readUsersList` and compared by `compareWaysIn`, which fails for each
+every record read."; it names the first `listedNoWayIn` (20) accounts
+with no way in by login and counts the rest. The rehearsal has a fifth
+check, `ways in`: before and after, the program's `users list` on the
+database its server serves (`Server` gains `console`, `withServer` the
+place's options), read by `readUsersList` field by field at the
+heading's column widths, so that a display name with line breaks is read
+as one row, and output that does not fit the columns is an old program
+that cannot be driven; compared by `compareWaysIn`, which fails for each
 login whose SIGNS IN was `yes` and is not any more. `users list` and its
-table are stable for the rehearsal. `Test.Storage.Fixture.decodableRecord`
+table are stable for the rehearsal, and `Console.listing` is exported
+for its tests. `Test.Storage.Fixture.decodableRecord`
 is a record the sign-in decodes, for tests.
 
 Each space's home page is the root of its pages (WP5.78b, #201). Step 13

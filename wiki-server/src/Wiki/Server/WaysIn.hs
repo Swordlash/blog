@@ -32,6 +32,7 @@ module Wiki.Server.WaysIn
   , WaysIn (..)
   , waysIn
   , waysInLines
+  , listedNoWayIn
   )
 where
 
@@ -129,7 +130,7 @@ wayIn configured a
 -- how many are disabled, and of the enabled ones how many sign in with a
 -- password (and how many of those with a hash from before OPAQUE), how
 -- many through a provider, how many with a passkey alone, and each that
--- has no way in, by login.
+-- has no way in, by login, in the order of the logins.
 data WaysIn = WaysIn
   { disabled :: Int
   , password :: Int
@@ -150,13 +151,17 @@ waysIn configured accounts =
     , oldHash = count (== ByPassword True)
     , provider = count (== ByProvider)
     , passkey = count (== ByPasskey)
-    , none = [(a.login, why) | (a, NoWay why) <- ways]
+    , none = sortOn (\(l, _) -> l.text) [(a.login, why) | (a, NoWay why) <- ways]
     }
   where
     ways = [(a, wayIn configured a) | a <- accounts]
     count p = length (filter (p . snd) ways)
 
--- | The summary as lines of the check's output, after the tables' lines:
+-- | The summary as lines of the check's output, after the tables' lines.
+-- The accounts with no way in are counted exactly, and the first
+-- 'listedNoWayIn' are named, then how many more there are: a wiki after a
+-- large import has thousands, which every deploy's log would otherwise
+-- hold.
 --
 -- > Accounts: 5 (4 enabled, 1 disabled). How the enabled ones sign in:
 -- >   with a password: 2, of which 1 with a hash from before OPAQUE until its next sign-in
@@ -172,9 +177,15 @@ waysInLines w =
   , "  with a passkey alone: " <> show w.passkey
   , "  no way in: " <> show (length w.none)
   ]
-    <> ["    " <> l.text <> ": " <> reason why | (l, why) <- w.none]
+    <> ["    " <> l.text <> ": " <> reason why | (l, why) <- take listedNoWayIn w.none]
+    <> ["    and " <> show unnamed <> " more" | unnamed > 0]
   where
+    unnamed = length w.none - listedNoWayIn
     enabled = w.password + w.provider + w.passkey + length w.none
     reason = \case
       NoPasswordSet -> "no password set"
       OnlyRemovedProviders ps -> "only a provider the settings no longer name (" <> T.intercalate ", " ps <> ")"
+
+-- | How many accounts with no way in 'waysInLines' names: 20.
+listedNoWayIn :: Int
+listedNoWayIn = 20

@@ -115,6 +115,17 @@ summarySpec = describe "wiki-server check, how the accounts sign in" $ do
                  , "    finn: no password set"
                  , "    gwen: only a provider the settings no longer name (gitlab)"
                  ]
+  it "counts every account with no way in, names the first twenty by login, and says how many more there are" $ do
+    -- Logins given in reverse, as a database's order need not be the
+    -- logins'.
+    let crowd = [account ("user" <> T.justifyRight 4 '0' (show i)) noColumns | i <- [1234 :: Int, 1233 .. 1]]
+        lines' = waysInLines (waysIn [] crowd)
+    take 1 (drop 4 lines') `shouldBe` ["  no way in: 1234"]
+    take 2 (drop 5 lines') `shouldBe` ["    user0001: no password set", "    user0002: no password set"]
+    drop 24 lines' `shouldBe` ["    user0020: no password set", "    and 1214 more"]
+    length lines' `shouldBe` 5 + listedNoWayIn + 1
+    -- Twenty, and no line for none more.
+    waysInLines (waysIn [] (take listedNoWayIn crowd)) `shouldSatisfy` all (not . T.isInfixOf "more")
   it "says there are none of each on a wiki with no accounts" $
     waysInLines (waysIn [] [])
       `shouldBe` [ "Accounts: 0 (0 enabled, 0 disabled). How the enabled ones sign in:"

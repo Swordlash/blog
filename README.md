@@ -1905,10 +1905,10 @@ to the demo, keeping `data/`.
   an account whose stored password no sign-in can use (an OPAQUE record
   without its stretch or the other way round, a record or a stretch that does
   not decode, a hash from before OPAQUE the server cannot read). When everything
-  reads, it ends by saying how the enabled accounts sign in, and lists those
-  with no way in; that is not a failure, since an account made without a
-  password, an imported one and one whose provider was removed are all
-  normal:
+  reads, it ends by saying how the enabled accounts sign in, and names those
+  with no way in (the first twenty by login, then how many more); that is not a
+  failure, since an account made without a password, an imported one and one
+  whose provider was removed are all normal:
 
   ```text
   Every table and every record read.
