@@ -43,6 +43,13 @@ module Wiki.Core.Space
 
     -- * Its home page
   , hasHome
+  , rootPage
+  , pagePath
+  , pagesAt
+  , pageAt
+  , parentOrRoot
+  , strayRoots
+  , rootedPages
   , withHome
   , defaultHomePage
   , homeDeleteRefusal
@@ -55,8 +62,11 @@ where
 
 import Control.Monad.Fail (fail)
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.:?), (.=))
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Data.Type.Equality (type (~))
 import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Core.Attachment (MimeType (..), mimeEssence)
@@ -64,7 +74,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..), Sibling (..), childrenInOrder, treeOrder)
 import Wiki.Core.Page qualified as Page
-import Wiki.Core.Path (TreeNode (..))
+import Wiki.Core.Path (PathError, TreeNode (..), findChild, pathUnder, resolveUnder)
 import Wiki.Core.Slug
 import Wiki.Core.User (Avatar (..))
 import Wiki.Core.Vault (KeyId)
@@ -450,6 +460,112 @@ checkProfile space p = do
 -- home page ('defaultHomePage').
 hasHome :: Space -> Bool
 hasHome s = not s.personalContainer && isNothing s.encryption
+
+-- | 'rootPage' is the page a space's pages hang from: its home page, the
+-- only one of its pages with no parent (WP5.78 of docs/PLAN.md). Every
+-- other page is under it, and it has no segment in addresses: the
+-- space's own address is the home page's, and a page's path starts under
+-- it ('Wiki.Core.Path.pathUnder'). 'Nothing' for the two kinds of space
+-- with no home page ('hasHome'): the container of personal spaces, which
+-- has no pages, and an encrypted space, whose pages may be several at the
+-- top level, each with its segment.
+rootPage :: Space -> Maybe PageId
+rootPage s = guard (hasHome s) *> s.homePage
+
+-- | 'pagePath' is a page's path in its space: the slugs from under the
+-- space's root ('rootPage') down to the page, found through the lookup
+-- given. The home page's path is empty, and so the space's address is the
+-- home page's. A page under the home page has the path it had when it was
+-- a top-level page. In a space with no root (an encrypted space) every
+-- page's path starts with its top-level page's slug. 'Nothing' when the
+-- page, or a page above it, is not found. Every part of the wiki that
+-- writes a page's address or reads one asks this function or 'pagesAt'.
+pagePath :: (TreeNode p, NodeId p ~ PageId) => Space -> (PageId -> Maybe p) -> PageId -> Maybe [Slug]
+pagePath space = pathUnder (rootPage space)
+
+-- | 'pagesAt' is the pages a path goes through in a space, among the pages
+-- given: the space's root first, when it has one, and the page the path
+-- names last. The empty path names the root, the home page. A path that
+-- names nothing as written, and starts with the root's slug, is read again
+-- without that segment ('Wiki.Core.Path.resolveUnder'): the address a page
+-- had while the home page had a segment of its own.
+pagesAt :: (TreeNode p, NodeId p ~ PageId) => Space -> [p] -> [Slug] -> Either (PathError p) [p]
+pagesAt space pages = resolveUnder (rootPage space >>= \r -> find (\p -> nodeId p == r) pages) (findChild pages)
+
+-- | 'pageAt' is the page a path names in a space ('pagesAt'), if any.
+pageAt :: (TreeNode p, NodeId p ~ PageId) => Space -> [p] -> [Slug] -> Maybe p
+pageAt space pages path = rightToMaybe (pagesAt space pages path) >>= lastMay
+
+-- | 'parentOrRoot' is the parent a page created or moved in a space gets
+-- when it is given this one: the one given, or the space's root
+-- ('rootPage') for none. A page asked for at a space's top level goes
+-- under its home page, since nothing but the home page has no parent. In
+-- a space with no root, none stays none.
+parentOrRoot :: Space -> Maybe PageId -> Maybe PageId
+parentOrRoot space parent = parent <|> rootPage space
+
+-- | 'strayRoots' is the pages of a space, among those given, that have no
+-- parent and should have one: every page with no parent but the space's
+-- root. Empty for a space with no root, which may have many top-level
+-- pages. A storage refuses a write that leaves one, and the database's
+-- check reports one.
+strayRoots :: (TreeNode p, NodeId p ~ PageId) => Space -> [p] -> [p]
+strayRoots space pages = case rootPage space of
+  Nothing -> []
+  Just r -> [p | p <- pages, isNothing (nodeParent p), nodeId p /= r]
+
+-- | 'rootedPages' is a space's pages with its home page as their only
+-- root ('rootPage'): the rule step 13 of the schema applied to the
+-- databases ("Wiki.Server.Storage.Migrate.Code.Step0013"), applied here
+-- to what was written before it and is read again: the demo's wiki kept
+-- in a browser, and an archive. The home page is taken from under its
+-- parent, if it has one. Every other page with no parent goes under it,
+-- in the order it was in, before the pages the home page had under it:
+-- their positions move past the others'. Where one of those pages and a
+-- page that had no parent share a slug, the page that had no parent keeps
+-- it, since its address does not change, and the other gets the next free
+-- one ('freshSlug'). Pages of a space with no root, or whose home page is
+-- not among them, are as they were. Applied twice, it changes nothing the
+-- second time.
+rootedPages :: Space -> [Page.Page] -> [Page.Page]
+rootedPages space pages = case find (\p -> Just p.id == rootPage space) pages of
+  Nothing -> pages
+  Just home ->
+    let others = [p | p <- pages, p.space == space.id, isNothing p.parent, p.id /= home.id]
+        below = [p | p <- pages, p.parent == Just home.id]
+        kept = Set.fromList (map (\p -> p.slug) others)
+        -- The pages under the home page whose slug a page with no parent
+        -- has, in the order of their slugs, each given the next slug free
+        -- among all of the home page's pages to be.
+        clashing = sortOn (\p -> (p.slug, p.id)) [p | p <- below, p.slug `Set.member` kept]
+        renamed = snd (foldl' rename (kept <> Set.fromList (map (\p -> p.slug) below), Map.empty) clashing)
+        rename (taken, done) p = let s = freshSlug (`Set.member` taken) p.slug in (Set.insert s taken, Map.insert p.id s done)
+        past = case (nonEmpty (map (\p -> p.position) others), nonEmpty (map (\p -> p.position) below)) of
+          (Just tops, Just children) -> max 0 (maximum tops - minimum children + 1)
+          _ -> 0
+        moved p
+          | p.id == home.id = placed Nothing p.slug p.position p
+          | p.space == space.id && isNothing p.parent = placed (Just home.id) p.slug p.position p
+          | p.parent == Just home.id = placed p.parent (Map.findWithDefault p.slug p.id renamed) (p.position + past) p
+          | otherwise = p
+     in if null others && isNothing home.parent then pages else map moved pages
+  where
+    placed parent slug position p =
+      Page.Page
+        { id = p.id
+        , space = p.space
+        , parent
+        , title = p.title
+        , slug
+        , body = p.body
+        , attachments = p.attachments
+        , createdAt = p.createdAt
+        , updatedAt = p.updatedAt
+        , position
+        , template = p.template
+        , createdBy = p.createdBy
+        , updatedBy = p.updatedBy
+        }
 
 -- | A space with this page as its home page, or with none. (A function,
 -- since a record update of @homePage@ cannot tell a space's field from

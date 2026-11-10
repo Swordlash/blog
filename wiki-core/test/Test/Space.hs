@@ -56,6 +56,25 @@ withIcon i s = withProfile (profile s.description (Just i)) s
 home :: PageId
 home = PageId "home"
 
+-- | A page of the space @docs@: its id, slug, parent and position.
+page :: Text -> Text -> Maybe Text -> Int -> Page
+page i sl parent position =
+  Page
+    { id = PageId i
+    , space = SpaceId "docs"
+    , parent = PageId <$> parent
+    , title = i
+    , slug = slug sl
+    , body = ""
+    , attachments = []
+    , createdAt = UTCTime (fromGregorian 2026 1 1) 0
+    , updatedAt = UTCTime (fromGregorian 2026 1 1) 0
+    , position
+    , template = False
+    , createdBy = Nothing
+    , updatedBy = Nothing
+    }
+
 -- | A slug written in a test, which must be one.
 slug :: Text -> Slug
 slug t = either (panic . show) identity (mkSlug t)
@@ -181,6 +200,52 @@ spec = describe "Wiki.Core.Space" $ do
       (slugText p.slug, p.position) `shouldBe` ("home-3", -3)
     it "keeps home where the slug is free" $
       slugText (made [(slug "homes", 4)] s).slug `shouldBe` "home"
+
+  describe "rootPage" $ do
+    let s = withHome (Just home) (space "docs" "Docs" Nothing)
+    it "is the home page of a space that has one" $
+      rootPage s `shouldBe` Just home
+    it "is none for the container of personal spaces and an encrypted space" $ do
+      rootPage s {personalContainer = True} `shouldBe` Nothing
+      rootPage s {encryption = Just (KeyId "k1")} `shouldBe` Nothing
+
+  describe "rootedPages" $ do
+    let s = (withHome (Just home) (space "docs" "Docs" Nothing)) {pageOrder = ByHand}
+        at i sl parent pos = page i sl parent pos
+        homePage' parent = at "home" "home" parent 5
+        -- Two top-level pages, and two pages under the home page, one of
+        -- them with the slug of a top-level page, and one of its slug
+        -- with a 2 taken already.
+        given =
+          [ homePage' Nothing
+          , at "a" "about" Nothing 1
+          , at "b" "notes" Nothing 2
+          , at "c" "notes" (Just "home") 0
+          , at "d" "notes-2" (Just "home") 1
+          , at "e" "deep" (Just "c") 0
+          ]
+        rooted = rootedPages s given
+        placeOf i = (\p -> (p.parent, slugText p.slug, p.position)) <$> find (\p -> p.id == PageId i) rooted
+    it "leaves the home page alone at the top level" $
+      [p.id | p <- rooted, isNothing p.parent] `shouldBe` [home]
+    it "puts the other top-level pages under it with their slugs and order" $ do
+      placeOf "a" `shouldBe` Just (Just home, "about", 1)
+      placeOf "b" `shouldBe` Just (Just home, "notes", 2)
+    it "keeps the home page's pages after them, the clashing one renamed to the next free slug" $ do
+      placeOf "c" `shouldBe` Just (Just home, "notes-3", 3)
+      placeOf "d" `shouldBe` Just (Just home, "notes-2", 4)
+      placeOf "e" `shouldBe` Just (Just (PageId "c"), "deep", 0)
+    it "takes a home page that was under another page from under it" $ do
+      let nested = [at "a" "about" Nothing 0, homePage' (Just "a"), at "x" "x" (Just "home") 0]
+      [(p.id, p.parent) | p <- rootedPages s nested] `shouldBe` [(PageId "a", Just home), (home, Nothing), (PageId "x", Just home)]
+    it "changes nothing the second time" $
+      rootedPages s rooted `shouldBe` rooted
+    it "changes nothing in a space with no root, or whose home page is not among the pages" $ do
+      rootedPages s {encryption = Just (KeyId "k1")} given `shouldBe` given
+      rootedPages (withHome (Just (PageId "elsewhere")) s) given `shouldBe` given
+    it "leaves the pages of other spaces alone" $ do
+      let elsewhere = (at "z" "z" Nothing 0) {space = SpaceId "other"}
+      find (\p -> p.id == PageId "z") (rootedPages s (elsewhere : given)) `shouldBe` Just elsewhere
 
   describe "homeBody" $
     it "names the space and invites whoever made it to write" $ do

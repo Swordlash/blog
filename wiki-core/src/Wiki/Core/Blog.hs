@@ -49,21 +49,21 @@ import Wiki.Core.Id (PageId)
 import Wiki.Core.Markdown.Ast (Block (..), Inline (..), ListItem (..), parseMarkdown)
 import Wiki.Core.Order (ChildOrder (..), childrenInOrder)
 import Wiki.Core.Page (PageSummary (..))
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Space (..), rootPage)
 import Wiki.Core.Version (Author)
 
 --------------------------------------------------------------------------------
 -- Posts
 
--- | A space's posts, among its pages: its top-level pages except its home
--- page and its templates ('Wiki.Core.Page.template'), newest first. The
--- caller checks whether the space is shown as a blog.
+-- | A space's posts, among its pages: the pages under its home page, its
+-- root ('rootPage'), except its templates ('Wiki.Core.Page.template'),
+-- newest first. The caller checks whether the space is shown as a blog.
 posts :: Space -> [PageSummary] -> [PageSummary]
-posts space pages = filter (isPost space) (childrenInOrder NewestFirst pages Nothing)
+posts space pages = filter (isPost space) (childrenInOrder NewestFirst pages (rootPage space))
 
 -- | Whether a page of a space is one of its posts ('posts').
 isPost :: Space -> PageSummary -> Bool
-isPost space p = p.space == space.id && isNothing p.parent && space.homePage /= Just p.id && not p.template
+isPost space p = p.space == space.id && p.parent == rootPage space && space.homePage /= Just p.id && not p.template
 
 -- | 'Neighbours': the posts listed before and after a post.
 data Neighbours = Neighbours

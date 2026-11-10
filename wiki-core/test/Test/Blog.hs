@@ -68,20 +68,24 @@ ids = map (\p -> p.id.text)
 
 spec :: Spec
 spec = describe "Wiki.Core.Blog" $ do
+  -- The home page, @about@, is the root of the space's pages (WP5.78).
   let pages =
         [ page "about" Nothing 1
-        , page "first" Nothing 2
-        , page "third" Nothing 9
-        , page "second" Nothing 5
+        , page "first" (Just "about") 2
+        , page "third" (Just "about") 9
+        , page "second" (Just "about") 5
         , page "notes" (Just "second") 6
         ]
+      -- The pages of a space with no home page, as an encrypted space's
+      -- are: several at the top level.
+      flat = [page "about" Nothing 1, page "first" Nothing 2, page "third" Nothing 9, page "second" Nothing 5]
 
   describe "posts" $ do
-    it "are the top-level pages but the home page, the newest first by when each was made" $
+    it "are the pages under the home page, the newest first by when each was made" $
       ids (posts (blogSpace (Just "about")) pages) `shouldBe` ["third", "second", "first"]
-    it "take the home page in when there is none, whatever order the space lists its pages in" $ do
-      ids (posts (blogSpace Nothing) pages) `shouldBe` ["third", "second", "first", "about"]
-      ids (posts (blogSpace Nothing) {pageOrder = OldestFirst} pages) `shouldBe` ["third", "second", "first", "about"]
+    it "are the top-level pages of a space with no home page, whatever order the space lists its pages in" $ do
+      ids (posts (blogSpace Nothing) flat) `shouldBe` ["third", "second", "first", "about"]
+      ids (posts (blogSpace Nothing) {pageOrder = OldestFirst} flat) `shouldBe` ["third", "second", "first", "about"]
     it "leave a page under a post out" $
       isPost (blogSpace Nothing) (page "notes" (Just "second") 6) `shouldBe` False
     it "take two made at once by title" $
@@ -92,9 +96,9 @@ spec = describe "Wiki.Core.Blog" $ do
     let space = blogSpace (Just "about")
     it "are the older post and the newer one" $ do
       neighbours space pages (PageId "second")
-        `shouldBe` Just Neighbours {older = Just (page "first" Nothing 2), newer = Just (page "third" Nothing 9)}
-      neighbours space pages (PageId "third") `shouldBe` Just Neighbours {older = Just (page "second" Nothing 5), newer = Nothing}
-      neighbours space pages (PageId "first") `shouldBe` Just Neighbours {older = Nothing, newer = Just (page "second" Nothing 5)}
+        `shouldBe` Just Neighbours {older = Just (page "first" (Just "about") 2), newer = Just (page "third" (Just "about") 9)}
+      neighbours space pages (PageId "third") `shouldBe` Just Neighbours {older = Just (page "second" (Just "about") 5), newer = Nothing}
+      neighbours space pages (PageId "first") `shouldBe` Just Neighbours {older = Nothing, newer = Just (page "second" (Just "about") 5)}
     it "are none for a page that is no post" $ do
       neighbours space pages (PageId "about") `shouldBe` Nothing
       neighbours space pages (PageId "notes") `shouldBe` Nothing
