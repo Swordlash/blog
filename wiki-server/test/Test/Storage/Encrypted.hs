@@ -15,7 +15,9 @@
 -- user back to the readers waiting for a grant. A page moves within its
 -- encrypted space, but not out of it or into it; a grant sent twice in one
 -- request is made once; and a whole wiki's archive comes in with every
--- space plain.
+-- space plain. The whole wiki's export leaves an encrypted space out, an
+-- import into one is refused, and the sitemap lists its pages, by their
+-- random slugs, to its members only.
 module Test.Storage.Encrypted (spec) where
 
 import Data.Aeson (eitherDecode)
@@ -42,15 +44,18 @@ import Wiki.Core.Export qualified as Export
 import Wiki.Core.Id (PageId (..), SpaceId, UserId (..))
 import Wiki.Core.Notification (Notification (..), WatchTarget (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
-import Wiki.Core.Permission (SpacePermission (..), Subject (..))
+import Wiki.Core.Permission (Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (mkSlug, slugText)
 import Wiki.Core.Space (Space (..), SpaceProfile (..))
+import Wiki.Core.Space qualified as Space
 import Wiki.Core.User (Password (..), User (..))
 import Wiki.Core.Vault
 import Wiki.Core.Version (VersionsQuery (..))
 import Wiki.Server.Accounts (createAccount)
+import Wiki.Server.Import (intoEncrypted)
 import Wiki.Server.Storage
+import Wiki.Server.Storage.Rows (SitemapNode (..))
 import Wiki.Server.Storage.Schema (KeyGrants (..), PageLinks (..), Pages (..), PublicKeys (..), Vaults (..), WikiDb (..), wikiDb)
 import Wiki.Server.Vault (keyIdOf, storeVault)
 import Wiki.Server.WebAuthn (toBase64Url)
@@ -290,6 +295,43 @@ spec backing = describe "encrypted spaces in the storage" $ do
       blog <- maybe (panic "no blog") pure (find (\s -> s.slug == either (const (panic "slug")) identity (mkSlug "blog")) spaces)
       pages <- ok =<< runStoredWiki st Administrator (listPages blog.id)
       pages `shouldSatisfy` (not . null)
+
+  -- The whole wiki's export holds plain text only: an encrypted space is
+  -- left out, with its pages and its grants, and the plain spaces beside
+  -- it are there (#209's tests, WP5.74b3 of docs/PLAN.md).
+  it "leaves an encrypted space out of the whole wiki's export, with its pages and its grants" $ withEncrypted backing $ \st p secret -> do
+    let as :: UserId -> StoredWiki IO a -> IO a
+        as u = runStoredWiki st (AsUser u)
+    void (ok =<< as p.ada (createSealedPage secret.id (newPage (PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f") Nothing 'a')))
+    void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+    plain <- ok =<< as p.ada (createSpace Nothing "Plain")
+    archive <- ok =<< exportArchive st "test"
+    let spaceIds = map (\s -> s.id) archive.spaces
+    (secret.id `elem` spaceIds, plain.id `elem` spaceIds) `shouldBe` (False, True)
+    [x.id | x <- archive.pages, x.space == secret.id] `shouldBe` []
+    [g | g <- archive.grants.spaces, g.space == secret.id] `shouldBe` []
+
+  it "refuses an import whose spaces would land in an encrypted space, or under it" $ withEncrypted backing $ \st _ secret -> do
+    -- The demo's spaces, one of them at the encrypted space's address.
+    let top = [s | s <- demoArchive.spaces, isNothing s.parent]
+        moved = fromMaybe (panic "no top-level space in the demo") (head top)
+        archive = demoArchive {Export.spaces = [if s.id == moved.id then s {Space.slug = secret.slug} else s | s <- demoArchive.spaces]}
+    blocked <- reading st (intoEncrypted archive)
+    blocked `shouldContain` [[secret.slug]]
+    -- The demo's own addresses land in no encrypted space.
+    reading st (intoEncrypted demoArchive) `shouldReturn` []
+
+  -- The sitemap lists the pages of the spaces the reader may view, by
+  -- their slugs, which are random in an encrypted space; nobody else gets
+  -- the space at all.
+  it "lists an encrypted space's pages in the sitemap by their random slugs, to its members only" $ withEncrypted backing $ \st p secret -> do
+    let as :: UserId -> StoredWiki IO a -> IO a
+        as u = runStoredWiki st (AsUser u)
+    made <- ok =<< as p.ada (createSealedPage secret.id (newPage (PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f") Nothing 'a'))
+    mine <- as p.ada sitemapPages
+    map (\n -> (n.id, n.slug)) (Map.findWithDefault [] secret.id mine) `shouldBe` [(made.id, made.slug)]
+    Map.member secret.id <$> as p.dan sitemapPages `shouldReturn` False
+    Map.member secret.id <$> runStoredWiki st Anonymous sitemapPages `shouldReturn` False
 
   it "takes no plain title or text for a page of an encrypted space" $ do
     -- A title or a text given as text, not as a ciphertext, does not parse.

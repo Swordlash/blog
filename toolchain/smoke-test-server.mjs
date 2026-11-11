@@ -84,6 +84,14 @@
 //    frames load with the service worker on too; and offline, over plain
 //    HTTP to a host that is not the loopback one, and in a link's text, the
 //    page shows the image instead.
+// 10. Encrypted spaces (WP5.74, toolchain/smoke-encrypted.mjs): a space
+//    encrypted through its permissions, a page of it written in two
+//    versions and read back with its history, a reader given its key by a
+//    member's browser, a browser without the keys unlocked with the
+//    password in the space's own form, and the canary
+//    (toolchain/smoke-canary.mjs): what the space protects is found in no
+//    file of the data directory, no row of the database and nothing the
+//    browsers sent or received.
 //
 // On PostgreSQL (toolchain/smoke-test.sh runs it so when one is at hand),
 // the server and the console find their database in WIKI_DATABASE_URL, which
@@ -103,6 +111,7 @@ import { tmpdir } from "node:os";
 import { basename, extname, join, normalize, resolve } from "node:path";
 import { chromium } from "playwright";
 import { adoptionMayChange, fittedFrame } from "./smoke-adoption.mjs";
+import { encryptedSpaces } from "./smoke-encrypted.mjs";
 
 const started = Date.now();
 const built = resolve(process.argv[2] ?? "dist-newstyle/wasm/public/app");
@@ -142,6 +151,12 @@ const adminName = "Ada Admin";
 const adminPassword = "the smoke test's password";
 execFileSync(wikiServer, ["users", "add", "--data", data, adminLogin, "--display-name", adminName, "--admin"], {
   input: `${adminPassword}\n`,
+  stdio: ["pipe", "inherit", "inherit"],
+});
+// A user who is no administrator, a reader of part 10's encrypted space.
+const readerUser = { login: "bea", password: "the reader's password" };
+execFileSync(wikiServer, ["users", "add", "--data", data, readerUser.login, "--display-name", "Bea Reader"], {
+  input: `${readerUser.password}\n`,
   stdio: ["pipe", "inherit", "inherit"],
 });
 
@@ -1623,6 +1638,10 @@ try {
   // ---- 9. Interactive SVGs ----------------------------------------------------
 
   await interactiveSvgs();
+
+  // ---- 10. Encrypted spaces ---------------------------------------------------
+
+  await encryptedSpaces({ browser, url, origin, data, timeout, eventually, failures, admin: { login: adminLogin, password: adminPassword }, reader: readerUser });
 
   // ---- 5. What the server says of itself -------------------------------------
 
