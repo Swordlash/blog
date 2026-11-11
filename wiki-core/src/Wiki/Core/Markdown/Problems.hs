@@ -54,6 +54,7 @@ import Halogen.VDom.Types qualified as VDom
 import Protolude
 import Wiki.Core.Markdown.Ast qualified as A
 import Wiki.Core.Markdown.Box (readAlertKind)
+import Wiki.Core.Markdown.Folds (Fold, foldsParsed, isSpoiler)
 import Wiki.Core.Markdown.Render (IslandKey (..), Options (..), defaultOptions, renderSections)
 
 -- | 'Problem' is a place in a page's source that does not render as
@@ -106,11 +107,14 @@ data IslandPlace = IslandPlace
   }
   deriving stock (Eq, Show)
 
--- | 'Checked' is what 'check' found in one text: the parser's problems,
--- and the place of each island that can fail, by its key.
+-- | 'Checked' is what 'checkText' found in one text: the parser's
+-- problems, the place of each island that can fail, by its key, and the
+-- spoilers the editor offers to fold ("Wiki.Core.Markdown.Folds"), found
+-- from the same parse.
 data Checked = Checked
   { problems :: [Problem]
   , islands :: Map IslandKey IslandPlace
+  , folds :: [Fold]
   }
   deriving stock (Eq, Show)
 
@@ -119,15 +123,24 @@ data Checked = Checked
 -- loop.
 instance NFData Checked where
   rnf c =
-    rnf [(p.from, p.to, p.kind, p.message) | p <- c.problems] `seq`
-      rnf [(k.source, k.occurrence, p.from, p.to, p.kind) | (k, p) <- Map.toList c.islands]
+    rnf [(p.from, p.to, p.kind, p.message) | p <- c.problems]
+      `seq` rnf [(k.source, k.occurrence, p.from, p.to, p.kind) | (k, p) <- Map.toList c.islands]
+      `seq` rnf c.folds
 
 instance NFData ProblemKind where
   rnf k = k `seq` ()
 
--- | The parser's problems in a text, and the places of its islands.
+-- | The parser's problems in a text, the places of its islands, and its
+-- spoilers' folds, from one parse of the text.
 checkText :: Text -> Checked
-checkText source = Checked {problems = parserProblems source, islands = islandPlaces source}
+checkText source =
+  Checked
+    { problems = problemsParsed parsed
+    , islands = islandsIn source (fst parsed)
+    , folds = filter isSpoiler (foldsParsed source parsed)
+    }
+  where
+    parsed = either (const ([], [])) identity (A.parseWithLinesAndMarkers source)
 
 -- | The problems the parser finds in a text, in the order of their lines:
 -- the broken marker lines of spoilers and of the other blocks of the
@@ -138,11 +151,13 @@ checkText source = Checked {problems = parserProblems source, islands = islandPl
 -- crosses the end of its section cuts a section, and is marked as any
 -- other pair that does.
 parserProblems :: Text -> [Problem]
-parserProblems source = sort (markerLines <> spoilerHeads <> boxes)
+parserProblems source = problemsParsed (either (const ([], [])) identity (A.parseWithLinesAndMarkers source))
+
+-- | 'parserProblems' of a text parsed already.
+problemsParsed :: ([(Maybe Int, A.Block)], [A.MarkerLine]) -> [Problem]
+problemsParsed (located, markers) = sort (markerLines <> spoilerHeads <> boxes)
   where
-    (tree, markers) = case A.parseWithAllMarkers source of
-      Right (bs, _, ms, _) -> (bs, ms)
-      Left _ -> ([], [])
+    tree = map snd located
     markerLines =
       [ Problem {from = line, to = line, kind = if spoilerLine written then Spoiler else Marker, message = sentence why}
       | A.MarkerLine line _ (A.Faulty written why) <- markers
@@ -160,7 +175,7 @@ parserProblems source = sort (markerLines <> spoilerHeads <> boxes)
     -- none to the blocks inside another.
     boxes =
       [ Problem {from = line, to = line, kind = Box, message = why}
-      | (Just line, A.BlockQuote (opening : _)) <- either (const []) identity (A.parseWithLines source)
+      | (Just line, A.BlockQuote (opening : _)) <- located
       , Just why <- [boxMarkerProblem opening]
       ]
 
@@ -205,17 +220,20 @@ boxMarkerProblem = \case
 -- formula, a diagram or a picture. The keys are the renderer's own
 -- (see the module's header).
 islandPlaces :: Text -> Map IslandKey IslandPlace
-islandPlaces source = case A.parseWithLines source of
-  Left _ -> Map.empty
-  Right located ->
-    let blocks = zip3 located (extents located) (map (concatMap widgets) (renderSections probe (map (pure . snd) located)))
-        -- A paragraph split around its display math is several blocks
-        -- in a row on the same lines, and its formulas are counted across
-        -- them, in order: each block's islands come after the sources of
-        -- the islands of the blocks before it on those lines.
-        sameLines = groupBy (\(_, l, _) (_, l', _) -> l == l') blocks
-        before earlier = [written | (_, _, found) <- earlier, Probe _ _ written <- found]
-     in Map.fromList (concat [placed (before earlier) block | run <- sameLines, (earlier, block) <- zip (inits run) run])
+islandPlaces source = either (const Map.empty) (islandsIn source) (A.parseWithLines source)
+
+-- | 'islandPlaces' of a text whose blocks are parsed already, each with
+-- the line it starts on.
+islandsIn :: Text -> [(Maybe Int, A.Block)] -> Map IslandKey IslandPlace
+islandsIn source located =
+  let blocks = zip3 located (extents located) (map (concatMap widgets) (renderSections probe (map (pure . snd) located)))
+      -- A paragraph split around its display math is several blocks
+      -- in a row on the same lines, and its formulas are counted across
+      -- them, in order: each block's islands come after the sources of
+      -- the islands of the blocks before it on those lines.
+      sameLines = groupBy (\(_, l, _) (_, l', _) -> l == l') blocks
+      before earlier = [written | (_, _, found) <- earlier, Probe _ _ written <- found]
+   in Map.fromList (concat [placed (before earlier) block | run <- sameLines, (earlier, block) <- zip (inits run) run])
   where
     sourceLines = T.lines source
     lineCount = max 1 (length sourceLines)
@@ -227,13 +245,13 @@ islandPlaces source = case A.parseWithLines source of
     -- lines at its end. A block without a line (the footnotes, which come
     -- last) may be anywhere.
     extents :: [(Maybe Int, A.Block)] -> [(Int, Int)]
-    extents located =
+    extents starts =
       [ case start of
           Just s ->
             let next = fromMaybe (lineCount + 1) (head [l | (Just l, _) <- later, l > s])
              in (s, max s (lastNonBlank s (next - 1)))
           Nothing -> (1, lineCount)
-      | ((start, _), later) <- zip located (drop 1 (tails located))
+      | ((start, _), later) <- zip starts (drop 1 (tails starts))
       ]
     lastNonBlank s e
       | e > s && blank e = lastNonBlank s (e - 1)

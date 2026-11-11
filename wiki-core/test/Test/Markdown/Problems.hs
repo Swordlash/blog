@@ -8,6 +8,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Protolude
 import Test.Hspec
+import Wiki.Core.Markdown.Folds (Fold (..), spoilerFolds)
 import Wiki.Core.Markdown.Problems
 import Wiki.Core.Markdown.Render (IslandKey (..))
 
@@ -64,6 +65,14 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
       placed "## One\n\n### [[!spoiler]] Q\n\n[[!spoiler]]{s}(S)\nHidden.\n\n### Two\n\nMore.\n[[/spoiler]]{s}\n" `shouldBe` [(5, 5, Spoiler)]
       -- A pair that holds a heading spoiler and the text after its section.
       placed "[[!spoiler]]{s}(S)\n## [[!spoiler]] Q\n\nAnswer.\n\n# Top\n\nMore.\n[[/spoiler]]{s}\n" `shouldBe` [(1, 1, Spoiler)]
+
+    it "finds, from the same parse, the problems and islands the parser and the islands' places find apart, and the spoilers' folds" $ do
+      let source = "# T\n\n> [!]\n\n[[!spoiler]]{a}(A)\n$x$\n[[/spoiler]]{a}\n\n## [[!spoiler]] Q\n\nAnswer $y$.\n\n[[!pause]] x\n"
+          checked = checkText source
+      checked.problems `shouldBe` parserProblems source
+      checked.islands `shouldBe` islandPlaces source
+      checked.folds `shouldBe` spoilerFolds source
+      map (\f -> (f.from, f.to)) checked.folds `shouldBe` [(5, 7), (9, 13)]
 
     it "lists the problems in the order of their lines" $
       placed "> [!]\n\n[[!pause]] x\n\n[[!spoiler]]{b}(B)\nText." `shouldBe` [(1, 1, Box), (3, 3, Marker), (5, 5, Spoiler)]

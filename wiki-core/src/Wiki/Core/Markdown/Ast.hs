@@ -104,6 +104,7 @@ module Wiki.Core.Markdown.Ast
   , parseWithMarkers
   , parseWithAllMarkers
   , parseWithLines
+  , parseWithLinesAndMarkers
 
     -- * Reading the tree
   , plainText
@@ -536,6 +537,14 @@ parseWithTasks source =
 parseWithLines :: Text -> Either ParseError [(Maybe Int, Block)]
 parseWithLines source =
   (\(Blocks bs _ _) -> finishedWith (toList bs)) <$> parsed source
+
+-- | Parse a page's Markdown into what 'parseWithLines' and
+-- 'parseWithAllMarkers' give apart: each block of the page with the line
+-- it starts on, and the marker lines. One parse, for a caller that needs
+-- both (the editor's check of its text, "Wiki.Core.Markdown.Problems").
+parseWithLinesAndMarkers :: Text -> Either ParseError ([(Maybe Int, Block)], [MarkerLine])
+parseWithLinesAndMarkers source =
+  (\(Blocks bs (Markers _ ss _) _) -> (finishedWith (toList bs), sortOn (\s -> (s.lineAt, s.columnAt)) (ordNub ss))) <$> parsed source
 
 -- | What every block of a page goes through once parsed.
 finished :: [Block] -> [Block]

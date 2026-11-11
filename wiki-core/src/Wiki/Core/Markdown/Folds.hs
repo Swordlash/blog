@@ -32,6 +32,7 @@ module Wiki.Core.Markdown.Folds
   ( Fold (..)
   , FoldKind (..)
   , folds
+  , foldsParsed
   , spoilerFolds
   , isSpoiler
   )
@@ -84,17 +85,20 @@ spoilerFolds = filter isSpoiler . folds
 -- headings' sections, in the order of their first lines, an outer fold
 -- before the folds inside it.
 folds :: Text -> [Fold]
-folds source
+folds source = foldsParsed source (either (const ([], [])) identity (A.parseWithLinesAndMarkers source))
+
+-- | 'folds' of a text the caller has parsed already
+-- ('A.parseWithLinesAndMarkers'), so that one parse serves both: the
+-- blocks of the page with their lines, and the marker lines. Only the
+-- insides of blocks that hold sections are parsed again.
+foldsParsed :: Text -> ([(Maybe Int, A.Block)], [A.MarkerLine]) -> [Fold]
+foldsParsed source (located, markers)
   | T.any (== '\r') source = []
-  | otherwise = sortOn (\f -> (f.from, Down f.to)) (blockSpoilers <> region 0 (length sourceLines))
+  | otherwise = sortOn (\f -> (f.from, Down f.to)) (blockSpoilers <> inRegion 0 (length sourceLines) located)
   where
     sourceLines = Seq.fromList (T.splitOn "\n" source)
     lineAt n = fromMaybe "" (Seq.lookup (n - 1) sourceLines)
     blank n = T.all isSpace (lineAt n)
-
-    markers = case A.parseWithAllMarkers source of
-      Right (_, _, ms, _) -> ms
-      Left _ -> []
     -- The line each closed block of the wiki's own ends on, by the line it
     -- starts on: a spoiler's, a div's, a deck's notes'.
     ends = Map.fromList [(start, line) | A.MarkerLine line _ (A.Ends start) <- markers]
@@ -115,9 +119,13 @@ folds source
       | end <= offset = []
       | otherwise = case A.parseWithLines (T.intercalate "\n" (map lineAt [offset + 1 .. end])) of
           Left _ -> []
-          Right located ->
-            let placed = [(offset + l, b) | (Just l, b) <- located]
-             in concat [inBlock end placed (l, b) | (l, b) <- placed]
+          Right inside -> inRegion offset end inside
+
+    -- The folds of a region's blocks, as its parse placed them.
+    inRegion :: Int -> Int -> [(Maybe Int, A.Block)] -> [Fold]
+    inRegion offset end blocks =
+      let placed = [(offset + l, b) | (Just l, b) <- blocks]
+       in concat [inBlock end placed (l, b) | (l, b) <- placed]
 
     -- The folds a block of a region starts, and those inside it.
     inBlock :: Int -> [(Int, A.Block)] -> (Int, A.Block) -> [Fold]
