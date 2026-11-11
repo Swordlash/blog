@@ -5,8 +5,10 @@ import Data.Row (Empty, type (.==))
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
+import Halogen.HTML.Core (HTML (..))
 import Halogen.HTML.Properties qualified as HP
 import Halogen.VDom.DOM.Monad (MemDOM)
+import Halogen.VDom.Types (VDom (..))
 import Protolude
 import Test.Hspec
 import Test.Markdown.Html
@@ -233,6 +235,16 @@ spec = describe "Markdown.Render" $ do
           tree = either (panic . show) (allTasks . tasksOf) (parseMarkdown source)
       shown `shouldBe` [(t.label, show t.index) | t <- tree]
       map fst shown `shouldBe` ["quoted", "boxed", "hidden", "deeper", "after a broken marker", "in the section", "in a div", "noted"]
+    it "keys a list of tasks' items by each task's index and how often its box was drawn anew, a sorted list's in the order shown, and no other list" $ do
+      let keysOf :: [HH.HTML Void Void] -> [[Text]]
+          keysOf = concatMap $ \h -> case h.unHTML of
+            Keyed _ _ _ children -> [map fst children]
+            _ -> []
+          drawn i = if i == 1 then 2 else 0
+          shown = either (panic . show) identity (renderMarkdown defaultOptions {taskDrawn = drawn} "- [ ] a\n- [x] b\n\n{.sorted}\n- [x] c\n- [ ] d\n\n- plain")
+          sortedKeys = concat [keysOf inner | h <- shown, Elem _ _ _ inner' <- [h.unHTML], let inner = map HTML inner']
+      keysOf shown `shouldBe` [["task-0-0", "task-1-2"]]
+      sortedKeys `shouldBe` [["task-3-0", "task-2-0"]]
     it "numbers a footnote's tasks after the page's, as the tasks of the tree are" $
       showsWith
         defaultOptions {taskBoxes = Just (\_ _ -> panic "no change is made")}

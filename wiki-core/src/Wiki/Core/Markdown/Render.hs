@@ -145,6 +145,15 @@
 -- each part in the order of the source. The items are rendered in the
 -- order of the source and only shown in the other, so a task's index,
 -- the islands' keys and the footnotes' numbers are those of the source.
+--
+-- A list that has tasks is keyed: each task's item by its index (and by
+-- 'taskDrawn'), each other item by its place. When a sorted list moves an
+-- item, its element moves with it, and its checkbox, whose state the
+-- browser set on a click, stays the box of its own task. A checkbox's
+-- state is written only when the rendered state changes, so a click the
+-- page view does not take leaves the box as the browser set it: the view
+-- then counts the box as drawn once more, its item gets a new key, and the
+-- new element shows the state the view has.
 module Wiki.Core.Markdown.Render
   ( Options (..)
   , MentionTarget (..)
@@ -247,6 +256,10 @@ data Options page w i = Options
   -- ("Wiki.Core.Markdown.Tasks") and whether it is now ticked. 'Nothing'
   -- by default, and the checkboxes are disabled: only the page view, for
   -- a reader who may edit the page, ticks tasks.
+  , taskDrawn :: Int -> Int
+  -- ^ How many times the box of the task with this index was drawn anew,
+  -- part of its item's key (the module's Haddock says why). None by
+  -- default.
   }
 
 -- | The user a mention names, as its link shows them.
@@ -298,6 +311,7 @@ defaultOptions =
     , boxes = []
     , numbering = noNumbers
     , taskBoxes = Nothing
+    , taskDrawn = const 0
     }
 
 -- | What a destination is when nothing is known about the wiki: a URL, used
@@ -407,10 +421,15 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
         | onlyDefinitions tex -> [] <$ formula tex
         | otherwise -> formula tex <&> \(k, ms) -> [opts.mathDisplay k ms tex]
       List kind items -> do
-        rendered <- traverse (renderItem kind) items
+        rendered <- zipWithM (renderItem kind) [0 ..] items
         sorting <- gets (.sorting)
-        let shown = if sorting then filter (not . snd) rendered <> filter snd rendered else rendered
-        pure [listOf kind (any isTask items) (map fst shown)]
+        let done (_, _, d) = d
+            shown = if sorting then filter (not . done) rendered <> filter done rendered else rendered
+        pure
+          [ if any isTask items
+              then keyedListOf kind [(key, html) | (key, html, _) <- shown]
+              else listOf kind [html | (_, html, _) <- shown]
+          ]
       Table aligns header rows -> single <$> renderTable aligns header rows
       Div written bs -> do
         attrs <- ownAttrs written
@@ -452,7 +471,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
       -- A slide shows the notes it refers to, which need not start at the
       -- first ("Wiki.Core.Slides").
       Footnotes notes ->
-        single . HH.section [classesProp ["footnotes"]] . single . listOf (OrderedList (firstNote notes)) False <$> traverse renderNote notes
+        single . HH.section [classesProp ["footnotes"]] . single . listOf (OrderedList (firstNote notes)) <$> traverse renderNote notes
       RawHtmlBlock raw -> pure (renderRawHtml opts raw)
       TableOfContents -> pure (contentsNav contents)
 
@@ -470,10 +489,18 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
     -- bullet, and the emoji the class @emoji-bullet@, which moves it to
     -- where the bullet was. The emoji stays in the item's text, so the
     -- text a search, a comment's quote or a slide's steps read is the same.
-    -- A task's item is as the module's Haddock says. With the item, whether
-    -- it is a done task, which a sorted list shows last.
-    renderItem :: ListKind -> ListItem -> R (HH.HTML w i, Bool)
-    renderItem kind item@(ListItem task _) = (,fromMaybe False task) <$> renderItem' kind item
+    -- A task's item is as the module's Haddock says. With the item, its key
+    -- (a task's by its index, another item's by its place in the list) and
+    -- whether it is a done task, which a sorted list shows last.
+    renderItem :: ListKind -> Int -> ListItem -> R (Text, HH.HTML w i, Bool)
+    renderItem kind place item@(ListItem task _) = do
+      -- The next task's index: the item's own, if it is a task.
+      index <- gets (.tasks)
+      html <- renderItem' kind item
+      let key = case task of
+            Just _ -> "task-" <> show index <> "-" <> show (opts.taskDrawn index)
+            Nothing -> "item-" <> show place
+      pure (key, html, fromMaybe False task)
 
     renderItem' :: ListKind -> ListItem -> R (HH.HTML w i)
     renderItem' kind (ListItem task bs) = case task of
@@ -805,13 +832,20 @@ headingOf level = case level of
   5 -> HH.h5
   _ -> HH.h6
 
-listOf :: ListKind -> Bool -> [HH.HTML w i] -> HH.HTML w i
-listOf kind tasks = case kind of
-  BulletList -> HH.ul cls
-  OrderedList start -> HH.ol (cls <> [HP.prop (HH.PropName "start") start | start /= 1])
+-- | A list of tasks, its items keyed ('renderItem').
+keyedListOf :: ListKind -> [(Text, HH.HTML w i)] -> HH.HTML w i
+keyedListOf kind = case kind of
+  BulletList -> HH.keyed (HH.ElemName "ul") [taskList :: HP.IProp I.HTMLul i]
+  OrderedList start -> HH.keyed (HH.ElemName "ol") ([taskList] <> [HP.prop (HH.PropName "start") start | start /= 1] :: [HP.IProp I.HTMLol i])
   where
-    cls :: (HasType "class" Text r) => [HP.IProp r i]
-    cls = [classesProp ["task-list"] | tasks]
+    taskList :: (HasType "class" Text r) => HP.IProp r i
+    taskList = classesProp ["task-list"]
+
+-- | A list without tasks.
+listOf :: ListKind -> [HH.HTML w i] -> HH.HTML w i
+listOf kind = case kind of
+  BulletList -> HH.ul []
+  OrderedList start -> HH.ol [HP.prop (HH.PropName "start") start | start /= 1]
 
 alignment :: (HasType "style" Text r) => Alignment -> [HP.IProp r i]
 alignment = \case

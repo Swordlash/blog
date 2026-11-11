@@ -55,6 +55,10 @@ when `Options.taskBoxes` says what a change does. Attributes in braces on
 the line before a list put it in a `Div` that has them, and a list in a
 `Div` of the class `sorted` shows its done tasks last; the line is a
 marker line of the role `SetsAttributes`, which the export leaves out.
+A list of tasks is keyed, each task's item by its index and by
+`Options.taskDrawn`, so that an item a sorted list moves keeps its
+checkbox, and a box a click left in a state the caller does not take is
+drawn anew.
 
 A page's backlinks (WP5.88, #189): `linkDestinations` gives the
 destination of every link the renderer makes of some blocks, in document
