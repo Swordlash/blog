@@ -115,7 +115,6 @@ module Wiki.Server.Export.Document
   , isPause
   , htmlBlocks
   , htmlInlines
-  , writeHtmlNodes
   )
 where
 
@@ -138,7 +137,7 @@ import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
 import Wiki.App.Route qualified as R
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MediaKind (..), attachmentKind, findAttachment)
 import Wiki.Core.Id (AttachmentId (..), PageId)
-import Wiki.Core.Markdown.Ast (Attributes, Block (..), BoxMarker (..), Footnote (..), ListItem (..), MarkerLine (..), MarkerName (..), MarkerRole (..), MarkerStart (..), ParseError, SpoilerHead (..), WrittenIds (..), markerAt, parseWithAllMarkers, spoilerProblemText)
+import Wiki.Core.Markdown.Ast (Attributes, Block (..), BoxMarker (..), Footnote (..), ListItem (..), MarkerLine (..), MarkerName (..), MarkerRole (..), MarkerStart (..), ParseError, SpoilerHead (..), WrittenIds (..), languageOfClasses, listingLanguage, markerAt, norenderClass, parseWithAllMarkers, spoilerProblemText)
 import Wiki.Core.Markdown.Box (AlertKind (..), BoxCounter, BoxKind, Numbering, alertKindName, boxCaption, countBox, countSection, definedKind, startCounting)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
@@ -900,10 +899,17 @@ boxesOf defined boxes numbers = \case
 -- Raw HTML, through the allowlist
 
 -- | A raw HTML block, as the part the allowlist keeps, read by pandoc's
--- HTML reader.
+-- HTML reader. An @html@ fence, which the page shows in a frame with the
+-- author's styles, is read the same way: through the page's allowlist,
+-- without the styles, which a document has no frame to keep apart from
+-- its own.
 htmlBlock :: P.Block -> [P.Block]
 htmlBlock = \case
   P.RawBlock f raw | isHtml f -> htmlBlocks raw
+  P.CodeBlock (_, cls, _) code
+    | norenderClass `notElem` cls
+    , languageOfClasses cls == Just "html" ->
+        htmlBlocks code
   b -> [b]
 
 -- | Raw HTML, reduced to what the allowlist keeps, as pandoc's blocks. A
@@ -911,7 +917,7 @@ htmlBlock = \case
 htmlBlocks :: Text -> [P.Block]
 htmlBlocks raw = case Html.parseHtml raw of
   [] -> []
-  nodes -> either (const [P.Para (B.toList (B.text (Html.htmlText nodes)))]) (\(P.Pandoc _ bs) -> walk dotsAsText bs) (runPure (readHtml def (writeHtmlNodes nodes)))
+  nodes -> either (const [P.Para (B.toList (B.text (Html.htmlText nodes)))]) (\(P.Pandoc _ bs) -> walk dotsAsText bs) (runPure (readHtml def (Html.renderHtml nodes)))
 
 -- | Inlines with tags among them, read together with the text between the
 -- tags, as the page's renderer reads them: the tags the allowlist keeps,
@@ -972,25 +978,6 @@ plain = query $ \case
 isHtml :: P.Format -> Bool
 isHtml f = f == P.Format "html"
 
--- | What the allowlist kept, written out as HTML again, with its text and
--- attribute values escaped, so that pandoc reads exactly that tree.
-writeHtmlNodes :: [Html.Node Void] -> Text
-writeHtmlNodes = foldMap node
-  where
-    node = \case
-      Html.Element name attrs children
-        | name `elem` voidElements -> open name attrs
-        | otherwise -> open name attrs <> foldMap node children <> "</" <> name <> ">"
-      Html.TextNode t -> escape t
-    open name attrs = "<" <> name <> foldMap (\(k, v) -> " " <> k <> "=\"" <> escape v <> "\"") attrs <> ">"
-    escape = T.concatMap $ \case
-      '&' -> "&amp;"
-      '<' -> "&lt;"
-      '>' -> "&gt;"
-      '"' -> "&quot;"
-      c -> T.singleton c
-    voidElements = ["br", "hr", "img", "source", "wbr"]
-
 ----------------------------------------------------------------------
 -- What the wiki adds
 
@@ -1019,13 +1006,19 @@ prefixIds prefix = walk inline . walk block
       x -> x
     prefixed i = if T.null i then i else prefix <> i
 
--- | The islands, as a document shows them.
+-- | The islands, as a document shows them. A fence's language is found as
+-- the page's parser finds it ('languageOfClasses'), and a fence with the
+-- class @norender@ is a listing of its language, as on the page
+-- ('listingLanguage').
 islands :: Output -> P.Block -> [P.Block]
 islands output = \case
   P.CodeBlock (ident, cls, kv) code
-    | "math" `elem` cls -> [P.Para [P.Math P.DisplayMath code]]
-    | "mermaid" `elem` cls -> islandNote "A Mermaid diagram is drawn here in the wiki; a document cannot draw it. Its source:" code
-    | "tikz" `elem` cls ->
+    | norenderClass `elem` cls ->
+        let lang = languageOfClasses cls
+         in listing (ident, map listingLanguage (maybeToList lang) <> filter (`notElem` (norenderClass : maybeToList lang)) cls, kv) code
+    | Just lang <- languageOfClasses cls, lang `elem` ["math", "latex"] -> [P.Para [P.Math P.DisplayMath code]]
+    | languageOfClasses cls == Just "mermaid" -> islandNote "A Mermaid diagram is drawn here in the wiki; a document cannot draw it. Its source:" code
+    | languageOfClasses cls == Just "tikz" ->
         if output `elem` [ToTeX, ToBeamer]
           then -- A picture LaTeX draws, inserted as it is, centred, in a
           -- div that carries what it loads for the preamble
@@ -1033,9 +1026,11 @@ islands output = \case
             let picture = tikzDocument code
              in [P.Div ("", ["tikz"], [("preamble", picture.preamble)]) [P.RawBlock (P.Format "latex") ("\\begin{center}\n" <> picture.picture <> "\n\\end{center}")]]
           else islandNote "A TikZ picture is drawn here in the wiki, and in a PDF; this document cannot draw it. Its source:" code
-    | "numbered" `elem` cls -> [P.CodeBlock (ident, map (\c -> if c == "numbered" then "numberLines" else c) cls, kv) code]
+    | otherwise -> listing (ident, cls, kv) code
   b -> [b]
   where
+    -- A listing; a numbered one with pandoc's class for numbered lines.
+    listing (i, classes, kvs) source = [P.CodeBlock (i, map (\c -> if c == "numbered" then "numberLines" else c) classes, kvs) source]
     islandNote text code = [P.Div ("", ["island-note"], []) [P.Para [P.Emph (B.toList (B.text text))], P.CodeBlock ("", [], []) code]]
 
 -- | Links and embeds, resolved for a document.

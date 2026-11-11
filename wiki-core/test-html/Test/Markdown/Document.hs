@@ -99,6 +99,7 @@ kind = \case
   Mermaid _ -> "mermaid"
   Tikz _ -> "tikz"
   MathBlock _ -> "math"
+  HtmlBlock _ -> "html"
   List _ items
     | any (\(ListItem task _) -> isJust task) items -> "task"
     | otherwise -> "list"
