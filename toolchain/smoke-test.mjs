@@ -81,6 +81,7 @@ import { extname, join, normalize, relative, resolve, sep } from "node:path";
 import { strFromU8, unzipSync } from "fflate";
 import { chromium } from "playwright";
 import { drawable } from "../web/src/tikz-letters.mjs";
+import { adoptionMayChange, fittedFrame } from "./smoke-adoption.mjs";
 
 const started = Date.now();
 const root = resolve(process.argv[2] ?? "dist-newstyle/wasm/public/app");
@@ -262,12 +263,23 @@ const markPrerendered = (page) =>
 // page's Markdown may not embed, so its image is prerendered as its
 // description; the program then builds the image and gives the attachment's
 // link its object URL.
+//
+// The attributes the page's scripts write are not repairs either
+// ('adoptionMayChange', toolchain/smoke-adoption.mjs). One is the height of
+// an html fence's frame, which the islands' script measures once the
+// frame's document has loaded. The test waits until every such frame has
+// its height, then compares. Without the wait, the height was there or not,
+// depending on whether the frame's document had loaded in time.
 async function repairsOf(page) {
+  await eventually(
+    async () => assert.equal(await page.evaluate((frame) => document.querySelectorAll(`#app ${frame}:not([style])`).length, fittedFrame), 0, "a frame without its height"),
+    "the html fences' frames fitted to their content",
+  );
   await eventually(
     async () => assert.ok(await page.evaluate(() => Date.now() - window.smokeLastChange > 300), "still changing"),
     "the page settling after the program started",
   );
-  return page.evaluate((islands) => {
+  const { attributeChanges, ...repairs } = await page.evaluate(({ islands, fittedFrame }) => {
     const app = document.querySelector("#app");
     const describe = (node, parent = node.parentElement) => {
       if (node.nodeType === Node.TEXT_NODE) return `text ${JSON.stringify(node.data.slice(0, 60))} in <${parent?.localName ?? "?"}>`;
@@ -277,7 +289,7 @@ async function repairsOf(page) {
     const objectImage = (node) => node instanceof HTMLImageElement && node.getAttribute("src")?.startsWith("blob:");
     const removed = [];
     const changed = [];
-    const attributes = [];
+    const attributeChanges = [];
     const objectUrls = [];
     let islandSources = 0;
     for (const [node, mark] of window.smokePrerendered) {
@@ -295,20 +307,8 @@ async function repairsOf(page) {
       } else {
         const now = Object.fromEntries([...node.attributes].map((a) => [a.name, a.value]));
         for (const name of new Set([...Object.keys(mark.attributes), ...Object.keys(now)])) {
-          // data-stuck is the layout's, set on a bar that sticks under the
-          // header once the window scrolls (wiki-app/jsbits/layout.js), and
-          // data-current the contents', set on the link to the section
-          // being read (wiki-app/jsbits/toc.js), and data-unseen the
-          // shell's, on the link to "What's new?", from what this browser
-          // has seen (a server's; the demo has no such link). An html
-          // fence's frame has its height in its style, which the islands'
-          // script measures once the frame's document has loaded
-          // (wiki-app/jsbits/islands.js).
-          const scripts = ["data-prerendered", "data-stuck", "data-current", "data-unseen"];
-          const measured = name === "style" && node.matches("iframe.wiki-html");
-          if (scripts.includes(name) || measured || mark.attributes[name] === now[name]) continue;
-          const change = `${describe(node)} ${name}: ${JSON.stringify(mark.attributes[name]?.slice(0, 40))} -> ${JSON.stringify(now[name]?.slice(0, 40))}`;
-          (mark.attributes[name]?.startsWith("data:") && now[name]?.startsWith("blob:") ? objectUrls : attributes).push(change);
+          if (mark.attributes[name] === now[name]) continue;
+          attributeChanges.push({ element: describe(node), fitted: node.matches(fittedFrame), name, before: mark.attributes[name], after: now[name] });
         }
       }
     }
@@ -319,8 +319,16 @@ async function repairsOf(page) {
       if (node.nodeType === Node.TEXT_NODE && node.data === "") continue;
       (objectImage(node) ? objectUrls : built).push(describe(node));
     }
-    return { removed, built, changed, attributes, objectUrls, islandSources };
-  }, islands);
+    return { removed, built, changed, attributeChanges, objectUrls, islandSources };
+  }, { islands, fittedFrame });
+  repairs.attributes = [];
+  for (const change of attributeChanges) {
+    if (adoptionMayChange(change)) continue;
+    const { element, name, before, after } = change;
+    const line = `${element} ${name}: ${JSON.stringify(before?.slice(0, 40))} -> ${JSON.stringify(after?.slice(0, 40))}`;
+    (before?.startsWith("data:") && after?.startsWith("blob:") ? repairs.objectUrls : repairs.attributes).push(line);
+  }
+  return repairs;
 }
 
 // Go to an address and wait for the program to have adopted the page

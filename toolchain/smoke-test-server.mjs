@@ -88,6 +88,7 @@ import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, extname, join, normalize, resolve } from "node:path";
 import { chromium } from "playwright";
+import { adoptionMayChange, fittedFrame } from "./smoke-adoption.mjs";
 
 const started = Date.now();
 const built = resolve(process.argv[2] ?? "dist-newstyle/wasm/public/app");
@@ -344,37 +345,53 @@ async function loadAdopted(page, path) {
     for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
       if (node.parentElement?.closest(unadopted)) continue;
       if ((node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement)?.closest(browsers)) continue;
-      marks.set(node, node.nodeType === Node.TEXT_NODE ? node.data : [...node.attributes].map((a) => `${a.name}=${a.value}`).join(" "));
+      marks.set(node, node.nodeType === Node.TEXT_NODE ? node.data : Object.fromEntries([...node.attributes].map((a) => [a.name, a.value])));
     }
     window.smokePrerendered = marks;
   }, { unadopted, browsers });
   releaseWasm();
   page.wasmGate = null;
   await eventually(async () => assert.ok(await programStarted(page), "no listener yet"), `${path}: the program starting`);
-  // A moment for anything the adoption would change to be changed.
+  // A moment for anything the adoption would change to be changed. An html
+  // fence's frame gets its height from the islands' script once the frame's
+  // document has loaded, a change adoption may make
+  // (toolchain/smoke-adoption.mjs). The test waits until every such frame
+  // has its height, then compares. Without the wait, the height was there or
+  // not, depending on whether the frame's document had loaded in time.
   await page.waitForTimeout(300);
-  const repairs = await page.evaluate(({ unadopted, browsers }) => {
+  await eventually(
+    async () => assert.equal(await page.evaluate((frame) => document.querySelectorAll(`#app ${frame}:not([style])`).length, fittedFrame), 0, "a frame without its height"),
+    `${path}: the html fences' frames fitted to their content`,
+  );
+  const changes = await page.evaluate(({ unadopted, browsers, fittedFrame }) => {
     const app = document.querySelector("#app");
+    const shown = (attributes) => Object.entries(attributes).map(([name, value]) => `${name}=${value}`).join(" ");
     const found = [];
     for (const [node, was] of window.smokePrerendered) {
       if (!app.contains(node)) {
-        if (node.nodeType !== Node.TEXT_NODE || was.trim() !== "") found.push(`gone: ${was}`);
+        if (node.nodeType !== Node.TEXT_NODE) found.push({ repair: `gone: ${shown(was)}` });
+        else if (was.trim() !== "") found.push({ repair: `gone: ${was}` });
+      } else if (node.nodeType === Node.TEXT_NODE) {
+        if (node.data !== was) found.push({ repair: `changed: ${was} -> ${node.data}` });
       } else {
-        // data-unseen is the shell's, set on the link to "What's new?" from
-        // what this browser has seen, which the server cannot know.
-        const now = node.nodeType === Node.TEXT_NODE ? node.data : [...node.attributes].filter((a) => !["data-prerendered", "data-stuck", "data-current", "data-unseen"].includes(a.name)).map((a) => `${a.name}=${a.value}`).join(" ");
-        const before = node.nodeType === Node.TEXT_NODE ? was : was.replace(/ ?data-prerendered=true/, "");
-        if (now !== before) found.push(`changed: ${before} -> ${now}`);
+        // Each attribute changed, which 'adoptionMayChange' tells apart.
+        const now = Object.fromEntries([...node.attributes].map((a) => [a.name, a.value]));
+        const fitted = node.matches(fittedFrame);
+        const attributes = [...new Set([...Object.keys(was), ...Object.keys(now)])]
+          .filter((name) => was[name] !== now[name])
+          .map((name) => ({ fitted, name, before: was[name], after: now[name] }));
+        if (attributes.length > 0) found.push({ repair: `changed: ${shown(was)} -> ${shown(now)}`, attributes });
       }
     }
     const walker = document.createTreeWalker(app, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
       if (node.parentElement?.closest(unadopted)) continue;
       if ((node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement)?.closest(browsers)) continue;
-      if (!window.smokePrerendered.has(node) && !(node.nodeType === Node.TEXT_NODE && node.data === "")) found.push(`built: ${node.nodeName}`);
+      if (!window.smokePrerendered.has(node) && !(node.nodeType === Node.TEXT_NODE && node.data === "")) found.push({ repair: `built: ${node.nodeName}` });
     }
     return found;
-  }, { unadopted, browsers });
+  }, { unadopted, browsers, fittedFrame });
+  const repairs = changes.filter(({ attributes }) => !attributes?.every(adoptionMayChange)).map(({ repair }) => repair);
   const asked = [...page.apiAsked];
   releaseApi();
   page.apiGate = null;
