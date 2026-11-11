@@ -18,7 +18,8 @@ title: Tick a page's tasks in the page, and sort done tasks last
 
   shows two boxes; tick the first and the bar says "1 box changed, not
   saved yet". Leaving the page with ticks not saved asks first, as
-  leaving the editor does.
+  leaving the editor does, and Rename, Move and Delete ask you to save or
+  discard them first.
 - A task with tasks under it goes with them: ticking it ticks them all,
   ticking the last of them ticks it too, and unticking one unticks the
   task above it.

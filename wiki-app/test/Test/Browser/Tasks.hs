@@ -20,7 +20,7 @@ import Data.Time (addUTCTime)
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Http (Asked (..), answerRaw, asked, holdAt, release, serveDemo, serverStarts, serverStops, startServer)
+import Test.Browser.Http (Asked (..), answerRaw, answerWith, asked, holdAt, release, serveDemo, serverStarts, serverStops, startServer)
 import Test.Browser.Mount (clickButton, slugs, startChangedWith)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
@@ -33,6 +33,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Id (PageId (..))
+import Wiki.Core.Page (Page (body, template, updatedAt))
 import Wiki.Core.Page qualified as Core
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space qualified as Core
@@ -119,7 +120,7 @@ spec m = describe "tasks ticked in a page" $ do
     box 0 ui >>= click
     eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
     clickButton ui ".page-actions button" "Move"
-    find ui ".page-view .error" >>= (`shouldHaveText` "Save or discard the ticked tasks before you move the page.")
+    find ui ".page-view .error" >>= (`shouldHaveText` "Save or discard the ticked tasks first.")
     length <$> findAll ui ".inline-form" `shouldReturn` 0
     find ui ".user-switcher-toggle" >>= click
     find ui ".user-menu button[data-login=reader]" >>= click
@@ -230,6 +231,76 @@ spec m = describe "tasks ticked in a page" $ do
     length <$> findAll ui ".page-body input[aria-label='Read it']" `shouldReturn` 0
     serverStops
 
+  it "opens no form of the page while there are ticks, and keeps them through a render of the shell" $ runPage $ do
+    (ui, wiki) <- page m "user-admin" tasksText
+    box 0 ui >>= click
+    eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    for_ ["Rename", "Delete", "Move"] $ \action -> do
+      clickButton ui ".page-actions button" action
+      find ui ".page-view .error" >>= (`shouldHaveText` "Save or discard the ticked tasks first.")
+      length <$> findAll ui ".inline-form, .confirm" `shouldReturn` 0
+    -- The page's width is the shell's: choosing it renders the shell,
+    -- and the view with it.
+    find ui ".page-width-option-full" >>= click
+    eventually $ find ui ".page-view" >>= (`shouldHaveClass` "page-width-full")
+    find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    (box 0 ui >>= (`getProperty` "checked")) `shouldReturn` "true"
+    find ui ".page-ticks-save" >>= click
+    eventually $ bodyOf wiki `shouldReturn` T.replace "- [ ] Buy milk" "- [x] Buy milk" tasksText
+
+  it "keeps the page shown and the ticks when the page cannot be read again, and after" $ runPage $ do
+    serverStarts
+    serveDemo
+    let guide = demoPage "markdown-guide"
+        guideAt = endpointUrl (\e -> e.spaces.pageAt guide.space (slugs ["markdown-guide"]))
+    answerWith "PUT" ("api/v1/pages/" <> guide.id.text <> "/template") 200 (guide :: Core.Page) {template = True}
+    ui <- startServer m (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
+    readIt ui >>= click
+    eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    -- "Use as template" reloads the wiki and the page, whose read fails.
+    answerRaw "GET" guideAt 503 "<html>down for maintenance</html>"
+    find ui ".use-as-template" >>= click
+    eventually $ find ui ".page-ticks-note" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "could not be read again")
+    find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    (readIt ui >>= (`getProperty` "checked")) `shouldReturn` "true"
+    -- The next reload reads it, and the ticks are still there.
+    answerWith "GET" guideAt 200 (guide :: Core.Page) {template = True}
+    find ui ".use-as-template" >>= click
+    eventually $ find ui ".use-as-template" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
+    find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    (readIt ui >>= (`getProperty` "checked")) `shouldReturn` "true"
+    serverStops
+
+  it "keeps the ticks of a visit against a save of an earlier one that answers late" $ runPage $ do
+    serverStarts
+    serveDemo
+    let guide = demoPage "markdown-guide"
+        guideAt = endpointUrl (\e -> e.spaces.pageAt guide.space (slugs ["markdown-guide"]))
+        saveAt = "api/v1/pages/" <> guide.id.text
+        saved = (guide :: Core.Page) {body = T.replace "- [ ] Read it" "- [x] Read it" guide.body, updatedAt = addUTCTime 60 guide.updatedAt}
+    answerWith "PUT" saveAt 200 saved
+    holdAt "PUT" saveAt
+    ui <- startServer m (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
+    readIt ui >>= click
+    eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    find ui ".page-ticks-save" >>= click
+    -- The save is slow; the reader leaves, comes back, and ticks again.
+    find ui ".breadcrumbs a[href$='#/s/docs/']" >>= click
+    find ui ".leave-confirm button.danger" >>= click
+    eventually $ find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
+    find ui ".wiki-sidebar a[href$='#/s/docs/p/markdown-guide/']" >>= click
+    eventuallyWithin 20000 (find ui ".page-body input[aria-label='Write the page'][data-task]") >>= click
+    eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    -- The first save lands: the page has its tick, and the new tick is
+    -- kept, on the page as it is now.
+    answerWith "GET" guideAt 200 saved
+    release
+    eventually $ (readIt ui >>= (`getProperty` "checked")) `shouldReturn` "true"
+    eventually $ find ui ".page-ticks-note" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "kept on the new version")
+    find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    (find ui ".page-body input[aria-label='Write the page']" >>= (`getProperty` "checked")) `shouldReturn` "false"
+    serverStops
+
   it "reaches the boxes with Tab and ticks them with Space" $ runPage $ do
     (ui, _) <- page m "user-admin" tasksText
     box 0 ui >>= focus
@@ -254,6 +325,8 @@ spec m = describe "tasks ticked in a page" $ do
     -- The tasks of the sorted list, in the order shown, and whether each
     -- box is ticked.
     sortedLabels ui = findAll ui ".page-body .sorted .task-text" >>= traverse textContent
+    -- The Markdown guide's task "Read it", once the long guide is shown.
+    readIt ui = eventuallyWithin 20000 (find ui ".page-body input[aria-label='Read it'][data-task]")
     sortedChecked ui = findAll ui ".page-body .sorted input" >>= traverse (fmap (== "true") . (`getProperty` "checked"))
 
 -- | The page the tests tick: tasks under a task (indices 1 to 3), and a

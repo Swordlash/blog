@@ -29,6 +29,7 @@ import Test.Rect qualified as Rect
 import Test.Route qualified as Route
 import Test.Server qualified as Server
 import Test.Shell qualified as Shell
+import Test.Ticking qualified as Ticking
 
 main :: IO ()
 main = do
@@ -52,6 +53,7 @@ main = do
       Rect.spec
       Link.spec
       Live.spec
+      Ticking.spec
       Shell.spec
       Server.spec
       Passwords.spec

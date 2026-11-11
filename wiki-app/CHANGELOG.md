@@ -18,6 +18,13 @@ asks the view slot `HasUnsaved` (`ViewQuery`, which the blog view passes
 to its home page) before following a route away, with its own question
 for ticks, and the view sets `guardUnload` while there are ticks.
 `Body.renderedTicking` renders a page with enabled boxes.
+`Wiki.App.View.Ticking` is the view's staging of the ticks, changed only
+by `step` on an event; ticks leave it only for a save of this visit,
+Discard, a Leave, a reload asked for, or the right to edit lost. Each visit
+of an address has a number, and an answer to an earlier visit's request
+changes nothing; a failed reload keeps the page and the ticks. A form of
+the page opens only without ticks, and the boxes are disabled while one is
+open.
 
 An `html` fence is shown in a frame (WP5.89, #196): the island
 `HtmlFrame` renders an `<iframe class="wiki-html">` whose `sandbox` and
