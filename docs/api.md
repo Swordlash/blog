@@ -319,17 +319,22 @@ not the attachment's is 404.
 An attachment stored as an SVG (`image/svg+xml`, its parameters left off,
 in any case) has an interactive form, the same address with `?interactive`
 (`Wiki.Api.Links.attachmentFrameUrl`), which a page's frame loads for
-`![…](attachment:x.svg){.interactive}` (`MonadWiki.attachmentFrameUrl`;
-the in-memory backend has none). It answers the same bytes, permission
-check, `ETag` and `Cache-Control`, with `Content-Disposition: inline` and
-`Content-Security-Policy: sandbox allow-scripts; default-src 'none';
-script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:;
-frame-ancestors 'self'` (`Wiki.Api.ContentPolicy.interactiveSvgPolicy`): the
-SVG's own scripts and styles run with an opaque origin, wherever the address
-is opened, and nothing loads or connects. Any other attachment asked for
-with `?interactive` gets its plain answer. The plain address of an SVG is
-unchanged: a download, under a policy that runs no script. The two forms
-are two addresses, so a cache never confuses them.
+`![…](attachment:x.svg){.interactive}` (`MonadWiki.attachmentFrameUrl`: the
+HTTP backend gives it in a secure context only, the in-memory backend
+never). Asked by a frame's load, `Sec-Fetch-Dest: iframe`, it answers the
+same bytes, permission check and `Cache-Control`, with
+`Content-Disposition: inline`, `Content-Security-Policy: sandbox
+allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src
+'unsafe-inline'; img-src data:; frame-ancestors 'self'; webrtc 'block'`
+(`Wiki.Api.ContentPolicy.interactiveSvgPolicy`) and an `ETag` of its own,
+the bytes' tag with `-interactive`: the SVG's own scripts and styles run
+with an opaque origin and nothing loads or connects. Anything else asking
+with `?interactive` (a tab's navigation, an `<img>`, a fetch, a request
+without `Sec-Fetch-Dest`), and any attachment that is not an SVG, gets the
+plain answer: for an SVG a download, under a policy that runs no script.
+Every answer to an address with `?interactive` carries
+`Vary: Sec-Fetch-Dest`, so a browser's cache never gives one the
+other's.
 
 ### Drafts
 

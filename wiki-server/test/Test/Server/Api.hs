@@ -221,6 +221,11 @@ draftsAndSearch backing = describe "drafts and search" $ do
     map (\(h :: SearchHit) -> h.page) <$> ok200 (getUrl r (onAdmin r "api/v1/search?q=first&limit=100000")) `shouldReturn` [page.id]
     ok200 (getUrl r (onAdmin r "api/v1/search?q=first&limit=-3")) `shouldReturn` ([] :: [SearchHit])
 
+-- | The request headers an answer says it depends on, from all its @Vary@
+-- headers (the API adds @Cookie@ to every answer).
+varies :: Reply -> [ByteString]
+varies reply = [BS.dropWhile (== 32) v | (name, value) <- reply.headers, name == "Vary", v <- BS.split 44 value]
+
 attachments :: Backing -> Spec
 attachments backing = describe "attachments" $ do
   let upload r page name mediaType content = multipart r (onAdmin r (links.pages.upload page.id)) [] [("file", name, mediaType, content)]
@@ -253,33 +258,56 @@ attachments backing = describe "attachments" $ do
     reply <- getUrl r (onAdmin r (attachmentUrl a))
     header "Content-Disposition" reply `shouldBe` Just "attachment; filename=\"notes d_a.pdf\"; filename*=UTF-8''notes%20d%C3%ADa.pdf"
 
-  it "answer an SVG's interactive form shown, its scripts run in a sandbox of their own, and nothing loaded" $ withRunning backing $ \r -> do
+  it "answer an SVG's interactive form to a frame's load, shown, its scripts run in a sandbox of their own, and nothing loaded" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False
     a <- upload r page "flame graph.svg" "image/svg+xml" bytes >>= jsonAs 201
     attachmentFrameUrl a `shouldBe` Just (attachmentUrl a <> "?interactive")
-    reply <- getUrl r (onAdmin r (fromMaybe "" (attachmentFrameUrl a)))
+    let framed = onAdmin r (fromMaybe "" (attachmentFrameUrl a))
+        fromFrame = [("Sec-Fetch-Dest", "iframe")]
+    reply <- getUrlWith r framed fromFrame
     (reply.status, reply.body) `shouldBe` (200, bytes)
     header "Content-Type" reply `shouldBe` Just "image/svg+xml"
     header "X-Content-Type-Options" reply `shouldBe` Just "nosniff"
     header "Content-Disposition" reply `shouldBe` Just "inline; filename=\"flame graph.svg\"; filename*=UTF-8''flame%20graph.svg"
     header "Content-Security-Policy" reply `shouldBe` Just (encodeUtf8 interactiveSvgPolicy)
     header "Cache-Control" reply `shouldBe` Just "private, max-age=300"
-    -- The plain form of the same SVG is as it was: downloaded, no script.
+    varies reply `shouldContain` ["Sec-Fetch-Dest"]
+    -- The plain form of the same SVG is as it was: downloaded, no script,
+    -- under a tag of its own.
     plain <- getUrl r (onAdmin r (attachmentUrl a))
     header "Content-Disposition" plain `shouldSatisfy` maybe False (BS.isPrefixOf "attachment; ")
     header "Content-Security-Policy" plain `shouldSatisfy` maybe False (BS.isSuffixOf "sandbox")
-    -- Revalidated with the same headers.
-    revalidated <- getUrlWith r (onAdmin r (fromMaybe "" (attachmentFrameUrl a))) [("If-None-Match", fromMaybe "" (header "ETag" reply))]
+    varies plain `shouldNotContain` ["Sec-Fetch-Dest"]
+    header "ETag" plain `shouldNotBe` header "ETag" reply
+    -- Revalidated by its own tag, with the same headers; the plain tag is
+    -- no tag of it, nor it of the plain answer.
+    revalidated <- getUrlWith r framed (fromFrame <> [("If-None-Match", fromMaybe "" (header "ETag" reply))])
     revalidated.status `shouldBe` 304
     header "Content-Security-Policy" revalidated `shouldBe` Just (encodeUtf8 interactiveSvgPolicy)
+    (.status) <$> getUrlWith r framed (fromFrame <> [("If-None-Match", fromMaybe "" (header "ETag" plain))]) `shouldReturn` 200
+    inTab <- getUrlWith r framed [("Sec-Fetch-Dest", "document"), ("If-None-Match", fromMaybe "" (header "ETag" reply))]
+    inTab.status `shouldBe` 200
+    header "Content-Security-Policy" inTab `shouldBe` header "Content-Security-Policy" plain
 
-  it "answer any other type asked for interactively as they answer it plainly" $ withRunning backing $ \r -> do
+  it "answer the interactive address plainly to anything but a frame's load: a tab, an image, a fetch, no header" $ withRunning backing $ \r -> do
+    (_, page) <- withSpace r False
+    a <- upload r page "flame.svg" "image/svg+xml" bytes >>= jsonAs 201
+    plain <- getUrl r (onAdmin r (attachmentUrl a))
+    let framed = onAdmin r (fromMaybe "" (attachmentFrameUrl a))
+    for_ ([[]] <> [[("Sec-Fetch-Dest", d)] | d <- ["document", "image", "object", "embed", "empty", "frame", "IFRAME", "iframe, document"]]) $ \asking -> do
+      asked <- getUrlWith r framed asking
+      (asking, asked.status, header "Content-Disposition" asked, header "Content-Security-Policy" asked, header "ETag" asked)
+        `shouldBe` (asking, 200, header "Content-Disposition" plain, header "Content-Security-Policy" plain, header "ETag" plain)
+      -- It depends on the header all the same, for a cache.
+      varies asked `shouldContain` ["Sec-Fetch-Dest"]
+
+  it "answer any other type asked for interactively as they answer it plainly, a frame's load included" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False
     for_ [("page.html", "text/html"), ("chart.png", "image/png"), ("drawing.svg", "application/octet-stream"), ("data.xml", "application/xml")] $ \(name, mediaType) -> do
       a <- upload r page name mediaType bytes >>= jsonAs 201
       attachmentFrameUrl a `shouldBe` Nothing
       plain <- getUrl r (onAdmin r (attachmentUrl a))
-      asked <- getUrl r (onAdmin r (attachmentUrl a <> "?interactive"))
+      asked <- getUrlWith r (onAdmin r (attachmentUrl a <> "?interactive")) [("Sec-Fetch-Dest", "iframe")]
       (name, asked.status, header "Content-Disposition" asked, header "Content-Security-Policy" asked)
         `shouldBe` (name, 200, header "Content-Disposition" plain, header "Content-Security-Policy" plain)
       header "Content-Security-Policy" asked `shouldNotBe` Just (encodeUtf8 interactiveSvgPolicy)
@@ -288,11 +316,13 @@ attachments backing = describe "attachments" $ do
     (space, page) <- withSpace r False
     a <- upload r page "flame.svg" "image/svg+xml" bytes >>= jsonAs 201
     let framed = fromMaybe "" (attachmentFrameUrl a)
-    getUrl r (onPublic r framed) >>= jsonAs 404 >>= (`shouldBe` NotFound)
+        fromFrame = [("Sec-Fetch-Dest", "iframe")]
+    getUrlWith r (onPublic r framed) fromFrame >>= jsonAs 404 >>= (`shouldBe` NotFound)
     _ :: Space <- ok200 (sendJson r methodPut (onAdmin r (links.spaces.setPublic space.id)) SpacePublic {public = True})
-    (.status) <$> getUrl r (onPublic r framed) `shouldReturn` 200
+    shown <- getUrlWith r (onPublic r framed) fromFrame
+    (shown.status, header "Content-Security-Policy" shown) `shouldBe` (200, Just (encodeUtf8 interactiveSvgPolicy))
     _ :: Space <- ok200 (sendJson r methodPut (onAdmin r (links.spaces.setPublic space.id)) SpacePublic {public = False})
-    getUrl r (onPublic r framed) >>= jsonAs 404 >>= (`shouldBe` NotFound)
+    getUrlWith r (onPublic r framed) fromFrame >>= jsonAs 404 >>= (`shouldBe` NotFound)
 
   it "answer a range of their bytes, as a video seeking asks" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False

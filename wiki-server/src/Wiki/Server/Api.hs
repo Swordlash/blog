@@ -1514,9 +1514,15 @@ exportedResponse e =
 -- interactive SVG's frame loads ("Wiki.Core.Markdown.Frame"): shown in the
 -- browser, under 'interactiveSvgPolicy', which lets the SVG's own scripts
 -- run with an opaque origin and nothing else. Only an attachment stored as
--- an SVG gets it ('framesInteractively'); any other asked for so gets the
--- plain answer. The permission is checked as for the plain form, and a
--- browser's cache keeps the two apart by their addresses.
+-- an SVG gets it ('framesInteractively'), and only when a frame asks
+-- ('loadedByFrame'); any other request, with the parameter or without,
+-- gets the plain answer. The permission is checked as for the plain form.
+--
+-- One address with @?interactive@ has two answers, so a browser's cache
+-- must not give a tab the frame's: each answer to such an address says it
+-- depends on @Sec-Fetch-Dest@ ('framedVary'), and the interactive answer
+-- has a tag of its own ('interactiveTag'), so that a revalidation of the
+-- one is never answered 304 for the other.
 attachmentContent :: Env -> Who -> AttachmentId -> FileName -> Request -> (Response -> IO a) -> IO a
 attachmentContent env who aid name request respond
   | requestMethod request `notElem` [methodGet, methodHead] =
@@ -1529,13 +1535,15 @@ attachmentContent env who aid name request respond
           if not present
             then respond (refusal ApiError.NotFound)
             else do
-              let tag = case a.source of
-                    SourceBlob b -> "\"" <> encodeUtf8 b.text <> "\""
-                    SourceUrl _ -> "\"\""
-                  interactive = isJust (lookup (encodeUtf8 interactiveParameter) (queryString request)) && framesInteractively a.mediaType.text
-                  (shownAs, policy)
-                    | interactive = (inlineDisposition a, encodeUtf8 interactiveSvgPolicy)
-                    | otherwise = (disposition a, "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox")
+              let plainTag = case a.source of
+                    SourceBlob b -> encodeUtf8 b.text
+                    SourceUrl _ -> ""
+                  asked = isJust (lookup (encodeUtf8 interactiveParameter) (queryString request))
+                  interactive = asked && framesInteractively a.mediaType.text && loadedByFrame request
+                  (shownAs, policy, tag)
+                    | interactive = (inlineDisposition a, encodeUtf8 interactiveSvgPolicy, quoted (interactiveTag plainTag))
+                    | otherwise = (disposition a, "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox", quoted plainTag)
+                  quoted t = "\"" <> t <> "\""
                   headers =
                     [ (hContentType, encodeUtf8 (safeMediaType a.mediaType))
                     , ("X-Content-Type-Options", "nosniff")
@@ -1544,10 +1552,37 @@ attachmentContent env who aid name request respond
                     , (hCacheControl, keptPrivately)
                     , (hETag, tag)
                     ]
+                      <> [framedVary | asked]
               if lookup hIfNoneMatch (requestHeaders request) == Just tag
                 then respond (responseLBS status304 headers "")
                 else respond (responseFile status200 headers file Nothing)
         Right _ -> respond (refusal ApiError.NotFound)
+
+-- | Whether a request is a frame loading its document, as the browser says
+-- in @Sec-Fetch-Dest@: the only request an SVG's interactive form is given
+-- to. Anyone who may upload an SVG could hand out its interactive address,
+-- and opened in a tab it would be their scripted page under the wiki's host
+-- name (a sign-in form that looks like the wiki's, which sends what is
+-- typed away by navigating its own tab), so a tab's navigation
+-- (@document@), an @\<img>@, @\<object>@ or @\<embed>@, a fetch, and a
+-- request without the header at all get the plain answer: when in doubt,
+-- the plain one. Chromium sends the header only to a secure origin (HTTPS,
+-- or the loopback host), and the application asks for a frame only there
+-- ("Wiki.App.Backend.Http").
+loadedByFrame :: Request -> Bool
+loadedByFrame request = lookup "Sec-Fetch-Dest" (requestHeaders request) == Just "iframe"
+
+-- | The header that tells a cache an answer to an attachment's interactive
+-- address depends on who asked ('loadedByFrame'): a frame gets the
+-- interactive form, anything else the plain one.
+framedVary :: Header
+framedVary = (hVary, "Sec-Fetch-Dest")
+
+-- | The tag of an attachment's interactive answer: the bytes' tag with a
+-- suffix, so that the plain answer's tag never revalidates it, nor it the
+-- plain one's.
+interactiveTag :: ByteString -> ByteString
+interactiveTag plain = plain <> "-interactive"
 
 -- | Serve an image at its URL, a space's icon or a user's avatar, as the
 -- storage finds it for the 'Who' asking (@lookUp@: its media type and its
