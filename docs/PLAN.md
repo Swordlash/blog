@@ -1638,6 +1638,14 @@ which the wiki pins since #227.
 
 ### Later, or waiting for the owner
 
+- **Compressing the text of page versions (#241; the owner, 2026-11-11: not
+  now).** A version is a whole copy of the page. Versions as diffs were
+  weighed and refused (reading a version would need a chain, one bad diff
+  would break the later ones, sealed versions could not follow); if the
+  size ever hurts, a version's body is compressed when stored, above a
+  threshold, and stays a row that stands alone. Measure first. The issue
+  holds what would have to be settled.
+
 - **Issue #120, the owner's editor improvements** (the owner, 2026-10-31; closed
   2026-11-04). WP5.37 to WP5.45 did all of it, and WP5.53 the three requests added on
   2026-11-03 (a link to a page from the editor, links to sections and selected text,
