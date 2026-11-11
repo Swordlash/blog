@@ -18,8 +18,9 @@ title: Interactive SVGs, such as flame graphs, in a frame of their own
   corner to make it taller. **Open in a new tab**, under it, shows the
   file alone. Its scripts run cut off from the wiki: they cannot read your
   session or anything of the page, cannot send anything to the wiki or
-  anywhere else, and cannot open tabs or dialogs, in the frame or alone
-  in a tab. Without `{.interactive}` an SVG stays an image, in which
+  anywhere else, and cannot open tabs or dialogs. Opened alone in a tab,
+  the file is held the same way, except that, like any web page, it can
+  send that tab to another address. Without `{.interactive}` an SVG stays an image, in which
   nothing runs. Only an SVG attached to the page is framed, not one at an
   address on the web. The demo, which has no server to send the rules
   that keep the scripts in, shows the image; so do feeds and exports.

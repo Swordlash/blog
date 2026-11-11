@@ -2112,8 +2112,9 @@ to the demo, keeping `data/`.
   no script; an interactive SVG's frame runs the SVG's own scripts in a
   sandbox without the wiki's origin, and the server sends that SVG with a
   policy that loads and connects nothing (`interactiveSvgPolicy`), so the
-  scripts reach no cookie, no storage, no page and no network, in the frame
-  or opened alone in a tab.
+  scripts reach no cookie, no storage, no page and no connection, in the
+  frame or opened alone in a tab (where a script can still send its own tab
+  to another address, as any page can).
   The demo carries it in its pages; the server sends it as a header too, and
   turns off the camera, the microphone and the location. So a script slipped
   into a page, past the allowlist of its HTML, has nowhere to send an

