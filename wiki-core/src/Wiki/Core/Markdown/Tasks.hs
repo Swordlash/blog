@@ -87,6 +87,9 @@ tasksOf doc = evalState (inBlocks doc) 0
       Table {} -> pure []
       MarkerError _ _ -> pure []
       RawHtmlBlock _ -> pure []
+      -- An html fence's content is HTML, shown in a frame: no Markdown,
+      -- so no task.
+      HtmlBlock _ _ -> pure []
       TableOfContents -> pure []
     inItem (ListItem task bs) = case task of
       Nothing -> inBlocks bs
