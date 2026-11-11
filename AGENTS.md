@@ -33,7 +33,9 @@ early, as soon as the session thinks the branch has a chance to pass (the owner,
 each is based on the branch of the one before, a stack (the owner, 2026-11-11), so
 that the owner merges them from the bottom without a rebase and a second run of CI
 between; pull requests that share no file stay based on `main`. When a lower branch
-changes, the session rebases the branches above it onto it. The owner merges a stack
+changes, the session rebases the branches above it onto it. When a lower one merges,
+GitHub retargets the next one to `main`, and the session leaves it as it is, not
+rebased onto `main` unless it conflicts, so that its checks stand. The owner merges a stack
 from the bottom, with merge commits: a squash or a rebase of a lower one would leave
 its commits, rewritten, in the ones above.
 
