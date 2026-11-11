@@ -493,7 +493,7 @@ An address in `href`, `src` or `poster` is a URL starting with `http:` or `https
 
 ### HTML with its own styles
 
-HTML in a page has no styles of its own: a `style` could restyle the wiki around it, or imitate it. An `html` fence may have them. It is shown in a frame of its own, as wide as the text, as high as what it holds (but no higher than most of the window: a longer block scrolls inside), with no border and the page's background, so its styles reach nothing outside the frame:
+HTML in a page has no styles of its own: a `style` could restyle the wiki around it, or imitate it. An `html` fence may have them. It is shown in a frame of its own, as wide as the text, as high as what it holds (but no higher than most of the window: a longer block scrolls inside), with no border and the page's background, so its styles reach nothing outside the frame. The toolbar's "HTML block" button writes the fence, around the lines selected or with an example to type over:
 
 ```html
 <style>

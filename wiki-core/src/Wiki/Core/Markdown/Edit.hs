@@ -23,8 +23,8 @@
 --   command turns a list of another kind into its own; 'Heading' cycles
 --   through levels one to three and back to none.
 --
--- * Block ones ('CodeBlock', 'DisplayMath', 'Mermaid', 'Tikz', 'Html'
---   'Details') put fences around the lines the selection touches, or a
+-- * Block ones ('CodeBlock', 'DisplayMath', 'Mermaid', 'Tikz',
+--   'HtmlBlock', 'Html' 'Details') put fences around the lines the selection touches, or a
 --   template after the cursor's line when nothing is selected; on lines
 --   already fenced they remove the fences.
 --
@@ -126,6 +126,9 @@ data Command
   | Mermaid
   | -- | A TikZ picture: the body of a @tikzpicture@.
     Tikz
+  | -- | An @html@ fence: HTML with styles of its own, which the page shows
+    -- in a frame ("Wiki.Core.Markdown.Frame").
+    HtmlBlock
   | Link
   | -- | A link to a known address, chosen rather than typed: the text a
     -- link with nothing selected gets (a page's title), and the address
@@ -236,6 +239,7 @@ apply command text selection = case command of
   DisplayMath -> fenced (Fence "$$" "$$" "E = mc^2" True) text sel
   Mermaid -> fenced (Fence "```mermaid" "```" "graph LR\n  A --> B" True) text sel
   Tikz -> fenced (Fence "```tikz" "```" "\\draw[->] (0,0) -- (2,1) node[right] {$x$};" True) text sel
+  HtmlBlock -> fenced (Fence "```html" "```" "<p style=\"color: teal\">HTML with styles of its own</p>" True) text sel
   Link -> link "" "link text" text sel
   LinkTo title address -> linkTo title address text sel
   Image -> link "!" "description" text sel

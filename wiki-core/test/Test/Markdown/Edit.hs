@@ -176,6 +176,11 @@ spec = describe "Wiki.Core.Markdown.Edit" $ do
     Tikz `turns` "«\\draw (0,0) circle (1);»" `into` "```tikz\n«\\draw (0,0) circle (1);»\n```"
     Tikz `turns` "«```tikz\n\\draw (0,0) circle (1);\n```»" `into` "«\\draw (0,0) circle (1);»"
 
+  describe "HtmlBlock" $ do
+    HtmlBlock `turns` "‸" `into` "```html\n«<p style=\"color: teal\">HTML with styles of its own</p>»\n```"
+    HtmlBlock `turns` "«<b>x</b>»" `into` "```html\n«<b>x</b>»\n```"
+    HtmlBlock `turns` "«```html\n<b>x</b>\n```»" `into` "«<b>x</b>»"
+
   describe "Link" $ do
     Link `turns` "‸" `into` "[«link text»](https://)"
     it "makes the selection the text, and selects the address to type" $

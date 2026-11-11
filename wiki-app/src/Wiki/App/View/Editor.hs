@@ -2656,6 +2656,8 @@ blockTools =
   , Tool DisplayMath "Display math" Nothing "M1.5 2.5h13v11h-13zM11 5H5.5L8.5 8l-3 3H11"
   , Tool Mermaid "Mermaid diagram" Nothing "M1.5 2.5h5v4h-5zM9.5 9.5h5v4h-5zM4 6.5v5h5.5"
   , Tool Tikz "TikZ picture" Nothing "M2.5 1.5v12h12M4.5 11c2-1 3-7 6-7 1.5 0 2.5 1 3.5 2"
+  , -- A frame around angle brackets: HTML in a frame of its own.
+    Tool HtmlBlock "HTML block" Nothing "M1.5 2.5h13v11h-13zM5.5 6 3.5 8l2 2M10.5 6l2 2-2 2M9 5.5 7 10.5"
   , Tool HorizontalRule "Horizontal rule" Nothing "M1.5 8h13M4 4.5h8M4 11.5h8"
   , -- A box with a disclosure triangle, as a closed spoiler shows.
     Tool SpoilerBlock "Block spoiler" Nothing "M1.5 2.5h13v11h-13zM4 5l2.5 1.5L4 8zM8.5 6.5h4M4 10.5h8.5"
