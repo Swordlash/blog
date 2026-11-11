@@ -63,6 +63,30 @@ function wiki_test_frame_remeasure(frameSelector) {
   return `${before} ${Math.round(frame.getBoundingClientRect().height)}`;
 }
 
+// The fitter's postcondition, as three whole numbers, "scroll height cap":
+// the frame document's scroll height, the height the fitter set in the
+// frame's style, and the cap (80% of the window's height). "" before the
+// document has loaded.
+function wiki_test_frame_fit(frameSelector) {
+  const frame = document.querySelector(frameSelector);
+  const doc = wikiTestFrameDocument(frameSelector);
+  if (!frame || !doc) return "";
+  return [doc.documentElement.scrollHeight, Number.parseFloat(frame.style.height) || 0, Math.floor(window.innerHeight * 0.8)].map(Math.round).join(" ");
+}
+
+// Make the window seem this high to the page's scripts, and tell them it
+// changed, as a window made higher would: the browser test cannot resize
+// its window. innerHeight is the window's own property, which a script may
+// define again; 0 puts the window's own back, as it was. The stylesheet's
+// 80vh stays the real window's.
+const wikiTestInnerHeight = Object.getOwnPropertyDescriptor(window, "innerHeight");
+
+function wiki_test_window_height(height) {
+  if (height > 0) Object.defineProperty(window, "innerHeight", { configurable: true, get: () => height });
+  else Object.defineProperty(window, "innerHeight", wikiTestInnerHeight);
+  window.dispatchEvent(new Event("resize"));
+}
+
 // What a script in a frame would have set on the page, had it run: "" when
 // nothing ran.
 function wiki_test_frame_flag() {

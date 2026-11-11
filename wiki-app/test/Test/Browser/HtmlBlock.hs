@@ -46,6 +46,8 @@ $( browserJS
      , ("js_markup", "wiki_test_markup", Safe, [t|IO JSText|])
      , ("js_frame_outside", "wiki_test_frame_outside", Safe, [t|JSText -> JSText -> IO JSText|])
      , ("js_frame_remeasure", "wiki_test_frame_remeasure", Safe, [t|JSText -> IO JSText|])
+     , ("js_frame_fit", "wiki_test_frame_fit", Safe, [t|JSText -> IO JSText|])
+     , ("js_window_height", "wiki_test_window_height", Safe, [t|Int -> IO ()|])
      ]
  )
 
@@ -113,12 +115,35 @@ spec m = describe "an html fence" $ do
       eventually $ do
         (high, _, cap) <- heights frameN
         (name, high, abs (high - expected cap) <= 2) `shouldSatisfy` (\(_, _, ok) -> ok)
+      -- The postcondition: nothing to scroll to below the height, unless
+      -- the frame is at its cap.
+      (scrolled, given, cap) <- fit frameN
+      (name, scrolled <= given + 1 || given >= cap - 1) `shouldBe` (name, True)
       -- Measured again, the frame keeps its height: nothing of a measure
       -- depends on the height the last one gave.
       again <- unsafeIOToPageM (fromJSText <$> js_frame_remeasure (toJSText frameN))
       case mapMaybe readMaybe (T.words again) :: [Int] of
         [before, after] -> (name, after) `shouldBe` (name, before)
         _ -> expectationFailure ("no heights for " <> name <> ": " <> again)
+
+  it "is fitted again to the window's new height" $ runPage $ do
+    ui <- page m "```html\n<div style=\"height: 3000px\">tall</div>\n```\n"
+    _ <- find ui frame
+    (_, fitted, cap) <- eventually $ do
+      found@(_, given, cap) <- fit frame
+      given `shouldBe` cap
+      pure found
+    -- The window made 200px higher, as far as the page's scripts can tell:
+    -- the frame follows the new cap, in an animation frame.
+    unsafeIOToPageM (js_window_height (round (fromIntegral cap / 0.8 :: Double) + 200))
+    eventually $ do
+      (_, given, higherCap) <- fit frame
+      higherCap `shouldSatisfy` (> cap)
+      given `shouldBe` higherCap
+    unsafeIOToPageM (js_window_height 0)
+    eventually $ do
+      (_, given, _) <- fit frame
+      given `shouldBe` fitted
 
   describe "on a slide, drawn in the slide's colours, whatever the system's" $ do
     let slides = PageSlides (slugs ["team", "projects"]) (slugs ["html-blocks"]) 1 1
@@ -244,6 +269,16 @@ flag = unsafeIOToPageM (fromJSText <$> js_frame_flag)
 computedStyle :: Text -> Text -> PageM s Text
 computedStyle selector property = unsafeIOToPageM (fromJSText <$> js_computed_style (toJSText selector) (toJSText property))
 
+-- | The fitter's postcondition for a frame: the frame document's scroll
+-- height, the height the fitter set, and the cap ('wiki_test_frame_fit');
+-- the test fails until the frame has loaded.
+fit :: Text -> PageM s (Int, Int, Int)
+fit f = do
+  written <- unsafeIOToPageM (fromJSText <$> js_frame_fit (toJSText f))
+  case mapMaybe readMaybe (T.words written) of
+    [a, b, c] -> pure (a, b, c)
+    _ -> expectationFailure ("no fit yet: " <> show written)
+
 -- | A frame's height, its content's and the stylesheet's cap
 -- ('wiki_test_frame_heights'); the test fails until the frame has loaded.
 heights :: Text -> PageM s (Int, Int, Int)
@@ -323,6 +358,10 @@ sized =
   , ("a floated box", "<div style=\"float: left; width: 50px; height: 120px\"></div>", min 120)
   , ("a box moved by a transform", "<p style=\"margin: 0; height: 80px\">a</p><div style=\"height: 80px; transform: translateY(400px)\">moved</div>", min 560)
   , ("nothing", "", const 0)
+  , -- Generated content has no box a script can ask for; the check of the
+    -- scroll height finds the first, the computed place the second.
+    ("an ::after placed absolutely", "<style>.x::after { content: \"Hello\"; position: absolute; top: 0; height: 300px }</style><div class=\"x\"></div>", min 300)
+  , ("a ::before placed fixed", "<style>.y::before { content: \"Fixed\"; position: fixed; top: 10px; height: 200px }</style><div class=\"y\"></div>", min 210)
   ]
 
 -- | The demo's Projects space with a page of this text, shown to an

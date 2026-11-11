@@ -61,33 +61,88 @@ function wiki_islands_highlight(element, language, code) {
 // the application asks.
 //
 // The rule. A frame is at most 80% of the window's height (its cap, which
-// the stylesheet's max-height says too), and scrolls inside beyond it. Its
-// content is measured with the frame at that cap, so what depends on the
-// frame's size is read against the frame at its largest: 100vh (and dvh,
-// svh, lvh), a height in percent of the root, a media or container query
-// on the frame's height. The frame's height is then the smaller of the
-// cap and the content's extent, and never depends on the height it had
-// before: two measures in a row give the same.
+// the stylesheet's max-height says too), and scrolls inside beyond it.
+// Nothing of its content is cut off unless the frame is at its cap, where
+// the rest scrolls; a block with anything to scroll to is never 0px, and
+// an empty block is.
 //
-// The extent is the lowest bottom of anything with a box: the root's box
-// (the content in the flow, its margins included), every element's box
-// (content placed absolutely, floated, moved by a transform), and every
-// text's (text that overflows the element it is in). What an element
-// clips (its overflow not visible: a box that scrolls) counts only as far
-// as that element's own bottom. An element placed fixed is placed in the
-// frame, not in the flow, and counts as the frame at its cap places it;
-// one placed from the frame's bottom counts at the cap. An empty block is
-// 0px high; a block whose content has a box but no extent below the
-// frame's top (moved above it) is 150px high, and scrolls, rather than
-// hidden.
+// 1. The estimate. The content is measured with the frame at its cap, so
+//    what depends on the frame's size is read against the frame at its
+//    largest: 100vh (and dvh, svh, lvh), a height in percent of the root, a
+//    media or container query on the frame's height. The estimate is the
+//    lowest bottom of anything with a box ('wikiFrameExtent'): the root's
+//    box (the content in the flow, its margins included), every element's
+//    box (placed absolutely, floated, moved by a transform), every text's
+//    (text that overflows its element), and a ::before or ::after placed
+//    fixed, from its computed place. What an element clips (its overflow
+//    not visible) counts only as far as that element's own bottom. An
+//    element placed fixed counts as the frame at its cap places it. A
+//    block whose content has a box but nothing below the frame's top
+//    (moved above it) is estimated at 150px rather than hidden.
+// 2. The check that corrects it. With the estimate set, the frame's
+//    document must not overflow the frame: its root's scroll height, the
+//    browser's own account of everything there is to scroll to (generated
+//    content included), must be no more than the height, or the height
+//    must be the cap. If it is more, the frame grows to it, at most to the
+//    cap, and the check is made again, at most four times (content that
+//    depends on the frame's height can move as it grows). The scroll height
+//    is never less than the frame's own height, so it can say the frame is
+//    too small, never wrongly that it is big enough.
 //
-// It is measured again when the root's size changes (the width, content
-// in the flow), when an image or another resource in the frame loads, when
-// a <details> opens or closes, and when a transition or an animation ends.
-// A change of out-of-flow content at any other moment (an animation that
+// Each measure starts from the same height, the cap, so two measures in a
+// row give the same. It is measured again when the root's size changes
+// (the width, content in the flow), when an image or another resource in
+// the frame loads, when a <details> opens or closes, when a transition or
+// an animation ends, and when the window's height changes (the cap is a
+// part of it), once in an animation frame for every frame of the page. A
+// change of out-of-flow content at any other moment (an animation that
 // never ends) is not followed. A new document (a new srcdoc, as the
-// preview is typed) is measured once it has loaded.
-const wikiFittedFrames = new WeakSet();
+// preview is typed) is measured once it has loaded. Painting outside a box
+// (an outline, a shadow) is not content: nothing scrolls to it.
+//
+// The frames fitted are kept in a set, with how to stop watching each. A
+// frame that has left the page (its island destroyed, the route changed)
+// is dropped from it, its observer disconnected, whenever another frame is
+// fitted, the window's height changes, or its own observer fires; the
+// window's listener goes with the last frame.
+const wikiFittedFrames = new Map();
+let wikiFramesResizing = false;
+
+// Measure every frame again, once in the next animation frame, when the
+// window's height changes; and drop the frames that have left the page.
+function wikiFramesOnResize() {
+  if (wikiFramesResizing) return;
+  wikiFramesResizing = true;
+  requestAnimationFrame(() => {
+    wikiFramesResizing = false;
+    wikiFramesSweep();
+    for (const fitted of wikiFittedFrames.values()) fitted.measure();
+  });
+}
+
+// Drop the frames that have left the page, and the window's listener with
+// the last of them.
+function wikiFramesSweep() {
+  for (const [frame, fitted] of wikiFittedFrames) {
+    if (!frame.isConnected) {
+      fitted.stop();
+      wikiFittedFrames.delete(frame);
+    }
+  }
+  if (wikiFittedFrames.size === 0) window.removeEventListener("resize", wikiFramesOnResize);
+}
+
+// Where a ::before or ::after placed fixed ends, from its computed style:
+// its top, then its margin, border, padding and height down; 0 for one
+// that is not there or not placed fixed. A pseudo-element has no box a
+// script can ask for.
+function wikiFixedPseudoBottom(win, element, which) {
+  const style = win.getComputedStyle(element, which);
+  if (style.content === "none" || style.content === "normal" || style.position !== "fixed" || style.display === "none") return 0;
+  const px = (value) => Number.parseFloat(value) || 0;
+  const top = style.top === "auto" ? 0 : px(style.top);
+  return top + px(style.marginTop) + px(style.borderTopWidth) + px(style.paddingTop) + px(style.height) + px(style.paddingBottom) + px(style.borderBottomWidth);
+}
 
 // The lowest bottom of what a frame's document shows, in the document's
 // coordinates, and whether it shows anything: a text or an element with a
@@ -118,6 +173,13 @@ function wikiFrameExtent(doc) {
           boxed ||= box.height > 0;
           bottom = Math.max(bottom, Math.min(own, limit));
         }
+        for (const which of ["::before", "::after"]) {
+          const pseudo = wikiFixedPseudoBottom(win, child, which);
+          if (pseudo > 0) {
+            boxed = true;
+            bottom = Math.max(bottom, pseudo);
+          }
+        }
         visit(child, style.overflowY === "visible" ? limit : Math.min(limit, own));
       }
     }
@@ -127,18 +189,28 @@ function wikiFrameExtent(doc) {
 }
 
 function wiki_islands_fit_frame(frame) {
+  wikiFramesSweep();
   if (wikiFittedFrames.has(frame)) return;
-  wikiFittedFrames.add(frame);
   let observer = null;
   const measure = () => {
+    if (!frame.isConnected) return wikiFramesSweep();
     const doc = frame.contentDocument;
-    if (!doc?.documentElement) return;
+    const root = doc?.documentElement;
+    if (!root) return;
     const cap = Math.floor(window.innerHeight * 0.8);
+    // 1. The estimate, at the cap.
     frame.style.height = `${cap}px`;
     const { bottom, boxed } = wikiFrameExtent(doc);
     const extent = Math.ceil(bottom);
-    const height = extent > 0 ? Math.min(extent, cap) : boxed ? Math.min(150, cap) : 0;
+    let height = extent > 0 ? Math.min(extent, cap) : boxed ? Math.min(150, cap) : 0;
     frame.style.height = `${height}px`;
+    // 2. The check: nothing to scroll to below the height, or the cap.
+    for (let pass = 0; pass < 4 && height < cap; pass++) {
+      const needed = root.scrollHeight;
+      if (needed <= height + 1) break;
+      height = Math.min(needed, cap);
+      frame.style.height = `${height}px`;
+    }
   };
   const watch = () => {
     observer?.disconnect();
@@ -149,6 +221,8 @@ function wiki_islands_fit_frame(frame) {
     for (const type of ["load", "toggle", "transitionend", "animationend"]) doc.addEventListener(type, measure, true);
     measure();
   };
+  wikiFittedFrames.set(frame, { measure, stop: () => observer?.disconnect() });
+  if (wikiFittedFrames.size === 1) window.addEventListener("resize", wikiFramesOnResize);
   frame.addEventListener("load", watch);
   watch();
 }
