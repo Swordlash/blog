@@ -23,7 +23,8 @@ import Wiki.Api (AccountApi (..), AdminApi (..), AttachmentsApi (..), PagesApi (
 import Wiki.Api.Account (Account (..), AccountDisabled (..), NewAccount (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), Directory (..), GroupName (..), ServerStatus (..), UserPage (..), UserSummary (..), WikiSettings (..))
 import Wiki.Api.Error (ApiError (..))
-import Wiki.Api.Links (attachmentUrl, avatarUrl, links, searchUrl, spaceIconUrl)
+import Wiki.Api.ContentPolicy (interactiveSvgPolicy)
+import Wiki.Api.Links (attachmentFrameUrl, attachmentUrl, avatarUrl, links, searchUrl, spaceIconUrl)
 import Wiki.Api.Opaque (NewAccountRecord (..))
 import Wiki.Api.Types
 import Wiki.Api.Version (pageVersion)
@@ -251,6 +252,47 @@ attachments backing = describe "attachments" $ do
     a <- upload r page "notes día.pdf" "application/pdf" bytes >>= jsonAs 201
     reply <- getUrl r (onAdmin r (attachmentUrl a))
     header "Content-Disposition" reply `shouldBe` Just "attachment; filename=\"notes d_a.pdf\"; filename*=UTF-8''notes%20d%C3%ADa.pdf"
+
+  it "answer an SVG's interactive form shown, its scripts run in a sandbox of their own, and nothing loaded" $ withRunning backing $ \r -> do
+    (_, page) <- withSpace r False
+    a <- upload r page "flame graph.svg" "image/svg+xml" bytes >>= jsonAs 201
+    attachmentFrameUrl a `shouldBe` Just (attachmentUrl a <> "?interactive")
+    reply <- getUrl r (onAdmin r (fromMaybe "" (attachmentFrameUrl a)))
+    (reply.status, reply.body) `shouldBe` (200, bytes)
+    header "Content-Type" reply `shouldBe` Just "image/svg+xml"
+    header "X-Content-Type-Options" reply `shouldBe` Just "nosniff"
+    header "Content-Disposition" reply `shouldBe` Just "inline; filename=\"flame graph.svg\"; filename*=UTF-8''flame%20graph.svg"
+    header "Content-Security-Policy" reply `shouldBe` Just (encodeUtf8 interactiveSvgPolicy)
+    header "Cache-Control" reply `shouldBe` Just "private, max-age=300"
+    -- The plain form of the same SVG is as it was: downloaded, no script.
+    plain <- getUrl r (onAdmin r (attachmentUrl a))
+    header "Content-Disposition" plain `shouldSatisfy` maybe False (BS.isPrefixOf "attachment; ")
+    header "Content-Security-Policy" plain `shouldSatisfy` maybe False (BS.isSuffixOf "sandbox")
+    -- Revalidated with the same headers.
+    revalidated <- getUrlWith r (onAdmin r (fromMaybe "" (attachmentFrameUrl a))) [("If-None-Match", fromMaybe "" (header "ETag" reply))]
+    revalidated.status `shouldBe` 304
+    header "Content-Security-Policy" revalidated `shouldBe` Just (encodeUtf8 interactiveSvgPolicy)
+
+  it "answer any other type asked for interactively as they answer it plainly" $ withRunning backing $ \r -> do
+    (_, page) <- withSpace r False
+    for_ [("page.html", "text/html"), ("chart.png", "image/png"), ("drawing.svg", "application/octet-stream"), ("data.xml", "application/xml")] $ \(name, mediaType) -> do
+      a <- upload r page name mediaType bytes >>= jsonAs 201
+      attachmentFrameUrl a `shouldBe` Nothing
+      plain <- getUrl r (onAdmin r (attachmentUrl a))
+      asked <- getUrl r (onAdmin r (attachmentUrl a <> "?interactive"))
+      (name, asked.status, header "Content-Disposition" asked, header "Content-Security-Policy" asked)
+        `shouldBe` (name, 200, header "Content-Disposition" plain, header "Content-Security-Policy" plain)
+      header "Content-Security-Policy" asked `shouldNotBe` Just (encodeUtf8 interactiveSvgPolicy)
+
+  it "answer an SVG's interactive form to whoever may view its page, and to no one else" $ withRunning backing $ \r -> do
+    (space, page) <- withSpace r False
+    a <- upload r page "flame.svg" "image/svg+xml" bytes >>= jsonAs 201
+    let framed = fromMaybe "" (attachmentFrameUrl a)
+    getUrl r (onPublic r framed) >>= jsonAs 404 >>= (`shouldBe` NotFound)
+    _ :: Space <- ok200 (sendJson r methodPut (onAdmin r (links.spaces.setPublic space.id)) SpacePublic {public = True})
+    (.status) <$> getUrl r (onPublic r framed) `shouldReturn` 200
+    _ :: Space <- ok200 (sendJson r methodPut (onAdmin r (links.spaces.setPublic space.id)) SpacePublic {public = False})
+    getUrl r (onPublic r framed) >>= jsonAs 404 >>= (`shouldBe` NotFound)
 
   it "answer a range of their bytes, as a video seeking asks" $ withRunning backing $ \r -> do
     (_, page) <- withSpace r False

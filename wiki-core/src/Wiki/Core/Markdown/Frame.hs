@@ -122,8 +122,8 @@ module Wiki.Core.Markdown.Frame
   )
 where
 
-import Data.Text qualified as T
 import Protolude
+import Wiki.Core.Attachment (MimeType (..), mimeEssence)
 
 -- | The sandbox of an @html@ fence's frame, the value of its @sandbox@
 -- attribute: no scripts, the wiki's origin, and links that open in an
@@ -165,13 +165,14 @@ interactiveClass :: Text
 interactiveClass = "interactive"
 
 -- | Whether an attachment of this stored media type has an interactive
--- form: an SVG, @image\/svg+xml@, in any case of letters. The server
--- answers the interactive form for these types only, and the application
--- asks for a frame only for them, so the two never disagree. An @.svg@
--- file stored under another type is not one: the server serves the type
--- it stored.
+-- form: an SVG, @image\/svg+xml@, compared as browsers compare media
+-- types ('Wiki.Core.Attachment.mimeEssence': its parameters left off, in
+-- any case of letters). The server answers the interactive form for these
+-- types only, and the application asks for a frame only for them, so the
+-- two never disagree. An @.svg@ file stored under another type is not
+-- one: the server serves the type it stored.
 framesInteractively :: Text -> Bool
-framesInteractively mediaType = T.toLower mediaType == "image/svg+xml"
+framesInteractively mediaType = mimeEssence (MimeType mediaType) == "image/svg+xml"
 
 -- | The height, in pixels, of an interactive SVG's frame when the embed
 -- gives none: about a flame graph's of thirty levels. The page cannot
