@@ -18,9 +18,12 @@
 #
 # `start` leaves a container that runs and answers as it is: other test runs
 # may be using it. It waits a minute for one that runs but does not answer
-# yet (another `start` may have just made it), and makes a new one only when
-# none runs or the one that runs does not answer. `restart` always makes a
-# new one. Both wait until PostgreSQL answers.
+# yet, and makes a new one only when there is none, or the one there does
+# not run or does not answer. `restart` always makes a new one. Both wait
+# until PostgreSQL answers. `start`, `restart` and `stop` of one name take a
+# lock (flock on $XDG_RUNTIME_DIR/ci-postgres.<name>.lock, else in /tmp), so
+# that two of them never act on the same container at once; `env` only
+# reads, and takes none.
 #
 # The variables are printed one per line, for $GITHUB_ENV:
 #
@@ -86,18 +89,16 @@ answers_soon() {
   done
 }
 
-# Remove the container given (an id, or the name; none when empty), and
-# run a new one, on a host port Docker chooses. `start` gives the id of the
-# container it found unusable, not the name: a container another `start`
-# has made since is then not removed. Rootless Docker chooses the next port
-# of its range without checking that the host has it free, and fails to
-# start the container when another process holds it ("address already in
-# use"): the container made is then removed, by its id, and Docker asked
-# again, which gives the port after it; ten times at most. When the run
-# fails because another `start` has just made a container of the same name,
-# that container is used.
+# Run a new container of that name, on a host port Docker chooses. Rootless
+# Docker chooses the next port of its range without checking that the host
+# has it free, and fails to start the container when another process holds
+# it ("address already in use"): the container made is then removed, by its
+# id, and Docker asked again, which gives the port after it; ten times at
+# most. The caller holds the lock ('lock'), so no other `start` makes a
+# container of the name meanwhile. One made by something that does not take
+# the lock (an older copy of this script, a person) makes the run fail with
+# the name taken, and that container is used once it runs.
 create() {
-  [ -z "$1" ] || docker rm -f "$1" >/dev/null 2>&1 || true
   scratch=$(mktemp -d)
   attempt=0
   while :; do
@@ -109,6 +110,12 @@ create() {
       break
     fi
     if grep -q 'is already in use by container' "$scratch/error"; then
+      tries=0
+      until published; do
+        tries=$((tries + 1))
+        [ "$tries" -le 30 ] || break
+        sleep 1
+      done
       break
     fi
     attempt=$((attempt + 1))
@@ -124,18 +131,44 @@ create() {
     exit 1
   done
   rm -rf "$scratch"
-  # Another start's container may not run yet: wait for it to run as well.
-  tries=0
-  until published; do
-    tries=$((tries + 1))
-    [ "$tries" -le 30 ] || break
-    sleep 1
-  done
   if ! published || ! answers_soon; then
     docker logs "$name" >&2 || true
     printf 'ci-postgres: PostgreSQL in %s did not answer in a minute\n' "$name" >&2
     exit 1
   fi
+}
+
+# Take the lock of the container's name, held until the script exits:
+# `start`, `restart` and `stop` of one name run one at a time, so that what
+# one of them sees of the container stays true until it is done. The lock
+# is flock(1) on a file in $XDG_RUNTIME_DIR (the account's runtime
+# directory, which rootless Docker uses too, the same in every session of
+# the account), else in /tmp. The kernel releases it when the process ends,
+# however it ends, so a killed `start` leaves nothing that blocks the next
+# one. Without flock the script runs unlocked, and says so.
+lock() {
+  lock_file=${XDG_RUNTIME_DIR:-/tmp}/ci-postgres.$name.lock
+  if ! command -v flock >/dev/null 2>&1; then
+    printf 'ci-postgres: no flock here; %s runs without the lock that keeps two starts of %s apart\n' "$1" "$name" >&2
+    return 0
+  fi
+  exec 9>>"$lock_file"
+  if ! flock --wait 600 9; then
+    printf 'ci-postgres: %s was held for ten minutes; giving up\n' "$lock_file" >&2
+    exit 1
+  fi
+}
+
+# For the script's tests only: with WIKI_CI_POSTGRES_TEST_PAUSE set to a
+# file's path, wait under the lock, after looking at the container, until
+# that file is removed. The wait is announced by a file of the same path
+# with ".paused" after it.
+pause_for_test() {
+  [ -n "${WIKI_CI_POSTGRES_TEST_PAUSE:-}" ] || return 0
+  : >"$WIKI_CI_POSTGRES_TEST_PAUSE.paused"
+  while [ -e "$WIKI_CI_POSTGRES_TEST_PAUSE" ]; do
+    sleep 0.1 9>&-
+  done
 }
 
 # Write pg_dump, pg_restore and psql into the directory, and print the
@@ -170,20 +203,23 @@ EOF
 case ${1:-} in
   start)
     docker_answers
-    # A container another `start` is making is "created" for a moment
-    # before it runs: wait for it to run before judging it.
-    tries=0
-    while [ "$(docker inspect --format '{{.State.Status}}' "$name" 2>/dev/null || true)" = created ] && [ "$tries" -lt 30 ]; do
-      tries=$((tries + 1))
-      sleep 1
-    done
-    seen=$(docker inspect --format '{{.Id}}' "$name" 2>/dev/null || true)
-    if ! published || ! answers_soon; then
-      create "$seen"
+    lock start
+    status=$(docker inspect --format '{{.State.Status}}' "$name" 2>/dev/null || true)
+    pause_for_test
+    # None: make one. One that runs is kept if it answers within a minute
+    # (it may have just been made); one that does not answer, or does not
+    # run, is made again.
+    if [ -z "$status" ]; then
+      create
+    elif [ "$status" != running ] || ! published || ! answers_soon; then
+      docker rm -f "$name" >/dev/null 2>&1 || true
+      create
     fi
     print_variables "${2:-$(mktemp -d)}"
     ;;
   env)
+    # env only reads, so it takes no lock: a container another start is
+    # making, which does not answer yet, is reported as not answering.
     docker_answers
     if ! published || ! answers; then
       printf 'ci-postgres: %s does not run or does not answer; start it with: sh toolchain/ci-postgres.sh start\n' "$name" >&2
@@ -193,10 +229,15 @@ case ${1:-} in
     ;;
   restart)
     docker_answers
-    create "$name"
+    lock restart
+    pause_for_test
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    create
     print_variables "${2:-$(mktemp -d)}"
     ;;
   stop)
+    lock stop
+    pause_for_test
     docker rm -f "$name" >/dev/null 2>&1 || true
     ;;
   *)
