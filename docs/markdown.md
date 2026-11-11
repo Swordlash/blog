@@ -493,7 +493,7 @@ An address in `href`, `src` or `poster` is a URL starting with `http:` or `https
 
 ### HTML with its own styles
 
-HTML in a page has no styles of its own: a `style` could restyle the wiki around it, or imitate it. An `html` fence may have them. It is shown in a frame of its own, as wide as the text, as high as what it holds (but no higher than most of the window: a longer block scrolls inside), with no border and the page's background, so its styles reach nothing outside the frame. The toolbar's "HTML block" button writes the fence, around the lines selected or with an example to type over:
+HTML in a page has no styles of its own: a `style` could restyle the wiki around it, or imitate it. An `html` fence may have them. It is shown in a frame of its own, as wide as the text, as high as what it holds (but no higher than 80% of the window's height: a longer block scrolls inside), with no border and the page's background, so its styles reach nothing outside the frame. The toolbar's "HTML block" button writes the fence, around the lines selected or with an example to type over:
 
 ```html
 <style>
@@ -505,6 +505,8 @@ HTML in a page has no styles of its own: a `style` could restyle the wiki around
   <p style="font-style: italic">Styled by its own CSS, with the wiki's <span class="c-red">red</span> and <mark class="h-yellow">yellow</mark>.</p>
 </div>
 ```
+
+Inside the block, the window is the frame at its largest: `100vh`, a height in percent of the page, and a media query on the height all mean the frame at 80% of the window's height, so a box `50vh` high makes the frame half that.
 
 The frame holds the wiki's stylesheet, in the page's colour scheme, so the wiki's classes (the colours above, a table's look, a box's) work as in the page, and the block's own rules come after it and win over the wiki's. What the block may hold is what HTML in a page may hold, with two more things: a `style` attribute on any element, and `<style>` elements. Everything else is left out as in a page: no `script`, no event handler (`onclick` and the rest), no `iframe`, `object`, `embed` or `svg`, no `form` (its content is kept, without the fields), no `meta`, `base` or `link`, and no `javascript:` or `data:` address. The frame is sandboxed besides, so nothing in it could run even if it were there.
 

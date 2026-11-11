@@ -57,18 +57,29 @@ function wiki_islands_highlight(element, language, code) {
 // An html fence's frame (Wiki.App.Islands' HtmlFrame), kept as high as its
 // content. The frame runs no script, so the page measures it: the frame
 // has the page's origin (Wiki.Core.Markdown.Frame's frameSandbox), so its
-// document is the page's to read. The stylesheet caps the height, and the
-// frame scrolls beyond it. A frame is set up once, however often the
-// application asks.
+// document is the page's to read. A frame is set up once, however often
+// the application asks.
 //
-// The content's height is measured with the frame collapsed to nothing,
-// within one task, so that nothing of it is painted: the larger of the
-// root element's box (the content in the flow) and the root's scroll
-// height, which then is the extent of everything that overflows (content
-// placed absolutely, transformed, floated), no longer the frame's own
-// height. Content placed `fixed` overflows nothing, so the bottom of each
-// such element counts too, as the collapsed frame places it (one placed
-// from the frame's bottom is not counted). An empty block is 0px high.
+// The rule. A frame is at most 80% of the window's height (its cap, which
+// the stylesheet's max-height says too), and scrolls inside beyond it. Its
+// content is measured with the frame at that cap, so what depends on the
+// frame's size is read against the frame at its largest: 100vh (and dvh,
+// svh, lvh), a height in percent of the root, a media or container query
+// on the frame's height. The frame's height is then the smaller of the
+// cap and the content's extent, and never depends on the height it had
+// before: two measures in a row give the same.
+//
+// The extent is the lowest bottom of anything with a box: the root's box
+// (the content in the flow, its margins included), every element's box
+// (content placed absolutely, floated, moved by a transform), and every
+// text's (text that overflows the element it is in). What an element
+// clips (its overflow not visible: a box that scrolls) counts only as far
+// as that element's own bottom. An element placed fixed is placed in the
+// frame, not in the flow, and counts as the frame at its cap places it;
+// one placed from the frame's bottom counts at the cap. An empty block is
+// 0px high; a block whose content has a box but no extent below the
+// frame's top (moved above it) is 150px high, and scrolls, rather than
+// hidden.
 //
 // It is measured again when the root's size changes (the width, content
 // in the flow), when an image or another resource in the frame loads, when
@@ -78,22 +89,56 @@ function wiki_islands_highlight(element, language, code) {
 // preview is typed) is measured once it has loaded.
 const wikiFittedFrames = new WeakSet();
 
+// The lowest bottom of what a frame's document shows, in the document's
+// coordinates, and whether it shows anything: a text or an element with a
+// height (an empty element, as wide as the block, shows nothing).
+function wikiFrameExtent(doc) {
+  const win = doc.defaultView;
+  const scrolled = win.scrollY;
+  const range = doc.createRange();
+  let bottom = doc.documentElement.getBoundingClientRect().bottom + scrolled;
+  let boxed = false;
+  const visit = (node, clip) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        if (child.data.trim() === "") continue;
+        range.selectNodeContents(child);
+        const box = range.getBoundingClientRect();
+        if (box.width === 0 && box.height === 0) continue;
+        boxed ||= box.height > 0;
+        bottom = Math.max(bottom, Math.min(box.bottom + scrolled, clip));
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        const style = win.getComputedStyle(child);
+        if (style.display === "none") continue;
+        const fixed = style.position === "fixed";
+        const box = child.getBoundingClientRect();
+        const own = fixed ? box.bottom : box.bottom + scrolled;
+        const limit = fixed ? Infinity : clip;
+        if (box.width > 0 || box.height > 0) {
+          boxed ||= box.height > 0;
+          bottom = Math.max(bottom, Math.min(own, limit));
+        }
+        visit(child, style.overflowY === "visible" ? limit : Math.min(limit, own));
+      }
+    }
+  };
+  if (doc.body) visit(doc.body, Infinity);
+  return { bottom, boxed };
+}
+
 function wiki_islands_fit_frame(frame) {
   if (wikiFittedFrames.has(frame)) return;
   wikiFittedFrames.add(frame);
   let observer = null;
   const measure = () => {
     const doc = frame.contentDocument;
-    const root = doc?.documentElement;
-    if (!root) return;
-    frame.style.height = "0px";
-    let height = Math.max(root.getBoundingClientRect().height, root.scrollHeight);
-    for (const element of doc.querySelectorAll("body *")) {
-      if (doc.defaultView.getComputedStyle(element).position === "fixed") {
-        height = Math.max(height, element.getBoundingClientRect().bottom);
-      }
-    }
-    frame.style.height = `${Math.ceil(height)}px`;
+    if (!doc?.documentElement) return;
+    const cap = Math.floor(window.innerHeight * 0.8);
+    frame.style.height = `${cap}px`;
+    const { bottom, boxed } = wikiFrameExtent(doc);
+    const extent = Math.ceil(bottom);
+    const height = extent > 0 ? Math.min(extent, cap) : boxed ? Math.min(150, cap) : 0;
+    frame.style.height = `${height}px`;
   };
   const watch = () => {
     observer?.disconnect();

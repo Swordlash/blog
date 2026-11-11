@@ -45,6 +45,7 @@ $( browserJS
      , ("js_frame_marked", "wiki_test_frame_marked", Safe, [t|JSText -> IO Bool|])
      , ("js_markup", "wiki_test_markup", Safe, [t|IO JSText|])
      , ("js_frame_outside", "wiki_test_frame_outside", Safe, [t|JSText -> JSText -> IO JSText|])
+     , ("js_frame_remeasure", "wiki_test_frame_remeasure", Safe, [t|JSText -> IO JSText|])
      ]
  )
 
@@ -104,13 +105,20 @@ spec m = describe "an html fence" $ do
     frameStyle ".shown-by-css" "background-image" >>= (`shouldSatisfy` T.isPrefixOf "url(\"data:image/svg+xml")
     flag `shouldReturn` ""
 
-  it "is as high as its content out of the flow too, and an empty block is 0px high" $ runPage $ do
-    ui <- page m (T.intercalate "\n\n" (map (\b -> "```html\n" <> b <> "\n```") outOfFlow))
+  it "is as high as its content, measured with the frame at its largest, the same when measured again" $ runPage $ do
+    ui <- page m (T.intercalate "\n\n" (map (\(_, b, _) -> "```html\n" <> b <> "\n```") sized))
     _ <- find ui ".page-body iframe.wiki-html"
-    for_ (zip [1 :: Int ..] [300, 250, 120, 560, 0]) $ \(n, expected) ->
+    for_ (zip [1 :: Int ..] sized) $ \(n, (name, _, expected)) -> do
+      let frameN = ".page-body iframe.wiki-html:nth-of-type(" <> show n <> ")"
       eventually $ do
-        (high, _, _) <- heights (".page-body iframe.wiki-html:nth-of-type(" <> show n <> ")")
-        (n, abs (high - expected) <= 2) `shouldBe` (n, True)
+        (high, _, cap) <- heights frameN
+        (name, high, abs (high - expected cap) <= 2) `shouldSatisfy` (\(_, _, ok) -> ok)
+      -- Measured again, the frame keeps its height: nothing of a measure
+      -- depends on the height the last one gave.
+      again <- unsafeIOToPageM (fromJSText <$> js_frame_remeasure (toJSText frameN))
+      case mapMaybe readMaybe (T.words again) :: [Int] of
+        [before, after] -> (name, after) `shouldBe` (name, before)
+        _ -> expectationFailure ("no heights for " <> name <> ": " <> again)
 
   describe "on a slide, drawn in the slide's colours, whatever the system's" $ do
     let slides = PageSlides (slugs ["team", "projects"]) (slugs ["html-blocks"]) 1 1
@@ -299,17 +307,22 @@ rawTextLines =
 rawText :: Text
 rawText = "```html\n" <> T.unlines rawTextLines <> "```\n"
 
--- | Blocks whose content is out of the flow, and the empty block, in the
--- order of the heights the test expects of them: placed absolutely, 300px;
--- placed fixed, 250px; floated, 120px; moved 400px down by a transform,
--- below an 80px paragraph, 560px in all; nothing, 0px.
-outOfFlow :: [Text]
-outOfFlow =
-  [ "<div style=\"position: absolute; top: 0; height: 300px\">Visible</div>"
-  , "<div style=\"position: fixed; top: 0; height: 250px\">Fixed</div>"
-  , "<div style=\"float: left; width: 50px; height: 120px\"></div>"
-  , "<p style=\"margin: 0; height: 80px\">a</p><div style=\"height: 80px; transform: translateY(400px)\">moved</div>"
-  , ""
+-- | Blocks, each with its name and the height the frame should have, from
+-- the frame's cap (80% of the window): one whose height depends on the
+-- frame's (in vh, in percent of the root), read against the frame at its
+-- cap; content out of the flow (placed absolutely, fixed, floated, moved
+-- by a transform); and nothing at all.
+sized :: [(Text, Text, Int -> Int)]
+sized =
+  [ ("a box at most 100vh high that scrolls, holding a paragraph", "<div style=\"overflow: auto; max-height: 100vh\"><p>Visible</p></div>", const 56)
+  , ("a box 50vh high", "<div style=\"height: 50vh\">half</div>", (`div` 2))
+  , ("a box at least 100vh high", "<div style=\"min-height: 100vh\">full</div>", identity)
+  , ("a box half as high as the root, which is the frame", "<style>html, body, .page-body { height: 100% }</style><div style=\"height: 50%\">half</div>", identity)
+  , ("a box placed absolutely", "<div style=\"position: absolute; top: 0; height: 300px\">Visible</div>", min 300)
+  , ("a box placed fixed", "<div style=\"position: fixed; top: 0; height: 250px\">Fixed</div>", min 250)
+  , ("a floated box", "<div style=\"float: left; width: 50px; height: 120px\"></div>", min 120)
+  , ("a box moved by a transform", "<p style=\"margin: 0; height: 80px\">a</p><div style=\"height: 80px; transform: translateY(400px)\">moved</div>", min 560)
+  , ("nothing", "", const 0)
   ]
 
 -- | The demo's Projects space with a page of this text, shown to an

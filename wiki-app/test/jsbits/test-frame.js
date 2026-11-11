@@ -50,6 +50,19 @@ function wiki_test_frame_outside(frameSelector, names) {
   return [...body.querySelectorAll("*")].map((element) => element.localName).filter((name) => !allowed.has(name)).join(",");
 }
 
+// Have the page measure the frame again (its document's load listener, one
+// of the events it measures on), and say the frame's height before and
+// after, in whole pixels: "before after", or "" before the document has
+// loaded.
+function wiki_test_frame_remeasure(frameSelector) {
+  const frame = document.querySelector(frameSelector);
+  const doc = wikiTestFrameDocument(frameSelector);
+  if (!frame || !doc) return "";
+  const before = Math.round(frame.getBoundingClientRect().height);
+  doc.dispatchEvent(new Event("load"));
+  return `${before} ${Math.round(frame.getBoundingClientRect().height)}`;
+}
+
 // What a script in a frame would have set on the page, had it run: "" when
 // nothing ran.
 function wiki_test_frame_flag() {
