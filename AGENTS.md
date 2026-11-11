@@ -29,7 +29,24 @@ handles the review rounds and amends the plan. Changes to `docs/PLAN.md` alone g
 straight to `main`, without a pull request; code goes through one, one per work package,
 opened ready for review, not as a draft, on its own branch. The pull request is opened
 early, as soon as the session thinks the branch has a chance to pass (the owner,
-2026-11-10).
+2026-11-10). When several pull requests are open together and touch common files,
+each is based on the branch of the one before, a stack (the owner, 2026-11-11), so
+that the owner merges them from the bottom without a rebase and a second run of CI
+between; pull requests that share no file stay based on `main`. When a lower branch
+changes, the session rebases the branches above it onto it. A pull request's base is
+set before its branch is pushed, never after: a run takes the base its pull request
+had when the push arrived, a change of base starts no run, and the `changelog` job of
+a run started against `main` counts the lower pull requests' entries as this one's and
+fails. The owner merges a stack
+from the bottom, as he chooses. After a merge commit, which his bypass of the
+linear-history rule allows, the next pull request, which GitHub retargets to `main`,
+needs nothing: the session leaves it as it is, and its checks stand. After a squash or
+a rebase, the lower one's commits are in the next one rewritten: the session rebases
+the next branch onto `main` at once (`git rebase --onto origin/main <the lower
+branch's old head>`), which changes no file of its tree when `main` took nothing else,
+and force-pushes it. The ruleset requires no status check, so the owner may merge the
+rebased pull request on the strength of the run its head passed before the rebase,
+without waiting for the new one; the push to `main` runs the full CI all the same.
 
 Each work package has two reviews on a Fable session (the owner, 2026-11-10): the
 session's own review of the subagent's branch, before the pull request is opened, and
@@ -66,9 +83,9 @@ the session never applies it.
 The owner merges. The session does not merge a pull request unless the owner asks it
 to. When the owner tells the session to merge a pull request as it is, without waiting
 for its checks, the session merges it past the branch's rules (`gh pr merge --admin`;
-the owner, 2026-11-10). When `main` has moved, the session rebases the branch onto it
-(and force-pushes: work-package branches belong to the session) so CI runs on the
-rebased head.
+the owner, 2026-11-10). When `main` has moved, the session rebases a branch based on
+`main` onto it (and force-pushes: work-package branches belong to the session) so CI
+runs on the rebased head; a stacked branch follows the stack's rule above.
 
 When a work package is done, its pull request's description says what was built, the
 choices made, and what differs from the plan. The plan keeps no log of the work (the
