@@ -553,6 +553,14 @@ jobs:
       if: matrix.group == 'unit'
       run: sh toolchain/test-check-changelog.sh
 
+    # The script that starts PostgreSQL for the tests, against containers
+    # of the test's own names: started twice it keeps the same container
+    # and port, and a host port another process holds does not stop it.
+    # About half a minute.
+    - name: Test ci-postgres.sh
+      if: matrix.group == 'postgres'
+      run: sh toolchain/test-ci-postgres.sh
+
     # The two database groups use separate hosted VMs. Only PostgreSQL
     # needs a container; unit and SQLite never start or discover a cluster.
     - name: Start PostgreSQL for the tests
@@ -649,7 +657,8 @@ jobs:
       run: sh toolchain/test-ci-prune-caches.sh
 
     # The rehearsal script's ports, against a fake old and new wiki-server:
-    # below 32768, and another pair when one is taken. Two seconds.
+    # port 0 for the old server's listeners, the admin listener's address
+    # read from its log, and two runs side by side. Six seconds.
     - name: Test rehearse-ci.sh
       if: matrix.group == 'deploy'
       run: sh toolchain/test-rehearse-ci.sh
