@@ -181,7 +181,7 @@ module Wiki.Server.Storage.Rows
   , linksVersion
   , linksVersionSetting
   , writeLinks
-  , markAllLinks
+  , markSpaceLinks
   , resolvePendingLinks
   , ensureLinks
   , linkingPages
@@ -1598,21 +1598,25 @@ insertSpace s = insertSpaces [s]
 -- | Add spaces, in the order given, so that a space can come after its
 -- parent: one statement for each 500, which the databases check the
 -- foreign keys of at its end. A path from the top may lead into a new
--- space, so every link is marked to be followed again.
+-- space, so those links are marked to be followed again.
 insertSpaces :: (Backend be) => [Space] -> Db be ()
 insertSpaces ss = do
   for_ (chunksOf 500 ss) $ \chunk -> runInsert (insert wikiDb.spaces (insertValues (map spaceRow chunk)))
-  unless (null ss) markAllLinks
+  unless (null ss) markFromTop
 
 -- | Overwrite the space with this id: every column of it. A space given
--- another parent, slug or home page reads paths otherwise, so every link
--- is then marked to be followed again.
+-- another parent or slug, or another home page, reads paths otherwise, so
+-- the links that may lead elsewhere are then marked to be followed again
+-- ('markFromTop', 'markSpaceLinks').
 updateSpace :: (Backend be) => Space -> Db be ()
 updateSpace s = do
   let r = spaceRow s
-      place x = (x.parent, x.slug, x.home_page)
-  before <- runSelectReturningOne (select (place <$> filter_ (\x -> x.id ==. val_ r.id) (all_ wikiDb.spaces)))
-  when (before /= Just (r.parent, r.slug, r.home_page)) markAllLinks
+  before <- runSelectReturningOne (select ((\x -> (x.parent, x.slug, x.home_page)) <$> filter_ (\x -> x.id ==. val_ r.id) (all_ wikiDb.spaces)))
+  case before of
+    Just (parent, slug, home)
+      | home /= r.home_page -> markSpaceLinks s.id
+      | (parent, slug) /= (r.parent, r.slug) -> markFromTop
+    _ -> pass
   runUpdate $
     update
       wikiDb.spaces
@@ -1647,14 +1651,15 @@ setSpacePosition sid n = runUpdate (update wikiDb.spaces (\x -> x.position <-. v
 -- | Delete a space: its subspaces, their pages, the pages' versions,
 -- attachments and drafts, and the grants on all of them go with it, as the
 -- schema's foreign keys cascade. The pages' links are deleted here,
--- whatever the foreign keys do, and every other link is marked to be
--- followed again.
+-- whatever the foreign keys do, and the links that led to them, or start
+-- at the top of the wiki, are marked to be followed again.
 deleteSpaceRow :: (Backend be) => SpaceId -> Db be ()
 deleteSpaceRow sid = do
   spaces <- loadSpaces
   let gone = [x.id | x <- Map.elems spaces, any (\c -> c.id == sid) (fromMaybe [] (ancestry (`Map.lookup` spaces) x.id))]
   pages <- inChunks gone $ \chunk -> map (\n -> n.id) <$> nodesWhere (\p -> p.space_id `in_` map (\x -> val_ x.text) chunk)
-  markAllLinks
+  markFromTop
+  markOfAndTo pages
   deleteLinksFrom pages
   runDelete (delete wikiDb.spaces (\x -> x.id ==. val_ sid.text))
 
@@ -2070,41 +2075,34 @@ storeServerSettings s = do
 --
 -- The writes of the rows a link depends on keep them so, here, so that no
 -- caller can leave it out. Each marks the links it may change as
--- @pending@, without following any:
+-- @pending@, without following any.
 --
-
--- * A write of a page's text ('insertPage', 'updatePageText') writes the
-
---   page's links again from its text, all pending ('writeLinks'). Every
---   writer of a page's text (a save, a restore, both imports, the guide,
---   a template's copy) goes through those two.
+-- A write of a page's text ('insertPage', 'updatePageText') writes the
+-- page's links again from its text, all pending ('writeLinks'). Every
+-- writer of a page's text (a save, a restore, both imports, the guide, a
+-- template's copy) goes through those two.
 --
-
--- * A page created ('insertPage') marks the links named as it is
-
---   ('Wiki.App.Route.linkName': the slug the path ends in, or the id a
---   permanent address names). A path that named nothing, or named another
---   page only through the rule for old addresses, can lead to the new
---   page only if its last slug is the new page's.
+-- A page created ('insertPage') marks the links named as it is
+-- ('Wiki.App.Route.linkName': the slug the path ends in, or the id a
+-- permanent address names). A path that named nothing, or named another
+-- page only through the rule for old addresses, can lead to the new page
+-- only if its last slug is the new page's.
 --
-
--- * Pages moved ('movePages') mark their own links (a relative path
-
---   starts where its page is), the links that led to them (an old path no
---   longer does), and the links named as one of them (a path may now).
+-- Pages moved ('movePages') mark their own links (a relative path starts
+-- where its page is), the links that led to them (an old path no longer
+-- does), and the links named as one of them (a path may now).
 --
-
--- * Pages deleted ('deletePageRow') lose their links, and mark the links
-
---   that led to them, which may now lead nowhere or, through the rule for
---   old addresses, to another page.
+-- Pages deleted ('deletePageRow') lose their links, and mark the links
+-- that led to them, which may now lead nowhere or, through the rule for
+-- old addresses, to another page.
 --
-
--- * A space added, deleted, moved or given another slug, or whose home
-
---   page or encryption changes, marks every link ('markAllLinks'): a path
---   from the top is read against every space's path, and a space's root
---   decides how every path into it is read. Spaces change seldom.
+-- A space added, deleted, moved or given another slug marks the links
+-- whose path starts at the top of the wiki ('markFromTop'): such a path is
+-- read against every space's path, where a relative path and a permanent
+-- address do not depend on where their space is. A space deleted marks the
+-- links that led to its pages too, and a space whose home page or
+-- encryption changes the links of its pages and to them
+-- ('markSpaceLinks'): a space's root decides how its paths are read.
 --
 -- Every write transaction then ends, before it commits, by resolving the
 -- pending links ('resolvePendingLinks'), each space's pages read once for
@@ -2216,11 +2214,23 @@ markOfAndTo pids = for_ (chunksOf 500 pids) $ \chunk -> do
   markLinks (\r -> r.source_id `in_` map (\p -> val_ p.text) chunk)
   markLinks (\r -> r.target_id `in_` map (\p -> just_ (val_ p.text)) chunk)
 
--- | 'markAllLinks' marks every link as pending: what a change to the
--- tree of spaces does, which changes how a path from the top is read, or
--- how every path into a space is.
-markAllLinks :: (Backend be) => Db be ()
-markAllLinks = markLinks (const (val_ True))
+-- | 'markFromTop' marks the links whose path starts at the top of the
+-- wiki (@\/team\/handbook@, a page's own address, @\/s\/team\/p\/handbook\/@):
+-- what a space added, moved or given another slug may lead elsewhere,
+-- since such a path is read against every space's path. A relative path,
+-- or a permanent address, does not depend on where its space is.
+markFromTop :: (Backend be) => Db be ()
+markFromTop = markLinks (\r -> r.destination `like_` val_ "/%")
+
+-- | 'markSpaceLinks' marks the links of a space's pages, the links that
+-- lead to them, and the links from the top: what a change to how the
+-- space's paths are read does (its home page, the root of its paths, or
+-- its encryption, which leaves it none).
+markSpaceLinks :: (Backend be) => SpaceId -> Db be ()
+markSpaceLinks sid = do
+  markFromTop
+  pages <- pageNodes sid
+  markOfAndTo (map (\n -> n.id) pages)
 
 -- | 'resolvePendingLinks' follows the links marked pending again
 -- ('Wiki.App.Backlinks.linkTarget'), and unmarks them: each one's page
@@ -2228,23 +2238,25 @@ markAllLinks = markLinks (const (val_ True))
 -- whose space is not Links.counted ('Wiki.App.Backlinks.counted': the front
 -- page's, an encrypted space's) is deleted instead. Every write
 -- transaction ends with it, before its commit ("Wiki.Server.Storage").
+--
+-- The pending rows are deleted and written again, resolved, a hundred to a
+-- statement: a write that marked tens of thousands of links (an import, a
+-- space moved) then costs a few hundred statements, not one for each link.
 resolvePendingLinks :: (Backend be) => Db be ()
 resolvePendingLinks = do
-  rows <- runSelectReturningList (select ((\r -> (r.source_id, r.ordinal, r.destination, r.target_id)) <$> filter_ (\r -> r.pending ==. val_ True) (all_ wikiDb.page_links)))
+  rows <- runSelectReturningList (select (filter_ (\r -> r.pending ==. val_ True) (all_ wikiDb.page_links)))
   unless (null rows) $ do
     l <- startLinking
-    nodes <- Map.fromList . map (\n -> (n.id, n)) <$> pageNodesWithIds [PageId s | (s, _, _, _) <- rows]
-    for_ rows $ \(source, ordinal, destination, before) -> do
-      linked <- maybe (pure Nothing) (\n -> fmap (n,) <$> linkedPages l n.space) (Map.lookup (PageId source) nodes)
+    nodes <- Map.fromList . map (\n -> (n.id, n)) <$> pageNodesWithIds (ordNub [PageId r.source_id | r <- rows])
+    resolved <- fmap catMaybes . for rows $ \r -> do
+      linked <- maybe (pure Nothing) (\n -> fmap (n,) <$> linkedPages l n.space) (Map.lookup (PageId r.source_id) nodes)
       case linked of
         Just (n, pages) | Links.counted l.home pages.space -> do
-          after <- fmap (\t -> t.text) <$> Links.linkTarget (linkWorld l) pages n.id destination
-          runUpdate $
-            update
-              wikiDb.page_links
-              (\r -> mconcat ([r.pending <-. val_ False] <> [r.target_id <-. val_ after | after /= before]))
-              (\r -> r.source_id ==. val_ source &&. r.ordinal ==. val_ ordinal)
-        _ -> runDelete (delete wikiDb.page_links (\r -> r.source_id ==. val_ source &&. r.ordinal ==. val_ ordinal))
+          target <- Links.linkTarget (linkWorld l) pages n.id r.destination
+          pure (Just r {S.target_id = (\t -> t.text) <$> target, S.pending = False})
+        _ -> pure Nothing
+    runDelete (delete wikiDb.page_links (\r -> r.pending ==. val_ True))
+    for_ (chunksOf 100 resolved) $ \chunk -> runInsert (insert wikiDb.page_links (insertValues chunk))
 
 -- | 'ensureLinks' fills @page_links@ from every page's text, unless this
 -- version of how links are read ('linksVersion') filled it: once after

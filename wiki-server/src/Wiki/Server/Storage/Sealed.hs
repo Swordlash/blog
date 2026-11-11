@@ -34,7 +34,7 @@ import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (..), PageKey (..), Seal
 import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), PublicKey (..), Sealed (..), WrappedKey (..))
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Rows (markAllLinks, micro)
+import Wiki.Server.Storage.Rows (markSpaceLinks, micro)
 import Wiki.Server.Storage.Schema (KeyGrants (..), PageKeys (..), Pages (..), PublicKeys (..), SealedVersions (..), Spaces (..), WikiDb (..), wikiDb)
 
 --------------------------------------------------------------------------------
@@ -48,7 +48,7 @@ setSpaceKey sid k = do
   runUpdate (update wikiDb.spaces (\x -> x.key_id <-. val_ (Just k.text)) (\x -> x.id ==. val_ sid.text))
   -- An encrypted space has no root, so paths into it read otherwise, and
   -- its pages are no longer linked ("Wiki.Server.Storage.Rows", "Links").
-  markAllLinks
+  markSpaceLinks sid
 
 -- | The kind of resource a space's grants are of.
 spaceKind :: Text
