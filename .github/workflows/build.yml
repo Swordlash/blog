@@ -12,6 +12,20 @@ name: CI
 # server-page.yml and toolchain/deploy-local.sh's is_code say the same of
 # what the page is built from, which the changelog is not part of: they
 # leave changelog/ out.
+#
+# A pull request runs CI whatever its base branch: `pull_request` names no
+# branch. Pull requests that are open together and touch common files are
+# stacked (AGENTS.md): each is based on the branch of the one before, and
+# its run tests it merged into that branch. When the lower one merges,
+# GitHub deletes its branch and retargets the upper one to main. That
+# starts no run: a change of base is the type `edited`, which is left out
+# so that editing a title or a description does not build everything
+# again. The upper one keeps the checks of its head, which were run on top
+# of the lower branch, whose content is then main's; the owner merges it
+# without waiting. The tree those checks tested is the merged tree only if
+# main took nothing else in between. The push to main of the upper one's
+# merge is never counted as tested (toolchain/ci-already-tested.sh says
+# why), so the full CI runs on main for it.
 on:
   push:
     branches:
@@ -24,8 +38,6 @@ on:
       - 'wiki-core/reference/**'
       - 'docs/markdown.md'
   pull_request:
-    branches:
-      - main
     paths:
       - '**'
       - '!**.md'
@@ -55,8 +67,10 @@ on:
   # is what saves main's hosted wasm copies. The run reads them, and saves
   # them again, so a pull request that lands on the hosted runners never
   # starts from an empty store (the wasm store takes three quarters of an
-  # hour to build there). A pull request can restore only its own caches
-  # and main's.
+  # hour to build there). A pull request can restore only its own caches,
+  # its base branch's and main's, and a base branch other than main has
+  # none (no run is made for a push to it): a stacked pull request finds
+  # its own and main's, as any other does, and not the lower one's.
   schedule:
     - cron: '17 3 * * 1'
 
@@ -175,7 +189,12 @@ jobs:
   # labels are read when the job runs, so that after adding the label a
   # re-run of this job alone passes: a label does not start a run of this
   # workflow, which would build everything again. Pushes to main have no
-  # pull request and no check.
+  # pull request and no check. The pull request's changes are those from
+  # the first parent of the merge commit the run checks out (HEAD^1), which
+  # is its base as GitHub merged it: main, or the lower branch of a stack.
+  # The base is not named by its branch, origin/<base>: a stacked pull
+  # request's base branch is deleted when the lower one merges, and a
+  # re-run after that (for the label) would find no such branch.
   changelog:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -192,11 +211,10 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         PR: ${{ github.event.pull_request.number }}
-        BASE: ${{ github.event.pull_request.base.ref }}
         EVENT_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
       run: |
         labels=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" --jq '.[].name' 2>/dev/null) || labels=$EVENT_LABELS
-        sh toolchain/check-changelog.sh --pr "$PR" --base "origin/$BASE" --labels "$labels"
+        sh toolchain/check-changelog.sh --pr "$PR" --base 'HEAD^1' --labels "$labels"
 
   # What the run does and where, decided on a hosted runner for every run:
   # whether the build jobs need to run at all (on a push), and which runner
@@ -222,6 +240,8 @@ jobs:
     # fast-forwarded to their head (AGENTS.md), so the push is usually the
     # very commit the pull request's last run tested. The build jobs then
     # skip. Not asked for pull requests or by hand, where they always run.
+    # The merge of a stacked pull request other than the lowest is not
+    # found, and the full CI runs (see the top and the script).
     # Once the demo is deployed (the repository is public, see the deploy
     # job), the run found must also have kept the page it built, which the
     # deploy job takes from it: a run from before the page was kept, or
@@ -456,7 +476,15 @@ jobs:
     # checked out, built and copied aside, and the pull request's checked out
     # again for the Build step below. Only the sqlite job builds it, and
     # rehearses the upgrade on both databases: building it in the postgres
-    # job too cost that job two and a half minutes.
+    # job too cost that job two and a half minutes. The base is the commit
+    # the event names, whatever its branch: for a stacked pull request, the
+    # head of the branch below it, so that each pull request of a stack
+    # rehearses the upgrade from the one before. The upgrade from main to
+    # an upper pull request in one step is never rehearsed: its run is not
+    # repeated once it is retargeted to main, and a push to main rehearses
+    # nothing. Each step of it is rehearsed in its own pull request, and a
+    # deploy rehearses the upgrade it makes, from whatever it runs, before
+    # it touches the running wiki.
     - name: Build the base branch's wiki-server, for the rehearsal
       if: github.event_name == 'pull_request' && matrix.group == 'sqlite'
       run: |

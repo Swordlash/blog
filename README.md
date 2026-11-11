@@ -2728,8 +2728,8 @@ the store complete can wait for that with `sh toolchain/bootstrap.sh warm`.
 
 ## CI
 
-`.github/workflows/build.yml` runs three build jobs on every pull request to `main` and
-every push to it, in parallel after a first job, `plan` (below): `native` (build and
+`.github/workflows/build.yml` runs three build jobs on every pull request, whatever its
+base branch, and every push to `main`, in parallel after a first job, `plan` (below): `native` (build and
 test natively), `wasm` (build for wasm, run the test suites and the smoke test in
 headless Chromium, and keep the built page as the run's `app` artifact) and `format`
 (`npm run format-check`).
@@ -2800,6 +2800,12 @@ runs nothing. And on a push to `main`, the first job, `plan`
 commit, or of a merge commit's second parent with the same tree, and when there is one
 the three build jobs are skipped. Pull requests are rebased onto `main` and `main` is
 fast-forwarded to their head, so the push to `main` is normally that very commit.
+
+Pull requests stacked on one another's branches (`AGENTS.md`) are tested each merged
+into the branch below it, the rehearsal's old program being that branch's wiki-server.
+When the lower one merges, GitHub retargets the upper one to `main` without starting a
+run, so it keeps the checks its head passed and can be merged at once; its merge is
+never counted as tested on `main`, and the full CI runs there after it.
 
 ### Which runner, and who may run on it
 

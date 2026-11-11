@@ -4,7 +4,8 @@
 # repository of its own: one new entry with the pull request's number (ok),
 # a wrong number, pr: 0, none, two, an old entry edited well and badly, an
 # entry deleted, a number another entry has, a file that is not an entry,
-# the base moved on after the branch, and the label no-changelog. Then the
+# the base moved on after the branch, a pull request stacked on another's
+# branch, and the label no-changelog. Then the
 # grammar on entries of its own (well formed or not, each with the reason),
 # and every entry of this repository's changelog/.
 #
@@ -189,6 +190,28 @@ expect_ok 160
 git -C "$REPO" checkout -q -f main
 git -C "$REPO" reset -q --hard HEAD~1
 pass 'main moved on: only the pull request'"'"'s changes are checked'
+
+# A stacked pull request: upper is based on lower's branch, and each adds
+# its own entry. Against lower, only upper's entry is counted. Then as CI
+# checks it: the merge commit GitHub makes of upper into lower is checked
+# out, and the base is its first parent, HEAD^1, which still works once
+# lower's branch is deleted (a re-run after the lower one merged).
+branch lower
+entry 160 'Heading spoilers' >"$REPO/changelog/00160-heading-spoilers.md"
+commit 'the lower entry'
+git -C "$REPO" checkout -q -B upper
+entry 161 'Problems in the editor' >"$REPO/changelog/00161-editor-problems.md"
+commit 'the upper entry'
+(cd "$REPO" && sh "$CHECK" --pr 161 --base lower) >"$out" 2>&1 || fail 'the check refused a stacked pull request against the branch below it'
+assert_contains 'ok: changelog/00161-editor-problems.md, the entry of #161'
+git -C "$REPO" checkout -q --detach lower
+git -C "$REPO" merge -q --no-ff -m 'Merge upper into lower' upper
+git -C "$REPO" branch -q -D lower
+(cd "$REPO" && sh "$CHECK" --pr 161 --base 'HEAD^1') >"$out" 2>&1 || fail 'the check refused a stacked pull request against its merge commit'"'"'s first parent'
+assert_contains 'ok: changelog/00161-editor-problems.md, the entry of #161'
+git -C "$REPO" checkout -q -f main
+git -C "$REPO" branch -q -D upper
+pass 'a stacked pull request: only its own entry is counted, against the branch below it or HEAD^1'
 
 # The label no-changelog exempts it, given as CI gives labels (a line each,
 # or between commas), and only that label does.
