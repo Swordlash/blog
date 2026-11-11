@@ -131,14 +131,14 @@ These languages are highlighted, by the names a fence may give them (in any case
 | GraphQL | `graphql`, `gql` |
 | Groovy | `groovy`, `gradle` |
 | Haskell | `haskell`, `hs` |
-| HTML and XML | `html`, `xml`, `svg`, `xhtml` |
+| HTML and XML | `html` (with `{.norender}`), `xml`, `svg`, `xhtml` |
 | INI and TOML | `ini`, `toml` |
 | Java | `java`, `jsp` |
 | JavaScript | `javascript`, `js`, `jsx`, `mjs`, `cjs` |
 | JSON | `json` |
 | Julia | `julia`, `jl` |
 | Kotlin | `kotlin`, `kt`, `kts` |
-| LaTeX | `latex`, `tex` |
+| LaTeX | `latex` (with `{.norender}`), `tex` |
 | Lisp | `lisp`, `cl`, `common-lisp`, `elisp`, `el` |
 | Lua | `lua` |
 | Makefile | `makefile`, `make`, `mk` |
@@ -174,6 +174,12 @@ These languages are highlighted, by the names a fence may give them (in any case
 
 `m` is MATLAB; Objective-C is `objc`. COBOL, Fish, Zig and Scratch are not highlighted: highlight.js, which the wiki highlights with, has no grammar for them.
 
+Some fences are not listings: the wiki renders them. `html` is HTML in a frame (see HTML), `latex` and `math` are display math (see Math), `mermaid` a diagram and `tikz` a picture. The class `norender` keeps such a fence a listing of its language, highlighted as that language: ` ```html {.norender} `, or ` ```{.html .norender} `. A `math` fence kept this way is highlighted as `latex`. `norender` changes nothing on any other fence, and the page shows no class of a listing, this one included. A page written before the wiki rendered `html` and `latex` fences shows them rendered now; `{.norender}` after the language shows such a listing as it was.
+
+```latex {.norender}
+\frac{a}{b} % shown as TeX, not set
+```
+
 A long listing can be shown a few lines at a time: `rows=N` in braces after the fence's language (` ```haskell {rows=3} `, or ` ```{.haskell rows=3} `) makes the block that many lines high, and the rest of the code scrolls inside it. A value that is not a whole number above zero is ignored, and the block is as long as its code. The toolbar's code block button writes a fence without it.
 
 The class `numbered` puts a number before each line: ` ```haskell {.numbered} `, also with `rows` (` ```haskell {.numbered rows=3} `, or ` ```{.haskell .numbered rows=3} `). The numbers are in a margin beside the code, dimmed: they are not selected with the code, not copied by the **Copy** button, and not searched. In a listing that scrolls they scroll with the code. An export numbers the same listings in a PDF; a Word document shows the code without numbers.
@@ -203,11 +209,17 @@ LaTeX's own delimiters work too, and mean the same: inline math is between `\(` 
 
 So `\(` and `\[` start math rather than escaping a parenthesis or a bracket, as in pandoc. One that no `\)` or `\]` closes later in the same paragraph stays the escape it was, and `\\[` (an escaped backslash, then a bracket) is not math. A bracket needs no backslash in text, [like this]; in a link's text, where brackets have to pair, write a lone one as `&#91;` or `&#93;`.
 
-A `math` fence is display math too:
+A `math` fence is display math too, and so is a `latex` fence, exactly as `$$` is: the same macros, the same errors, the same export.
 
 ```math
 \sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}
 ```
+
+```latex
+\binom{n}{k} = \frac{n!}{k!\,(n-k)!}
+```
+
+A `tex` fence stays a listing of TeX, and either fence with `{.norender}` is one too (see Code).
 
 ### What KaTeX sets
 
@@ -478,6 +490,27 @@ Among the text of a paragraph only formatting, links and media count: a paragrap
 The attributes: `class`, `id` and `title` on any element, and where they mean something `href` (`a`), `src` (`img`, `video`, `audio`, `source`), `alt` (`img`), `width` and `height` in pixels (`img`, `video`; `width` on tables and cells too), `colspan` and `rowspan` (cells), `open` (`details`), `controls` (`video`, `audio`), `poster` (`video`) and `start` (`ol`). Every other attribute is left out: no `style`, and no `onclick` or other event handler.
 
 An address in `href`, `src` or `poster` is a URL starting with `http:` or `https:` (or `mailto:`, for a link), or a path. A path is read as in a Markdown link, and failing that as the name of one of the page's attachments, so `<img src="team.jpg">` shows the attachment `team.jpg`; a source is looked for among the attachments first. `attachment:name` works as in Markdown. Any other address, such as `javascript:` or `data:`, is left out, and a link that leads nowhere is shown as broken.
+
+### HTML with its own styles
+
+HTML in a page has no styles of its own: a `style` could restyle the wiki around it, or imitate it. An `html` fence may have them. It is shown in a frame of its own, as wide as the text, as high as what it holds (but no higher than most of the window: a longer block scrolls inside), with no border and the page's background, so its styles reach nothing outside the frame:
+
+```html
+<style>
+  .card { border: 2px solid; border-radius: 8px; padding: 0 1em; }
+  .card h3 { margin-top: 0.5em; }
+</style>
+<div class="card">
+  <h3>A card</h3>
+  <p style="font-style: italic">Styled by its own CSS, with the wiki's <span class="c-red">red</span> and <mark class="h-yellow">yellow</mark>.</p>
+</div>
+```
+
+The frame holds the wiki's stylesheet, in the page's colour scheme, so the wiki's classes (the colours above, a table's look, a box's) work as in the page, and the block's own rules come after it and win over the wiki's. What the block may hold is what HTML in a page may hold, with two more things: a `style` attribute on any element, and `<style>` elements. Everything else is left out as in a page: no `script`, no event handler (`onclick` and the rest), no `iframe`, `object`, `embed` or `svg`, no `form` (its content is kept, without the fields), no `meta`, `base` or `link`, and no `javascript:` or `data:` address. The frame is sandboxed besides, so nothing in it could run even if it were there.
+
+Addresses are read as in the page: `attachment:name`, a path to a page, a page's attachment. A link opens in a new tab, since the frame cannot show another page; a link to a place in the page (`#intro`) has nowhere to lead from the frame, and shows its text alone. A link in the block is not one of the page's links: it does not make a backlink.
+
+The block's text is searched as the page's is, without its tags and its CSS. A comment cannot quote what is inside the frame. A feed shows the block's source as a listing, since a feed reader has no frame to keep its styles in. An export shows its HTML as it shows HTML in a page, without the block's styles.
 
 ## Comments
 

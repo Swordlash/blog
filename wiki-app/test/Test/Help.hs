@@ -35,15 +35,17 @@ spec = describe "Wiki.App.Help" $ do
   it "takes every section it names from the Markdown guide, none of them empty" $ do
     let sections = helpSections [exerciseBox]
     map (\s -> s.title) sections
-      `shouldBe` ["Lists", "Tasks", "Tables", "Emoji", "Code", "Mathematics", "Diagrams", "Pictures", "Notes and boxes", "This wiki's kinds of box"]
+      `shouldBe` ["Lists", "Tasks", "Tables", "Emoji", "Code", "Mathematics", "Diagrams", "Pictures", "HTML with its own styles", "Notes and boxes", "This wiki's kinds of box"]
     for_ sections $ \s -> (s.title, T.null (T.strip s.body)) `shouldBe` (s.title, False)
 
-  it "has every section parse, the emoji shown, the diagrams and pictures as fences, and the five kinds of box" $ do
+  it "has every section parse, the emoji shown, the diagrams, pictures and HTML as fences, and the five kinds of box" $ do
     let sections = helpSections []
         body t = maybe "" (\s -> s.body) (find (\s -> s.title == t) sections)
     for_ sections $ \s -> (s.title, isRight (parseMarkdown s.body)) `shouldBe` (s.title, True)
     body "Diagrams" `shouldSatisfy` T.isInfixOf "```mermaid"
     body "Pictures" `shouldSatisfy` T.isInfixOf "```tikz"
+    body "HTML with its own styles" `shouldSatisfy` T.isInfixOf "```html\n<style>"
+    body "HTML with its own styles" `shouldSatisfy` T.isInfixOf "```html {.norender}"
     -- The section on emoji shows its example as an emoji, not as text.
     body "Emoji" `shouldSatisfy` T.isInfixOf "`:tada:`"
     (emojiNames <$> parseMarkdown (body "Emoji")) `shouldSatisfy` either (const False) (elem "tada")

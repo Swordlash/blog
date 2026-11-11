@@ -26,7 +26,7 @@ spec = describe "docs/markdown.md" $ do
   it "parses into every kind of block it describes" $ do
     doc <- either (panic . show) identity . parseMarkdown <$> readGuide
     let kinds = map kind (universe doc)
-    for_ ["heading", "para", "list", "task", "quote", "break", "code", "mermaid", "tikz", "math", "table", "footnotes", "alert", "div", "spoiler"] $ \k ->
+    for_ ["heading", "para", "list", "task", "quote", "break", "code", "mermaid", "tikz", "math", "html", "table", "footnotes", "alert", "div", "spoiler"] $ \k ->
       (k, k `elem` kinds) `shouldBe` (k, True)
 
   it "renders, with the constructs it shows" $ do
@@ -52,6 +52,9 @@ spec = describe "docs/markdown.md" $ do
       , "<td><span class=\"math inline\">\\abs{x}</span>, <span class=\"math inline\">\\norm{x}</span></td>"
       , "<div class=\"math display\">\n\\newcommand{\\dist}[2]{d\\left(#1, #2\\right)}"
       , "<pre class=\"mermaid\">graph LR"
+      , "<div class=\"math display\">\\binom{n}{k}"
+      , "<pre><code class=\"language-latex\">\\frac{a}{b} % shown as TeX, not set"
+      , "<pre><code class=\"language-html\">&lt;style&gt;\n  .card {"
       , "<pre class=\"tikz\">\\draw[-&gt;] (0,0) -- (2,0) node[right] {$x$};"
       , "<th style=\"text-align: center\">Syntax</th>"
       , "<input checked disabled type=\"checkbox\"> write the page"
