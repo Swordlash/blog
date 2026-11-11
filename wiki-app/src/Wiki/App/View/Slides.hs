@@ -1,8 +1,10 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
--- | The slides view: a page presented as slides ("Wiki.Core.Slides"), for
--- anyone who may read the page. It shows one slide at a time over the
+-- | The slides view: a presentation ("Wiki.Core.PageKind") presented as
+-- slides ("Wiki.Core.Slides"), for anyone who may read the page. A
+-- document's address here shows a note that it is a document, with a
+-- link to it: the kind decides how a page is shown. It shows one slide at a time over the
 -- whole window, or full screen, with the speaker's notes below it on
 -- request, an overview of every slide, and a print stylesheet that puts
 -- each slide on its own page, so that the browser's "Save as PDF" turns
@@ -94,7 +96,8 @@ import Wiki.App.Route (Route (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.Core.Markdown (parseMarkdown)
-import Wiki.Core.Page (Page (attachments, body, title), PageSummary)
+import Wiki.Core.Page (Page (attachments, body, kind, title), PageSummary)
+import Wiki.Core.PageKind (isPresentation)
 import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), RenderedSlide (..), Slide (..), SlideTitle (..), deckOf, showingStep, themeName)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
@@ -117,6 +120,9 @@ type Slots = Body.IslandSlots
 data Loaded
   = Loading
   | Failed WikiError
+  | -- | The page is a document, which is not presented
+    -- ("Wiki.Core.PageKind"): the view says so, with a link to it.
+    NotPresentation Page
   | -- | The page, the URL of each of its attachments, the page as slides,
     -- and the people it mentions ("Wiki.App.View.Body").
     Ready Page Body.Addresses Deck (Map Text Author)
@@ -211,6 +217,13 @@ component =
     render st = case st.loaded of
       Loading -> [hh|<p class="loading">Loading…</p>|]
       Failed e -> failureView e Retry
+      NotPresentation page ->
+        [hh|
+          <div class="slides-not-presentation" role="note">
+            <p>“{{ page.title }}” is a document, not a presentation, so it is not shown as slides.</p>
+            {{ back st.input }}
+          </div>
+        |]
       Ready page addresses deck people ->
         let place = Body.Place {context = st.input.context, space = st.input.space, pages = st.input.pages, path = st.input.path, attachments = page.attachments, urls = addresses.urls, downloads = addresses.downloads, frames = addresses.frames, people}
             count = length deck.slides
@@ -537,6 +550,8 @@ fetch :: (MonadWiki n, MonadNotifications n) => UrlOwner -> Input -> n Loaded
 fetch owner input =
   getPage input.space.id input.path >>= \case
     Left e -> pure (Failed e)
+    Right page
+      | not (isPresentation page.kind) -> pure (NotPresentation page)
     Right page -> do
       addresses <- Body.attachmentAddresses owner page.attachments
       people <- Body.askPeople (Body.unasked Body.noPeople [page.body])

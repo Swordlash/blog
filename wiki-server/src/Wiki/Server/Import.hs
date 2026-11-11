@@ -440,6 +440,10 @@ importPage blobs a discussions choices spacePath target progress pm
           let replaced = savedAs time pm.archived.title pm.archived.body theirs
           updatePageText theirs.id replaced.title replaced.body replaced.updatedAt
           insertVersion replaced Nothing
+          -- The imported page's kind comes with its text, except on a
+          -- space's home page, which is a document.
+          home <- (>>= (\s -> s.homePage)) . Map.lookup target <$> loadSpaces
+          when (home /= Just theirs.id) (setPageKindRow theirs.id pm.archived.kind)
           deleteAttachmentsOf theirs.id
           n <- attach blobs a theirs.id pm.archived.attachments
           said <- discuss theirs.id (Map.findWithDefault [] pm.archived.id discussions)
@@ -467,6 +471,7 @@ importPage blobs a discussions choices spacePath target progress pm
               , updatedAt = pm.archived.updatedAt
               , position = maybe 0 ((+ 1) . maximum) (nonEmpty (map (\x -> x.position) siblings))
               , template = pm.archived.template
+              , kind = pm.archived.kind
               , createdBy = Nothing
               , updatedBy = Nothing
               }

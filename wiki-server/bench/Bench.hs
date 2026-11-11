@@ -68,6 +68,7 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug, mkSlug)
@@ -300,6 +301,7 @@ pageOf space now i =
     , updatedAt = addUTCTime (fromIntegral i) now
     , position = i
     , template = False
+    , kind = Kind.Document
     , createdBy = Nothing
     , updatedBy = Nothing
     }

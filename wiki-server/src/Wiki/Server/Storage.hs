@@ -269,6 +269,7 @@ import Wiki.Core.Markdown.Frame (framesInteractively)
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder, savedAs)
+import Wiki.Core.PageKind (PageKind (..), knownKinds, pageKindName)
 import Wiki.Core.Path (NodeId, TreeNode, ancestry, childrenOf, findChild, resolvePath, resolveUnderM)
 import Wiki.Core.Permission
   ( GlobalGrant (..)
@@ -1536,10 +1537,12 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
   getPage sid = run Reads . (withWriters <=< getPageTx sid)
   pageLocation = run Reads . pageLocationTx
   pageBacklinks = run Reads . backlinksTx
-  createPage sid parent title = run Writes . (withWriters <=< createPageTx sid parent title)
+  createPage sid parent title = run Writes . (withWriters <=< createPageTx Document sid parent title)
+  createPageOf kind sid parent title = run Writes . (withWriters <=< createPageTx kind sid parent title)
   savePage pid base title = saving . (withWriters <=< savePageTx pid base title)
   movePage pid sid = run Writes . (withWriters <=< movePageTx pid sid)
   setPageTemplate pid = run Writes . (withWriters <=< setPageTemplateTx pid)
+  setPageKind pid = run Writes . (withWriters <=< setPageKindTx pid)
   deletePage = run Writes . deletePageTx
   uploadAttachment pid name mediaType bytes = run Writes (uploadAttachmentTx pid name mediaType (fromIntegral (BS.length bytes)) (`storeBlob` bytes))
   deleteAttachment = run Writes . deleteAttachmentTx
@@ -2820,11 +2823,12 @@ shiftPageTx pid how = do
 --------------------------------------------------------------------------------
 -- Pages
 
--- | A new page. With no parent, it goes under the space's home page
--- ('Wiki.Core.Space.parentOrRoot'), since nothing but the home page has
--- no parent.
-createPageTx :: SpaceId -> Maybe PageId -> Text -> Text -> Tx Page
-createPageTx sid asked title body = do
+-- | A new page of a kind. With no parent, it goes under the space's home
+-- page ('Wiki.Core.Space.parentOrRoot'), since nothing but the home page
+-- has no parent. Only a kind this program knows can be chosen.
+createPageTx :: PageKind -> SpaceId -> Maybe PageId -> Text -> Text -> Tx Page
+createPageTx kind sid asked title body = do
+  requireKnownKind kind
   (s, c) <- findSpace sid
   let parent = parentOrRoot s asked
   parentPage <- traverse findNode parent
@@ -2850,6 +2854,7 @@ createPageTx sid asked title body = do
           , updatedAt = time
           , position = nextPosition (childrenOf nodes parent)
           , template = False
+          , kind
           , createdBy = Nothing
           , updatedBy = Nothing
           }
@@ -2946,6 +2951,30 @@ setPageTemplateTx pid template = do
     invalid "A space's home page cannot be a template."
   db (setPageTemplateRow pid template)
   findPage pid
+
+-- | Give a page a kind ("Wiki.Core.PageKind"). Not a save, as for a
+-- template: nothing else of the page changes, and no version is kept. A
+-- space's home page is a document, since it opens the space. An encrypted
+-- space's pages may be presentations: the kind is in the clear, and the
+-- slides are made from the text in the reader's browser.
+setPageKindTx :: PageId -> PageKind -> Tx Page
+setPageKindTx pid kind = do
+  requireKnownKind kind
+  p <- findNode pid
+  (s, c) <- findSpace p.space
+  requireEdit c
+  requireOrdinary p.space
+  when (kind /= Document && s.homePage == Just pid) $
+    invalid "A space's home page is a document."
+  db (setPageKindRow pid kind)
+  findPage pid
+
+-- | Refuse a kind this program does not know: a page is made, or made
+-- into, a document or a presentation only.
+requireKnownKind :: PageKind -> Tx ()
+requireKnownKind kind =
+  unless (kind `elem` knownKinds) $
+    invalid ("A page is a document or a presentation, not “" <> pageKindName kind <> "”.")
 
 -- | Delete a page: the pages under it, and the versions, attachments and
 -- drafts of all of them, go with it, as the schema's foreign keys cascade.
@@ -3622,6 +3651,7 @@ createSealedPageTx sid new = do
           , updatedAt = time
           , position = nextPosition (childrenOf nodes parent)
           , template = False
+          , kind = Document
           , createdBy = Nothing
           , updatedBy = Nothing
           }

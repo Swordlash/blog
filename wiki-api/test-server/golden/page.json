@@ -22,6 +22,7 @@
     "name": "Bea"
   },
   "id": "p1",
+  "kind": "document",
   "parent": null,
   "position": 2,
   "slug": "tour",

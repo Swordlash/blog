@@ -42,7 +42,7 @@ spaces/<slug>/spaces/<slug>/…                subspaces, the same shape, to any
 | `audit.json`             | `[{"id", "at", "actor": {"id", "login"}, "action", "subject": {"kind", "id", "name"}, "detail", "address"}]`, the audit log, oldest first |
 | `space.json`             | `{"id", "name", "slug", "public", "createdAt", "mathMacros", "position", "subspaceOrder", "pageOrder", "homePage", "icon", "description", "blog"}`, from `mathMacros` on only when they are not the default |
 | `icon.<ext>`             | the image a space is pictured with, as its `icon`'s `file` names it; the extension is the image's type (`png`, `jpg`, `gif`, `webp`, `avif`) |
-| `page.json`              | `{"id", "title", "slug", "createdAt", "updatedAt", "position", "template", "attachments": [attachment]}`, `position` only when it is not 0 and `template` only when true |
+| `page.json`              | `{"id", "title", "slug", "createdAt", "updatedAt", "position", "template", "kind", "attachments": [attachment]}`, `position` only when it is not 0, `template` only when true and `kind` only when it is not `"document"` |
 | an attachment            | `{"id", "name", "mediaType", "size", "url"}` for a file on the web, `{…, "blob", "file"}` for one whose bytes the wiki keeps, in `page.json`'s `attachments`, in the page's order |
 | `page.md`                | the page's body, its Markdown byte for byte, in UTF-8, with nothing added |
 | `attachments/<name>`     | an attachment's bytes, as its record's `file` names them |
@@ -234,7 +234,9 @@ page.
   (missing: false). Each is written only when it is not the default, so
   the record of a space without them is what it was before. A page's
   `template` (whether it is one of its space's templates; missing: false)
-  is another.
+  is another, and so is its `kind` (`"presentation"` for a page presented
+  as slides; missing: `"document"`). A kind the reader does not know is
+  kept as written and shown as a document.
 - **Anything else bumps `formatVersion`**: a field or a file removed,
   renamed or moved, or one whose meaning changes. The reader brings an
   archive of every older version to the current one, a version at a time

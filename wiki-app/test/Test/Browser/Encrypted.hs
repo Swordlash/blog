@@ -81,6 +81,7 @@ import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
@@ -1036,6 +1037,7 @@ plainPage =
     , updatedAt = demoNow
     , position = 0
     , template = False
+    , kind = Kind.Document
     , createdBy = Nothing
     , updatedBy = Nothing
     }

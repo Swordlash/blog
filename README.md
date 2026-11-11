@@ -393,7 +393,8 @@ full.
 
 ## Presentations
 
-Any page can be a slide deck, and is an ordinary page all the same. This is the
+A presentation is a kind of page, chosen under **New page** beside a
+document, and its text is Markdown all the same. This is the
 demo's [Presentations](https://swordlash.github.io/blog/s/docs/p/markdown-guide/presentations/),
 whole:
 
@@ -402,7 +403,7 @@ whole:
 
 [[!slides]]{theme=beamer aspect=16:9}
 
-Any page can be a slide deck. Press **Present** above the page: this one is a deck, and its slides tell you how it is written.
+A presentation is a kind of page: **New page** offers it beside a document. Press **Present** above the page: this one is a presentation, and its slides tell you how it is written.
 
 [[!notes]]
 These are the speaker's notes: on the page they are a box like this one; on the slides they are hidden until you press **n**.
@@ -418,7 +419,7 @@ These are the speaker's notes: on the page they are a box like this one; on the 
 - Everything a page shows, a slide shows: tables, code, formulas, diagrams.
 
 [[!notes]]
-Mention that a page with no `---` is one slide, and is not offered as a deck.
+Mention that a presentation with no `---` is one slide.
 [[/notes]]
 
 ---

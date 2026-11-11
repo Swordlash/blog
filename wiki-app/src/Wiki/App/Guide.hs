@@ -44,6 +44,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (markerAt)
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.Url (Url (..))
@@ -59,17 +60,17 @@ data Tour = DemoTour | ServerTour
 -- tour's page, for the space's home page.
 insertGuide :: Tour -> SpaceId -> (NominalDiffTime -> UTCTime) -> State MemState PageId
 insertGuide which sid ago = do
-  tourPage <- page Nothing "Tour" 1 (case which of DemoTour -> demoTour; ServerTour -> serverTour)
-  guide <- page Nothing "Markdown guide" 2 markdownGuide
+  tourPage <- page Document Nothing "Tour" 1 (case which of DemoTour -> demoTour; ServerTour -> serverTour)
+  guide <- page Document Nothing "Markdown guide" 2 markdownGuide
   modify (fst . attachBytes guide (FileName "tree.png") (MimeType "image/png") treePng)
   modify (fst . attachUrl guide (FileName "earth.jpg") (MimeType "image/jpeg") 267290 (Url earthUrl))
-  _ <- page (Just guide) "Diagrams" 3 diagrams
-  _ <- page (Just guide) "Mathematics" 3 mathematics
-  _ <- page (Just guide) "Presentations" 2 presentations
+  _ <- page Document (Just guide) "Diagrams" 3 diagrams
+  _ <- page Document (Just guide) "Mathematics" 3 mathematics
+  _ <- page Presentation (Just guide) "Presentations" 2 presentations
   pure tourPage
   where
-    page parent title daysAgo body = state $ \st ->
-      let (st', p) = insertPage sid parent title (T.unlines (unwrapped body)) (ago daysAgo) st in (p.id, st')
+    page kind parent title daysAgo body = state $ \st ->
+      let (st', p) = insertPageOf kind sid parent title (T.unlines (unwrapped body)) (ago daysAgo) st in (p.id, st')
 
 -- | The name of the space a server keeps the guide in.
 guideSpaceName :: Text
@@ -230,8 +231,8 @@ demoTour =
   , "it for the reason. The count beside **Save**, such as *2 problems*,"
   , "goes to the next one at each click."
   , ""
-  , "A space's **New page**, and a page's **New subpage**, start a page from"
-  , "nothing."
+  , "A space's **New page**, and a page's **New subpage**, make a document or"
+  , "a presentation, blank or from a template."
   , ""
   , "## Being told"
   , ""
@@ -861,15 +862,17 @@ markdownGuide =
   , "    address, as a browser reads a relative link."
   ]
 
--- | A page written as slides ("Wiki.Core.Slides"), which says how.
+-- | A presentation ("Wiki.Core.PageKind"), presented as slides
+-- ("Wiki.Core.Slides"), which says how.
 presentations :: [Text]
 presentations =
   [ "# Presentations"
   , ""
   , "[[!slides]]{theme=beamer aspect=16:9}"
   , ""
-  , "Any page can be a slide deck. Press **Present** above the page: this one is"
-  , "a deck, and its slides tell you how it is written."
+  , "A presentation is a kind of page: **New page** offers it beside a document."
+  , "Press **Present** above the page: this one is a presentation, and its slides"
+  , "tell you how it is written."
   , ""
   , "[[!notes]]"
   , "These are the speaker's notes: on the page they are a box like this one;"
@@ -888,8 +891,7 @@ presentations =
   , "- Everything a page shows, a slide shows: tables, code, formulas, diagrams."
   , ""
   , "[[!notes]]"
-  , "Mention that a page with no `---` is one slide, and is not offered as a"
-  , "deck."
+  , "Mention that a presentation with no `---` is one slide."
   , "[[/notes]]"
   , ""
   , "---"

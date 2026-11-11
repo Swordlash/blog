@@ -39,6 +39,7 @@ import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Children (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), isHomeBody, withHome, withProfile)
@@ -106,7 +107,11 @@ page i s parent sl body = pageWith i s parent sl body 0 []
 
 -- | A page of an archive, with its position and its attachments.
 pageWith :: Text -> Text -> Maybe Text -> Text -> Text -> Int -> [Attachment] -> Page
-pageWith i s parent sl body position attachments =
+pageWith = pageOfKind Kind.Document
+
+-- | 'pageWith' for a page of a kind.
+pageOfKind :: Kind.PageKind -> Text -> Text -> Maybe Text -> Text -> Text -> Int -> [Attachment] -> Page
+pageOfKind kind i s parent sl body position attachments =
   Page
     { id = PageId i
     , space = SpaceId s
@@ -119,6 +124,7 @@ pageWith i s parent sl body position attachments =
     , updatedAt = time
     , position
     , template = False
+    , kind
     , createdBy = Nothing
     , updatedBy = Nothing
     }
@@ -175,7 +181,7 @@ makeSpace :: Running -> Text -> IO Space
 makeSpace r s = sendJson r methodPost (admin r links.spaces.create) NewSpace {parent = Nothing, name = s} >>= jsonAs 201
 
 makePage :: Running -> Space -> Text -> Text -> IO Page
-makePage r s title body = sendJson r methodPost (admin r (links.spaces.createPage s.id)) NewPage {parent = Nothing, title, body} >>= jsonAs 201
+makePage r s title body = sendJson r methodPost (admin r (links.spaces.createPage s.id)) NewPage {parent = Nothing, title, body, kind = Kind.Document} >>= jsonAs 201
 
 -- | The docs of the tests: a space with a subspace, a page with one under
 -- it, the first with a picture.
@@ -283,7 +289,7 @@ merging backing = describe "a space at the same path" $ do
     let theirs =
           archive
             [spaceWith "s1" Nothing "docs" False "\\R: \\mathbb{R}" NewestFirst ByHand]
-            [pageWith "p1" "s1" Nothing "tour" "Tour." 1 [], pageWith "p2" "s1" Nothing "guide" "Guide." 0 []]
+            [pageWith "p1" "s1" Nothing "tour" "Tour." 1 [], pageOfKind Kind.Presentation "p2" "s1" Nothing "guide" "Guide." 0 []]
     plan <- preview r theirs
     [(s.status, map (\p -> p.conflict) s.pages) | s <- plan.spaces] `shouldBe` [(SpaceMerged, [Nothing, Nothing])]
     apply r theirs importEverything `shouldReturn` summary {spacesMerged = 1, pagesCreated = 2}
@@ -292,6 +298,8 @@ merging backing = describe "a space at the same path" $ do
     pages <- ok200 (getUrl r (admin r (links.spaces.listPages ours.id)))
     -- The space's home page first, made with it.
     [(p.title, p.position) | (p :: PageSummary) <- pages] `shouldBe` [("Home", 0), ("Intro", intro.position), ("Title of guide", intro.position + 1), ("Title of tour", intro.position + 2)]
+    -- Each page of the archive with its kind.
+    [(p.title, p.kind) | (p :: PageSummary) <- pages, "Title of" `T.isPrefixOf` p.title] `shouldBe` [("Title of guide", Kind.Presentation), ("Title of tour", Kind.Document)]
 
   it "keeps the server's math macros when it has some" $ withRunning backing $ \r -> do
     ours <- makeSpace r "docs"

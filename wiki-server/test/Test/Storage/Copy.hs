@@ -384,6 +384,7 @@ everyTable = do
         , updated_at = time 1
         , position = 0
         , template = slug == "late"
+        , kind = if slug == "late" then "presentation" else "document"
         , search_text = "Page " <> slug
         , search_fold = "page " <> slug
         }

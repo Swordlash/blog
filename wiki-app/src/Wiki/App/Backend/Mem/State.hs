@@ -37,6 +37,7 @@ module Wiki.App.Backend.Mem.State
   , giveHomePage
   , ensureHomePages
   , insertPage
+  , insertPageOf
   , attachBytes
   , attachUrl
 
@@ -80,7 +81,9 @@ module Wiki.App.Backend.Mem.State
   , shiftSpaceIn
   , shiftPageIn
   , setPageTemplateIn
+  , setPageKindIn
   , createPageIn
+  , createPageOfIn
   , savePageIn
   , movePageIn
   , deletePageIn
@@ -213,6 +216,7 @@ import Wiki.Core.Notification (Happened (..), MailMode, Mark, Notification (Noti
 import Wiki.Core.Notification qualified as Notice
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), PageSummary, childPages, pageTreeOrder, positionPage, summaryOf)
+import Wiki.Core.PageKind (PageKind (..), knownKinds, pageKindName)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, resolvePath)
 import Wiki.Core.Permission
   ( GlobalGrant (GlobalGrant)
@@ -663,7 +667,11 @@ placePages siblings st = st {pages = Map.mapWithKey (\k p -> maybe p (`positionP
 -- ('Wiki.Core.Space.parentOrRoot'): the demo's content, made before its
 -- spaces have their home pages, is rooted afterwards ('ensureHomePages').
 insertPage :: SpaceId -> Maybe PageId -> Text -> Text -> UTCTime -> MemState -> (MemState, Page)
-insertPage space asked title body now st0 =
+insertPage = insertPageOf Document
+
+-- | 'insertPage' for a page of a kind ("Wiki.Core.PageKind").
+insertPageOf :: PageKind -> SpaceId -> Maybe PageId -> Text -> Text -> UTCTime -> MemState -> (MemState, Page)
+insertPageOf kind space asked title body now st0 =
   let (i, st) = newId "page" st0
       parent = maybe asked (`Space.parentOrRoot` asked) (Map.lookup space st.spaces)
       base = fromMaybe (fallbackSlug "page") (slugify title)
@@ -681,6 +689,7 @@ insertPage space asked title body now st0 =
           , updatedAt = now
           , position = nextPosition (childrenOf (pagesOf space st) parent)
           , template = False
+          , kind
           , createdBy = Nothing
           , updatedBy = Nothing
           }
@@ -867,6 +876,7 @@ repage space parent slug position p =
     , updatedAt = p.updatedAt
     , position
     , template = p.template
+    , kind = p.kind
     , createdBy = Nothing
     , updatedBy = Nothing
     }
@@ -1389,10 +1399,32 @@ setPageTemplateIn pid template st = do
   let p' = p {template}
   pure (st {pages = Map.insert pid p' st.pages}, p')
 
--- | Create a page. A page with no parent goes under the space's home page
--- ('Wiki.Core.Space.parentOrRoot').
+-- | Make a page a document or a presentation, as someone who edits its
+-- space. Not a save: nothing else of the page changes. A space's home
+-- page is a document, and only a kind this program knows is taken.
+setPageKindIn :: PageId -> PageKind -> Write Page
+setPageKindIn pid kind st = do
+  unless (kind `elem` knownKinds) $
+    Left (Invalid ("A page is a document or a presentation, not “" <> pageKindName kind <> "”."))
+  p <- findPage st pid
+  (s, c) <- findSpace st p.space
+  requireEdit st c
+  requireOrdinary st p.space
+  when (kind /= Document && s.homePage == Just pid) $
+    Left (Invalid "A space's home page is a document.")
+  let p' = p {kind}
+  pure (st {pages = Map.insert pid p' st.pages}, p')
+
+-- | Create a page, a document. A page with no parent goes under the
+-- space's home page ('Wiki.Core.Space.parentOrRoot').
 createPageIn :: SpaceId -> Maybe PageId -> Text -> Text -> UTCTime -> Write Page
-createPageIn sid asked title body now st = do
+createPageIn = createPageOfIn Document
+
+-- | 'createPageIn' for a page of a kind, which this program knows.
+createPageOfIn :: PageKind -> SpaceId -> Maybe PageId -> Text -> Text -> UTCTime -> Write Page
+createPageOfIn kind sid asked title body now st = do
+  unless (kind `elem` knownKinds) $
+    Left (Invalid ("A page is a document or a presentation, not “" <> pageKindName kind <> "”."))
   (s, c) <- findSpace st sid
   let parent = Space.parentOrRoot s asked
   parentPage <- traverse (findPage st) parent
@@ -1401,7 +1433,7 @@ createPageIn sid asked title body now st = do
   when (any (\p -> p.space /= sid) parentPage) $
     Left (Invalid "A page's parent has to be in the same space.")
   t <- nonBlank "A page's title" title
-  let (st', page) = insertPage sid parent t body now st
+  let (st', page) = insertPageOf kind sid parent t body now st
   -- Its first version is its creator's. Creating a page counts as a save:
   -- the people it mentions, and whoever watches its space, are notified.
   pure (tell now page Nothing "" PageSaved (newlyMentioned "" body) (recordVersion (currentUserId st) page st'), page)

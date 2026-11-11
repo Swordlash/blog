@@ -476,7 +476,8 @@ data SpacesApi form mode = SpacesApi
   -- so it changes only compatibly.
   , createPage :: mode :- Capture "space" SpaceId :> "pages" :> ReqBody '[JSON] NewPage :> PostCreated '[JSON] (Versioned Page)
   -- ^ @createPage@. CI seeds the wiki it rehearses with it
-  -- (@toolchain/rehearse-ci.sh@), with a @parent@, a @title@ and a @body@.
+  -- (@toolchain/rehearse-ci.sh@), with a @parent@, a @title@ and a @body@;
+  -- the @kind@ is optional, and a document without it.
   -- Stable for the upgrade's rehearsal: a later version's rehearsal drives
   -- this through the old program (wiki-server's "Wiki.Server.Rehearsal"),
   -- so it changes only compatibly.
@@ -510,6 +511,9 @@ data PagesApi form mode = PagesApi
   -- ^ @shiftPage@.
   , template :: mode :- Capture "page" PageId :> "template" :> ReqBody '[JSON] PageTemplate :> Put '[JSON] Page
   -- ^ @setPageTemplate@: whether the page is one of its space's templates.
+  , kind :: mode :- Capture "page" PageId :> "kind" :> ReqBody '[JSON] PageKindChange :> Put '[JSON] Page
+  -- ^ @setPageKind@: whether the page is a document or a presentation
+  -- (@{"kind": "presentation"}@).
   , delete :: mode :- Capture "page" PageId :> DeleteNoContent
   -- ^ @deletePage@.
   , upload :: mode :- Capture "page" PageId :> "attachments" :> MultipartForm form (AttachmentUpload form) :> PostCreated '[JSON] Attachment

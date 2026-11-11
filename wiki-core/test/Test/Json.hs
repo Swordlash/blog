@@ -11,6 +11,8 @@ import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Gen, Property, forAll, (===))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
+import Wiki.Core.Page (Page (kind), PageSummary (kind))
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Permission
 import Wiki.Core.Search
 import Wiki.Core.Slug
@@ -34,6 +36,7 @@ spec = describe "JSON" $ do
     prop "Attachment" $ roundTrips genAttachment
     prop "Space" $ roundTrips genSpace
     prop "Page" $ roundTrips genPage
+    prop "PageKind" $ roundTrips genPageKind
     prop "User" $ roundTrips genUser
     prop "Group" $ roundTrips genGroup
     prop "Membership" $ roundTrips genMembership
@@ -82,6 +85,26 @@ spec = describe "JSON" $ do
     it "with a permission as its name" $
       toJSON [View, Edit, AdministerSpace] `shouldBe` toJSON ["View", "Edit", "AdministerSpace" :: Text]
 
+  describe "a page's kind" $ do
+    it "is written as its name" $
+      toJSON [Document, Presentation, OtherKind "calendar"] `shouldBe` toJSON ["document", "presentation", "calendar" :: Text]
+    it "reads a page written before kinds existed as a document" $
+      ((\p -> p.kind) <$> (eitherDecode pageWithoutKind :: Either [Char] Page)) `shouldBe` Right Document
+    it "reads a summary written before kinds existed as a document" $
+      ((\p -> p.kind) <$> (eitherDecode summaryWithoutKind :: Either [Char] PageSummary)) `shouldBe` Right Document
+    it "keeps a kind it does not know as written" $
+      eitherDecode "\"calendar\"" `shouldBe` Right (OtherKind "calendar")
+
   it "refuses a space whose slug breaks the rules" $
     (eitherDecode "{\"id\":\"s1\",\"name\":\"E\",\"slug\":\"Not a slug\",\"parent\":null,\"public\":false}" :: Either [Char] Space)
       `shouldSatisfy` isLeft
+
+-- | A page as the API wrote it before pages had a kind.
+pageWithoutKind :: LByteString
+pageWithoutKind =
+  "{\"id\":\"p1\",\"space\":\"s1\",\"parent\":null,\"title\":\"T\",\"slug\":\"t\",\"body\":\"\",\"attachments\":[],\"createdAt\":\"2026-01-02T00:00:00Z\",\"updatedAt\":\"2026-01-02T00:00:00Z\",\"position\":0,\"template\":false}"
+
+-- | A page's summary as the API wrote it before pages had a kind.
+summaryWithoutKind :: LByteString
+summaryWithoutKind =
+  "{\"id\":\"p1\",\"space\":\"s1\",\"parent\":null,\"title\":\"T\",\"slug\":\"t\",\"createdAt\":\"2026-01-02T00:00:00Z\",\"updatedAt\":\"2026-01-02T00:00:00Z\",\"position\":0,\"template\":false}"

@@ -1,16 +1,20 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The form for a new page: its title, and what it starts from, under the
--- page the route names or at the space's top level. Creating it creates
+-- | The form for a new page: its title, its kind, and what it starts from,
+-- under the page the route names or at the space's top level. Creating it creates
 -- the page at once, with its body, and opens the editor on it, so that the
 -- page has an id from the start: files can be attached to it before
 -- anything is written, and the editor only ever saves a page that exists.
 -- A page created and then left without a word written stays, empty; it is
 -- deleted with the page's Delete, as any other page is.
 --
--- A page starts blank, or from a template ("Wiki.Core.Template"): one of
--- the space's own (its pages marked 'Wiki.Core.Page.template'), or one
--- built into the wiki (meeting notes, a decision record, a how-to guide). A
+-- A page is a document or a presentation ("Wiki.Core.PageKind"), chosen
+-- first: the two kinds are the form's first choice (the owner, issue
+-- #191). Then it starts blank, or from a template of that kind
+-- ("Wiki.Core.Template"): one of the space's own (its pages marked
+-- 'Wiki.Core.Page.template'), or one built into the wiki (meeting notes, a
+-- decision record and a how-to guide for a document, a starter deck for a
+-- presentation). Choosing another kind starts it blank again. A
 -- template's body is copied into the new page with @{{title}}@, @{{date}}@
 -- and @{{author}}@ filled in: the title typed, today's date (UTC, in ISO
 -- 8601 format) and the display name of the user creating it.
@@ -40,8 +44,9 @@ import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Route (Route (..), pageRoute)
 import Wiki.App.View.Common
 import Wiki.Core.Id (PageId)
-import Wiki.Core.Page (Page (body), PageSummary, templatePages)
+import Wiki.Core.Page (Page (body), PageSummary (kind), templatePages)
 import Wiki.Core.Page qualified as P
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id, name), pageAt)
 import Wiki.Core.Template (Placeholders (Placeholders), builtinTemplates, fillTemplate)
@@ -63,8 +68,10 @@ data State = State
   { input :: Input
   , title :: Text
   -- ^ The title typed so far.
+  , kind :: PageKind
+  -- ^ The kind of page to make.
   , start :: Start
-  -- ^ What the page starts from.
+  -- ^ What the page starts from, among the templates of that kind.
   , creating :: Bool
   , problem :: Maybe WikiError
   }
@@ -78,13 +85,13 @@ data Start
     BuiltIn Text
   deriving stock (Eq, Show)
 
-data Action = Receive Input | Followed (Follow Route) | Typed Text | Chose Start | Submit
+data Action = Receive Input | Followed (Follow Route) | Typed Text | ChoseKind PageKind | Chose Start | Submit
 
 component :: forall query m. (MonadWiki m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \input -> pure State {input, title = "", start = Blank, creating = False, problem = Nothing}
+      { initialState = \input -> pure State {input, title = "", kind = Document, start = Blank, creating = False, problem = Nothing}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.receive = Just . Receive}
       }
@@ -112,13 +119,18 @@ component =
                   <span>Title</span>
                   <input type="text" class="new-page-title" onValueInput={{ Typed }} required autofocus>
                 </label>
+                <fieldset class="new-page-kind">
+                  <legend>Kind</legend>
+                  {{ kindChoice Document "Document" "A page, read as a document." }}
+                  {{ kindChoice Presentation "Presentation" "A deck of slides, presented one at a time." }}
+                </fieldset>
                 <fieldset class="new-page-start">
                   <legend>Start from</legend>
-                  {{ choice Blank "Blank" "An empty page." }}
-                  {% for t in templatePages input.pages %}
+                  {{ choice Blank "Blank" (if st.kind == Presentation then "An empty deck." else "An empty page.") }}
+                  {% for t in [t | t <- templatePages input.pages, t.kind == st.kind] %}
                     {{ choice (SpaceTemplate t.id) t.title ("A template of " <> input.space.name <> ".") }}
                   {% end %}
-                  {% for t in builtinTemplates %}
+                  {% for t in [t | t <- builtinTemplates, t.kind == st.kind] %}
                     {{ choice (BuiltIn t.key) t.title "Built in." }}
                   {% end %}
                 </fieldset>
@@ -126,6 +138,15 @@ component =
                 {{ Router.link ctx.router Followed (leaving input) [HP.class_ "button"] [HH.text "Cancel"] }}
               </form>
             |]
+
+        kindChoice :: PageKind -> Text -> Text -> H.ComponentHTML Action Empty m
+        kindChoice kind label hint =
+          [hh|
+            <label class="check new-page-kind-choice">
+              <input type="radio" name="new-page-kind" checked={{ kind == st.kind }} onChange={{ const (ChoseKind kind) }}>
+              <span>{{ label }} <small class="check-help">{{ hint }}</small></span>
+            </label>
+          |]
 
         choice :: Start -> Text -> Text -> H.ComponentHTML Action Empty m
         choice start label hint =
@@ -141,6 +162,8 @@ component =
       Receive input -> modify (\st -> st {input})
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       Typed title -> modify (\st -> st {title})
+      -- Another kind has other templates: the page starts blank again.
+      ChoseKind kind -> modify (\st -> st {kind, start = if kind == st.kind then st.start else Blank})
       Chose start -> modify (\st -> st {start})
       Submit -> do
         st <- get
@@ -148,7 +171,7 @@ component =
           Right parentPage | not st.creating -> do
             modify (\s -> s {creating = True, problem = Nothing})
             body <- startingBody st
-            result <- createPage st.input.space.id ((\p -> p.id) <$> parentPage) st.title body
+            result <- createPageOf st.kind st.input.space.id ((\p -> p.id) <$> parentPage) st.title body
             modify (\s -> s {creating = False})
             case result of
               Left e -> modify (\s -> s {problem = Just e})

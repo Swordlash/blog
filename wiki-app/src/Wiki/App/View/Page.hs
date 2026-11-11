@@ -5,7 +5,7 @@
 -- Markdown rendered by "Wiki.App.View.Body" (with its links resolved and
 -- its islands drawn), its attachments, and the actions the current user
 -- may take. Anyone who may read the page may read its source and its
--- history, present it as slides if it is written as a deck
+-- history, present it as slides if it is a presentation
 -- ("Wiki.Core.Slides"), and export it as a document
 -- ("Wiki.App.View.Export"). Someone who may edit it may also edit it, add
 -- a page under it, and rename, move or delete it. The space's home page,
@@ -176,9 +176,9 @@ import Wiki.Core.Id
   )
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Notification (WatchTarget (..))
-import Wiki.Core.Page (Page (attachments, body, createdAt, createdBy, id, parent, slug, space, template, title, updatedAt, updatedBy), PageSummary (id, parent, slug, title), retitled)
+import Wiki.Core.Page (Page (attachments, body, createdAt, createdBy, id, kind, parent, slug, space, template, title, updatedAt, updatedBy), PageSummary (id, parent, slug, title), retitled)
+import Wiki.Core.PageKind (PageKind (..), isPresentation)
 import Wiki.Core.Permission (mayMovePage)
-import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (blog, encryption, homePage, id, name), rootPage)
 import Wiki.Core.Template (placeholderNames)
@@ -330,6 +330,7 @@ data Action
   | ToggleComments
   | ClickedQuote CommentThreadId
   | SetTemplate Bool
+  | SetKind PageKind
   | ShowChanged
   | CopySelection BlockText
   | CopyPermanentLink
@@ -479,7 +480,7 @@ component =
                        -- stays the space's.
                        <> ( if spaceHome
                               then []
-                              else [button "Move" StartMove, button "Delete" (Open ConfirmingDelete)] <> useAsTemplate
+                              else [button "Move" StartMove, button "Delete" (Open ConfirmingDelete)] <> useAsTemplate <> asPresentation
                           )
                )
       | otherwise = [viewSource, history] <> copyPermanent <> present <> export <> [comments | commentsHere input]
@@ -506,8 +507,7 @@ component =
         viewSource = Router.link input.context.router Followed (documentRoute input.context page.space (PageSource spacePath input.path)) [HP.class_ "button"] [HH.text "View source"]
         -- The same for its history.
         history = Router.link input.context.router Followed (documentRoute input.context page.space (PageHistory spacePath input.path Nothing AgainstPrevious)) [HP.class_ "button"] [HH.text "History"]
-        -- Also presenting it, if it is written as slides: any page can be
-        -- shown as slides by its address, but only a deck offers it.
+        -- Also presenting it, if it is a presentation ("Wiki.Core.PageKind").
         present = [Router.link input.context.router Followed (documentRoute input.context page.space (PageSlides spacePath input.path 1 1)) [HP.class_ "button page-present"] [HH.text "Present"] | deck]
         -- Also exporting it as a document, on a backend that makes them:
         -- a deck as a presentation too.
@@ -518,6 +518,12 @@ component =
         -- page except the space's home page.
         useAsTemplate =
           [[hh|<button type="button" class="use-as-template" aria-pressed={{ ariaBool page.template }} onClick={{ const (SetTemplate (not page.template)) }}>Use as template</button>|]]
+        -- Make it a presentation, which is presented as slides, or a
+        -- document again ("Wiki.Core.PageKind"): for someone who may edit
+        -- it, on every page except the space's home page, which is a
+        -- document.
+        asPresentation =
+          [[hh|<button type="button" class="page-kind" aria-pressed={{ ariaBool deck }} title="A presentation is shown as slides, each top-level heading opening one" onClick={{ const (SetKind (if deck then Document else Presentation)) }}>Presentation</button>|]]
 
     -- A note above a version of the page saying which it is, with a link
     -- to the page as it is now.
@@ -1072,6 +1078,15 @@ component =
             asked' <- gets (\st -> st.visit)
             startWrite
             setPageTemplate page.id template >>= done asked' (const Nothing)
+      -- The same for the page's kind.
+      SetKind kind -> withPage $ \page ->
+        gets (\st -> (writeOut st, unsaved st)) >>= \case
+          (True, _) -> pass
+          (_, True) -> modify (\st -> st {problem = Just ticksFirst})
+          _ -> do
+            asked' <- gets (\st -> st.visit)
+            startWrite
+            setPageKind page.id kind >>= done asked' (const Nothing)
       Delete -> withPage $ \page -> whenM (gets (not . writeOut)) $ do
         input <- gets (\st -> st.input)
         asked' <- gets (\st -> st.visit)
@@ -1343,7 +1358,7 @@ fetch owner input =
     Right page -> do
       addresses <- Body.attachmentAddresses owner page.attachments
       let parsed = Md.parseMarkdown page.body
-      pure (Ready page addresses (either (const False) isDeck parsed) (either (const Nothing) Md.contentsPanel parsed))
+      pure (Ready page addresses (isPresentation page.kind) (either (const Nothing) Md.contentsPanel parsed))
   where
     -- The version asked for, if any, in the page's place: its title, its
     -- text, its time and who saved it. A version the page does not have is

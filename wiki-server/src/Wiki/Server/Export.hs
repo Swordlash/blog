@@ -16,7 +16,7 @@
 -- * EPUB;
 -- * PDF, made by pandoc's LaTeX writer and @xelatex@, through pandoc's own
 --   PDF path in a temporary directory it removes afterwards;
--- * for a deck ("Wiki.Core.Slides"): PowerPoint, and Beamer's LaTeX or its
+-- * for a presentation ("Wiki.Core.PageKind", "Wiki.Core.Slides"): PowerPoint, and Beamer's LaTeX or its
 --   PDF. The deck's aspect ratio becomes Beamer's @aspectratio@, and its
 --   theme a Beamer theme ('beamerLook'). PowerPoint gets pandoc's own
 --   reference presentation, which is 16:9, whatever the deck says.
@@ -133,7 +133,8 @@ import Wiki.Core.Markdown.Box (BoxKind, BoxNumbering (..), Numbering (..))
 import Wiki.Core.Math (Macros (..), spaceMacros)
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), pageNumber, pageTreeOrder, summaryOf)
-import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), Theme (..), deckOf, isDeck)
+import Wiki.Core.PageKind (isPresentation)
+import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), Theme (..), deckOf)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..), rootPage)
 import Wiki.Core.Url (Url (..))
@@ -395,12 +396,12 @@ exportPage exports engine key storage who pid format = oneAtATime exports key . 
       settings <- readServerSettings storage
       now <- getCurrentTime
       let read' = readPage page.body
-          deck = either (const False) isDeck read'.blocks
+          deck = isPresentation page.kind
           looks = either (const (deckOf [])) deckOf read'.blocks
           output = outputOf format
           place = placeOf settings.publicUrl settings.boxes settings.mathMacros spaces pages page (\_ _ -> Nothing) ""
       if forDecks format && not deck
-        then pure (Left (ApiError.Invalid "Only a page written as slides exports as a presentation."))
+        then pure (Left (ApiError.Invalid "Only a presentation exports as slides."))
         else do
           (bag, stored) <- mediaOf storage [page]
           case pageBlocks output (place stored) read' of

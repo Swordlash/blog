@@ -22,7 +22,7 @@ import Test.Browser.Mount (adopt, slugs, start, startChanged, startWith)
 import Test.Browser.Text (setMarkdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
-import Wiki.App.Backend.Mem.State (MemState (..), insertPage)
+import Wiki.App.Backend.Mem.State (MemState (..), insertPageOf)
 import Wiki.App.Demo (demoNow)
 import Wiki.App.Islands (Island (..), MonadIslands)
 import Wiki.App.Islands qualified as Islands
@@ -30,6 +30,7 @@ import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Markdown.Frame (FrameScheme (..), frameDocument)
 import Wiki.Core.Markdown.Html (allowedElements)
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Space qualified as Core
 
 $( browserJS
@@ -177,7 +178,7 @@ spec m = describe "an html fence" $ do
         onSlide = ".slide-frame.current .slide iframe.wiki-html"
         deck theme extra = "[[!slides]]{theme=" <> theme <> "}\n\n## A slide\n\n```html\n" <> extra <> "<p id=\"text\">Readable</p>\n```\n"
     it "is light text on a dark slide under the system's light scheme" $ runPage $ do
-      ui <- pageAt m (deck "dark" "") slides
+      ui <- deckAt m (deck "dark" "") slides
       _ <- find ui onSlide
       slideText <- computedStyle ".slide-frame.current .slide" "color"
       slideText `shouldBe` "rgb(230, 237, 243)"
@@ -185,7 +186,7 @@ spec m = describe "an html fence" $ do
     it "is dark text on a light slide whatever the root's palette, as under the system's dark scheme" $ runPage $ do
       -- The runner's system is light; the dark scheme gives the root the
       -- dark palette, which the block's own rule does here.
-      ui <- pageAt m (deck "light" "<style>:root { --text: rgb(230, 237, 243) }</style>\n") slides
+      ui <- deckAt m (deck "light" "<style>:root { --text: rgb(230, 237, 243) }</style>\n") slides
       _ <- find ui onSlide
       slideText <- computedStyle ".slide-frame.current .slide" "color"
       slideText `shouldBe` "rgb(31, 35, 40)"
@@ -429,8 +430,26 @@ pageAt
   => Text
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
-pageAt m body = startChanged m withPage (Just "user-admin")
+pageAt m = pageOfKindAt m Kind.Document
+
+-- | 'pageAt' for a presentation, which is presented as slides.
+deckAt
+  :: forall m
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  => Text
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+deckAt m = pageOfKindAt m Kind.Presentation
+
+pageOfKindAt
+  :: forall m
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  => Kind.PageKind
+  -> Text
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+pageOfKindAt m kind body = startChanged m withPage (Just "user-admin")
   where
     withPage st = case head (filter (\s -> s.name == "Projects") (Map.elems st.spaces)) of
-      Just (s :: Core.Space) -> fst (insertPage s.id Nothing "HTML blocks" body demoNow st)
+      Just (s :: Core.Space) -> fst (insertPageOf kind s.id Nothing "HTML blocks" body demoNow st)
       Nothing -> panic "the demo has no space Projects"

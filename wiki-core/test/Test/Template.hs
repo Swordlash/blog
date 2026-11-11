@@ -9,6 +9,7 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (elements, forAll, listOf, (===), (==>))
 import Wiki.Core.Markdown.Ast (Block (..), parseMarkdown)
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Template
 
 values :: Placeholders
@@ -34,8 +35,11 @@ spec = describe "Template" $ do
         not ("{{" `T.isInfixOf` t) ==> fillTemplate values t === t
 
   describe "builtinTemplates" $ do
-    it "are meeting notes, a decision record and a how-to guide" $
-      map (\t -> t.key) builtinTemplates `shouldBe` ["meeting-notes", "decision-record", "how-to"]
+    it "are meeting notes, a decision record and a how-to guide, then a starter deck" $
+      map (\t -> t.key) builtinTemplates `shouldBe` ["meeting-notes", "decision-record", "how-to", "starter-deck"]
+    it "are documents but the starter deck, a presentation" $
+      map (\t -> (t.key, t.kind)) builtinTemplates
+        `shouldBe` [("meeting-notes", Document), ("decision-record", Document), ("how-to", Document), ("starter-deck", Presentation)]
     it "each start with its title as a heading and use every placeholder" $
       for_ builtinTemplates $ \t -> do
         (t.key, "# {{title}}\n" `T.isPrefixOf` t.body) `shouldBe` (t.key, True)

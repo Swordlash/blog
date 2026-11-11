@@ -97,6 +97,7 @@ library
       Wiki.Core.Notification
       Wiki.Core.Order
       Wiki.Core.Page
+      Wiki.Core.PageKind
       Wiki.Core.Path
       Wiki.Core.Permission
       Wiki.Core.Search

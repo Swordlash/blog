@@ -58,6 +58,7 @@ import Wiki.Core.Notification (MailMode (..), Notification (..), PageLocation (.
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page, summaryOf)
 import Wiki.Core.Page qualified as Page (Page (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchQuery)
 import Wiki.Core.Space qualified as Space
@@ -221,6 +222,7 @@ stubs =
           , backlinks = \p -> if p == Sample.page.id then pure [Backlink {page = PageId "p2", title = "Glossary", location = PageLocation {space = [Sample.slug "docs"], page = [Sample.slug "glossary"]}}] else refuse NotFound
           , shift = \p body -> pure Sample.page {Page.id = p, Page.position = fromEnum body.shift}
           , template = \p body -> pure Sample.page {Page.id = p, Page.template = body.template}
+          , kind = \p body -> pure Sample.page {Page.id = p, Page.kind = body.kind}
           , delete = \p -> if p == Sample.page.id then pure NoContent else refuse Forbidden
           , upload = \_ u ->
               liftIO (BS.readFile u.payload) <&> \bytes -> Sample.attachment {Attachment.name = Attachment.FileName u.name, Attachment.mediaType = Attachment.uploadedMimeType u.mediaType, Attachment.size = fromIntegral (BS.length bytes)}
@@ -653,7 +655,7 @@ spec = describe "a server of the API's type" $ do
       header "ETag" r `shouldBe` Just (encodeUtf8 etag)
 
     it "makes one, answering 201 with its version" $ do
-      r <- sendJson methodPost (links.spaces.createPage s) NewPage {parent = Nothing, title = "New", body = "# New"}
+      r <- sendJson methodPost (links.spaces.createPage s) NewPage {parent = Nothing, title = "New", body = "# New", kind = Kind.Document}
       status r `shouldBe` 201
       (\(x :: Page) -> (x.title, x.body)) <$> jsonBody r `shouldBe` Just ("New", "# New")
       header "ETag" r `shouldBe` Just (encodeUtf8 etag)
@@ -677,6 +679,7 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPost (links.pages.move p) PageMove {space = SpaceId "s2", parent = Nothing}) 200 Sample.page {Page.space = SpaceId "s2"}
       answers (sendJson methodPost (links.pages.shift p) ShiftBy {shift = ShiftUp}) 200 Sample.page {Page.position = fromEnum ShiftUp}
       answers (sendJson methodPut (links.pages.template p) PageTemplate {template = True}) 200 Sample.page {Page.template = True}
+      answers (sendJson methodPut (links.pages.kind p) PageKindChange {kind = Kind.Presentation}) 200 Sample.page {Page.kind = Kind.Presentation}
       (status <$> request methodDelete (links.pages.delete p) [] "") `shouldReturn` 204
       answers (request methodDelete (links.pages.delete (PageId "other")) [] "") 403 Forbidden
 

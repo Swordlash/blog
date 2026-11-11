@@ -82,6 +82,7 @@ import Wiki.Server.Storage.Schema (AuditLog (..), GlobalGrants (..), Notificatio
 import Database.PostgreSQL.Simple qualified as Pg
 import Database.PostgreSQL.Simple.Types qualified as PgTypes
 import Wiki.Server.Storage.Postgres (closePostgres, openPostgres)
+import Wiki.Core.PageKind qualified as Kind
 #endif
 
 spec :: Backing -> Spec
@@ -273,6 +274,7 @@ crowd st users watches = do
           , updatedAt = now
           , position = 100 + i
           , template = False
+          , kind = Kind.Document
           , createdBy = Nothing
           , updatedBy = Nothing
           }
@@ -343,6 +345,7 @@ addPagesWith st space name body n = do
           , updatedAt = now
           , position = 1000 + i
           , template = False
+          , kind = Kind.Document
           , createdBy = Nothing
           , updatedBy = Nothing
           }

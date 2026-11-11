@@ -352,13 +352,16 @@ updateGuide st actor address = do
           leftOut p = [AttachmentsLeftOut (shown <> ": " <> T.intercalate ", " (missing p)) | not (null (missing p))]
       case found of
         Just p
-          | hashOf p == release -> pure ([Current] <> [Wrote at release | recorded /= Just release] <> leftOut p)
+          | hashOf p == release -> do
+              releaseKind r p
+              pure ([Current] <> [Wrote at release | recorded /= Just release] <> leftOut p)
           | recorded == Just (hashOf p) -> do
               -- The guide wrote what the page has, so the release's title
               -- and text go over it, as a new version.
               let new = savedAs (micro now) r.page.title r.page.body p
               updatePageText p.id new.title new.body new.updatedAt
               insertVersion new Nothing
+              releaseKind r p
               pure ([Rewritten shown new, Wrote at release] <> leftOut p)
           | isJust recorded -> pure [LeftAlone (shown <> ": changed by an administrator since the guide wrote it, so left alone")]
           | otherwise -> pure [LeftAlone (shown <> ": a page the guide did not write, so left alone")]
@@ -373,6 +376,14 @@ updateGuide st actor address = do
                 case parent of
                   Left () -> pure [LeftAlone (shown <> ": new in this release, but the page it goes under is not at " <> pathText parentPath <> ", so not added")]
                   Right under -> [Added shown, Wrote at (writtenHash r.page.title r.page.body)] <$ addPage now archive g under r
+
+    -- A page whose text is the release's gets the release's kind too
+    -- ("Wiki.Core.PageKind"): the guide's deck, a document before kinds
+    -- existed, becomes a presentation. The kind is not part of the hash, so
+    -- a page an administrator changed keeps its kind with its text. The
+    -- guide's home page, the tour, is a document in every release.
+    releaseKind :: (Backend be) => ReleasePage -> Page -> Db be ()
+    releaseKind r p = when (p.kind /= r.page.kind) (setPageKindRow p.id r.page.kind)
 
     -- A page of the release the guide never had, under its parent, last
     -- among its siblings, with its attachments.
@@ -393,6 +404,7 @@ updateGuide st actor address = do
               , updatedAt = micro now
               , position = maybe 0 ((+ 1) . maximum) (nonEmpty (map (\x -> x.position) siblings))
               , template = False
+              , kind = r.page.kind
               , createdBy = Nothing
               , updatedBy = Nothing
               }

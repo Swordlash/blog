@@ -2478,6 +2478,13 @@ pre.numbered > code {
 
 /* ---- Slides ------------------------------------------------------------ */
 
+/* A document's address of slides: a note in the page, with a link back to
+   the document (Wiki.App.View.Slides). */
+.slides-not-presentation {
+  max-width: 40rem;
+  margin: 2rem auto;
+}
+
 /* A page presented as slides (Wiki.App.View.Slides) covers the whole window,
    over the frame, which stays where it was beneath. Each theme sets the
    slide's own colours; the dark frame around a slide, the notes and the
@@ -6983,7 +6990,8 @@ a.mention {
   font-size: 0.925rem;
 }
 
-.use-as-template[aria-pressed="true"] {
+.use-as-template[aria-pressed="true"],
+.page-kind[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -7009,7 +7017,9 @@ a.mention {
   padding: 0.12rem 0;
 }
 
-/* What a new page starts from: blank, or a template. */
+/* What a new page is, a document or a presentation, and what it starts
+   from: blank, or a template of that kind. */
+.new-page-kind,
 .new-page-start {
   display: flex;
   flex-basis: 100%;
@@ -7020,6 +7030,7 @@ a.mention {
   border: none;
 }
 
+.new-page-kind legend,
 .new-page-start legend {
   margin-bottom: 0.3rem;
   font-weight: 600;

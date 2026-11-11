@@ -451,6 +451,8 @@ data Pages f = PageRow
   , template :: Columnar f Bool
   , search_text :: Columnar f Text
   , search_fold :: Columnar f Text
+  , kind :: Columnar f Text
+  -- ^ The page's kind by its name ("Wiki.Core.PageKind"), step 19.
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)

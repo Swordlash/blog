@@ -27,6 +27,7 @@ import Wiki.Api.Links (links)
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Version (latestVersions)
@@ -34,7 +35,7 @@ import Wiki.Server.Guide
 import Wiki.Server.Options qualified as Options
 import Wiki.Server.Storage (Config (..), Storage, Who (..), defaultConfig, reading, runStoredWiki, withStorage, writing)
 import Wiki.Server.Storage.Audit (operator)
-import Wiki.Server.Storage.Rows (loadPages, loadSpaces, settingValue, storeSetting, updatePageText)
+import Wiki.Server.Storage.Rows (loadPages, loadSpaces, setPageKindRow, settingValue, storeSetting, updatePageText)
 
 spec :: Backing -> Spec
 spec backing = describe "the guide" $ do
@@ -207,6 +208,29 @@ updating backing = describe "updating it to this release" $ do
       -- The record is written as it is now.
       record <- reading st ((>>= decodeStrict' . encodeUtf8) <$> settingValue "guide-installed")
       ((\(i :: Installed) -> (Map.member "" i.pages, Map.member "tour" i.pages)) <$> record) `shouldBe` Just (True, False)
+
+  it "gives a page whose text is the release's the release's kind, and leaves an edited page's kind alone" $
+    withStorageIn backing $ \_ st -> do
+      _ <- installGuide st operator "console" >>= ok
+      g <- guideOf st
+      pages <- reading st (loadPages g.id)
+      let at title = maybe (panic ("no page " <> title)) identity (find (\p -> p.title == title) pages)
+          slides = at "Presentations"
+          maths = at "Mathematics"
+      slides.kind `shouldBe` Kind.Presentation
+      -- As a guide installed before pages had kinds: every page a
+      -- document. An administrator edits Mathematics and makes it a
+      -- presentation.
+      writing st (setPageKindRow slides.id Kind.Document)
+      edited <- runStoredWiki st Administrator (savePage maths.id maths.updatedAt maths.title (maths.body <> "\nOur note.\n")) >>= ok
+      _ <- runStoredWiki st Administrator (setPageKind edited.id Kind.Presentation) >>= ok
+      _ <- updateGuide' st
+      deck <- runStoredWiki st Administrator (getPage g.id [slug "markdown-guide", slug "presentations"]) >>= ok
+      deck.kind `shouldBe` Kind.Presentation
+      kept <- runStoredWiki st Administrator (getPage g.id [slug "markdown-guide", slug "mathematics"]) >>= ok
+      kept.kind `shouldBe` Kind.Presentation
+      -- No version for the kind: the deck's text was the release's.
+      runStoredWiki st Administrator (listVersions slides.id latestVersions) >>= ok >>= (`shouldSatisfy` ((== 1) . length))
 
   it "tells the live channel of each page it rewrites, as a save does" $
     withPlaceIn backing $ \at -> do

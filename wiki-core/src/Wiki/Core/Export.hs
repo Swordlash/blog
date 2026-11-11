@@ -50,7 +50,7 @@
 -- * __Additions need no new version.__ A reader ignores the fields and the
 --   files it does not know, and a field that may be missing has a default
 --   (a space is private and has no math macros, lists its children by name
---   and was created with its first page; a page has an empty body; a child
+--   and was created with its first page; a page has an empty body and is a document; a child
 --   ordered by hand is at position 0; a group has no members; unless the
 --   record says otherwise). So an older program reads a newer archive of
 --   the same version, and a newer program an older archive.
@@ -133,6 +133,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (readNumbering)
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind (PageKind (..), pageKindName, pageKindOf)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Slug (Slug, slugText)
@@ -1093,6 +1094,7 @@ pageFields p =
   ]
     <> ["position" .= p.position | p.position /= 0]
     <> ["template" .= True | p.template]
+    <> ["kind" .= pageKindName p.kind | p.kind /= Document]
 
 -- | Parse a page, with no attachments yet.
 parsePage :: Value -> Parser Page
@@ -1107,7 +1109,8 @@ parsePage = withObject "page" $ \o -> do
   updatedAt <- o .:? "updatedAt" .!= createdAt
   position <- o .:? "position" .!= 0
   template <- o .:? "template" .!= False
-  pure Page {id, space, parent, title, slug, body, attachments = [], createdAt, updatedAt, position, template, createdBy = Nothing, updatedBy = Nothing}
+  kind <- maybe Document pageKindOf <$> o .:? "kind"
+  pure Page {id, space, parent, title, slug, body, attachments = [], createdAt, updatedAt, position, template, kind, createdBy = Nothing, updatedBy = Nothing}
 
 -- | An attachment's record as it was parsed: the page it is attached to,
 -- the attachment, and the archive file its bytes are in, if it names one.

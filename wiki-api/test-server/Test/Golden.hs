@@ -37,6 +37,7 @@ import Wiki.Core.Id (BlobId (..), CommentId (..), CommentThreadId (..), GroupId 
 import Wiki.Core.Notification (MailMode (..), Watch (..), WatchReason (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (summaryOf)
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space, SpaceProfile (..))
 import Wiki.Core.User (Avatar (..), Password (..), User (..))
@@ -155,7 +156,7 @@ spec = describe "golden JSON" $ do
     golden "space-profile-colour" SpaceProfile {description = "", icon = Just (IconColour "teal"), blog = True, boxNumbering = WithSection}
     golden "space-order" SpaceOrder {children = ChildPages, order = NewestFirst}
     golden "space-move" SpaceMove {parent = Nothing}
-    golden "new-page" NewPage {parent = Nothing, title = "Tour", body = "# Tour"}
+    golden "new-page" NewPage {parent = Nothing, title = "Tour", body = "# Tour", kind = Kind.Document}
     golden "page-edit" PageEdit {title = "Tour", body = "# Tour, again"}
     golden "page-move" PageMove {space = SpaceId "s2", parent = Just (PageId "p9")}
     golden "page-template" PageTemplate {template = True}

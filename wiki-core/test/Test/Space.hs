@@ -15,6 +15,7 @@ import Wiki.Core.Attachment (MimeType (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space
 import Wiki.Core.Vault (KeyId (..))
@@ -71,6 +72,7 @@ page i sl parent position =
     , updatedAt = UTCTime (fromGregorian 2026 1 1) 0
     , position
     , template = False
+    , kind = Document
     , createdBy = Nothing
     , updatedBy = Nothing
     }

@@ -36,6 +36,7 @@ import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), GroupId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
@@ -48,6 +49,7 @@ spec backing = describe "the API over HTTP" $ do
   whoIsAsking backing
   spacesAndPages backing
   templates backing
+  kinds backing
   versions backing
   draftsAndSearch backing
   attachments backing
@@ -108,7 +110,7 @@ withSpace :: Running -> Bool -> IO (Space, Page)
 withSpace r public = do
   space <- sendJson r methodPost (onAdmin r links.spaces.create) NewSpace {parent = Nothing, name = "Team notes"} >>= jsonAs 201
   _ :: Space <- ok200 (sendJson r methodPut (onAdmin r (links.spaces.setPublic space.id)) SpacePublic {public})
-  page <- sendJson r methodPost (onAdmin r (links.spaces.createPage space.id)) NewPage {parent = Nothing, title = "Welcome", body = "# Welcome\n\nThe first page."} >>= jsonAs 201
+  page <- sendJson r methodPost (onAdmin r (links.spaces.createPage space.id)) NewPage {parent = Nothing, title = "Welcome", body = "# Welcome\n\nThe first page.", kind = Kind.Document} >>= jsonAs 201
   pure (space, page)
 
 spacesAndPages :: Backing -> Spec
@@ -139,6 +141,34 @@ spacesAndPages backing = describe "spaces and pages" $ do
     map (\(s :: Space) -> s.id) <$> ok200 (getUrl r (onPublic r links.spaces.list)) `shouldReturn` [private.id]
     sendJson r methodPost (onPublic r links.spaces.create) NewSpace {parent = Nothing, name = "Mine"} >>= jsonAs 403 >>= (`shouldBe` Forbidden)
     sendJson r methodPut (onPublic r (links.spaces.rename private.id)) SpaceName {name = "Ours"} >>= jsonAs 403 >>= (`shouldBe` Forbidden)
+
+-- | A page's kind over HTTP: made with the page, changed by its own call,
+-- and read as a document from a request that does not say.
+kinds :: Backing -> Spec
+kinds backing = describe "page kinds" $ do
+  it "makes a page a presentation, says so in its summary, and a request without a kind makes a document" $ withRunning backing $ \r -> do
+    (space, page) <- withSpace r True
+    (page :: Page).kind `shouldBe` Kind.Document
+    sendJson r methodPut (onPublic r (links.pages.kind page.id)) PageKindChange {kind = Kind.Presentation} >>= jsonAs 403 >>= (`shouldBe` Forbidden)
+    made <- ok200 (sendJson r methodPut (onAdmin r (links.pages.kind page.id)) PageKindChange {kind = Kind.Presentation})
+    ((made :: Page).kind, made.updatedAt, made.body) `shouldBe` (Kind.Presentation, page.updatedAt, page.body)
+    listed <- ok200 (getUrl r (onPublic r (links.spaces.listPages space.id)))
+    [p.kind | (p :: PageSummary) <- listed, p.id == page.id] `shouldBe` [Kind.Presentation]
+    deck <- sendJson r methodPost (onAdmin r (links.spaces.createPage space.id)) NewPage {parent = Nothing, title = "Talk", body = "# Talk", kind = Kind.Presentation} >>= jsonAs 201
+    (deck :: Page).kind `shouldBe` Kind.Presentation
+    plain <- send r methodPost (onAdmin r (links.spaces.createPage space.id)) [(hContentType, "application/json")] "{\"parent\":null,\"title\":\"Old client\",\"body\":\"\"}" >>= jsonAs 201
+    (plain :: Page).kind `shouldBe` Kind.Document
+
+  it "refuses a space's home page, a kind it does not know, and what is not there" $ withRunning backing $ \r -> do
+    (space, page) <- withSpace r False
+    home <- maybe (panic "no home page") pure space.homePage
+    sendJson r methodPut (onAdmin r (links.pages.kind home)) PageKindChange {kind = Kind.Presentation} >>= jsonAs 400 >>= (`shouldSatisfy` isInvalid)
+    sendJson r methodPut (onAdmin r (links.pages.kind page.id)) PageKindChange {kind = Kind.OtherKind "calendar"} >>= jsonAs 400 >>= (`shouldSatisfy` isInvalid)
+    sendJson r methodPut (onAdmin r (links.pages.kind (PageId "no-such-page"))) PageKindChange {kind = Kind.Presentation} >>= jsonAs 404 >>= (`shouldBe` NotFound)
+  where
+    isInvalid = \case
+      Invalid _ -> True
+      _ -> False
 
 templates :: Backing -> Spec
 templates backing = describe "templates" $ do
@@ -644,7 +674,7 @@ permissions backing = describe "permissions given over HTTP" $ do
     let at' hs path = getUrlWith r (onPublic r (links.spaces.atPath (either (panic . show) identity (parsePath path)))) hs
         grant how sid granted =
           send r methodPut (onPublic r (links.spaces.setGrant sid)) [session, (hContentType, "application/json")] (encode SpaceGrantChange {subject = SubjectUser (UserId "user-editor"), permission = how, granted})
-        newPage' sid = send r methodPost (onPublic r (links.spaces.createPage sid)) [editor, (hContentType, "application/json")] (encode NewPage {parent = Nothing, title = "Granted", body = "Hello."})
+        newPage' sid = send r methodPost (onPublic r (links.spaces.createPage sid)) [editor, (hContentType, "application/json")] (encode NewPage {parent = Nothing, title = "Granted", body = "Hello.", kind = Kind.Document})
     team :: Space <- at' [session] "team" >>= jsonAs 200
     projects :: Space <- at' [session] "team/projects" >>= jsonAs 200
     (.status) <$> at' [editor] "team" `shouldReturn` 404

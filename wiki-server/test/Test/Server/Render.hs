@@ -42,6 +42,7 @@ import Wiki.Core.Encrypted (Encapsulated (..), PageKey (..), SealedContent (..),
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Page qualified as P
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space qualified as S
@@ -182,7 +183,7 @@ anonymous backing = describe "for someone not signed in" $ do
             , "<style>p::after { content: \"</style><script>alert(4)</script>\" }</style>"
             , "</iframe><script>alert(5)</script>"
             ]
-    _ <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) Api.NewPage {parent = Nothing, title = "Framed", body = "Before.\n\n```html\n" <> hostile <> "\n```\n\nAfter.\n"} >>= (jsonAs 201 :: Reply -> IO P.Page)
+    _ <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) Api.NewPage {parent = Nothing, title = "Framed", body = "Before.\n\n```html\n" <> hostile <> "\n```\n\nAfter.\n", kind = Kind.Document} >>= (jsonAs 201 :: Reply -> IO P.Page)
     (status, html) <- page r r.public "/s/docs/p/framed/"
     status `shouldBe` 200
     let (ahead, rest) = T.breakOn "<iframe " (appIn html)
@@ -206,7 +207,7 @@ anonymous backing = describe "for someone not signed in" $ do
   it "renders an html fence's height as its frame's, which the program leaves as it is" $ withDemoRunning backing identity $ \r -> do
     docs <- ok200 (getUrl r (r.public <> "/" <> links.spaces.atPath (slugs "docs"))) :: IO S.Space
     let fences = "```html {height=300}\n<p>Sized.</p>\n```\n\n```html {height=tall}\n<p>Fitted.</p>\n```\n"
-    _ <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) Api.NewPage {parent = Nothing, title = "Sized", body = fences} >>= (jsonAs 201 :: Reply -> IO P.Page)
+    _ <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) Api.NewPage {parent = Nothing, title = "Sized", body = fences, kind = Kind.Document} >>= (jsonAs 201 :: Reply -> IO P.Page)
     (status, html) <- page r r.public "/s/docs/p/sized/"
     status `shouldBe` 200
     case map (fst . T.breakOn ">") (drop 1 (T.splitOn "<iframe " (appIn html))) of

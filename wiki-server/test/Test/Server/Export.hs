@@ -47,6 +47,7 @@ import Wiki.Core.Markdown.Ast (Block (Div, Footnotes, Heading, List, Para, Pause
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..), BoxNumbering (..), Numbering (..), noNumbers)
 import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slides (Deck (..), Slide (..), deckOf)
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..), rootPage)
@@ -857,7 +858,7 @@ overHttp backing = describe "over HTTP" $ do
     tex `shouldSatisfy` T.isInfixOf "\\int_{-\\infty}^{\\infty}"
 
   it "exports a deck's steps as Beamer's overlays and PowerPoint's animation, and leaves them out elsewhere" $ withDemoRunning backing identity $ \r -> do
-    pid <- newPage r "Steps" stepsDeck
+    pid <- newPageOf Presentation r "Steps" stepsDeck
     let export format = getUrl r (r.admin <> "/admin/" <> links.pages.export pid format) >>= (`exported` format)
     tex <- decodeUtf8 <$> export BeamerTex
     tex `shouldSatisfy` T.isInfixOf "\\pause\n"
@@ -904,7 +905,7 @@ overHttp backing = describe "over HTTP" $ do
 
   it "offers presentations only of a deck, and refuses a format it cannot make, saying why" $ withDemoRunning backing identity $ \r -> do
     (docs, pages) <- docsIds r
-    getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pptx) >>= jsonAs 400 >>= (`shouldBe` Invalid "Only a page written as slides exports as a presentation.")
+    getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pptx) >>= jsonAs 400 >>= (`shouldBe` Invalid "Only a presentation exports as slides.")
     getUrl r (r.public <> "/" <> links.spaces.export docs.id BeamerTex) >>= jsonAs 400 >>= (`shouldBe` Invalid "A space exports as a document, not a presentation.")
 
   it "exports a space as one DOCX: a title page, a table of contents and every page in order" $ withDemoRunning backing identity $ \r -> do
@@ -936,9 +937,13 @@ overHttp backing = describe "over HTTP" $ do
 -- | An export from the public listener, which must have been made.
 -- | A new page at the top of the Docs space, made by the operator.
 newPage :: (HasCallStack) => Running -> Text -> Text -> IO PageId
-newPage r title body = do
+newPage = newPageOf Document
+
+-- | 'newPage' of a kind: a presentation is what exports as slides.
+newPageOf :: (HasCallStack) => PageKind -> Running -> Text -> Text -> IO PageId
+newPageOf kind r title body = do
   docs <- spaceAt r "docs"
-  made <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) NewPage {parent = Nothing, title, body} >>= jsonAs 201
+  made <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) NewPage {parent = Nothing, title, body, kind} >>= jsonAs 201
   pure (made :: Page).id
 
 exported' :: (HasCallStack) => Running -> PageId -> ExportFormat -> IO ByteString
@@ -1016,7 +1021,7 @@ pdfs backing = describe "PDFs, typeset by xelatex" $ do
     tex <- texEngine
     when (isNothing tex) (pendingWith "xelatex is not on this machine: TeX's limits were not tested against it")
     docs <- spaceAt r "docs"
-    made <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) NewPage {parent = Nothing, title = "Prying", body = "Here: $\\input{/etc/passwd}$ and\n\n```tikz\n\\node {\\input{/etc/passwd}};\n```\n"} >>= jsonAs 201
+    made <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) NewPage {parent = Nothing, title = "Prying", body = "Here: $\\input{/etc/passwd}$ and\n\n```tikz\n\\node {\\input{/etc/passwd}};\n```\n", kind = Document} >>= jsonAs 201
     reply <- getUrl r (r.admin <> "/admin/" <> links.pages.export (made :: Page).id Pdf)
     -- Refused, as TeX cannot open the file; or made without it.
     BSL.toStrict reply.body `shouldSatisfy` (not . ("root:" `BS.isInfixOf`))
@@ -1170,7 +1175,7 @@ pdfs backing = describe "PDFs, typeset by xelatex" $ do
     BS.take 5 bytes `shouldBe` "%PDF-"
     -- A page for each step of the deck, after the title's page: the steps
     -- the browser shows.
-    pid <- newPage r "Steps" stepsDeck
+    pid <- newPageOf Presentation r "Steps" stepsDeck
     pdf <- getUrl r (r.admin <> "/admin/" <> links.pages.export pid BeamerPdf) >>= (`exported` BeamerPdf)
     pdfPages pdf `shouldReturn` (1 + sum (map (\s -> s.steps) (either (panic . show) deckOf (parseMarkdown stepsDeck)).slides))
     -- The headers say nothing a browser would act on but the download.

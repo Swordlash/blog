@@ -799,7 +799,7 @@ handlers env caller =
           , listPages = wiki . listPages
           , postDetails = wiki . postDetails
           , pageAt = \s path -> versioned <$> wiki (getPage s path)
-          , createPage = \s new -> versioned <$> wiki (createPage s new.parent new.title new.body)
+          , createPage = \s new -> versioned <$> wiki (createPageOf new.kind s new.parent new.title new.body)
           , export = \s format request respond -> liftIO (exporting request respond (\key -> exportSpace env.exports env.texEngine key env.storage who s format))
           }
     , pages =
@@ -810,6 +810,7 @@ handlers env caller =
           , backlinks = wiki . pageBacklinks
           , shift = \p body -> wiki (shiftPage p body.shift)
           , template = \p body -> wiki (setPageTemplate p body.template)
+          , kind = \p body -> wiki (setPageKind p body.kind)
           , delete = \p -> wiki (deletePage p) $> NoContent
           , upload = \p u -> wiki (uploadAttachmentFile p u.name u.mediaType u.payload)
           , draft = wiki . getDraft
