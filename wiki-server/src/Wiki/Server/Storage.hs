@@ -573,11 +573,15 @@ data Migrated = Migrated
 -- program cannot read, is found while the backup taken before it can still
 -- be restored. A database of an earlier wiki-server ('OldSchema') or of a
 -- newer one ('Wiki.Server.Storage.Migrate.SchemaTooNew') is refused, as the
--- server refuses it.
+-- server refuses it. It also fills the table of links if this version of
+-- how links are read did not ('ensureLinks'), as opening the storage
+-- would: the deploy's migration then takes that time, before the new
+-- server must answer, and the check reads the table filled.
 migrateDatabase :: Place -> IO Migrated
 migrateDatabase place = withDatabase place $ \c -> do
   before <- databaseVersion c
   applied <- migrate c
+  withTransaction True c (runDb c (void ensureLinks >> resolvePendingLinks))
   pure Migrated {from = before, to = fromMaybe before (lastMay applied)}
 
 -- | 'CheckProblem' is why @wiki-server check@ failed.
@@ -2020,6 +2024,17 @@ pageLocationTx pid = do
 -- page is checked as 'pageLocationTx' checks it, before anything else is
 -- read. Of the pages that link to it, only those in a space the caller may
 -- view are read further, and listed.
+--
+-- The table follows each link among every space. A reader's click follows
+-- it among the spaces whose paths the reader can see ('listSpacesTx'),
+-- and that differs for one kind of link only: a path from the top whose
+-- longer part names a space hidden from the reader, which the reader
+-- reads as a page of the space above it. So the paths from the top named
+-- as this page ('Wiki.App.Route.linkName') that lead nowhere, or into a
+-- space the caller may not view, are followed again among the caller's
+-- spaces, and those that lead here are listed too. Otherwise the list
+-- would leave out a link the reader's click follows here, and tell them
+-- that a space they may not see is there.
 backlinksTx :: PageId -> Tx [Backlink]
 backlinksTx pid = do
   p <- findNode pid
@@ -2030,9 +2045,20 @@ backlinksTx pid = do
   if not (counted ctx.server.homePage s)
     then pure []
     else do
-      linking <- db (linkingPages pid)
+      stored <- db (linkingPages pid)
       let viewable sid = let chain = chainOf ctx sid in not (null chain) && canView ctx.principal ctx.grants chain && all (counted ctx.server.homePage) (lastMay chain)
-      nodes <- db (pageNodesWithIds [source | (source, sid) <- linking, viewable sid])
+      named <- db (fromTopNamed (slugText p.slug))
+      ends <- Map.fromList . map (\n -> (n.id, n.space)) <$> db (pageNodesWithIds [t | (_, _, Just t) <- named])
+      visible <- listSpacesTx
+      let elsewhere =
+            [ (source, destination)
+            | (source, destination, target) <- named
+            , source /= pid
+            , maybe True (\t -> maybe True (not . viewable) (Map.lookup t ends)) target
+            ]
+      followed <- db (followAmong visible elsewhere)
+      let here = [source | (source, Just t) <- followed, t == pid]
+      nodes <- db (pageNodesWithIds (ordNub ([source | (source, sid) <- stored, viewable sid] <> here)))
       above <- withAncestors nodes
       pure . backlinkOrder $
         [ Backlink {page = n.id, title = n.title, location = PageLocation {space = map (\x -> x.slug) (chainOf ctx n.space), page = path}}

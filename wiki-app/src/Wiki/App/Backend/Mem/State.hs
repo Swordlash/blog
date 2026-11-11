@@ -965,9 +965,9 @@ pageLocationIn pid st = do
 -- | The pages that link to a page ('Wiki.App.Backend.pageBacklinks'),
 -- found by resolving every page's links now ("Wiki.App.Backlinks"): the
 -- demo keeps no table of links, and its wiki is small. The page is
--- checked as 'pageLocationIn' checks it. Every link is followed among
--- every space, whoever asks, and the pages the current user may not view
--- are then left out.
+-- checked as 'pageLocationIn' checks it. Every link is followed as the
+-- current user's click follows it, among the spaces whose paths they can
+-- see ('listSpacesIn'), and the pages they may not view are left out.
 backlinksIn :: PageId -> MemState -> Either WikiError [Backlink]
 backlinksIn pid st = do
   target <- findPage st pid
@@ -986,8 +986,9 @@ backlinksIn pid st = do
           , Just path <- [Space.pagePath source (`Map.lookup` pages.byId) p.id]
           ]
   where
-    -- Every space but the front page's, each with its pages.
-    linked = Map.filter (\x -> not (Home.isHomeSpace st.server.homePage x.space.id)) (Map.mapWithKey (\sid x -> Links.linkedSpace x (pagesOf sid st)) st.spaces)
+    -- The spaces whose paths the current user can see, each with its
+    -- pages.
+    linked = Map.fromList [(x.id, Links.linkedSpace x (pagesOf x.id st)) | x <- listSpacesIn st]
     world =
       Links.LinkWorld
         { Links.spaces = map (\x -> x.space) (Map.elems linked)

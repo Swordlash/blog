@@ -303,6 +303,27 @@ reading = describe "who reads the list" $ do
     linking run Anonymous target `shouldReturn` [open.id]
     linking run editor target `shouldReturn` [open.id]
 
+  -- A click follows a path from the top among the spaces whose paths the
+  -- reader can see: where a space they may not see would take the path,
+  -- the list must follow it as their click does, or it would tell them
+  -- the space is there.
+  it "follows a path as the reader's click does, so that a space they may not see changes nothing" $ \(Fixture run) -> do
+    docs <- spaceAt run "docs"
+    hidden <- run admin (createSpace (Just docs.id) "Hidden") >>= ok
+    void (run admin (setSpaceSealed hidden.id True) >>= ok)
+    homonym <- made run docs "Hidden" ""
+    inner <- made run hidden "Inner" ""
+    source <- made run docs "Source" "[a](/docs/hidden) and [b](/docs/hidden/inner)"
+    hiddenHome <- run admin (getPage hidden.id []) >>= ok
+    -- For whoever sees the subspace, the paths lead into it.
+    linking run admin homonym `shouldReturn` []
+    linking run admin hiddenHome `shouldReturn` [source.id]
+    linking run admin inner `shouldReturn` [source.id]
+    -- For whoever does not, the first leads to the page of Docs, as their
+    -- click does, and the second nowhere.
+    for_ [Anonymous, editor, reader] $ \who ->
+      linking run who homonym `shouldReturn` [source.id]
+
   it "is not found for a page the reader may not view, as for a page that is not there" $ \(Fixture run) -> do
     team <- spaceAt run "team"
     secret <- made run team "Secret" ""

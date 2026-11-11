@@ -185,6 +185,8 @@ module Wiki.Server.Storage.Rows
   , resolvePendingLinks
   , ensureLinks
   , linkingPages
+  , fromTopNamed
+  , followAmong
   , loadLinkEnds
   )
 where
@@ -2122,7 +2124,10 @@ storeServerSettings s = do
 -- followed (the parser, 'Wiki.App.Backlinks.pageLinks' and
 -- 'Wiki.App.Backlinks.linkTarget'). A database whose @page_links@ another
 -- version filled is filled again when it is opened ('ensureLinks'). A
--- change to what counts as a link, or to where one leads, adds one.
+-- change to what counts as a link, or to where one leads, adds one. So
+-- does a later step of the schema that writes a page's text: it writes
+-- through rows of its own, not through 'writeLinks', and the links of
+-- the pages it changed are then filled again.
 linksVersion :: Int
 linksVersion = 1
 
@@ -2289,6 +2294,33 @@ linkingPages pid = do
     p <- join_ wikiDb.pages (\p -> p.id ==. r.source_id)
     pure (p.id, p.space_id)
   pure (ordNub [(PageId i, SpaceId s) | (i, s) <- rows])
+
+-- | The links whose path starts at the top of the wiki and is named as
+-- this ('keptName'), each as its page, its destination and the page it
+-- leads to: those a reader who sees fewer spaces may follow elsewhere
+-- ("Wiki.Server.Storage"'s backlinks).
+fromTopNamed :: (Backend be) => Text -> Db be [(PageId, Text, Maybe PageId)]
+fromTopNamed name =
+  map (\(s, d, t) -> (PageId s, d, PageId <$> t))
+    <$> runSelectReturningList (select ((\r -> (r.source_id, r.destination, r.target_id)) <$> filter_ (\r -> r.name ==. val_ (Just (keptName name)) &&. r.destination `like_` val_ "/%") (all_ wikiDb.page_links)))
+
+-- | 'followAmong' follows links on pages as a reader's click does: among
+-- these spaces, the ones whose paths the reader can see, rather than among
+-- every space as the table does. Each link as its page and its
+-- destination, with the page it leads to.
+followAmong :: (Backend be) => [Space] -> [(PageId, Text)] -> Db be [(PageId, Maybe PageId)]
+followAmong visible links
+  | null links = pure []
+  | otherwise = do
+      everyone <- startLinking
+      let l = Linking {home = everyone.home, spaces = Map.restrictKeys everyone.spaces (Set.fromList (map (\s -> s.id) visible)), kept = everyone.kept}
+      nodes <- Map.fromList . map (\n -> (n.id, n)) <$> pageNodesWithIds (map fst links)
+      for links $ \(source, destination) -> fmap (source,) $ case Map.lookup source nodes of
+        Nothing -> pure Nothing
+        Just n ->
+          linkedPages l n.space >>= \case
+            Just pages | Links.counted l.home pages.space -> Links.linkTarget (linkWorld l) pages n.id destination
+            _ -> pure Nothing
 
 -- | Every link as its page, its place among the page's links, the page
 -- it leads to and whether it is pending: what @wiki-server check@ reads
