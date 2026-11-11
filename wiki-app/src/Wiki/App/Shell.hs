@@ -544,7 +544,11 @@ component =
           -- that the sidebar's first render is the prerendered one; else
           -- 'Initialize' loads them.
           backlinks <- for (guard (isJust loaded) *> backlinksOf begun) $ \pid -> fmap (pid,) <$> atOnce (listedBacklinks pid)
-          pure begun {backlinks = join backlinks}
+          -- Made whole here, before the first render: left to the render,
+          -- the demo's backend would follow every page's links in the
+          -- middle of adopting the page, after the header already answers
+          -- and before the page's view does.
+          pure $! begun {backlinks = forced (join backlinks)}
       , render
       , eval =
           H.mkEval
@@ -1662,7 +1666,7 @@ component =
           listed <- lift (listedBacklinks pid)
           now <- get
           when (backlinksOf now == Just pid) $
-            modify (\s -> s {backlinks = Just (pid, listed)})
+            modify (\s -> s {backlinks = forced (Just (pid, listed))})
 
     -- Ask where the page of a permanent address is, and go there: its own
     -- address replaces the permanent one in the history, so that Back
@@ -1883,6 +1887,12 @@ backlinksOf :: State m -> Maybe PageId
 backlinksOf st = case st.here of
   InSpace _ space _ | not (homeSpace (context st) space.id) -> (\p -> p.id) <$> currentPage st
   _ -> Nothing
+
+-- | The backlinks loaded, made whole: each entry and its title. The
+-- demo's backend answers with a list made as it is read, and a list left
+-- to the render would be made in the middle of it.
+forced :: Maybe (PageId, [Backlink]) -> Maybe (PageId, [Backlink])
+forced loaded = foldr (\b rest -> b.page `seq` b.title `seq` b.location `seq` rest) () (foldMap snd loaded) `seq` loaded
 
 -- | A page's backlinks, none when they cannot be read: the sidebar leaves
 -- the section out then, as for a page nothing links to.

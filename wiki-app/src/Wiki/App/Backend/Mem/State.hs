@@ -440,18 +440,31 @@ versionsRead found st = foldl' step st found
 -- soon enough to pay for that, while a reader who never searches never
 -- pays. Once made, the text is stored with the page until the page
 -- changes.
+--
+-- The page's links ('Wiki.App.Backlinks.pageLinks') are kept the same
+-- way: a page's backlinks follow every page's links, and parsing every
+-- page again at each page shown would make every move between pages wait.
 data Prepared = Prepared
   { version :: UTCTime
   -- ^ The page's 'updatedAt' when it was prepared. A page's title and body
   -- change only with a new version, so a page whose version is not this
   -- one is prepared again instead of being searched with stale text.
   , text :: ~Searchable
+  , links :: ~[Text]
+  -- ^ The destinations of the page's links that may lead to a page.
   }
   deriving stock (Eq, Show)
 
--- | A page's prepared text, made when it is first needed.
+-- | A page's prepared text and links, made when they are first needed.
 prepare :: Page -> Prepared
-prepare p = Prepared {version = p.updatedAt, text = searchable p.title p.body}
+prepare p = Prepared {version = p.updatedAt, text = searchable p.title p.body, links = Links.pageLinks p.body}
+
+-- | A page's links, as 'Prepared' keeps them if they were made from this
+-- version of it, and otherwise read from its text on the spot.
+linksOf :: MemState -> Page -> [Text]
+linksOf st p = case Map.lookup p.id st.searchText of
+  Just prepared | prepared.version == p.updatedAt -> prepared.links
+  _ -> Links.pageLinks p.body
 
 -- | Prepare every page's text again: for a wiki whose pages were put in
 -- whole, loaded from IndexedDB or imported from an archive.
@@ -982,7 +995,7 @@ backlinksIn pid st = do
           | (source, chain, pages) <- sources
           , p <- Map.elems pages.byId
           , p.id /= pid
-          , pid `elem` mapMaybe (runIdentity . Links.linkTarget world pages p.id) (Links.pageLinks p.body)
+          , pid `elem` mapMaybe (runIdentity . Links.linkTarget world pages p.id) (linksOf st p)
           , Just path <- [Space.pagePath source (`Map.lookup` pages.byId) p.id]
           ]
   where

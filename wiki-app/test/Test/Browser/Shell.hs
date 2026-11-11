@@ -295,6 +295,41 @@ spec m = do
 
   -- A page's backlinks (WP5.88 of docs/PLAN.md), under "Linked from" in
   -- the space's sidebar.
+  -- A route that changes within one page (a slide, a version) loads the
+  -- page's backlinks again, after it is shown: neither waits for the
+  -- other, and the view keeps its place.
+  it "moves through a deck's slides and a page's version with its backlinks in the sidebar, and without any" $ runPage $ do
+    let guide = slugs ["markdown-guide", "presentations"]
+        deckRoute = PageSlides (slugs ["docs"]) guide 1 1
+        movedThrough ui listed = do
+          find ui ".slides-position" >>= (`shouldHaveText` "1 / 9")
+          eventually $ (traverse textContent =<< findAll ui ".wiki-sidebar .sidebar-backlinks a") `shouldReturn` listed
+          find ui ".slides-next" >>= click
+          find ui ".slides-position" >>= (`shouldHaveText` "2 / 9")
+          eventually $ location `shouldReturn` "#/s/docs/p/markdown-guide/presentations/slides/?slide=2"
+          find ui ".slides-next" >>= click
+          find ui ".slides-position" >>= (`shouldHaveText` "3 / 9")
+          eventually $ (traverse textContent =<< findAll ui ".wiki-sidebar .sidebar-backlinks a") `shouldReturn` listed
+    (deck, wiki) <- startWith m (Just "user-admin") deckRoute
+    movedThrough deck ["Markdown guide"]
+    unmount deck
+    -- A version of the page, then the page as it is now.
+    docs <- onWiki wiki (getSpace (slugs ["docs"]))
+    page <- onWiki wiki (getPage docs.id guide)
+    version <- startOn m wiki (PageAtVersion (slugs ["docs"]) guide page.updatedAt)
+    find version ".version-note" >>= (`shouldSatisfy'` "")
+    eventually $ (traverse textContent =<< findAll version ".wiki-sidebar .sidebar-backlinks a") `shouldReturn` ["Markdown guide"]
+    find version ".version-note a" >>= click
+    eventually $ location `shouldReturn` "#/s/docs/p/markdown-guide/presentations/"
+    eventually $ (traverse textContent =<< findAll version ".wiki-sidebar .sidebar-backlinks a") `shouldReturn` ["Markdown guide"]
+    unmount version
+    -- The same deck once nothing links to it: no section, the same moves.
+    markdownGuide <- onWiki wiki (getPage docs.id (slugs ["markdown-guide"]))
+    _ <- onWiki wiki (savePage markdownGuide.id markdownGuide.updatedAt markdownGuide.title "# Markdown guide\n\nNo links now.")
+    unlinked <- startOn m wiki deckRoute
+    movedThrough unlinked []
+    length <$> findAll unlinked ".wiki-sidebar .sidebar-backlinks" `shouldReturn` 0
+
   it "lists the pages that link to the page shown in the sidebar, each leading to its page, and not one saved without its link" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-admin") Home
     unmount ui

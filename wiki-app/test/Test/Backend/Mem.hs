@@ -25,6 +25,7 @@ import Wiki.App.Backend.Mem
 import Wiki.App.Backend.Mem.Archive (toArchive)
 import Wiki.App.Backend.Mem.Persist (records)
 import Wiki.App.Backend.Mem.State (MemState (..), Prepared (..), setHome)
+import Wiki.App.Backlinks (pageLinks)
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Attachment (Attachment (..), Source (..), findAttachment)
 import Wiki.Core.Id (UserId (..))
@@ -151,7 +152,7 @@ spec = do
             st <- readIORef ref
             Map.keys st.searchText `shouldBe` Map.keys st.pages
             for_ (Map.elems st.pages) $ \p ->
-              Map.lookup p.id st.searchText `shouldBe` Just Prepared {version = p.updatedAt, text = searchable p.title p.body}
+              Map.lookup p.id st.searchText `shouldBe` Just Prepared {version = p.updatedAt, text = searchable p.title p.body, links = pageLinks p.body}
             -- Made from the pages, so neither the store nor an export has it.
             records st `shouldBe` records st {searchText = mempty}
             toArchive demoNow "test" st `shouldBe` toArchive demoNow "test" st {searchText = mempty}
