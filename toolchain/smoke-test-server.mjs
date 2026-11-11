@@ -719,8 +719,19 @@ async function interactiveSvgs() {
     await eventually(async () => assert.ok(await workerPage.evaluate(() => navigator.serviceWorker.controller !== null), "no worker"), "the service worker taking the page over");
     await workerPage.goto(url(path));
     await eventually(async () => assert.equal(await flameIn(workerPage.locator("#app .page-view")).textContent(), "ready"), "the flame graph under the service worker");
-    // Offline, the page the worker kept shows the image where the frame
-    // was: the worker cannot serve the frame.
+    // The server out of reach while the browser still has a network (a VPN
+    // gone down): the worker serves the page it kept, which shows the image
+    // where the frame was, since the worker cannot serve the frame.
+    const unreachable = (route) => route.abort("connectionrefused");
+    await workerContext.route(`${origin}/**`, unreachable);
+    await workerPage.reload();
+    assert.equal(await workerPage.evaluate(() => navigator.onLine), true, "the browser's network, the server out of reach");
+    await workerPage.locator("head meta[name=wiki-offline-copy]").waitFor({ state: "attached", timeout });
+    await eventually(async () => assert.ok(await programStarted(workerPage), "no listener yet"), "the program starting on the kept copy");
+    await workerPage.locator("#app .page-body img[alt='Where the time goes']").waitFor({ timeout });
+    assert.equal(await workerPage.locator("#app .page-body iframe.wiki-svg").count(), 0, "a frame on the kept copy, the server out of reach");
+    await workerContext.unroute(`${origin}/**`, unreachable);
+    // Offline, the same.
     await workerContext.setOffline(true);
     await workerPage.reload();
     await eventually(async () => assert.ok(await programStarted(workerPage), "no listener yet"), "the program starting offline");
@@ -764,7 +775,7 @@ async function interactiveSvgs() {
     // No frame reached the other site: no request, no image, no beacon,
     // no form, no popup, no navigation.
     assert.deepEqual(reached, [], "what reached another site");
-    console.log("ok: interactive SVGs of a private space run their scripts in frames the server prerenders and the program adopts without loading them again, and the island loads once each in the editor's preview and the page; they reach no cookie, no storage, no page, no fetch, no tab and no dialog; the same address in a tab is a download, before or after its frame; another site cannot frame it; the frame loads with the service worker on too; offline, over plain HTTP to another host and in a link's text the page shows the image");
+    console.log("ok: interactive SVGs of a private space run their scripts in frames the server prerenders and the program adopts without loading them again, and the island loads once each in the editor's preview and the page; they reach no cookie, no storage, no page, no fetch, no tab and no dialog; the same address in a tab is a download, before or after its frame; another site cannot frame it; the frame loads with the service worker on too; offline, with the server out of reach, over plain HTTP to another host and in a link's text the page shows the image");
   } finally {
     elsewhere.close();
     stun.close();

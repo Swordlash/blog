@@ -65,12 +65,13 @@
 -- styles run and nothing else
 -- ("Wiki.Api.ContentPolicy.interactiveSvgPolicy"). The application asks
 -- for a frame only in a secure context (HTTPS, or the loopback host),
--- where browsers send that header, and only while the browser is online,
--- since the service worker does not serve the frame; elsewhere the embed
--- is an image ("Wiki.App.Backend.Http.frameUrlIn"), and so is an embed in
--- a link's text, where a frame and its download link cannot go. The
--- frame is
--- 'svgFrameHeight' pixels high unless the embed gives a height
+-- where browsers send that header, and only while the wiki's server can
+-- be reached (the browser online, and the page no copy the service worker
+-- served without the server), since the worker does not serve the frame;
+-- elsewhere the embed is an image ("Wiki.App.Backend.Http.frameUrlIn"),
+-- and so is an embed in a link's text, where a frame and its download
+-- link cannot go. The frame is 'svgFrameHeight' pixels high unless the
+-- embed gives a height
 -- (@{.interactive height=600}@, read as an @html@ fence's,
 -- "Wiki.Core.Markdown.Ast.frameHeight"): the page cannot measure a
 -- document of another origin.

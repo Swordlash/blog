@@ -146,7 +146,7 @@ import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
 import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, newPageId, newPageKey, newSpaceKey, noEncryption, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openTitle, sealContent, shareSpaceKey)
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
-import Wiki.App.Offline (browserOnline, forgetReads)
+import Wiki.App.Offline (browserOnline, forgetReads, offlineCopy)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.Vault (identitySlot)
 import Wiki.Core.Attachment (Attachment)
@@ -471,13 +471,21 @@ write_ :: (MonadIO m) => HttpWiki IO NoContent -> HttpWiki m (Either WikiError (
 write_ endpoint = void <$> write endpoint
 
 -- | 'FrameReach' is what decides whether an interactive SVG's frame can
--- load in this page ('frameUrlIn'), as the browser says it when the page
--- is rendered. Natively there is no page: secure, and online.
+-- reach the server from this page ('frameUrlIn'), as the program knows it
+-- when the page is rendered. Natively there is no page: secure, online,
+-- and no kept copy.
 data FrameReach = FrameReach
   { secure :: Bool
   -- ^ Whether the page is a secure context (HTTPS, or the loopback host).
   , online :: Bool
   -- ^ Whether the browser has a network (@navigator.onLine@).
+  , keptCopy :: Bool
+  -- ^ Whether the page is the copy the service worker kept and served
+  -- because the server could not be reached ("Wiki.App.Offline.offlineCopy"),
+  -- and the reader has not left it: the browser may have a network while
+  -- the server is out of its reach (a VPN gone down). It holds until the
+  -- reader goes to another route ('endPreload'), as the shell's notice of
+  -- the offline copy does.
   }
   deriving stock (Eq, Show)
 
@@ -493,15 +501,21 @@ data FrameReach = FrameReach
 --   frame all the same, since the server cannot know the reader's
 --   context; the program then puts the image in its place, which is a
 --   repair.
--- * Online only. The service worker does not serve a frame sandboxed
---   without the wiki's origin, so offline the frame would show the
---   browser's error page. The image shows the file if the browser has kept
---   it, and its description otherwise. The page does not fetch the plain
---   file while online as well, to have it offline: that would download
---   every interactive SVG twice. A connection lost or found while the page
---   is open changes nothing until the next render.
+-- * Only where the server can be reached: the browser online, and the
+--   page not the copy the service worker served without the server. The
+--   worker does not serve a frame sandboxed without the wiki's origin, so
+--   there the frame would show the browser's error page. The image shows
+--   the file if the browser has kept it, and its description otherwise.
+--   The page does not fetch the plain file while online as well, to have
+--   it offline: that would download every interactive SVG twice. A
+--   connection lost or found while the page is open changes nothing until
+--   the next render. A server that goes away while a live page is open,
+--   or that is still away when the reader leaves the kept copy (the worker
+--   then answers the views' reads from what it kept), still leaves a frame
+--   that fails on its load. Nothing here detects that: a frame of another
+--   origin gives the page no load error it can tell from a success.
 frameUrlIn :: FrameReach -> Attachment -> Maybe Text
-frameUrlIn reach a = guard (reach.secure && reach.online) *> Links.attachmentFrameUrl a
+frameUrlIn reach a = guard (reach.secure && reach.online && not reach.keptCopy) *> Links.attachmentFrameUrl a
 
 instance (MonadIO m) => MonadWiki (HttpWiki m) where
   session =
@@ -592,11 +606,15 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- program can build without a request.
   attachmentUrl = pure . Links.attachmentUrl
 
-  -- Only where the frame can load: see 'frameUrlIn'.
-  attachmentFrameUrl a = liftIO $ do
-    secure <- if inBrowser then (.isSecureContext) <$> Window.window else pure True
-    online <- browserOnline
-    pure (frameUrlIn FrameReach {secure, online} a)
+  -- Only where the frame can reach the server: see 'frameUrlIn'.
+  attachmentFrameUrl a = HttpWiki $ do
+    env <- ask
+    liftIO $ do
+      secure <- if inBrowser then (.isSecureContext) <$> Window.window else pure True
+      online <- browserOnline
+      copy <- if inBrowser then offlineCopy else pure Nothing
+      preloading <- readIORef env.preloading
+      pure (frameUrlIn FrameReach {secure, online, keptCopy = isJust copy && preloading} a)
 
   -- The document's address answers with its bytes, or with the API's
   -- refusal, which 'send' reads as any other ("Wiki.App.Backend.Http.Client").
