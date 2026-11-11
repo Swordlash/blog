@@ -23,6 +23,7 @@ import Test.Markdown.Markers qualified as Markers
 import Test.Markdown.Mention qualified as Mention
 import Test.Markdown.Problems qualified as Problems
 import Test.Markdown.Spoiler qualified as Spoiler
+import Test.Markdown.Tasks qualified as Tasks
 import Test.Markdown.Tikz qualified as Tikz
 import Test.Markdown.Toc qualified as Toc
 import Test.Math qualified as Math
@@ -58,6 +59,7 @@ main = hspec . parallel $ do
   Mention.spec
   Emoji.spec
   Spoiler.spec
+  Tasks.spec
   Problems.spec
   Path.spec
   Order.spec
