@@ -252,6 +252,16 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     query (\case P.BlockQuote bs -> [lists bs]; _ -> []) quotedList `shouldBe` [[2]]
     show quotedList `shouldNotSatisfy` T.isInfixOf "sorted"
 
+  it "gives an image its own braces and no line's before its paragraph: an interactive SVG is an image" $ do
+    let imageClasses = query (\case P.Image (_, cls, _) _ _ -> [cls]; _ -> [])
+    own <- blocksOf ToOther place "{.wide}\n![A tree](attachment:tree.png){.interactive}\n"
+    images own `shouldBe` ["attachments/a1/tree.png"]
+    imageClasses own `shouldBe` [["interactive"]]
+    show own `shouldNotSatisfy` T.isInfixOf "wide"
+    lined <- blocksOf ToOther place "{.interactive}\n![A tree](attachment:tree.png)\n"
+    images lined `shouldBe` ["attachments/a1/tree.png"]
+    imageClasses lined `shouldBe` [[]]
+
   it "keeps a brace line that is no line of attributes to the wiki: in code, in a paragraph" $ do
     coded <- blocksOf ToOther place "```\n{.sorted}\n```\n"
     query (\case P.CodeBlock _ t -> [t]; _ -> []) coded `shouldBe` ["{.sorted}"]

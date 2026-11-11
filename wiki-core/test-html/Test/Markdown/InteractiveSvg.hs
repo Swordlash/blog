@@ -74,5 +74,10 @@ spec = describe "Markdown.Render, an interactive SVG" $ do
     framedIn `shouldSatisfy` T.isInfixOf "<ul"
     inItem <- markdownWith framing "- ![f](attachment:flame.svg){.interactive}\n- b\n"
     inItem `shouldSatisfy` T.isInfixOf "<li><span class=\"svg-frame interactive\">"
+  it "takes the image's own braces, and none of a line of attributes before its paragraph" $ do
+    own <- markdownWith framing "{.wide}\n![f](attachment:flame.svg){.interactive}\n"
+    own `shouldSatisfy` T.isPrefixOf "<p><span class=\"svg-frame interactive\">"
+    own `shouldNotSatisfy` T.isInfixOf "wide"
+    markdownWith framing "{.interactive}\n![f](attachment:flame.svg)\n" `shouldReturn` "<p><img alt=\"f\" src=\"/files/flame.svg\"></p>"
   it "finds an interactive SVG among the page's links as any embed" $
     fmap linkDestinations (parseMarkdown "![flame](attachment:flame.svg){.interactive}") `shouldBe` Right ["attachment:flame.svg"]
