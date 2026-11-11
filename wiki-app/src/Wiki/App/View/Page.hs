@@ -790,9 +790,12 @@ component =
             gets (\st -> st.threads) >>= \case
               ThreadsLoading -> loadThreads
               _ -> pass
+      -- The browser's question before closing the tab is the view's only
+      -- while it has ticks: the editor sets it too, and may be the next
+      -- view.
       Finalize -> do
         disconnectFeed
-        H.liftEffect (guardUnload False)
+        whenM (gets (\st -> not (Map.null st.ticks))) (H.liftEffect (guardUnload False))
       Retry -> do
         modify (\st -> st {loaded = Loading})
         load
@@ -807,8 +810,9 @@ component =
           unwatchAll
           -- Ticks belong to the page and the version they were made on:
           -- the shell has asked before leaving them ('HasUnsaved').
+          ticked <- gets (\st -> not (Map.null st.ticks))
           modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, ticks = mempty, tickNote = Nothing, savingTicks = False})
-          syncGuard
+          when ticked syncGuard
         when (elsewhere || old.context.revision /= input.context.revision) $ do
           -- The people mentioned are looked up again: the current user may
           -- be someone else now.
@@ -1116,7 +1120,7 @@ component =
           | Just moved <- rebaseTicks st.tasks tasks st.ticks -> keep moved (Just KeptOnNewer)
           | otherwise -> dropping ("The page was saved since you ticked its tasks, and its tasks are not the same now, so " <> ticksWere <> " dropped.")
         _ -> st {loaded, tasks, ticks = mempty, shown = freshBody}
-      syncGuard
+      unless (Map.null st.ticks) syncGuard
 
     -- The ticks set, and the page's text with them; or, if they cannot be
     -- written, the ticks as they were, and why.
