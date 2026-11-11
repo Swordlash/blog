@@ -1318,6 +1318,34 @@ confirms it against reality and the plan is amended if it does not hold.
     is a link all the same, never shown as unresolved. The session had
     first read the issue as a link that survives a move and proposed a
     second package, a quote found again after edits; the owner dropped it.
+71. **Backlinks are the links as they lead now, kept in a table the
+    program fills (WP5.88, #189, #239; the owner, 2026-11-11: a list in
+    the left panel, counted when a page is saved, no graph).** Each page
+    lists the pages that link to it, "Linked from", below the space's
+    pages. A link counts as the page view follows it: one function reads
+    a destination (`Wiki.App.Route.readLink`), and both the resolver and
+    the name a link is kept under come from that reading, since two
+    readings disagreed once (a percent-encoded address) and the list went
+    stale. `Wiki.Core.Markdown.Render.linkDestinations` extracts a text's
+    links and matches every block and inline constructor by name, so a
+    new one does not compile until someone decides for it; an `html`
+    block, code, mathematics and diagrams contribute none. The server
+    keeps a row per link (`page_links`, step 14: the destination as
+    written, its name, the page it leads to now, a flag `pending`),
+    written by the only two writers of a page's text; a change to the
+    tree marks the rows it can affect, and the end of every write
+    transaction resolves them again without parsing Markdown. What the
+    server answers must equal resolving now: the demo has no table and
+    resolves each time, and the contract suite runs both. The list holds
+    only sources the reader may view, with no count of the others, and a
+    path from the top that a hidden space would catch is resolved again
+    among the reader's spaces. No code step fills the table: a step must
+    mean the same whatever the parser becomes (decision 64), so step 14
+    makes the table empty and the program fills it when the setting
+    `links-version` is not its own, at `migrate` and at opening the
+    storage; a change to how links are read bumps the version. The front
+    page is neither a source nor a target, and an encrypted space's pages
+    have no list and are in none.
 
 ## Repository layout
 
@@ -1407,8 +1435,7 @@ and presentations (#191) are started. In this order: #194 (persistent
 links, done: decision 70, #235); #205's last part (done: WP5.85, #237,
 decision 58); #188 (emojis: the
 done and closed: WP5.86, #236; the owner, 2026-11-11: Slack's names that
-GitHub's list does not have are not needed); #189 (backlinks, on decision 70's reading of a
-link by id); #196 (WP5.89: an `html` block in a frame without scripts, `latex`
+GitHub's list does not have are not needed); #189 (backlinks, done: decision 71, #239); #196 (WP5.89: an `html` block in a frame without scripts, `latex`
 as `$$`, `{.norender}`), then #200 (WP5.90: an interactive SVG in a frame
 that runs scripts and shares no origin, the frame the plugins will run
 in); #204 (TODO lists first, then the
@@ -1422,33 +1449,6 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
-- **WP5.88 Backlinks (#189; the owner, 2026-11-11: a list in the left
-  panel, counted when a page is saved, no graph).** Each page shows the
-  pages that link to it, "Linked from", as a section of the left panel.
-  A link is counted as the page view follows it: the same function
-  resolves it (`resolvePageLink`, with `classifyDestination`'s forms: a
-  path, a wiki link, a link by id, an embed of a page, a link in raw
-  HTML), so the list and a click cannot disagree. A page's link to itself
-  is not listed, and a page that links twice is listed once. The server
-  keeps the links in a table, written by the one function every writer of
-  a page's text goes through (create, save, restore a version, both
-  imports, the guide's install and update, a template's copy), and
-  removed with the page or its space. What it answers must be what
-  resolving the links now would answer, since the demo has no table and
-  computes the list each time, and the contract suite runs both: a link
-  to a page written before the page exists lists once the page is
-  created; a page that moved is no longer listed for a link by its old
-  path and still is for a link by its id; a source that moved has its
-  relative links read from its new place; a page deleted and another
-  made at its path; a space moved. So a row keeps the destination as
-  written beside the page it resolved to, and a change to the tree
-  resolves the rows again without parsing Markdown. The list holds only
-  the pages the reader may view, with no count of the others. A source
-  in an encrypted space is not listed: the server cannot read its text.
-  A code step fills the table for the pages there are, with its
-  rehearsal check (decisions 58 and 64); the table is read by `check`
-  and copied by `copy-database`. Takes the next schema step; WP5.87
-  takes the one after, and is briefed when this has merged.
 - **WP5.89 An `html` block in a frame, `latex` as display mathematics,
   `{.norender}` (#196; the owner, 2026-11-11).** Raw HTML in a page goes
   through the allowlist of decision 13 into the page itself, with no
@@ -1490,8 +1490,8 @@ which the wiki pins since #227.
   private space's attachment, on which the design depends. This is the
   frame external plugins will run in (decision 69).
 - **WP5.87 Every login is ASCII (the owner, 2026-11-10; after WP5.85,
-  whose files it changes, and after WP5.88, which takes the schema step
-  before its own).** A new login has had to be ASCII since
+  whose files it changes, and after WP5.88, which took step 14; this one
+  takes step 15).** A new login has had to be ASCII since
   2026-11-06 (`parseLogin`), and a login made before that was kept. The
   owner: there are probably none, and if there are, migrate them and
   enforce the rule; and, asked how, to decide as if there were none. So
@@ -1849,6 +1849,29 @@ needs. Each was true when its package merged; check before relying on one.
   deployed, and a failpoint set by mistake only makes a move fail and
   switch back. The README's paragraph on native CI's "three independent
   hosted jobs" is from before the `deploy` group.
+- **Backlinks (WP5.88, #239).** A save of a page that has links reads its
+  space's pages once (about 55 ms for 5,000 pages in an unoptimised
+  build), creating a page there costs 0.12 to 0.27 s, and the fill at an
+  upgrade 12 to 29 s for 5,000 pages with 50,000 links. A long list is
+  not capped. The list is not updated live. The demo computes its lists
+  before the first render and keeps each page's parsed links beside its
+  search text; the smoke test failed 9 times in 11 before that, the first
+  action after a load being lost, and once in 6 after it at another step
+  (a history page fetching TikZJax), which was not shown to be unrelated.
+- **The history's entry numbers (#240).** Following a permanent link ran
+  its redirect on a worker thread, and for a moment the entry had no
+  number in the history and none kept aside, so the shell numbered it
+  twice and "Stay" asked the browser to go further than the history
+  reaches; fixed by running the redirect on the component's loop and by
+  writing the number back before the kept one is cleared. The same
+  mechanism, read from the code and not reproduced, is in three other
+  redirects that do not go through `replacingEntry`: the redirect to a
+  space's canonical home address in `announce`, the administration's
+  canonical redirect, and Stay's own fallback. A small package of its
+  own. Two examples fail now and then for other reasons: "copies the
+  permanent link of the version shown…" reads the notice without
+  waiting, and "counts a notification the live channel tells of, with no
+  page shown".
 - **`check` and the accounts (WP5.85, #237).** `ways in` reads a column
   that knows of passwords alone: an account that signs in through a
   provider or with a passkey only reads "no (no password)" before and
