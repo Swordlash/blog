@@ -5,7 +5,7 @@
 An `html` fence, `latex` as display mathematics, and `{.norender}`
 (WP5.89, #196). A fence whose language is `html` is a new block,
 `HtmlBlock`, with the fence's attributes, of which `frameHeight` reads a
-height in pixels (`{height=300}`, `300px`, 1 to 4000), and one whose language is `latex` a `MathBlock`, as `math`
+height in pixels (`{height=300}` or `300px`, held to at most 4000), and one whose language is `latex` a `MathBlock`, as `math`
 is; the class `norender` keeps any of `html`, `latex`, `math`, `mermaid`
 and `tikz` a `CodeBlock` of its language (`math` as `latex`), read before
 the dispatch and in the attributes after the fence. `languageOfClasses`,

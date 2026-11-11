@@ -82,7 +82,7 @@ spec = describe "Markdown.Render, an html fence" $ do
       let hashRouted = framed {pageHref = ("#/" <>)}
       markup <- markdownWith hashRouted "```html\n<a href=\"guide\">guide</a>\n```\n"
       srcdocOf markup `shouldReturn` frameDocument SystemScheme "<a href=\"#/guide\" target=\"_blank\" rel=\"noopener noreferrer\">guide</a>"
-    it "gives the frame the height its fence gives, in pixels, and ignores a height it cannot read" $ do
+    it "gives the frame the height its fence gives, in pixels, at most 4000, and ignores a height it cannot read" $ do
       let measured = wiki {htmlBlock = \_ _ height document -> HH.text (show height <> " " <> show (document == frameDocument SystemScheme "<p>x</p>"))}
           heightOf attributes = markdownWith measured ("```html " <> attributes <> "\n<p>x</p>\n```\n")
       heightOf "" `shouldReturn` "Nothing True"
@@ -91,7 +91,7 @@ spec = describe "Markdown.Render, an html fence" $ do
       heightOf "{.numbered height=120}" `shouldReturn` "Just 120 True"
       heightOf "{height=tall}" `shouldReturn` "Nothing True"
       heightOf "{height=0}" `shouldReturn` "Nothing True"
-      heightOf "{height=5000}" `shouldReturn` "Nothing True"
+      heightOf "{height=5000}" `shouldReturn` "Just 4000 True"
 
     describe "whatever the block holds, nothing of it lands outside the srcdoc" $ do
       let hostile =

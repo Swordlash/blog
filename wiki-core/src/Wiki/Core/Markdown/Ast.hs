@@ -391,17 +391,21 @@ codeRows attrs = do
 
 -- | The height an @html@ fence's frame is given, in pixels, from its
 -- fence's attribute @height=N@ (@```html {height=300}@, or @height=300px@):
--- a whole number from 1 to 4000. Anything else, and no @height@, gives
--- none, and the frame is as high as its content. The page caps a frame at
--- 80% of the window's height either way.
+-- a whole number above 0, held to at most 4000. Anything else (0, a
+-- fraction, another unit), and no @height@, gives none, and the frame is
+-- as high as its content. The page caps a frame at 80% of the window's
+-- height either way.
 frameHeight :: Attributes -> Maybe Int
 frameHeight attrs = do
   written <- attribute "height" attrs
   let digits = fromMaybe written (T.stripSuffix "px" written)
-  guard (not (T.null digits) && T.length digits <= 4 && T.all isDigit digits)
-  n <- readMaybe (T.unpack digits)
-  guard (n >= 1 && n <= 4000)
-  pure n
+      significant = T.dropWhile (== '0') digits
+  guard (not (T.null significant) && T.all isDigit digits)
+  -- More than four digits is more than 4000, and is not read.
+  n <- if T.length significant > 4 then Just maxFrameHeight else readMaybe (T.unpack significant)
+  pure (min maxFrameHeight n)
+  where
+    maxFrameHeight = 4000
 
 -- | Whether a code block shows a number before each line: its fence has
 -- the class @numbered@ (@```haskell {.numbered}@, or
