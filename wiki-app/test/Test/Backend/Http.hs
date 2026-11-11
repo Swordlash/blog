@@ -332,12 +332,15 @@ requests = describe "its requests" $ do
       url `shouldSatisfy` (\u -> "api/v1/attachments/" `T.isPrefixOf` u || "https://" `T.isPrefixOf` u)
     readIORef asked `shouldReturn` []
 
-  it "gives a stored SVG's interactive address in a secure context only, where the browser names a frame's load" $ do
+  it "gives a stored SVG's interactive address only where its frame can load: a secure context, online" $ do
     let svg = Attachment {id = AttachmentId "a1", name = FileName "flame.svg", mediaType = MimeType "image/svg+xml", size = 1, source = SourceBlob (BlobId "b1")}
         png = Attachment {id = AttachmentId "a2", name = FileName "flame.png", mediaType = MimeType "image/png", size = 1, source = SourceBlob (BlobId "b2")}
-    frameUrlIn True svg `shouldBe` Just "api/v1/attachments/a1/flame.svg?interactive"
-    frameUrlIn False svg `shouldBe` Nothing
-    frameUrlIn True png `shouldBe` Nothing
+    let reach secure online = FrameReach {secure, online}
+    frameUrlIn (reach True True) svg `shouldBe` Just "api/v1/attachments/a1/flame.svg?interactive"
+    frameUrlIn (reach False True) svg `shouldBe` Nothing
+    frameUrlIn (reach True False) svg `shouldBe` Nothing
+    frameUrlIn (reach False False) svg `shouldBe` Nothing
+    frameUrlIn (reach True True) png `shouldBe` Nothing
 
 answers :: Spec
 answers = describe "its answers" $ do

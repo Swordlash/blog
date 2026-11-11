@@ -62,6 +62,7 @@ module Wiki.App.Backend.Http
   , runHttpWiki
   , cacheOf
   , frameUrlIn
+  , FrameReach (..)
 
     -- * Importing into the server
   , previewImport
@@ -145,7 +146,7 @@ import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
 import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, newPageId, newPageKey, newSpaceKey, noEncryption, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openTitle, sealContent, shareSpaceKey)
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
-import Wiki.App.Offline (forgetReads)
+import Wiki.App.Offline (browserOnline, forgetReads)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.Vault (identitySlot)
 import Wiki.Core.Attachment (Attachment)
@@ -469,19 +470,38 @@ write endpoint = send endpoint <* modifyCache afterWrite <* forgetFound
 write_ :: (MonadIO m) => HttpWiki IO NoContent -> HttpWiki m (Either WikiError ())
 write_ endpoint = void <$> write endpoint
 
+-- | 'FrameReach' is what decides whether an interactive SVG's frame can
+-- load in this page ('frameUrlIn'), as the browser says it when the page
+-- is rendered. Natively there is no page: secure, and online.
+data FrameReach = FrameReach
+  { secure :: Bool
+  -- ^ Whether the page is a secure context (HTTPS, or the loopback host).
+  , online :: Bool
+  -- ^ Whether the browser has a network (@navigator.onLine@).
+  }
+  deriving stock (Eq, Show)
+
 -- | The address an interactive SVG's frame loads ('Links.attachmentFrameUrl'),
--- if the page is a secure context (HTTPS, or the loopback host; the first
--- argument), and otherwise none, so that the embed stays an image. The
--- server gives the interactive form only to a frame's load, which the
--- browser names in @Sec-Fetch-Dest@, and Chromium sends that header only
--- from a secure context: over plain HTTP to another host the frame would
--- get the plain answer, a download, and stay blank. A page the server
--- prerendered for such a reader holds the frame all the same, since the
--- server cannot know the reader's context; the program then puts the
--- image in its place, which is a repair. Natively there is no page, and
--- the context counts as secure.
-frameUrlIn :: Bool -> Attachment -> Maybe Text
-frameUrlIn secure a = guard secure *> Links.attachmentFrameUrl a
+-- where the frame can load, and otherwise none, so that the embed stays an
+-- image:
+--
+-- * In a secure context only. The server gives the interactive form only
+--   to a frame's load, which the browser names in @Sec-Fetch-Dest@, and
+--   Chromium sends that header only from a secure context: over plain HTTP
+--   to another host the frame would get the plain answer, a download, and
+--   stay blank. A page the server prerendered for such a reader holds the
+--   frame all the same, since the server cannot know the reader's
+--   context; the program then puts the image in its place, which is a
+--   repair.
+-- * Online only. The service worker does not serve a frame sandboxed
+--   without the wiki's origin, so offline the frame would show the
+--   browser's error page. The image shows the file if the browser has kept
+--   it, and its description otherwise. The page does not fetch the plain
+--   file while online as well, to have it offline: that would download
+--   every interactive SVG twice. A connection lost or found while the page
+--   is open changes nothing until the next render.
+frameUrlIn :: FrameReach -> Attachment -> Maybe Text
+frameUrlIn reach a = guard (reach.secure && reach.online) *> Links.attachmentFrameUrl a
 
 instance (MonadIO m) => MonadWiki (HttpWiki m) where
   session =
@@ -572,10 +592,11 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- program can build without a request.
   attachmentUrl = pure . Links.attachmentUrl
 
-  -- Only in a secure context: see 'frameUrlIn'.
+  -- Only where the frame can load: see 'frameUrlIn'.
   attachmentFrameUrl a = liftIO $ do
     secure <- if inBrowser then (.isSecureContext) <$> Window.window else pure True
-    pure (frameUrlIn secure a)
+    online <- browserOnline
+    pure (frameUrlIn FrameReach {secure, online} a)
 
   -- The document's address answers with its bytes, or with the API's
   -- refusal, which 'send' reads as any other ("Wiki.App.Backend.Http.Client").

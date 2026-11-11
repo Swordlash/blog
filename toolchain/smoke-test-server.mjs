@@ -81,8 +81,9 @@
 //    recorded); the same address opened in a tab is a download, whether
 //    its frame loaded first or not; another site cannot frame it; one that
 //    navigates its frame to the wiki's API arrives there signed out; the
-//    frames load with the service worker on too; and over plain HTTP to a
-//    host that is not the loopback one the page shows the image instead.
+//    frames load with the service worker on too; and offline, over plain
+//    HTTP to a host that is not the loopback one, and in a link's text, the
+//    page shows the image instead.
 //
 // On PostgreSQL (toolchain/smoke-test.sh runs it so when one is at hand),
 // the server and the console find their database in WIKI_DATABASE_URL, which
@@ -573,6 +574,7 @@ async function interactiveSvgs() {
       "![hostile](attachment:hostile.svg){.interactive height=160}",
       "![wander](attachment:wander.svg){.interactive height=120}",
       "![still](attachment:flame.svg)",
+      "[![linked](attachment:flame.svg){.interactive}](https://example.com/)",
     ].join("\n\n");
     const made = await api(`spaces/${encodeURIComponent(space.body.id)}/pages`, { method: "POST", body: JSON.stringify({ parent: null, title: "Profiles", body }) });
     assert.equal(made.status, 201, "the page of the SVGs");
@@ -611,6 +613,8 @@ async function interactiveSvgs() {
       assert.ok(src[1].endsWith("?interactive"), `frame ${i}'s address: ${src[1]}`);
     }
     assert.equal(await page.locator("#app .page-body img[alt=still]").getAttribute("src"), framed(flame).replace(/^\//, "").replace("?interactive", ""), "an SVG without the class: the image");
+    // In a link's text, the image, which the page adopted unchanged.
+    assert.equal(await page.locator("#app .page-body a[href='https://example.com/'] > img[alt=linked]").count(), 1, "an interactive SVG in a link: the image");
     await eventually(async () => assert.ok(page.frames().some((f) => f.url().includes("hostile.svg"))), "the hostile SVG's frame");
 
     // A click in the flame graph changes it: its script ran.
@@ -715,6 +719,13 @@ async function interactiveSvgs() {
     await eventually(async () => assert.ok(await workerPage.evaluate(() => navigator.serviceWorker.controller !== null), "no worker"), "the service worker taking the page over");
     await workerPage.goto(url(path));
     await eventually(async () => assert.equal(await flameIn(workerPage.locator("#app .page-view")).textContent(), "ready"), "the flame graph under the service worker");
+    // Offline, the page the worker kept shows the image where the frame
+    // was: the worker cannot serve the frame.
+    await workerContext.setOffline(true);
+    await workerPage.reload();
+    await eventually(async () => assert.ok(await programStarted(workerPage), "no listener yet"), "the program starting offline");
+    await workerPage.locator("#app .page-body img[alt='Where the time goes']").waitFor({ timeout });
+    assert.equal(await workerPage.locator("#app .page-body iframe.wiki-svg").count(), 0, "a frame offline");
     await workerContext.close();
 
     // Another site's page that frames the SVG, made public for it: its
@@ -753,7 +764,7 @@ async function interactiveSvgs() {
     // No frame reached the other site: no request, no image, no beacon,
     // no form, no popup, no navigation.
     assert.deepEqual(reached, [], "what reached another site");
-    console.log("ok: interactive SVGs of a private space run their scripts in frames the server prerenders and the program adopts without loading them again, and the island loads once each in the editor's preview and the page; they reach no cookie, no storage, no page, no fetch, no tab and no dialog; the same address in a tab is a download, before or after its frame; another site cannot frame it; the frame loads with the service worker on too, and over plain HTTP to another host the page shows the image");
+    console.log("ok: interactive SVGs of a private space run their scripts in frames the server prerenders and the program adopts without loading them again, and the island loads once each in the editor's preview and the page; they reach no cookie, no storage, no page, no fetch, no tab and no dialog; the same address in a tab is a download, before or after its frame; another site cannot frame it; the frame loads with the service worker on too; offline, over plain HTTP to another host and in a link's text the page shows the image");
   } finally {
     elsewhere.close();
     stun.close();
