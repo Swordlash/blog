@@ -341,7 +341,7 @@ everyTable = do
     ]
   row wikiDb.key_grants [KeyGrantRow {resource_kind = "space", resource_id = "copy-sealed", key_id = "copy-space-key", recipient = "copy-u1", recipient_key_id = "copy-key", enc = "enc", sealed = "sealed", created_at = time 1}]
   row wikiDb.page_keys [PageKeyRow {page_id = "copy-late", key_id = "copy-page-key", space_key_id = "copy-space-key", nonce = "nonce", wrapped = "wrapped"}]
-  row wikiDb.sealed_versions [SealedVersionRow {page_id = "copy-page", updated_at = time 1, tag = "tag", key_id = "copy-page-key", title_nonce = "n1", title = "t", body_nonce = "n2", body = "b"}]
+  row wikiDb.sealed_versions [SealedVersionRow {page_id = "copy-page", updated_at = time 1, tag = "tag", key_id = "copy-page-key", title_nonce = "n1", title = "t", body_nonce = "n2", body = "b", chain_number = Just 2, previous_tag = Just "earlier-tag"}]
   row wikiDb.settings [SettingRow {key = "copy-setting", value = "ünïcode ✓"}]
   row wikiDb.sign_in_providers [ProviderRow {name = "copy-github", position = 0, kind = "github", client_id = "copy-client", issuer = Nothing, secret = Nothing}]
   row wikiDb.audit_log [AuditRow {id = "copy-audit", at = time 1, actor_id = "copy-u1", actor_login = "copy.one", action = "space.create", subject_kind = "space", subject_id = Just "copy-space", subject_name = "Copy", detail = "{}", address = "192.0.2.1"}]

@@ -245,7 +245,7 @@ import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentBody, formerAuthor, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (KeyGrant), PageKey (..), SealedContent (..), VersionTag (..), encapsulatedBytes, headingOf, keyIdBytes, maxBodyCiphertext, maxTitleCiphertext, nonceBytes, sealedKeyBytes)
+import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (KeyGrant), PageKey (..), SealedContent (..), VersionTag (..), chainAfter, encapsulatedBytes, firstChain, headingOf, keyIdBytes, maxBodyCiphertext, maxTitleCiphertext, nonceBytes, sealedKeyBytes)
 import Wiki.Core.Encrypted qualified as CE
 import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, checkLogins, rootedArchive, threadsAmong, withoutHomeDocument)
 import Wiki.Core.Export qualified as Export
@@ -3137,6 +3137,13 @@ grantSpaceKeyTx sid req = do
     unless (any (\x -> x.recipient == g.recipient && x.recipientKeyId == g.recipientKeyId) grants) $
       db (insertGrant spaceKind sid.text time KeyGrant {keyId = k, recipient = g.recipient, recipientKeyId = g.recipientKeyId, enc = g.enc, sealed = g.sealed})
 
+-- | Why a version of a page of an encrypted space is refused when it does
+-- not follow on the page's latest version in the chain of versions
+-- ("Wiki.Core.Encrypted"): sent by a tab of a program from before the
+-- chain, or built on a version that is no longer the latest.
+outOfChain :: Text
+outOfChain = "This version does not follow on the page's latest one: reload the page, and save again."
+
 -- | What a notification names a page of an encrypted space by, in the
 -- bell, the feed and the mail: not its title, which the server cannot
 -- read, but what it is.
@@ -3227,6 +3234,10 @@ createSealedPageTx sid new = do
   checkSealedParts new.pageKey new.content
   unless (new.pageKey.spaceKeyId == k) $
     failWith (Conflict "The space's key has changed since: open the space again.")
+  -- The first version of the chain ("Wiki.Core.Encrypted"): a browser of
+  -- before versions were chained sends none, and is told to reload.
+  unless (new.content.chain == Just firstChain) $
+    failWith (Conflict outOfChain)
   nodes <- db (childPages sid new.parent)
   random <- T.take 12 . T.filter (/= '-') <$> newId
   time <- now
@@ -3271,6 +3282,11 @@ saveSealedPageTx pid base edit = do
   checkSealedParts pk edit.content
   when (p.updatedAt /= base) $
     failWith (Conflict "The page has been saved by someone else since this edit began.")
+  -- The version follows on the latest one in the chain
+  -- ("Wiki.Core.Encrypted"): the next number, naming the latest's tag.
+  latest <- db (loadSealedVersion pid p.updatedAt) >>= maybe (failWith NotFound) pure
+  unless (edit.content.chain == Just (chainAfter latest.tag latest.chain)) $
+    failWith (Conflict outOfChain)
   time <- now
   let p' = savedAs time "" "" p
   author <- asks (\x -> x.author)

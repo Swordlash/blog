@@ -17,7 +17,7 @@ import Network.HTTP.Types (hContentType, statusCode)
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, info)
 import Protolude
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Database (Backing (..), choiceOf, placeOptionsOf, withConnectionTo, withEmptyPlace)
+import Test.Database (Backing (..), choiceOf, placeOptionsOf, undoStep16, withConnectionTo, withEmptyPlace)
 import Test.Hspec
 import Test.Server.Fixture (Reply (status), Running (..), cookie, givePassword, send, signInAs, withDemoMoved, withDemoPlace, withDemoRunning)
 import Test.Server.Program (cLocale, placeArgsOf, wikiServerProgram)
@@ -338,10 +338,11 @@ checksSpec backing = describe "the upgrade's rehearsal, its checks" $ do
     -- database forgets that the step and those after it ran, before the
     -- seed and after each of the old console's commands, which migrate
     -- it. The server of the before then migrates it, as the new program
-    -- would. This holds while the steps from 15 on make no table: step 15
-    -- makes none.
+    -- would. This holds while the steps from 15 on can run again: step 15
+    -- makes nothing, and step 16's columns are dropped with it.
     let forget = withConnectionTo at $ \c -> do
           begin True c
+          runScript c undoStep16
           runScript c "DELETE FROM wiki_schema WHERE version >= 15;"
           commitTransaction c
         oldConsole place args input = consoleOn place args input <* forget

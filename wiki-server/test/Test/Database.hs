@@ -49,6 +49,7 @@ module Test.Database
   , choiceOf
   , placeOptionsOf
   , withConnectionTo
+  , undoStep16
   )
 where
 
@@ -429,6 +430,12 @@ choiceOf = \case
 -- | The console's options for a place.
 placeOptionsOf :: Place -> PlaceOptions
 placeOptionsOf at = PlaceOptions {dataDir = at.dataDir, database = choiceOf at.database, programs = at.programs}
+
+-- | What undoes step 16 of the schema (@0016-chained-versions@), the same
+-- on both databases: for a test that plays a database from before it,
+-- whose steps from then on run again.
+undoStep16 :: Text
+undoStep16 = "ALTER TABLE sealed_versions DROP COLUMN chain_number; ALTER TABLE sealed_versions DROP COLUMN previous_tag;"
 
 -- | A connection of its own to a place's database, outside any storage:
 -- for a test that looks at the database as the storage leaves it, or

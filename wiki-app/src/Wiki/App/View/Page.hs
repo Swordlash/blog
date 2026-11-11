@@ -147,6 +147,7 @@ import Wiki.Api.Events (PageEvent (..), Readers (..), applyEvent, noReaders)
 import Wiki.Api.Export (ExportFormat, pageFormats)
 import Wiki.App.Backend (ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (exports, user), WikiError (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
+import Wiki.App.Backend.Encrypted (MonadEncryption (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Browser (ArticleLink (..), Selected (..), absoluteUrl, clickedThread, copyText, followArticleLink, markFragment, readSelection, reveal, revealFragment)
@@ -167,6 +168,7 @@ import Wiki.Core.Anchor (Anchor, BlockText (..), Located (..), Marking (Marking)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Blog (Neighbours (..), neighbours)
 import Wiki.Core.Comment (Comment (..), Thread (..), isInline, mayComment)
+import Wiki.Core.Encrypted (ChainProblem, chainProblemText)
 import Wiki.Core.Id
   ( AttachmentId
   , CommentThreadId (..)
@@ -285,6 +287,11 @@ data State = State
   -- ^ The task whose box the reader set last, by its index: its box has
   -- the focus again after a render that moved it, drew it anew, or took
   -- the focus away with the bar's buttons (Discard, a save).
+  , chainProblem :: Maybe ChainProblem
+  -- ^ What this tab found wrong with the versions the server sent of a
+  -- page of an encrypted space ("Wiki.Core.Encrypted"'s chain of
+  -- versions): shown in a banner over the page, which is then not edited
+  -- from this tab.
   }
 
 -- | An address put on the clipboard: by a click on a heading's or a box's
@@ -331,7 +338,7 @@ data Action
   | ReloadLosingTicks
   | DismissTickNote
 
-component :: forall m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component ViewQuery Input ViewOutput m
+component :: forall m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadEncryption m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component ViewQuery Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -375,6 +382,7 @@ component =
               , fetches = 0
               , lastBox = Nothing
               , writing = False
+              , chainProblem = Nothing
               }
       , render
       , eval =
@@ -411,8 +419,9 @@ component =
             -- It has its own class too: the bar stays under the header
             -- while the page scrolls (web/style.css), so that a long page
             -- can be edited without scrolling back up to it.
-            [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = input.context, target = WatchPage page.id} | notified input.context] }}{{ [HH.slot_ "star" () StarView.component StarView.Input {context = input.context, page = page.id} | notified input.context] }}{{ liveNote st }}{{ widthSwitch input.context.pageWidth }}</div>|]
+            [hh|<div class="actions page-actions">{{ actions input (isJust st.chainProblem) page deck (commentsToggle st) }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = input.context, target = WatchPage page.id} | notified input.context] }}{{ [HH.slot_ "star" () StarView.component StarView.Input {context = input.context, page = page.id} | notified input.context] }}{{ liveNote st }}{{ widthSwitch input.context.pageWidth }}</div>|]
               : toList (form input page mode)
+                <> [[hh|<p class="error encrypted-rollback" role="alert">{{ chainProblemText p }}</p>|] | Just p <- [st.chainProblem]]
                 <> toList (errorView <$> problem)
                 <> toList (versionNote input page)
                 <> toList (templateNote page)
@@ -443,11 +452,13 @@ component =
     exportMenu :: [ExportFormat] -> ExportTarget -> [H.ComponentHTML Action Slots m]
     exportMenu formats target = [HH.slot_ "export" () ExportView.component ExportView.Input {formats, target} | not (null formats)]
 
-    actions :: Input -> Page -> Bool -> H.ComponentHTML Action Slots m -> [H.ComponentHTML Action Slots m]
-    actions input page deck comments
+    actions :: Input -> Bool -> Page -> Bool -> H.ComponentHTML Action Slots m -> [H.ComponentHTML Action Slots m]
+    actions input readOnly page deck comments
       -- A version is only read: its history, and its permanent link.
       | isJust input.version = history : copyPermanent
-      | mayEdit input.context page.space =
+      -- So is a page whose versions the server sent wrong: the reader
+      -- reloads it before editing.
+      | mayEdit input.context page.space && not readOnly =
           [ Router.link input.context.router Followed (documentRoute input.context page.space (EditPage spacePath input.path)) [HP.class_ (if home then "button edit-home" else "button")] [HH.text (if home then "Edit home page" else "Edit")]
           | changes
           ]
@@ -780,6 +791,7 @@ component =
           Loading -> load >> H.liftEffect revealFragment
           loaded -> do
             for_ (pageOf loaded) (H.raise . Showing)
+            checkChain
             H.raise Loaded
             -- Scroll to the heading the address names, if any, once the
             -- page is shown: the browser does this for a page it loaded, but
@@ -1183,11 +1195,22 @@ component =
         Ready new _ _ _ | not (takesPage shown new) -> pure False
         _ -> do
           adopt loaded
+          checkChain
           resolvePeople
           gets (\st -> pageOf st.loaded) >>= traverse_ (H.raise . Showing)
           watch
           loadThreads
           pure True
+
+    -- What the backend found wrong with the versions of the page shown, in
+    -- an encrypted space ("Wiki.App.Backend.Encrypted"'s 'chainProblem').
+    checkChain :: H.HalogenM State Action Slots ViewOutput m ()
+    checkChain = do
+      st <- get
+      found <- case pageOf st.loaded of
+        Just page | isJust st.input.space.encryption -> lift (chainProblem page.id)
+        _ -> pure Nothing
+      modify (\now -> now {chainProblem = found})
 
     -- The page as it is now, fetched while there are unsaved ticks (after
     -- a save's conflict, or when the reader asks to see the new version),

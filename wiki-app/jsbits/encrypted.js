@@ -251,3 +251,36 @@ async function wiki_enc_open_many(space, items) {
 function wiki_enc_forget(handle) {
   wikiEncRegistry().keys.delete(handle);
 }
+
+// The latest version of each page of an encrypted space that this browser
+// has read and checked (Wiki.Core.Encrypted's Seen), by user: in local
+// storage under "wiki-chain:" and the user's id, as JSON {page: {number,
+// tag}}. Nothing in it is secret (ids, numbers and random tags); it stays
+// across sign-outs and reloads, so that a server that later sends an
+// older version of a page is caught. Without local storage, nothing is
+// remembered, and nothing is caught.
+function wikiEncSeenAll(user) {
+  try {
+    const all = JSON.parse(localStorage.getItem("wiki-chain:" + user));
+    return all !== null && typeof all === "object" ? all : {};
+  } catch {
+    return {};
+  }
+}
+
+// The version seen of a page, as JSON {number, tag}, or "" for none.
+function wiki_enc_seen(user, page) {
+  const seen = wikiEncSeenAll(user)[page];
+  return seen === undefined ? "" : JSON.stringify(seen);
+}
+
+// Remember the version seen of a page (JSON {number, tag}).
+function wiki_enc_keep_seen(user, page, seen) {
+  try {
+    const all = wikiEncSeenAll(user);
+    all[page] = JSON.parse(seen);
+    localStorage.setItem("wiki-chain:" + user, JSON.stringify(all));
+  } catch {
+    // No local storage: nothing is remembered.
+  }
+}

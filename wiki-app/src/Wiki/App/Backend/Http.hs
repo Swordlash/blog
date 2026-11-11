@@ -143,7 +143,7 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Opaque qualified as Opaque
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
-import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, newPageId, newPageKey, newSpaceKey, noEncryption, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openTitle, sealContent, shareSpaceKey)
+import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, keepSeen, newPageId, newPageKey, newSpaceKey, noEncryption, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openTitle, openVersionTitles, sealContent, seenOf, shareSpaceKey)
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (browserOnline, forgetReads, offlineCopy)
@@ -151,7 +151,7 @@ import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.Vault (identitySlot)
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Comment (Thread (..))
-import Wiki.Core.Encrypted (KeyGrant (..), PageKey (..))
+import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), KeyGrant (..), PageKey (..), SealedContent (..), SealedHeading (..), Seen (..), VersionTag, chainAfter, chainProblemText, firstChain, gapIn, headingOf, judgeHead, linkedDown)
 import Wiki.Core.Id (PageId (..), SpaceId)
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..))
@@ -163,7 +163,7 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Password (..), Standing (..), User (..), checkNewPassword)
 import Wiki.Core.Vault (KeyId)
-import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..), versionsPageSize)
+import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..), maxVersionsPageSize, versionsPageSize)
 
 -- | The HTTP backend's state: where requests go, and the cache.
 data HttpEnv = HttpEnv
@@ -1359,10 +1359,18 @@ data Held = Held
   -- fetched at the first search that needs them, and forgotten at every
   -- write, when the live channel says a page was saved, and when a list
   -- of the space's pages shows pages added, removed or saved since.
+  , heldHeads :: Map PageId (UTCTime, VersionTag, Maybe Chain)
+  -- ^ The latest version of each page of an encrypted space read here, by
+  -- its time, with its tag and chain, checked by its decryption: what the
+  -- next version saved on top of it is chained to ('sealedSavePage').
+  , heldProblems :: Map PageId ChainProblem
+  -- ^ What this tab found wrong with the versions the server sent of a
+  -- page ('checkHead', "Wiki.Core.Encrypted"'s chain of versions). A page
+  -- with a problem is not saved from this tab, until a reload.
   }
 
 noneHeld :: Held
-noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty}
+noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty}
 
 -- | Let go of what is held of encrypted spaces for the user who was signed
 -- in: the keys the page holds are forgotten, and the pages decrypted with
@@ -1371,7 +1379,7 @@ noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, hel
 -- encrypted (or not at all), never as plain text.
 forgetHeldOf :: HttpEnv -> IO ()
 forgetHeldOf env = do
-  was <- atomicModifyIORef' env.held (\h -> (h {heldKeys = mempty, heldFound = mempty}, h))
+  was <- atomicModifyIORef' env.held (\h -> (h {heldKeys = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty}, h))
   traverse_ (forgetSpaceKey . snd) (Map.elems was.heldKeys)
 
 modifyHeld :: (MonadIO m) => (Held -> Held) -> HttpWiki m ()
@@ -1599,6 +1607,71 @@ withPageKey space sid pid k step =
 unreadable :: Text
 unreadable = "(a page this browser cannot decrypt)"
 
+--------------------------------------------------------------------------------
+-- The chain of versions
+
+-- | Remember the latest versions of pages read here ('heldHeads').
+rememberHeads :: (MonadIO m) => [(PageId, (UTCTime, VersionTag, Maybe Chain))] -> HttpWiki m ()
+rememberHeads heads = modifyHeld (\h -> h {heldHeads = Map.union (Map.fromList heads) h.heldHeads})
+
+-- | Record what this tab found wrong with a page's versions.
+foundProblem :: (MonadIO m) => PageId -> ChainProblem -> HttpWiki m ()
+foundProblem pid problem = modifyHeld (\h -> h {heldProblems = Map.insert pid problem h.heldProblems})
+
+-- | A version this tab saved: the page's latest now, and the one this
+-- browser has seen.
+savedHead :: (MonadIO m) => PageId -> UTCTime -> SealedContent -> HttpWiki m ()
+savedHead pid at content = do
+  rememberHeads [(pid, (at, content.tag, content.chain))]
+  for_ content.chain $ \c -> withUser (\u -> liftIO (keepSeen u.id pid Seen {number = c.number, tag = content.tag}))
+
+-- | A step with the signed-in user, if any.
+withUser :: (MonadIO m) => (User -> HttpWiki m ()) -> HttpWiki m ()
+withUser step = ((\s -> s.user) <$> session) >>= traverse_ step
+
+-- | Check the latest version of a page the server sent (its tag and chain,
+-- which its decryption checked) against the latest one this browser read
+-- before ("Wiki.Core.Encrypted"'s 'judgeHead'). A later one is linked down
+-- to the one seen through the page's history, a page of it at most; past
+-- that, the versions in between are not checked. Then the latest is the
+-- one seen, unless something was wrong, which is recorded instead.
+checkHead :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> PageKey -> VersionTag -> Maybe Chain -> HttpWiki m ()
+checkHead key sid pid k tag chain = withUser $ \u -> do
+  seen <- liftIO (seenOf u.id pid)
+  verdict <- case judgeHead seen tag chain of
+    Left problem -> pure (Left problem)
+    Right Agrees -> pure (Right ())
+    Right (Advanced n) -> case seen of
+      Nothing -> pure (Right ())
+      Just s ->
+        send (endpoints.encrypted.versions pid Nothing (Just (min maxVersionsPageSize (n + 1)))) >>= \case
+          -- The history could not be read: nothing more is checked now.
+          Left _ -> pure (Right ())
+          Right listed -> do
+            titles <- liftIO (openVersionTitles key sid pid k [v.heading | v <- listed])
+            pure $ case [v | (v, Nothing) <- zip listed titles] of
+              -- A version whose title does not open is not the browser's.
+              v : _ -> Left (Gap (maybe 0 (\c -> c.number) v.heading.chain))
+              [] -> void (linkedDown s [(v.heading.tag, v.heading.chain) | v <- listed])
+  case verdict of
+    Left problem -> foundProblem pid problem
+    Right () -> for_ chain $ \c -> liftIO (keepSeen u.id pid Seen {number = c.number, tag})
+
+-- | The tag and chain of the version a save is made on top of: the one
+-- read here, or else that version fetched, and checked by the decryption
+-- of its title.
+baseHead :: (MonadIO m) => SpaceId -> PageId -> PageKeyRef -> UTCTime -> HttpWiki m (Either WikiError (VersionTag, Maybe Chain))
+baseHead sid pid pk base =
+  Map.lookup pid . (\h -> h.heldHeads) <$> readHeld >>= \case
+    Just (at, tag, chain) | at == base -> pure (Right (tag, chain))
+    _ ->
+      send (endpoints.encrypted.version pid (VersionTime base)) >>= \case
+        Left e -> pure (Left e)
+        Right v ->
+          liftIO (openTitle pk sid pid (headingOf v.content)) <&> \case
+            Left why -> Left (Invalid why)
+            Right _ -> Right (v.content.tag, v.content.chain)
+
 -- | A page of an encrypted space, decrypted.
 pageFrom :: SealedPage -> Text -> Text -> Page
 pageFrom p title body =
@@ -1633,6 +1706,7 @@ sealedListPages sid current =
     Right listed -> withSpaceKey Refresh sid current $ \key -> do
       titles <- liftIO (openHeadings key sid [(p.id, p.pageKey, p.heading) | p <- listed])
       rememberPages sid [(p.id, p.pageKey) | p <- listed]
+      rememberHeads [(p.id, (p.updatedAt, p.heading.tag, p.heading.chain)) | p <- listed, Map.member p.id titles]
       -- The pages the search holds decrypted are fetched again when the
       -- space's pages have changed since: one more, one fewer, one saved.
       let now' = Map.fromList [(p.id, p.updatedAt) | p <- listed]
@@ -1648,8 +1722,14 @@ sealedGetPage sid path current =
     Left e -> pure (Left e)
     Right p -> withSpaceKey NoRefresh sid current $ \key -> do
       rememberPages sid [(p.id, p.pageKey)]
-      withPageKey key sid p.id p.pageKey $ \pk ->
+      opened <- withPageKey key sid p.id p.pageKey $ \pk ->
         liftIO (openContent pk sid p.id p.content) <&> bimap Invalid (uncurry (pageFrom p))
+      -- The version opened, so its tag and chain are the ones it was
+      -- encrypted with: checked against what this browser read before.
+      when (isRight opened) $ do
+        rememberHeads [(p.id, (p.updatedAt, p.content.tag, p.content.chain))]
+        checkHead key sid p.id p.pageKey p.content.tag p.content.chain
+      pure opened
 
 sealedCreatePage :: (MonadIO m) => SpaceId -> Maybe PageId -> Text -> Text -> KeyId -> HttpWiki m (Either WikiError Page)
 sealedCreatePage sid parent title body current =
@@ -1657,10 +1737,11 @@ sealedCreatePage sid parent title body current =
     when (T.null (T.strip title)) $ throwError (Invalid "A page's title cannot be blank.")
     pid <- ExceptT (first Invalid <$> liftIO newPageId)
     (pk, pageKey) <- ExceptT (first Invalid <$> liftIO (newPageKey key current sid pid))
-    content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid pageKey.keyId (T.strip title) body))
+    content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid pageKey.keyId firstChain (T.strip title) body))
     liftIO (forgetPageKey pk)
     made <- ExceptT (write (getResponse <$> endpoints.encrypted.createPage sid NewSealedPage {id = pid, parent, pageKey, content}))
     lift (rememberPages sid [(pid, pageKey)])
+    lift (savedHead pid made.updatedAt content)
     pure (pageFrom made (T.strip title) body)
 
 sealedSavePage :: (MonadIO m) => SpaceId -> PageId -> PageKey -> UTCTime -> Text -> Text -> HttpWiki m (Either WikiError Page)
@@ -1668,8 +1749,13 @@ sealedSavePage sid pid k base title body =
   encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
     withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> runExceptT $ do
       when (T.null (T.strip title)) $ throwError (Invalid "A page's title cannot be blank.")
-      content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid k.keyId (T.strip title) body))
+      -- Not on top of versions this tab found wrong: the reader is shown
+      -- why, and reloads.
+      lift (Map.lookup pid . (\h -> h.heldProblems) <$> readHeld) >>= traverse_ (throwError . Invalid . chainProblemText)
+      (tag, chain) <- ExceptT (baseHead sid pid pk base)
+      content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid k.keyId (chainAfter tag chain) (T.strip title) body))
       saved <- ExceptT (write (getResponse <$> endpoints.encrypted.save pid (PageVersion base) SealedEdit {content}))
+      lift (savedHead pid saved.updatedAt content)
       pure (pageFrom saved (T.strip title) body)
 
 sealedVersions :: (MonadIO m) => SpaceId -> PageId -> PageKey -> VersionsQuery -> HttpWiki m (Either WikiError [VersionInfo])
@@ -1678,8 +1764,11 @@ sealedVersions sid pid k q =
     Left e -> pure (Left e)
     Right listed -> encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
       withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> do
-        titles <- liftIO (for listed (\v -> either (const unreadable) identity <$> openTitle pk sid pid v.heading))
-        pure (Right [VersionInfo {page = pid, updatedAt = v.updatedAt, title, author = v.author, number = v.number} | (v, title) <- zip listed titles])
+        opened <- liftIO (for listed (\v -> rightToMaybe <$> openTitle pk sid pid v.heading))
+        -- The versions whose titles opened are those whose tags and chains
+        -- are the browser's: each must follow on the next one.
+        for_ (gapIn [(v.heading.tag, v.heading.chain) | (v, Just _) <- zip listed opened]) (foundProblem pid)
+        pure (Right [VersionInfo {page = pid, updatedAt = v.updatedAt, title = fromMaybe unreadable title, author = v.author, number = v.number} | (v, title) <- zip listed opened])
 
 sealedVersion :: (MonadIO m) => SpaceId -> PageId -> PageKey -> UTCTime -> HttpWiki m (Either WikiError Version)
 sealedVersion sid pid k at =
@@ -1785,3 +1874,4 @@ instance (MonadIO m) => MonadEncryption (HttpWiki m) where
                           Left _ -> liftIO (forgetSpaceKey made.key)
                         pure result
   spaceEncryption sid = send (endpoints.encrypted.space sid)
+  chainProblem pid = Map.lookup pid . (\h -> h.heldProblems) <$> readHeld

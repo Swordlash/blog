@@ -450,6 +450,7 @@ instance (Monad m) => MonadEncryption (MemWiki m) where
   keyState _ = pure (Right NotEncrypted)
   encryptSpace _ = pure (Left noServer)
   spaceEncryption _ = pure (Left noServer)
+  chainProblem _ = pure Nothing
 
 instance (MonadIO m) => MonadStars (MemWiki m) where
   starred = query starredIn

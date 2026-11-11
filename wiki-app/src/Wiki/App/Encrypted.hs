@@ -32,10 +32,15 @@ module Wiki.App.Encrypted
   , openContent
   , openTitle
   , openHeadings
+  , openVersionTitles
   , openPages
   , newPageId
   , forgetSpaceKey
   , forgetPageKey
+
+    -- * The versions this browser has seen
+  , seenOf
+  , keepSeen
   )
 where
 
@@ -49,7 +54,7 @@ import Protolude hiding (wait)
 import Wiki.Api.Encrypted (NewGrant (..), PendingMember (..))
 import Wiki.App.Assistant (KeyRef, heldHandle)
 import Wiki.Core.Encrypted
-import Wiki.Core.Id (PageId (..), SpaceId (..))
+import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), PublicKey (..), Sealed (..), WrappedKey (..))
 
 $( browserJS
@@ -66,6 +71,8 @@ $( browserJS
      , ("js_openPromise", "wiki_enc_open", Safe, [t|Int -> JSText -> JSText -> JSText -> IO (Promise JSText)|])
      , ("js_open_manyPromise", "wiki_enc_open_many", Safe, [t|Int -> JSText -> IO (Promise JSText)|])
      , ("js_forget", "wiki_enc_forget", Safe, [t|Int -> IO ()|])
+     , ("js_seen", "wiki_enc_seen", Safe, [t|JSText -> JSText -> IO JSText|])
+     , ("js_keep_seen", "wiki_enc_keep_seen", Safe, [t|JSText -> JSText -> JSText -> IO ()|])
      ]
  )
 
@@ -204,22 +211,25 @@ openPageKey (SpaceKey space) sid pid k = whenHere $ do
   pure (answered (\o -> PageKeyRef <$> o .: "handle") answer)
 
 -- | Encrypt a version of a page, a title and a text, with the page's key,
--- under a new random tag.
-sealContent :: PageKeyRef -> SpaceId -> PageId -> KeyId -> Text -> Text -> IO (Either Text SealedContent)
-sealContent (PageKeyRef k) sid pid keyId title body = whenHere $ do
+-- under a new random tag, at its place in the page's chain of versions,
+-- which the additional data names ('contentData').
+sealContent :: PageKeyRef -> SpaceId -> PageId -> KeyId -> Chain -> Text -> Text -> IO (Either Text SealedContent)
+sealContent (PageKeyRef k) sid pid keyId chain title body = whenHere $ do
   tag <- VersionTag . fromJSText <$> js_random_id
   let seal field text = do
-        answer <- evaluate . fromJSText =<< js_seal k (toJSText text) (toJSText (fieldData sid pid keyId tag field))
+        answer <- evaluate . fromJSText =<< js_seal k (toJSText text) (toJSText (contentData sid pid keyId tag (Just chain) field))
         pure (answered (\o -> Sealed <$> o .: "nonce" <*> o .: "ciphertext") answer)
   sealedTitle <- seal TitleField title
   sealedBody <- seal BodyField body
-  pure (SealedContent tag keyId <$> sealedTitle <*> sealedBody)
+  pure (SealedContent tag keyId (Just chain) <$> sealedTitle <*> sealedBody)
 
 -- | Decrypt a version of a page with the page's key: its title and text.
+-- A version opens only with the tag and chain it was encrypted with, so
+-- those the server sent with it are the browser's.
 openContent :: PageKeyRef -> SpaceId -> PageId -> SealedContent -> IO (Either Text (Text, Text))
 openContent (PageKeyRef k) sid pid c = whenHere $ do
   let open field s = do
-        answer <- evaluate . fromJSText =<< js_open k (toJSText s.nonce.text) (toJSText s.ciphertext.text) (toJSText (fieldData sid pid c.keyId c.tag field))
+        answer <- evaluate . fromJSText =<< js_open k (toJSText s.nonce.text) (toJSText s.ciphertext.text) (toJSText (contentData sid pid c.keyId c.tag c.chain field))
         pure (answered (.: "text") answer)
   title <- open TitleField c.title
   body <- open BodyField c.body
@@ -228,25 +238,35 @@ openContent (PageKeyRef k) sid pid c = whenHere $ do
 -- | Decrypt a version's title with the page's key.
 openTitle :: PageKeyRef -> SpaceId -> PageId -> SealedHeading -> IO (Either Text Text)
 openTitle (PageKeyRef k) sid pid h = whenHere $ do
-  answer <- evaluate . fromJSText =<< js_open k (toJSText h.title.nonce.text) (toJSText h.title.ciphertext.text) (toJSText (fieldData sid pid h.keyId h.tag TitleField))
+  answer <- evaluate . fromJSText =<< js_open k (toJSText h.title.nonce.text) (toJSText h.title.ciphertext.text) (toJSText (contentData sid pid h.keyId h.tag h.chain TitleField))
   pure (answered (.: "text") answer)
 
 -- | Decrypt the titles of many pages of a space at once, each with its
 -- page's key: the title of each page whose title opens.
 openHeadings :: SpaceKey -> SpaceId -> [(PageId, PageKey, SealedHeading)] -> IO (Map PageId Text)
 openHeadings space sid pages =
-  openMany space sid [(pid, k, [(TitleField, h.tag, h.keyId, h.title)]) | (pid, k, h) <- pages] <&> Map.mapMaybe (\case [Just t] -> Just t; _ -> Nothing)
+  openMany space sid [(pid, k, [(TitleField, h.tag, h.keyId, h.chain, h.title)]) | (pid, k, h) <- pages] <&> Map.mapMaybe (\case [Just t] -> Just t; _ -> Nothing)
+
+-- | Decrypt the titles of many versions of one page at once: the title of
+-- each version, 'Nothing' for one that does not open. A run of versions
+-- whose titles all open is a run whose tags and chains are the browser's.
+openVersionTitles :: SpaceKey -> SpaceId -> PageId -> PageKey -> [SealedHeading] -> IO [Maybe Text]
+openVersionTitles space sid pid k headings =
+  openMany space sid [(pid, k, [(TitleField, h.tag, h.keyId, h.chain, h.title) | h <- headings])] <&> \opened ->
+    case Map.lookup pid opened of
+      Just titles | length titles == length headings -> titles
+      _ -> map (const Nothing) headings
 
 -- | Decrypt the titles and texts of many pages of a space at once: the
 -- title and text of each page whose content opens.
 openPages :: SpaceKey -> SpaceId -> [(PageId, PageKey, SealedContent)] -> IO (Map PageId (Text, Text))
 openPages space sid pages =
-  openMany space sid [(pid, k, [(TitleField, c.tag, c.keyId, c.title), (BodyField, c.tag, c.keyId, c.body)]) | (pid, k, c) <- pages] <&> Map.mapMaybe (\case [Just t, Just b] -> Just (t, b); _ -> Nothing)
+  openMany space sid [(pid, k, [(TitleField, c.tag, c.keyId, c.chain, c.title), (BodyField, c.tag, c.keyId, c.chain, c.body)]) | (pid, k, c) <- pages] <&> Map.mapMaybe (\case [Just t, Just b] -> Just (t, b); _ -> Nothing)
 
 -- | Decrypt fields of many pages in one call to the browser: the fields of
 -- each page, 'Nothing' for one that does not open. Natively, or without
 -- WebCrypto, nothing opens.
-openMany :: SpaceKey -> SpaceId -> [(PageId, PageKey, [(Field, VersionTag, KeyId, Sealed)])] -> IO (Map PageId [Maybe Text])
+openMany :: SpaceKey -> SpaceId -> [(PageId, PageKey, [(Field, VersionTag, KeyId, Maybe Chain, Sealed)])] -> IO (Map PageId [Maybe Text])
 openMany (SpaceKey space) sid pages =
   encryptionHere >>= \case
     False -> pure mempty
@@ -254,9 +274,25 @@ openMany (SpaceKey space) sid pages =
       let item (pid, k, fields) =
             object
               [ "pageKey" .= object ["nonce" .= k.wrapped.nonce, "wrapped" .= k.wrapped.key, "data" .= pageKeyData sid pid k.keyId]
-              , "fields" .= [object ["nonce" .= s.nonce, "ciphertext" .= s.ciphertext, "data" .= fieldData sid pid keyId tag field] | (field, tag, keyId, s) <- fields]
+              , "fields" .= [object ["nonce" .= s.nonce, "ciphertext" .= s.ciphertext, "data" .= contentData sid pid keyId tag chain field] | (field, tag, keyId, chain, s) <- fields]
               ]
       answer <- evaluate . fromJSText =<< js_open_many space (json (map item pages))
       pure $ case eitherDecodeStrict (encodeUtf8 answer) of
         Right opened | length opened == length pages -> Map.fromList (zip [pid | (pid, _, _) <- pages] opened)
         _ -> mempty
+
+--------------------------------------------------------------------------------
+-- The versions this browser has seen
+
+-- | The latest version of a page that this browser has read and checked
+-- for the user ("Wiki.Core.Encrypted"'s 'Seen'), if it remembers one.
+-- Natively, none.
+seenOf :: UserId -> PageId -> IO (Maybe Seen)
+seenOf u pid
+  | inBrowser = rightToMaybe . eitherDecodeStrict . encodeUtf8 . fromJSText <$> js_seen (toJSText u.text) (toJSText pid.text)
+  | otherwise = pure Nothing
+
+-- | Remember the latest version of a page this browser has read and
+-- checked for the user.
+keepSeen :: UserId -> PageId -> Seen -> IO ()
+keepSeen u pid seen = when inBrowser (js_keep_seen (toJSText u.text) (toJSText pid.text) (json seen))

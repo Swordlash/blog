@@ -30,7 +30,7 @@ import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Database.Beam (all_, delete, filter_, in_, insert, insertValues, isNothing_, join_, runDelete, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (&&.), (<-.), (==.))
 import Protolude
-import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (..), PageKey (..), SealedContent (..), VersionTag (..))
+import Wiki.Core.Encrypted (Chain (..), Encapsulated (..), KeyGrant (..), PageKey (..), SealedContent (..), VersionTag (..))
 import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), PublicKey (..), Sealed (..), WrappedKey (..))
 import Wiki.Server.Storage.Backend (Backend (..))
@@ -136,6 +136,8 @@ insertSealedVersion pid at c =
           , title = c.title.ciphertext.text
           , body_nonce = c.body.nonce.text
           , body = c.body.ciphertext.text
+          , chain_number = (\x -> fromIntegral x.number) <$> c.chain
+          , previous_tag = (\x -> (\t -> t.text) <$> x.previous) =<< c.chain
           }
       ]
 
@@ -144,6 +146,7 @@ contentOf r =
   SealedContent
     { tag = VersionTag r.tag
     , keyId = KeyId r.key_id
+    , chain = (\n -> Chain {number = fromIntegral n, previous = VersionTag <$> r.previous_tag}) <$> r.chain_number
     , title = Sealed {nonce = Nonce r.title_nonce, ciphertext = Ciphertext r.title}
     , body = Sealed {nonce = Nonce r.body_nonce, ciphertext = Ciphertext r.body}
     }

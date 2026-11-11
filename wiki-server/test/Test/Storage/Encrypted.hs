@@ -39,7 +39,7 @@ import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Backlink (Backlink (..))
-import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (..), PageKey (..), SealedContent (..), SealedHeading (..), VersionTag (..))
+import Wiki.Core.Encrypted (Chain (..), Encapsulated (..), KeyGrant (..), PageKey (..), SealedContent (..), SealedHeading (..), VersionTag (..), chainAfter, firstChain)
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Id (PageId (..), SpaceId, UserId (..))
 import Wiki.Core.Notification (Notification (..), WatchTarget (..))
@@ -56,7 +56,7 @@ import Wiki.Server.Accounts (createAccount)
 import Wiki.Server.Import (intoEncrypted)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Rows (SitemapNode (..))
-import Wiki.Server.Storage.Schema (KeyGrants (..), PageLinks (..), Pages (..), PublicKeys (..), Vaults (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (KeyGrants (..), PageLinks (..), Pages (..), PublicKeys (..), SealedVersions (..), Vaults (..), WikiDb (..), wikiDb)
 import Wiki.Server.Vault (keyIdOf, storeVault)
 import Wiki.Server.WebAuthn (toBase64Url)
 
@@ -170,17 +170,18 @@ spec backing = describe "encrypted spaces in the storage" $ do
     as p.ada (createSealedPage secret.id NewSealedPage {id = otherId, parent = Nothing, pageKey = pageKeyOf {spaceKeyId = KeyId (bytes16 'o')}, content = contentOf 'b'}) >>= (`shouldSatisfy` conflict)
     as p.ada (createSealedPage secret.id NewSealedPage {id = otherId, parent = Nothing, pageKey = pageKeyOf, content = contentUnder (KeyId (bytes16 'o')) 'b'}) >>= (`shouldSatisfy` invalid)
     -- A save over the version read; one over an older version refused.
-    saved <- ok =<< as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = contentOf 'c'})
-    saved.content `shouldBe` contentOf 'c'
-    as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = contentOf 'd'}) >>= (`shouldSatisfy` conflict)
+    let secondContent = savedOn (contentOf 'a') 'c'
+    saved <- ok =<< as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = secondContent})
+    saved.content `shouldBe` secondContent
+    as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = savedOn secondContent 'd'}) >>= (`shouldSatisfy` conflict)
     -- Read back by its path, listed, and its history.
-    ((\x -> x.content) <$> (ok =<< as p.ada (sealedPageAt secret.id [made.slug]))) `shouldReturn` contentOf 'c'
+    ((\x -> x.content) <$> (ok =<< as p.ada (sealedPageAt secret.id [made.slug]))) `shouldReturn` secondContent
     listed <- ok =<< as p.ada (sealedPages secret.id)
-    [(s.id, s.heading.title) | s <- listed] `shouldBe` [(pid, (contentOf 'c').title)]
+    [(s.id, s.heading.title, s.heading.chain) | s <- listed] `shouldBe` [(pid, secondContent.title, secondContent.chain)]
     contents <- ok =<< as p.ada (sealedContents secret.id)
-    map (\x -> x.content) contents `shouldBe` [contentOf 'c']
+    map (\x -> x.content) contents `shouldBe` [secondContent]
     versions <- ok =<< as p.ada (sealedVersions pid (VersionsQuery Nothing 50))
-    [(v.number, v.heading.title) | v <- versions] `shouldBe` [(2, (contentOf 'c').title), (1, (contentOf 'a').title)]
+    [(v.number, v.heading.title, v.heading.chain) | v <- versions] `shouldBe` [(2, secondContent.title, secondContent.chain), (1, (contentOf 'a').title, Just firstChain)]
     first' <- ok =<< as p.ada (sealedVersionAt pid made.updatedAt)
     first'.content `shouldBe` contentOf 'a'
     -- A plain space's pages are not read through these routes.
@@ -190,6 +191,34 @@ spec backing = describe "encrypted spaces in the storage" $ do
     ok =<< as p.ada (deleteSpace secret.id)
     count <- reading st (length <$> runSelectReturningList (select (all_ wikiDb.key_grants)))
     count `shouldBe` 0
+
+  -- The chain of versions (WP5.74b3 of docs/PLAN.md): a version is taken
+  -- only as the next of its page's chain, and a version of format 1,
+  -- written before versions were chained, is read as it was and chained on.
+  it "takes a version only as the next of its page's chain, and chains on from a version written before" $ withEncrypted backing $ \st p secret -> do
+    let as :: UserId -> StoredWiki IO a -> IO a
+        as u = runStoredWiki st (AsUser u)
+        pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+        unchained c = chainedAs Nothing (contentOf c)
+    -- A first version that is not the chain's first, or has none: refused.
+    as p.ada (createSealedPage secret.id NewSealedPage {id = pid, parent = Nothing, pageKey = pageKeyOf, content = savedOn (contentOf 'z') 'a'}) >>= (`shouldSatisfy` conflict)
+    as p.ada (createSealedPage secret.id NewSealedPage {id = pid, parent = Nothing, pageKey = pageKeyOf, content = unchained 'a'}) >>= (`shouldSatisfy` conflict)
+    made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
+    -- A save that skips a number, names another version, or has no chain.
+    let skipping = chainedAs (Just (Chain 3 (Just (contentOf 'a').tag))) (contentOf 'b')
+        elsewhere = savedOn (contentOf 'z') 'b'
+    for_ [skipping, elsewhere, unchained 'b'] $ \c ->
+      as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = c}) >>= (`shouldSatisfy` conflict)
+    -- A page whose latest version is of format 1, as b2 wrote it: read as
+    -- it was, and the next version is the chain's first, naming it.
+    writing st (runUpdate (update wikiDb.sealed_versions (\v -> mconcat [v.chain_number <-. val_ Nothing, v.previous_tag <-. val_ Nothing]) (\v -> v.page_id ==. val_ pid.text)))
+    old <- ok =<< as p.ada (sealedPageAt secret.id [made.slug])
+    old.content `shouldBe` unchained 'a'
+    let chained = chainedAs (Just (Chain 1 (Just (contentOf 'a').tag))) (contentOf 'b')
+    saved <- ok =<< as p.ada (saveSealedPage pid old.updatedAt SealedEdit {content = chained})
+    saved.content.chain `shouldBe` Just (Chain 1 (Just (contentOf 'a').tag))
+    third <- ok =<< as p.ada (saveSealedPage pid saved.updatedAt SealedEdit {content = savedOn chained 'c'})
+    third.content.chain `shouldBe` Just (Chain 2 (Just chained.tag))
 
   -- Backlinks (WP5.88 of docs/PLAN.md): the server cannot read what an
   -- encrypted page links to, so its pages have no list and are in none.
@@ -431,17 +460,27 @@ pageKeyOf = PageKey {keyId = KeyId (bytes16 'p'), spaceKeyId = spaceKey, wrapped
 contentOf :: Char -> SealedContent
 contentOf = contentUnder (KeyId (bytes16 'p'))
 
--- | A version encrypted with a page key, its ciphertexts made of a letter.
+-- | A version encrypted with a page key, its ciphertexts made of a letter:
+-- a page's first version.
 contentUnder :: KeyId -> Char -> SealedContent
 contentUnder k c =
   SealedContent
     { tag = VersionTag (bytes16 c)
     , keyId = k
+    , chain = Just firstChain
     , title = Sealed (Nonce (bytes16' 12)) (Ciphertext (bytes16' 40))
     , body = Sealed (Nonce (bytes16' 12)) (Ciphertext (bytes16' 200))
     }
   where
     bytes16' n = toBase64Url (BS.replicate n (fromIntegral (ord c)))
+
+-- | A version made of a letter, saved on top of another.
+savedOn :: SealedContent -> Char -> SealedContent
+savedOn previous c = chainedAs (Just (chainAfter previous.tag previous.chain)) (contentOf c)
+
+-- | A version with another chain.
+chainedAs :: Maybe Chain -> SealedContent -> SealedContent
+chainedAs chain x = SealedContent {tag = x.tag, keyId = x.keyId, chain, title = x.title, body = x.body}
 
 newPage :: PageId -> Maybe PageId -> Char -> NewSealedPage
 newPage pid parent c = NewSealedPage {id = pid, parent, pageKey = pageKeyOf, content = contentOf c}

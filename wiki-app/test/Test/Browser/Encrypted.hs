@@ -23,6 +23,11 @@
 -- came since, in parts of at most 500 grants, and the search finds a page
 -- written since its last search once the space's pages are listed again.
 --
+-- The chain of versions (WP5.74b3): a page the server rolls back to an
+-- older version than this browser read, or forks, or whose history it
+-- leaves a version out of, is shown with what is wrong, under a banner
+-- and without "Edit", and nothing is saved on top of it.
+--
 -- Over the backend over HTTP, with the test's server in fetch's place
 -- ("Test.Browser.Http") and the server of encrypted spaces played beside
 -- it (@jsbits\/test-encrypted.js@). The users' key pairs are made there as
@@ -60,6 +65,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route qualified as R
 import Wiki.Core.Anchor (Anchor (..))
+import Wiki.Core.Encrypted (ChainProblem (..))
 import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..))
@@ -83,6 +89,9 @@ $( browserJS
      , ("js_misname_key", "wiki_test_encrypted_misname_key", Safe, [t|JSText -> IO ()|])
      , ("js_many_readersPromise", "wiki_test_encrypted_many_readers", Safe, [t|Int -> IO (Promise ())|])
      , ("js_grants", "wiki_test_encrypted_grants", Safe, [t|IO Int|])
+     , ("js_roll_back", "wiki_test_encrypted_roll_back", Safe, [t|JSText -> IO ()|])
+     , ("js_drop_version", "wiki_test_encrypted_drop_version", Safe, [t|JSText -> Int -> IO ()|])
+     , ("js_seen_at", "wiki_test_encrypted_seen_at", Safe, [t|JSText -> JSText -> Int -> IO ()|])
      ]
  )
 
@@ -284,6 +293,71 @@ spec m = do
     sent <- asked
     [r.url | r <- sent, "api/v1/search" `T.isPrefixOf` r.url] `shouldBe` []
 
+  it "shows a page the server rolled back to an older version than this browser read, under a banner, and saves nothing on top of it" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Plans" "First.")
+    secondVersion <- ok =<< run env (savePage made.id made.updatedAt "Plans" "Second.")
+    void (ok =<< run env (savePage made.id secondVersion.updatedAt "Plans" "Third."))
+    -- The server serves the second version as the latest.
+    unsafeIOToPageM (js_roll_back (toJSText made.id.text))
+    later <- as "user-admin"
+    page <- ok =<< run later (getPage secret.id [made.slug])
+    page.body `shouldBe` "Second."
+    run later (chainProblem made.id) `shouldReturn` Just (Older 3 2)
+    before <- length <$> asked
+    run later (savePage made.id page.updatedAt "Plans" "On top of the older one.") >>= (`shouldSatisfy` isLeft)
+    sent <- drop before <$> asked
+    [r.url | r <- sent, r.method /= "GET"] `shouldBe` []
+    -- The page view shows the text under the banner, and no "Edit".
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    ui <- startServer m (R.Page [secretSlug] [made.slug])
+    eventually (find ui ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Second."))
+    eventually (find ui ".page-view .encrypted-rollback" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "older version of this page"))
+    actions <- findAll ui ".page-actions a" >>= traverse textContent
+    filter (T.isInfixOf "Edit") actions `shouldBe` []
+    unmount ui
+
+  it "finds a version the server sent under the number of another this browser read, and one left out of the history" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Plans" "First.")
+    void (ok =<< run env (savePage made.id made.updatedAt "Plans" "The admin's second."))
+    -- The reader, given the key, reads the page as the server serves it
+    -- once it has dropped the admin's second version, and saves on top.
+    unsafeIOToPageM (js_roll_back (toJSText made.id.text))
+    unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
+    admin <- as "user-admin"
+    void (ok =<< run admin (listPages secret.id))
+    readerFirst <- as "user-reader"
+    first' <- ok =<< run readerFirst (getPage secret.id [made.slug])
+    void (ok =<< run readerFirst (savePage made.id first'.updatedAt "Plans" "The reader's second."))
+    -- The admin read another second version.
+    forked <- as "user-admin"
+    page <- ok =<< run forked (getPage secret.id [made.slug])
+    page.body `shouldBe` "The reader's second."
+    run forked (chainProblem made.id) `shouldReturn` Just (Forked 2)
+    -- A browser that read the second version last is sent the fourth, with
+    -- the third left out of the history: the fourth does not link down to
+    -- the version read.
+    readerTab <- as "user-reader"
+    second' <- ok =<< run readerTab (getPage secret.id [made.slug])
+    third <- ok =<< run readerTab (savePage made.id second'.updatedAt "Plans" "Third.")
+    void (ok =<< run readerTab (savePage made.id third.updatedAt "Plans" "Fourth."))
+    seenAt "user-reader" made.id 1
+    unsafeIOToPageM (js_drop_version (toJSText made.id.text) 2)
+    gapped <- as "user-reader"
+    (\p -> p.body) <$> (ok =<< run gapped (getPage secret.id [made.slug])) `shouldReturn` "Fourth."
+    run gapped (chainProblem made.id) `shouldReturn` Just (Gap 2)
+    -- A browser that read none of it finds the same in the history.
+    seenAt "user-reader" made.id (-1)
+    history <- as "user-reader"
+    void (ok =<< run history (getPage secret.id [made.slug]))
+    run history (chainProblem made.id) `shouldReturn` Nothing
+    map (\v -> v.number) <$> (ok =<< run history (listVersions made.id (VersionsQuery Nothing 50))) `shouldReturn` [3, 2, 1]
+    run history (chainProblem made.id) `shouldReturn` Just (Gap 2)
+
   it "offers no comments, attachments or kept draft in an encrypted space's page and editor" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
@@ -317,6 +391,12 @@ spec m = do
       unsafeIOToPageM (js_start (toJSText (decodeUtf8 (toS (encode secret)))) (toJSText ("[\"user-admin\",\"user-reader\"]" :: Text)))
       unsafeIOToPageM (js_key_pair (toJSText user))
       as user
+
+-- | What this browser remembers of a page for a user, set to the version
+-- at an index from the first, as if it had read that one last; nothing for
+-- an index below 0.
+seenAt :: Text -> PageId -> Int -> PageM s ()
+seenAt user pid index = unsafeIOToPageM (js_seen_at (toJSText user) (toJSText pid.text) index)
 
 -- | A new tab of a user's, over the server, as the user asking.
 as :: Text -> PageM s HttpEnv

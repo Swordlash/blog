@@ -931,7 +931,10 @@ instance Table PageKeys where
 
 -- | A version of a page of an encrypted space, encrypted
 -- (@sealed_versions@), beside its row of 'PageVersions', whose title and
--- text are empty.
+-- text are empty. @chain_number@ and @previous_tag@ (migration
+-- @0016-chained-versions@) are where it stands in its page's history
+-- ("Wiki.Core.Encrypted"'s 'Wiki.Core.Encrypted.Chain'), both none for a
+-- version written before versions were chained.
 data SealedVersions f = SealedVersionRow
   { page_id :: Columnar f Text
   , updated_at :: Columnar f UTCTime
@@ -941,6 +944,8 @@ data SealedVersions f = SealedVersionRow
   , title :: Columnar f Text
   , body_nonce :: Columnar f Text
   , body :: Columnar f Text
+  , chain_number :: Columnar f (Maybe Int64)
+  , previous_tag :: Columnar f (Maybe Text)
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)

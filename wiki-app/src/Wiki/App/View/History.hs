@@ -45,15 +45,17 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
+import Wiki.App.Backend.Encrypted (MonadEncryption (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.View.Common
 import Wiki.App.View.Diff (diffView, titleChange)
 import Wiki.Core.Diff (Diff (..), diffText)
+import Wiki.Core.Encrypted (ChainProblem, chainProblemText)
 import Wiki.Core.Page (Page (body, id, title, updatedAt))
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (id))
+import Wiki.Core.Space (Space (encryption, id))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (..), latestVersions, versionsPageSize)
 
 -- | The history view's input, from the route: a page of a space the shell
@@ -109,6 +111,10 @@ data State = State
   -- ^ Why the last restore failed.
   , olderProblem :: Maybe WikiError
   -- ^ Why fetching older versions failed.
+  , chainProblem :: Maybe ChainProblem
+  -- ^ What this tab found wrong with the versions the server sent of a
+  -- page of an encrypted space ("Wiki.Core.Encrypted"'s chain of
+  -- versions), shown in a banner over the history.
   }
 
 data Action
@@ -121,7 +127,7 @@ data Action
   | Retry
   | Older
 
-component :: forall query m. (MonadLoad m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadEncryption m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -131,7 +137,7 @@ component =
           -- or the prerender shows (see "Wiki.App.Shell"); otherwise loaded
           -- in 'Initialize'.
           loaded <- fromMaybe Loading <$> atOnce (fetch 0 input)
-          pure State {input, loaded, confirming = False, problem = Nothing, olderProblem = Nothing}
+          pure State {input, loaded, confirming = False, problem = Nothing, olderProblem = Nothing, chainProblem = Nothing}
       , render
       , eval =
           H.mkEval
@@ -154,6 +160,9 @@ component =
               <span class="badge">History</span>
             </header>
             <div class="actions">{{ back st.input }}</div>
+            {% for p in maybeToList st.chainProblem %}
+              <p class="error encrypted-rollback" role="alert">{{ chainProblemText p }}</p>
+            {% end %}
             <div class="history">
               {{ versionList st.input st.olderProblem shown }}
               {{ detail st shown }}
@@ -271,7 +280,7 @@ component =
       Initialize ->
         gets (\st -> st.loaded) >>= \case
           Loading -> load
-          _ -> H.raise Loaded
+          _ -> checkChain >> H.raise Loaded
       Retry -> do
         modify (\st -> st {loaded = Loading})
         load
@@ -335,7 +344,18 @@ component =
       now <- gets (\st -> st.input)
       when (now.space.id == input.space.id && now.path == input.path && now.version == input.version && now.against == input.against) $ do
         modify (\st -> st {loaded})
+        checkChain
         H.raise Loaded
+
+    -- What the backend found wrong with the versions of the page, in an
+    -- encrypted space ("Wiki.App.Backend.Encrypted"'s 'chainProblem').
+    checkChain :: H.HalogenM State Action Slots ViewOutput m ()
+    checkChain = do
+      st <- get
+      found <- case st.loaded of
+        Ready shown | isJust st.input.space.encryption -> lift (chainProblem shown.page.id)
+        _ -> pure Nothing
+      modify (\now -> now {chainProblem = found})
 
 -- | Fetch the history the input asks for, with the versions compared and
 -- their diff, or the reason it cannot be shown. A version the history does

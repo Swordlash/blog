@@ -5,8 +5,9 @@
 // under encrypted/
 // (Wiki.Api.Encrypted), with the server's rules for grants (only a holder
 // of the key grants it, only to a reader with a current public key, and
-// only the current key) and for saves (against the version read). It
-// stores what the browser sends and never reads it, as the real server.
+// only the current key) and for saves (against the version read, as the
+// next of the page's chain of versions). It stores what the browser sends
+// and never reads it, as the real server.
 // The user asking is the one the test names (wiki_test_encrypted_as).
 
 const wikiTestEncrypted = { as: null, spaces: new Map(), directory: new Map(), pages: new Map(), next: 0, created: [] };
@@ -45,6 +46,21 @@ function wikiTestEncSealed(p) {
     createdBy: null,
     updatedBy: null,
   };
+}
+
+// A version's heading, as the lists of pages and of versions carry it.
+function wikiTestEncHeading(content) {
+  return { tag: content.tag, keyId: content.keyId, chain: content.chain, title: content.title };
+}
+
+// Whether a version's chain is the one the server takes on top of the
+// latest version (null for a new page's first): the next number, naming the
+// latest's tag (Wiki.Core.Encrypted's chainAfter).
+function wikiTestEncFollows(chain, latest) {
+  if (!chain) return false;
+  if (latest === null) return chain.number === 1 && (chain.previous ?? null) === null;
+  const number = latest.chain ? latest.chain.number + 1 : 1;
+  return chain.number === number && chain.previous === latest.tag;
 }
 
 function wikiTestEncServer(request) {
@@ -126,7 +142,7 @@ function wikiTestEncServer(request) {
         200,
         pages.map((p) => {
           const sealed = wikiTestEncSealed(p);
-          return { ...sealed, heading: { tag: sealed.content.tag, keyId: sealed.content.keyId, title: sealed.content.title }, content: undefined };
+          return { ...sealed, heading: wikiTestEncHeading(sealed.content), content: undefined };
         }),
       );
     }
@@ -142,6 +158,7 @@ function wikiTestEncServer(request) {
     if (rest === "/pages" && request.method === "POST") {
       const sent = JSON.parse(request.body);
       if (sent.pageKey.spaceKeyId !== s.space.encryption) return wikiTestEncJson(409, { error: "Conflict", text: "The space's key has changed since: open the space again." });
+      if (!wikiTestEncFollows(sent.content.chain, null)) return wikiTestEncJson(409, { error: "Conflict", text: "This version does not follow on the page's latest one." });
       const time = wikiTestEncNow();
       const p = { id: sent.id, space: s.space.id, parent: sent.parent, slug: `p${wikiTestEncrypted.next}x${Math.random().toString(36).slice(2, 9)}`, position: pages.length, pageKey: sent.pageKey, versions: [{ updatedAt: time, content: sent.content, author: me }] };
       wikiTestEncrypted.pages.set(p.id, p);
@@ -160,7 +177,9 @@ function wikiTestEncServer(request) {
     if (rest === "" && request.method === "PUT") {
       const latest = p.versions[p.versions.length - 1];
       if (header("if-match") !== wikiTestEncTag(latest.updatedAt)) return wikiTestEncJson(409, { error: "Conflict", text: "The page has been saved by someone else since this edit began." });
-      p.versions.push({ updatedAt: wikiTestEncNow(), content: JSON.parse(request.body).content, author: me });
+      const content = JSON.parse(request.body).content;
+      if (!wikiTestEncFollows(content.chain, latest.content)) return wikiTestEncJson(409, { error: "Conflict", text: "This version does not follow on the page's latest one." });
+      p.versions.push({ updatedAt: wikiTestEncNow(), content, author: me });
       const sealed = wikiTestEncSealed(p);
       return wikiTestEncJson(200, sealed, { ETag: wikiTestEncTag(sealed.updatedAt) });
     }
@@ -168,7 +187,7 @@ function wikiTestEncServer(request) {
       const n = p.versions.length;
       return wikiTestEncJson(
         200,
-        [...p.versions].reverse().map((v, i) => ({ page: p.id, updatedAt: v.updatedAt, heading: { tag: v.content.tag, keyId: v.content.keyId, title: v.content.title }, author: null, number: n - i })),
+        [...p.versions].reverse().map((v, i) => ({ page: p.id, updatedAt: v.updatedAt, heading: wikiTestEncHeading(v.content), author: null, number: n - i })),
       );
     }
     const v = rest.match(/^\/versions\/(.+)$/);
@@ -314,4 +333,30 @@ function wiki_test_encrypted_plain_http(plain) {
     if (!("crypto" in globalThis)) Object.defineProperty(globalThis, "crypto", wikiTestEncCrypto);
     wikiTestEncCrypto = null;
   }
+}
+
+// The server rolls a page back: its latest version is no longer there, so
+// that the one before it is served as the latest.
+function wiki_test_encrypted_roll_back(page) {
+  wikiTestEncrypted.pages.get(page).versions.pop();
+}
+
+// The server leaves a version out of a page's history, by its index from
+// the first version (0).
+function wiki_test_encrypted_drop_version(page, index) {
+  wikiTestEncrypted.pages.get(page).versions.splice(index, 1);
+}
+
+// What this browser remembers of a page for a user (jsbits/encrypted.js's
+// "wiki-chain:" in local storage), set to the version at an index from the
+// first (0), as if it had read that one last; nothing for an index below 0.
+function wiki_test_encrypted_seen_at(user, page, index) {
+  const key = "wiki-chain:" + user;
+  const all = JSON.parse(localStorage.getItem(key) ?? "{}");
+  if (index < 0) delete all[page];
+  else {
+    const content = wikiTestEncrypted.pages.get(page).versions[index].content;
+    all[page] = { number: content.chain.number, tag: content.tag };
+  }
+  localStorage.setItem(key, JSON.stringify(all));
 }

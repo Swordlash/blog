@@ -803,6 +803,19 @@ How it works:
   offers to unlock them there, with a passkey or your password.
 - Slugs in an encrypted space are random, since a title's slug would show
   the title.
+- Each version of a page names its number and the version before it, in
+  what its encryption binds, so the server cannot change either. Your
+  browser remembers the latest version it read of each page. When the
+  server later sends an older one, a different one under the same number,
+  or a history with a version missing or out of order, the page is shown
+  under a banner that says so, and cannot be edited in that tab until it
+  is reloaded. What this catches, and no more: a version missing from, or
+  reordered in, a part of the history your browser reads, and a latest
+  version older than (or forked from) one your browser read before. A
+  browser that never read a page cannot tell an older version from the
+  latest; neither can one that cleared its site data. Versions written
+  before this check came (WP5.74b3) are not numbered; their order is the
+  server's word.
 - Search runs in your browser: the first search after the page opens
   fetches every page of each encrypted space whose key you hold and
   decrypts it in memory, until a change: one you make, a save the page
