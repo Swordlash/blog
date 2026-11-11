@@ -12,6 +12,7 @@ import Test.Hspec
 import Test.Markdown.Html
 import Wiki.Core.Markdown
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..), BoxNumbering (..), Numbering (..))
+import Wiki.Core.Markdown.Tasks (Task (..), allTasks, tasksOf)
 import Wiki.Core.Math (Macros (..))
 
 shows' :: Text -> Text -> Expectation
@@ -193,6 +194,45 @@ spec = describe "Markdown.Render" $ do
                      <> "<ul class=\"task-list\"><li class=\"task-list-item task-done\"><input aria-label=\"c\" checked disabled type=\"checkbox\"> <span class=\"task-text\">c</span></li>"
                      <> "<li class=\"task-list-item\"><input aria-label=\"d\" disabled type=\"checkbox\"> <span class=\"task-text\">d</span></li></ul>"
                  )
+    it "gives each box the index of its task in the tree, in quotations, boxes, spoilers, divs, sections and footnotes" $ do
+      let source =
+            T.unlines
+              [ "> - [ ] quoted"
+              , ""
+              , "> [!NOTE] A box"
+              , "> - [ ] boxed"
+              , ""
+              , "See[^n]."
+              , ""
+              , "[^n]: A note."
+              , ""
+              , "    - [x] noted"
+              , ""
+              , "[[!spoiler]]{s}(Open)"
+              , "- [ ] hidden"
+              , "  - [x] deeper"
+              , "[[/spoiler]]"
+              , ""
+              , "[[!spoiler]]{t}"
+              , "- [ ] after a broken marker"
+              , ""
+              , "## [[!spoiler]] A section"
+              , ""
+              , "- [ ] in the section"
+              , ""
+              , "[[!div]]{.box}"
+              , "- [ ] in a div"
+              , "[[/div]]"
+              , ""
+              , "```"
+              , "- [ ] code"
+              , "```"
+              ]
+      html <- markdownWith defaultOptions {taskBoxes = Just (\_ _ -> panic "no change is made")} source
+      let shown = [(T.takeWhile (/= '"') label, T.takeWhile (/= '"') (T.drop 1 (T.dropWhile (/= '"') (snd (T.breakOn "data-task=" rest))))) | piece <- drop 1 (T.splitOn "aria-label=\"" html), let (label, rest) = T.breakOn "\"" piece, "data-task=" `T.isInfixOf` T.take 80 rest]
+          tree = either (panic . show) (allTasks . tasksOf) (parseMarkdown source)
+      shown `shouldBe` [(t.label, show t.index) | t <- tree]
+      map fst shown `shouldBe` ["quoted", "boxed", "hidden", "deeper", "after a broken marker", "in the section", "in a div", "noted"]
     it "numbers a footnote's tasks after the page's, as the tasks of the tree are" $
       showsWith
         defaultOptions {taskBoxes = Just (\_ _ -> panic "no change is made")}
