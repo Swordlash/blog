@@ -18,7 +18,7 @@ import Data.Text qualified as T
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Mount (slugs, startChanged, startWith)
+import Test.Browser.Mount (adopt, slugs, start, startChanged, startWith)
 import Test.Browser.Text (setMarkdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
@@ -32,7 +32,7 @@ import Wiki.Core.Markdown.Frame (frameDocument)
 import Wiki.Core.Space qualified as Core
 
 $( browserJS
-     ["jsbits/test-frame.js", "jsbits/test-style.js"]
+     ["jsbits/test-frame.js", "jsbits/test-style.js", "jsbits/test-markup.js"]
      [ ("js_frame_style", "wiki_test_frame_style", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
      , ("js_frame_count", "wiki_test_frame_count", Safe, [t|JSText -> JSText -> IO Int|])
      , ("js_frame_text", "wiki_test_frame_text", Safe, [t|JSText -> IO JSText|])
@@ -40,6 +40,9 @@ $( browserJS
      , ("js_frame_flag", "wiki_test_frame_flag", Safe, [t|IO JSText|])
      , ("js_formulas", "wiki_test_formulas", Safe, [t|JSText -> IO JSText|])
      , ("js_computed_style", "wiki_test_computed_style", Safe, [t|JSText -> JSText -> IO JSText|])
+     , ("js_frame_mark", "wiki_test_frame_mark", Safe, [t|JSText -> IO Bool|])
+     , ("js_frame_marked", "wiki_test_frame_marked", Safe, [t|JSText -> IO Bool|])
+     , ("js_markup", "wiki_test_markup", Safe, [t|IO JSText|])
      ]
  )
 
@@ -78,7 +81,10 @@ spec m = describe "an html fence" $ do
     eventually $ frameText `shouldReturn` "shown"
     frameCount "script" `shouldReturn` 0
     frameCount "[onerror], [onload], [onclick]" `shouldReturn` 0
-    frameCount "iframe, form, meta, base, link" `shouldReturn` 0
+    frameCount ".page-body :is(iframe, form, meta, base, link, style)" `shouldReturn` 0
+    -- The head is the wiki's: the character set, and the stylesheet's
+    -- import.
+    frameCount "head > *" `shouldReturn` 2
     flag `shouldReturn` ""
 
   it "runs no script even written straight into the frame's document: the sandbox forbids it" $ runPage $ do
@@ -102,13 +108,36 @@ spec m = describe "an html fence" $ do
       (high, content, _) <- heights ".editor-preview iframe.wiki-html"
       abs (high - content) `shouldSatisfy` (<= 1)
 
+  it "is adopted with the page that arrives with it, keeping the document it loaded" $ runPage $ do
+    -- The Markdown guide's frame, in the shell's HTML written out as the
+    -- prerender writes it (test/jsbits/test-markup.js), parsed back.
+    let guide = Page (slugs ["docs"]) (slugs ["markdown-guide"])
+    shown <- start m Nothing guide
+    _ <- find shown frame
+    html <- fromJSText <$> unsafeIOToPageM js_markup
+    unmount shown
+    arrived <- htmlContainer html
+    framed <- findIn arrived frame
+    eventually $ unsafeIOToPageM (js_frame_mark (toJSText frame)) `shouldReturn` True
+    ui <- adopt m arrived Nothing guide
+    find ui frame >>= (`shouldBeSameElement` framed)
+    -- The program has measured it, so it has filled the island.
+    eventually $ do
+      (high, content, _) <- heights frame
+      abs (high - content) `shouldSatisfy` (<= 1)
+    settle
+    settle
+    unsafeIOToPageM (js_frame_marked (toJSText frame)) `shouldReturn` True
+
   it "sets a latex fence as $$ sets the same formula" $ runPage $ do
     ui <- page m "$$\\frac{n(n+1)}{2}$$\n\n```latex\n\\frac{n(n+1)}{2}\n```\n"
     eventually $ do
-      formulas <- unsafeIOToPageM (decodeStrict . encodeUtf8 . fromJSText <$> js_formulas (toJSText (".page-body .wiki-math-display" :: Text)))
+      -- What KaTeX draws; its MathML holds the TeX as written, the fence's
+      -- with the line break it ends with.
+      formulas <- unsafeIOToPageM (decodeStrict . encodeUtf8 . fromJSText <$> js_formulas (toJSText (".page-body .wiki-math-display .katex-html" :: Text)))
       case formulas :: Maybe [Text] of
         Just [dollars, fence] -> do
-          dollars `shouldSatisfy` T.isInfixOf "katex-display"
+          dollars `shouldSatisfy` T.isInfixOf "mfrac"
           fence `shouldBe` dollars
         other -> expectationFailure ("not two formulas: " <> show other)
     length <$> findAll ui ".page-body pre.wiki-code" `shouldReturn` 0

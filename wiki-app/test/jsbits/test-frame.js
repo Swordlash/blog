@@ -50,3 +50,19 @@ function wiki_test_frame_flag() {
 function wiki_test_formulas(selector) {
   return JSON.stringify(Array.from(document.querySelectorAll(selector), (element) => element.innerHTML));
 }
+
+// Mark the document the first frame a selector finds holds, so that a test
+// can tell later whether the frame still holds that document or has loaded
+// another; true once marked, false before the document has loaded.
+function wiki_test_frame_mark(frameSelector) {
+  const doc = wikiTestFrameDocument(frameSelector);
+  if (!doc) return false;
+  doc.documentElement.dataset.wikiTestMark = "kept";
+  return true;
+}
+
+// Whether the first frame a selector finds still holds the document
+// wiki_test_frame_mark marked.
+function wiki_test_frame_marked(frameSelector) {
+  return wikiTestFrameDocument(frameSelector)?.documentElement.dataset.wikiTestMark === "kept";
+}

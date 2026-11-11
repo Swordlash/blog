@@ -300,9 +300,13 @@ async function repairsOf(page) {
           // data-current the contents', set on the link to the section
           // being read (wiki-app/jsbits/toc.js), and data-unseen the
           // shell's, on the link to "What's new?", from what this browser
-          // has seen (a server's; the demo has no such link).
+          // has seen (a server's; the demo has no such link). An html
+          // fence's frame has its height in its style, which the islands'
+          // script measures once the frame's document has loaded
+          // (wiki-app/jsbits/islands.js).
           const scripts = ["data-prerendered", "data-stuck", "data-current", "data-unseen"];
-          if (scripts.includes(name) || mark.attributes[name] === now[name]) continue;
+          const measured = name === "style" && node.matches("iframe.wiki-html");
+          if (scripts.includes(name) || measured || mark.attributes[name] === now[name]) continue;
           const change = `${describe(node)} ${name}: ${JSON.stringify(mark.attributes[name]?.slice(0, 40))} -> ${JSON.stringify(now[name]?.slice(0, 40))}`;
           (mark.attributes[name]?.startsWith("data:") && now[name]?.startsWith("blob:") ? objectUrls : attributes).push(change);
         }
