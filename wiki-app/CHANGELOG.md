@@ -6,33 +6,6 @@ per pull request.
 
 ## Unreleased
 
-Tasks ticked in a page (WP5.91, #204): the page view enables the boxes of
-the page as it is for whoever may edit it, once the program runs, holds
-the ticks as unsaved changes with the page's text with them written in,
-and shows a bar (`.page-ticks`, `role="status"`) that counts them, with
-"Save", one `savePage` against the version they were made on, and
-"Discard". A conflict fetches the page as it is and keeps the ticks on it
-when its tasks are the same, or offers a reload that loses them; a reload
-of the page keeps or drops them the same way and says which. The shell
-asks the view slot `HasUnsaved` (`ViewQuery`, which the blog view passes
-to its home page) before following a route away, with its own question
-for ticks, and the view sets `guardUnload` while there are ticks.
-`Body.renderedTicking` renders a page with enabled boxes.
-`Wiki.App.View.Ticking` is the view's staging of the ticks, changed only
-by `step` on an event; ticks leave it only for a save of this visit,
-Discard, a Leave, a reload asked for, or the right to edit lost. Each visit
-of an address has a number, and an answer to an earlier visit's request
-changes nothing; a failed reload keeps the page and the ticks. A form of
-the page opens only without ticks, and the boxes are disabled while one is
-open.
-"Use as template" is refused with ticks too. When a reload of the wiki
-or of the space fails while the content has changes not saved (an
-editor's, or ticks), the shell keeps the content and says so above it
-(`stale`), instead of showing the failure in its place; the blog view,
-the other parent of a page view, does the same for its home page
-(`staleNotice` is the line both show). Both fetches of
-the page view take the page through one function (`takeFetched`).
-
 An `html` fence is shown in a frame (WP5.89, #196): the island
 `HtmlFrame` renders an `<iframe class="wiki-html">` whose `sandbox` and
 `srcdoc` are attributes, so the prerendered page carries it, and
