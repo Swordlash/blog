@@ -156,6 +156,19 @@ spec m = describe "tasks ticked in a page" $ do
     eventually $ find ui ".page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Another task")
     length <$> findAll ui ".page-ticks-count" `shouldReturn` 0
 
+  it "does not move the ticks onto a page whose task's link leads elsewhere now, though its text reads the same" $ runPage $ do
+    let linked = "# Tasks\n\n- [ ] Review [ticket](issue-1)\n"
+    (ui, wiki) <- page m "user-admin" linked
+    box 0 ui >>= click
+    eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    let theirs = T.replace "issue-1" "issue-2" linked
+    saveBehind wiki 60 theirs
+    find ui ".page-ticks-save" >>= click
+    eventually $ find ui ".page-ticks-note" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "its tasks are not the same now")
+    _ <- find ui ".page-ticks-reload"
+    find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    bodyOf wiki `shouldReturn` theirs
+
   it "shows a sorted list's done tasks last, and ticks the box the source has" $ runPage $ do
     (ui, wiki) <- page m "user-admin" tasksText
     eventually $ sortedLabels ui `shouldReturn` ["New", "Next", "Old"]

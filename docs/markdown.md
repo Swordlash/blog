@@ -59,7 +59,7 @@ Whoever may edit a page ticks its tasks in the page itself, without the editor. 
 
 A task with tasks under it (in the list nested in its item) goes with them: ticking it ticks every task under it, ticking the last task under it not done ticks it too, at every depth, and unticking a task unticks the tasks above it.
 
-If someone else saves the page while you have ticks not saved, "Save" does not overwrite their version. When their version has the same tasks (as many, with the same text, in the same places), your ticks are kept on it, and the bar asks you to save again; when it has not, nothing is saved, and the bar offers to reload the page, which loses your ticks.
+If someone else saves the page while you have ticks not saved, "Save" does not overwrite their version. When their version has the same tasks (as many, in the same places, each written the same but for its box: a changed word, link, image or line under a task makes it another task; text outside the tasks may change), your ticks are kept on it, and the bar asks you to save again; when it has not, nothing is saved, and the bar offers to reload the page, which loses your ticks.
 
 `{.sorted}` on the line before a list of tasks shows its done tasks after the others, each part in its order, and so does every list nested in it, each by itself. Only the page shows them so: the text keeps its order, and the exports too.
 

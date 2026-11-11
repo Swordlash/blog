@@ -184,3 +184,30 @@ spec = describe "Markdown.Tasks" $ do
     it "does not when a task was added, removed or changed" $ do
       rebaseTicks (tasksIn "- [ ] a\n- [ ] b\n") (tasksIn "- [ ] new\n- [ ] a\n- [ ] b\n") (Map.fromList [(0, True)]) `shouldBe` Nothing
       rebaseTicks (tasksIn "- [ ] a\n- [ ] b\n") (tasksIn "- [ ] a\n- [ ] c\n") (Map.fromList [(0, True)]) `shouldBe` Nothing
+      rebaseTicks (tasksIn "- [ ] a\n- [ ] b\n") (tasksIn "- [ ] a\n") (Map.fromList [(0, True)]) `shouldBe` Nothing
+    let moved old new = rebaseTicks (tasksIn old) (tasksIn new) (Map.fromList [(0, True)])
+    it "takes a task whose link leads elsewhere for another task, though its label is the same" $
+      moved "- [ ] Review [ticket](issue-1)\n" "- [ ] Review [ticket](issue-2)\n" `shouldBe` Nothing
+    it "takes a task whose later paragraph, image or code changed for another task" $ do
+      moved "- [ ] a\n\n  more\n" "- [ ] a\n\n  other\n" `shouldBe` Nothing
+      moved "- [ ] a ![x](one.png)\n" "- [ ] a ![x](two.png)\n" `shouldBe` Nothing
+      moved "- [ ] run `make`\n" "- [ ] run `make all`\n" `shouldBe` Nothing
+    it "takes a task whose nested task's text changed for another task" $
+      moved "- [ ] a\n  - [ ] b\n" "- [ ] a\n  - [ ] c\n" `shouldBe` Nothing
+    it "moves the ticks when the other editor only ticked a nested task, which keeps their state unless the reader's tick names it" $ do
+      rebaseTicks (tasksIn "- [ ] a\n  - [ ] b\n  - [ ] c\n") (tasksIn "- [ ] a\n  - [x] b\n  - [ ] c\n") (Map.fromList [(2, True)])
+        `shouldBe` Just (Map.fromList [(2, True)])
+      rebaseTicks (tasksIn "- [ ] a\n  - [ ] b\n") (tasksIn "- [ ] a\n  - [x] b\n") (Map.fromList [(1, False)])
+        `shouldBe` Just (Map.fromList [(1, False)])
+    it "moves the ticks when only the text outside the tasks, or its white space, changed" $ do
+      moved "# Plan\n\n- [ ] a\n" "# The plan\n\nIntro.\n\n- [ ] a\n\nAfter.\n" `shouldBe` Just (Map.fromList [(0, True)])
+      moved "- [ ] a\n" "-   [ ] a\r\n" `shouldBe` Just (Map.fromList [(0, True)])
+    prop "moves ticks exactly when the tasks' trees are the same but for their boxes" $
+      forAll genPage $ \a -> forAll genPage $ \b ->
+        let same = map (\t -> t.content) (allTasks (tasksIn a)) == map (\t -> t.content) (allTasks (tasksIn b))
+         in isJust (rebaseTicks (tasksIn a) (tasksIn b) mempty) === same
+    prop "always moves ticks onto the text with only boxes changed" $
+      forAll genPage $ \source -> forAll (genTicks source) $ \ticks ->
+        case applyTicks (Map.fromList ticks) source of
+          Left e -> counterexample (show e) False
+          Right other -> property (isJust (rebaseTicks (tasksIn source) (tasksIn other) (Map.fromList ticks)))

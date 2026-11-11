@@ -6,6 +6,7 @@
 module Test.Ticking (spec) where
 
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Protolude
 import Test.Hspec
@@ -51,6 +52,7 @@ versions =
   , pageOf "p" ("Intro.\n\n" <> tasksText) 2
   , pageOf "p" "# Tasks\n\n- [x] a\n  - [ ] b\n  - [x] c\n- [ ] d\n" 3
   , pageOf "p" (tasksText <> "- [ ] e\n") 4
+  , pageOf "p" "# Tasks\n\n- [ ] a\n  - [ ] b\n  - [x] c\n- [ ] [d](elsewhere)\n" 6
   , pageOf "q" tasksText 5
   ]
 
@@ -98,6 +100,14 @@ spec = describe "Wiki.App.View.Ticking" $ do
     let s = step (Clicked 3 True) (step (Offered (pageOf "p" tasksText 0)) unstaged)
         next = step (Offered (pageOf "p" (tasksText <> "- [ ] e\n") 4)) s
     next.ticks `shouldBe` Map.fromList [(3, True)]
+    next.page `shouldBe` s.page
+    next.note `shouldBe` Just TasksChanged
+
+  it "keeps the ticks on the page shown when a task's link leads elsewhere now, though its label is the same" $ do
+    let linked = "# Tasks\n\n- [ ] a\n- [ ] Review [ticket](issue-1)\n"
+        s = step (Clicked 1 True) (step (Offered (pageOf "p" linked 0)) unstaged)
+        next = step (Offered (pageOf "p" (T.replace "issue-1" "issue-2" linked) 1)) s
+    next.ticks `shouldBe` Map.fromList [(1, True)]
     next.page `shouldBe` s.page
     next.note `shouldBe` Just TasksChanged
 

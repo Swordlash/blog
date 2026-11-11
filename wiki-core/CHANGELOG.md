@@ -45,7 +45,8 @@ Tasks ticked in a page (WP5.91, #204): `Wiki.Core.Markdown.Tasks` names a
 page's tasks by their index in the order of the tree (`tasksOf`, each with
 the tasks under it), applies the rules for the tasks under a task
 (`tick`), moves ticks onto a newer text with the same tasks
-(`rebaseTicks`), and writes ticks into the text (`applyTicks`), changing
+(`rebaseTicks`; the same as the parser's tree of each item but for the
+boxes, `content`), and writes ticks into the text (`applyTicks`), changing
 the boxes named and nothing else: a box is found where the parser found
 its task (`parseWithTasks` gives each task's bullet), and the result is
 parsed again and checked, or refused. The renderer labels each box with

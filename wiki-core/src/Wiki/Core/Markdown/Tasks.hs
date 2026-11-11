@@ -46,7 +46,12 @@ data Task = Task
   , done :: Bool
   -- ^ Whether its box is ticked in the text.
   , label :: Text
-  -- ^ The item's own text, without its markup ('taskLabel').
+  -- ^ The item's own text, without its markup ('taskLabel'): its box's
+  -- accessible name, not its identity.
+  , content :: [Block]
+  -- ^ The item's blocks as the parser gives them, every box in them
+  -- written to do ('withoutBoxes'): what the task is, which
+  -- 'rebaseTicks' compares.
   , under :: [Task]
   -- ^ The tasks under it: those in its item's blocks that are under no
   -- other task of the item. A task in a list in a non-task item of the
@@ -88,7 +93,7 @@ tasksOf doc = evalState (inBlocks doc) 0
       Just done -> do
         index <- state (\n -> (n, n + 1))
         under <- inBlocks bs
-        pure [Task {index, done, label = taskLabel bs, under}]
+        pure [Task {index, done, label = taskLabel bs, content = withoutBoxes bs, under}]
 
 -- | Every task of a forest, in the order of the tree: a task before the
 -- tasks under it.
@@ -145,10 +150,19 @@ tick forest ticks i want = case pathTo forest of
 -- | The ticks made on one text, moved to another: the text the page has
 -- now, after someone else saved it. They are moved only when the two
 -- texts have the same tasks: as many, under each other in the same way,
--- with the same labels. Each tick then names the same task, and keeps
--- the state the reader gave it unless the new text already has it.
--- 'Nothing' when the tasks are not the same, and the ticks cannot be
--- trusted to name the tasks the reader meant.
+-- and each with the same content, compared as the parser's tree of the
+-- item ('content'), all of it (every paragraph, a link's address, an
+-- image, code, the tasks under it), with only the boxes' states left
+-- out. Any other change in a task makes it another task. White space
+-- and line breaks that parse to the same tree are the same. The text
+-- outside the tasks may change freely. Something the parser numbers
+-- across the page (a footnote's number, a heading's or a box's id in a
+-- task) may change with the text outside, and then the tasks are not
+-- the same: the safe side. Each tick then names the same task, and keeps
+-- the state the reader gave it unless the new text already has it; a
+-- box the other editor ticked or unticked keeps their state unless the
+-- reader's own tick names it. 'Nothing' when the tasks are not the same,
+-- and the ticks cannot be trusted to name the tasks the reader meant.
 rebaseTicks :: [Task] -> [Task] -> Ticks -> Maybe Ticks
 rebaseTicks old new ticks
   | shape old == shape new = Just (Map.filterWithKey (\k s -> Map.lookup k written /= Just s) ticks)
@@ -212,22 +226,23 @@ applyTicks ticks source
       let written = foldl' (flip edit) source (sortOn (\(at, _, _) -> Down at) (catMaybes edits))
           expected = [Map.findWithDefault t.done t.index ticks | t <- tasks]
       (doc', _) <- first (const NotOnlyBoxes) (parseWithTasks written)
-      unless (map (\t -> t.done) (allTasks (tasksOf doc')) == expected && undone doc' == undone doc) (Left NotOnlyBoxes)
+      unless (map (\t -> t.done) (allTasks (tasksOf doc')) == expected && withoutBoxes doc' == withoutBoxes doc) (Left NotOnlyBoxes)
       Right written
   where
     starts = lineStarts source
     edit (at, len, new) t = T.take at t <> new <> T.drop (at + len) t
-    -- The tree with every task to do, to compare two trees but for their
-    -- boxes.
-    undone = map unticked
-    unticked = \case
-      BlockQuote bs -> BlockQuote (undone bs)
-      List kind items -> List kind [ListItem (False <$ task) (undone bs) | ListItem task bs <- items]
-      Div attrs bs -> Div attrs (undone bs)
-      Alert kind h bs -> Alert kind h (undone bs)
-      Spoiler h bs -> Spoiler h (undone bs)
-      Footnotes notes -> Footnotes [Footnote n l (undone bs) | Footnote n l bs <- notes]
-      other -> other
+
+-- | Blocks with every task in them written to do: to compare two trees
+-- but for their boxes.
+withoutBoxes :: [Block] -> [Block]
+withoutBoxes = map $ \case
+  BlockQuote bs -> BlockQuote (withoutBoxes bs)
+  List kind items -> List kind [ListItem (False <$ task) (withoutBoxes bs) | ListItem task bs <- items]
+  Div attrs bs -> Div attrs (withoutBoxes bs)
+  Alert kind h bs -> Alert kind h (withoutBoxes bs)
+  Spoiler h bs -> Spoiler h (withoutBoxes bs)
+  Footnotes notes -> Footnotes [Footnote n l (withoutBoxes bs) | Footnote n l bs <- notes]
+  other -> other
 
 -- | Where each line of a text starts, as an offset in characters, from
 -- the first line. A line ends at @\\r\\n@, at @\\r@ or at @\\n@, as
