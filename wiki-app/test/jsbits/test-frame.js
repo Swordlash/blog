@@ -40,6 +40,16 @@ function wiki_test_frame_heights(frameSelector) {
   return heights.map(Math.round).join(" ");
 }
 
+// The names of the elements in the frame's .page-body that are not among
+// these (a list joined with commas), joined with commas: "" when every one
+// is.
+function wiki_test_frame_outside(frameSelector, names) {
+  const allowed = new Set(names.split(","));
+  const body = wikiTestFrameDocument(frameSelector)?.querySelector(".page-body");
+  if (!body) return "no document";
+  return [...body.querySelectorAll("*")].map((element) => element.localName).filter((name) => !allowed.has(name)).join(",");
+}
+
 // What a script in a frame would have set on the page, had it run: "" when
 // nothing ran.
 function wiki_test_frame_flag() {

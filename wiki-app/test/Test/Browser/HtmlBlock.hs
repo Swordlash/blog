@@ -29,6 +29,7 @@ import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Markdown.Frame (frameDocument)
+import Wiki.Core.Markdown.Html (allowedElements)
 import Wiki.Core.Space qualified as Core
 
 $( browserJS
@@ -43,6 +44,7 @@ $( browserJS
      , ("js_frame_mark", "wiki_test_frame_mark", Safe, [t|JSText -> IO Bool|])
      , ("js_frame_marked", "wiki_test_frame_marked", Safe, [t|JSText -> IO Bool|])
      , ("js_markup", "wiki_test_markup", Safe, [t|IO JSText|])
+     , ("js_frame_outside", "wiki_test_frame_outside", Safe, [t|JSText -> JSText -> IO JSText|])
      ]
  )
 
@@ -81,11 +83,34 @@ spec m = describe "an html fence" $ do
     eventually $ frameText `shouldReturn` "shown"
     frameCount "script" `shouldReturn` 0
     frameCount "[onerror], [onload], [onclick]" `shouldReturn` 0
+    notAllowed `shouldReturn` ""
     frameCount ".page-body :is(iframe, form, meta, base, link, style)" `shouldReturn` 0
     -- The head is the wiki's: the character set, and the stylesheet's
     -- import.
     frameCount "head > *" `shouldReturn` 2
     flag `shouldReturn` ""
+
+  it "keeps what the browser reads as text in its element, and swallows nothing after it" $ runPage $ do
+    ui <- page m rawText
+    _ <- find ui ".page-body iframe.wiki-html"
+    -- Every line's paragraph after it is there: the element before it
+    -- ended where the browser ends it.
+    eventually $ frameCount ".page-body p.after" `shouldReturn` length rawTextLines
+    frameCount "script" `shouldReturn` 0
+    frameCount "[onerror], [onload]" `shouldReturn` 0
+    notAllowed `shouldReturn` ""
+    -- The two styles kept, their CSS as written.
+    frameCount ".page-body style" `shouldReturn` 2
+    frameStyle ".shown-by-css" "background-image" >>= (`shouldSatisfy` T.isPrefixOf "url(\"data:image/svg+xml")
+    flag `shouldReturn` ""
+
+  it "is as high as its content out of the flow too, and an empty block is 0px high" $ runPage $ do
+    ui <- page m (T.intercalate "\n\n" (map (\b -> "```html\n" <> b <> "\n```") outOfFlow))
+    _ <- find ui ".page-body iframe.wiki-html"
+    for_ (zip [1 :: Int ..] [300, 250, 120, 560, 0]) $ \(n, expected) ->
+      eventually $ do
+        (high, _, _) <- heights (".page-body iframe.wiki-html:nth-of-type(" <> show n <> ")")
+        (n, abs (high - expected) <= 2) `shouldBe` (n, True)
 
   it "runs no script even written straight into the frame's document: the sandbox forbids it" $ runPage $ do
     ui <- mount m (Islands.component @(Const Void) @Void) (HtmlFrame (frameDocument "<p>shown</p><script>parent.wikiFrameScriptRan = 'script'</script><img src=\"nowhere.png\" onerror=\"parent.wikiFrameScriptRan = 'handler'\">"))
@@ -147,6 +172,11 @@ spec m = describe "an html fence" $ do
     _ <- find ui ".page-body pre.wiki-code > code.hljs.language-html span.hljs-tag"
     _ <- find ui ".page-body pre.wiki-code > code.hljs.language-latex"
     length <$> findAll ui ".page-body iframe.wiki-html, .page-body .wiki-math-display" `shouldReturn` 0
+
+-- | The elements of the page's frame that are not among the allowlist's
+-- (and the frame's style elements): "" when there are none.
+notAllowed :: PageM s Text
+notAllowed = unsafeIOToPageM (fromJSText <$> js_frame_outside (toJSText frame) (toJSText (T.intercalate "," ("style" : allowedElements))))
 
 -- | The page's frame, when it has one.
 frame :: Text
@@ -218,6 +248,44 @@ hostile =
     , "<base href=\"https://evil.example/\"><link rel=\"stylesheet\" href=\"https://evil.example/x.css\">"
     , "```"
     ]
+
+-- | Elements the browser reads as text, each with HTML in it that would run
+-- or swallow what follows were it read as HTML, and a paragraph after it:
+-- a style with HTML in a string, a style with an SVG in a data address, a
+-- textarea, a title, an xmp, a noscript, a style inside an svg and inside
+-- math (where it is no text), a comment and CDATA.
+rawTextLines :: [Text]
+rawTextLines =
+  map
+    (<> "<p class=\"after\">after</p>")
+    [ "<style>p::after { content: \"</style><script>parent.wikiFrameScriptRan = 'style'</script>\" }</style>"
+    , "<style>.shown-by-css { background-image: url(\"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' onload='parent.wikiFrameScriptRan = 1'></svg>\") }</style><p class=\"shown-by-css\">x</p>"
+    , "<textarea><img src=\"nowhere.png\" onerror=\"parent.wikiFrameScriptRan = 'textarea'\"></textarea>"
+    , "<title><script>parent.wikiFrameScriptRan = 'title'</script></title>"
+    , "<xmp><img src=\"nowhere.png\" onerror=\"parent.wikiFrameScriptRan = 'xmp'\"></xmp>"
+    , "<noscript><img src=\"nowhere.png\" onerror=\"parent.wikiFrameScriptRan = 'noscript'\"></noscript>"
+    , "<svg><style><img src=\"nowhere.png\" onerror=\"parent.wikiFrameScriptRan = 'svg'\"></style></svg>"
+    , "<math><style></style><mtext><img src=\"nowhere.png\" onerror=\"parent.wikiFrameScriptRan = 'math'\"></mtext></math>"
+    , "<!-- <script>parent.wikiFrameScriptRan = 'comment'</script> -->"
+    , "<![CDATA[<img src=\"nowhere.png\" onerror=\"parent.wikiFrameScriptRan = 'cdata'\">]]>"
+    ]
+
+-- | 'rawTextLines' as one html fence.
+rawText :: Text
+rawText = "```html\n" <> T.unlines rawTextLines <> "```\n"
+
+-- | Blocks whose content is out of the flow, and the empty block, in the
+-- order of the heights the test expects of them: placed absolutely, 300px;
+-- placed fixed, 250px; floated, 120px; moved 400px down by a transform,
+-- below an 80px paragraph, 560px in all; nothing, 0px.
+outOfFlow :: [Text]
+outOfFlow =
+  [ "<div style=\"position: absolute; top: 0; height: 300px\">Visible</div>"
+  , "<div style=\"position: fixed; top: 0; height: 250px\">Fixed</div>"
+  , "<div style=\"float: left; width: 50px; height: 120px\"></div>"
+  , "<p style=\"margin: 0; height: 80px\">a</p><div style=\"height: 80px; transform: translateY(400px)\">moved</div>"
+  , ""
+  ]
 
 -- | The demo's Projects space with a page of this text, shown to an
 -- administrator.
