@@ -99,6 +99,8 @@ spec = describe "Markdown.Tasks" $ do
     it "puts a footnote's tasks after the page's, where the footnotes are" $
       map fst (flat "See[^1].\n\n[^1]: A note.\n\n    - [ ] in the note\n\n- [ ] after\n")
         `shouldBe` ["after", "in the note"]
+    it "finds no task in an html fence, which is HTML shown in a frame" $
+      map fst (flat "```html\n<ul><li>- [ ] not a task</li></ul>\n- [ ] nor this\n```\n\n- [ ] real\n") `shouldBe` ["real"]
     it "finds no task in code, in HTML, after a number or in text" $
       flat "```\n- [ ] code\n```\n\n<div>\n- [ ] html\n</div>\n\n1. [ ] numbered\n\nText - [x] here\n"
         `shouldBe` []
@@ -192,6 +194,15 @@ spec = describe "Markdown.Tasks" $ do
       moved "- [ ] a\n\n  more\n" "- [ ] a\n\n  other\n" `shouldBe` Nothing
       moved "- [ ] a ![x](one.png)\n" "- [ ] a ![x](two.png)\n" `shouldBe` Nothing
       moved "- [ ] run `make`\n" "- [ ] run `make all`\n" `shouldBe` Nothing
+    it "takes a task whose html, latex or listing changed for another task, and the same for the same" $ do
+      let inTask fence = "- [ ] a\n\n  " <> T.replace "\n" "\n  " fence <> "\n"
+      moved (inTask "```html\n<b>1</b>\n```") (inTask "```html\n<b>2</b>\n```") `shouldBe` Nothing
+      moved (inTask "```latex\nx^2\n```") (inTask "```latex\nx^3\n```") `shouldBe` Nothing
+      moved (inTask "```mermaid {.norender}\ngraph TD\n```") (inTask "```mermaid {.norender}\ngraph LR\n```") `shouldBe` Nothing
+      moved (inTask "```html\n<b>1</b>\n```") (inTask "```html {.norender}\n<b>1</b>\n```") `shouldBe` Nothing
+      moved (inTask "```html\n<b>1</b>\n```") ("Intro.\n\n" <> inTask "```html\n<b>1</b>\n```") `shouldBe` Just (Map.fromList [(0, True)])
+    it "ticks a task beside an html fence that holds a task's text" $
+      ticked [(0, True)] "```html\n- [ ] in the frame\n```\n\n- [ ] real\n" `shouldBe` "```html\n- [ ] in the frame\n```\n\n- [x] real\n"
     it "takes a task whose nested task's text changed for another task" $
       moved "- [ ] a\n  - [ ] b\n" "- [ ] a\n  - [ ] c\n" `shouldBe` Nothing
     it "moves the ticks when the other editor only ticked a nested task, which keeps their state unless the reader's tick names it" $ do

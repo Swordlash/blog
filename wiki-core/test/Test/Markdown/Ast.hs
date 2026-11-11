@@ -225,6 +225,17 @@ spec = describe "Markdown.Ast" $ do
     it "is no language" $
       "```{.norender}\nx\n```" `parses` [CodeBlock [("class", "norender")] Nothing "x\n"]
 
+  describe "a line of attributes before a fence or a list" $ do
+    it "gives a fence the attributes of the line before it, as after its info word" $ do
+      "{.norender}\n```html\n<b>x</b>\n```" `parses` [CodeBlock [("class", "norender")] (Just "html") "<b>x</b>\n"]
+      "{height=300}\n```html\n<b>x</b>\n```" `parses` [HtmlBlock [("height", "300")] "<b>x</b>\n"]
+    it "gives a list its attributes, in a div, and the fence after the list none of them" $
+      "{.sorted}\n- [ ] a\n\n```html\n<b>x</b>\n```"
+        `parses` [Div [("class", "sorted")] [List BulletList [ListItem (Just False) [Plain [Str "a"]]]], HtmlBlock [] "<b>x</b>\n"]
+    it "gives a fence after a list the line between them, and the list none of it" $
+      "- [ ] a\n\n{.norender}\n```mermaid\ngraph TD\n```"
+        `parses` [List BulletList [ListItem (Just False) [Plain [Str "a"]]], CodeBlock [("class", "norender")] (Just "mermaid") "graph TD\n"]
+
   describe "math" $ do
     it "reads inline math" $
       "Euler: $e^{i\\pi} + 1 = 0$." `parses` para [Str "Euler: ", Math InlineMath "e^{i\\pi} + 1 = 0", Str "."]

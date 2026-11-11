@@ -218,6 +218,20 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     lists boxed `shouldBe` [2]
     filter (`elem` ["Old", "New"]) (query (\case P.Str t -> [t]; _ -> []) boxed) `shouldBe` ["Old", "New"]
 
+  it "gives a fence the line of attributes before it, as the page does, and the list before it none" $ do
+    let codes = query (\case P.CodeBlock (_, cls, _) t -> [(cls, t)]; _ -> [])
+        lists = query (\case P.BulletList items -> [length items]; _ -> [])
+    listed <- blocksOf ToOther place "{.norender}\n```html\n<b>x</b>\n```\n"
+    codes listed `shouldBe` [(["html"], "<b>x</b>")]
+    show listed `shouldNotSatisfy` T.isInfixOf "norender"
+    fenceAfter <- blocksOf ToOther place "- [ ] a\n\n{.norender}\n```mermaid {.numbered}\ngraph TD\n```\n"
+    lists fenceAfter `shouldBe` [1]
+    codes fenceAfter `shouldBe` [(["mermaid", "numberLines"], "graph TD")]
+    show fenceAfter `shouldNotSatisfy` T.isInfixOf "island-note"
+    listFirst <- blocksOf ToOther place "{.sorted}\n- [ ] a\n\n```mermaid\ngraph TD\n```\n"
+    lists listFirst `shouldBe` [1]
+    show listFirst `shouldSatisfy` T.isInfixOf "island-note"
+
   it "keeps a brace line that is no line of attributes to the wiki: in code, in a paragraph" $ do
     coded <- blocksOf ToOther place "```\n{.sorted}\n```\n"
     query (\case P.CodeBlock _ t -> [t]; _ -> []) coded `shouldBe` ["{.sorted}"]
