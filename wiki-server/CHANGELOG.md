@@ -22,13 +22,6 @@ is not `Wiki.Core.Search.searchVersion` (now 2: an `html` block is the
 text it shows); only those two columns change, and only where they
 differ.
 
-The rehearsal starts the old and the new program's servers on port 0
-(`--listen 127.0.0.1:0 --admin-listen 127.0.0.1:0`, `listenAnywhere`) and
-reads the ports the system gave from the line each listener logs
-(`event=listening listener=NAME address=URL`, `listenedAt`), instead of
-binding port 0, closing the socket and passing the number on (WP5.94).
-That line is now part of what the rehearsal keeps stable.
-
 Every login is ASCII (WP5.87). Step 15 of the schema, a `CodeStep`
 (`Step0015`), renames each login that breaks the rule of 2026-11-06, a
 copy of `parseLogin` frozen in the step, to `user-` and the first eight
