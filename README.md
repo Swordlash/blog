@@ -1715,7 +1715,7 @@ In order, and what a failure at each step leaves:
 | PostgreSQL looked at first: a container of the compose project `<name>` set up on another port than `--db-port` is refused untouched, and one that runs is asked whether its database `wiki` is empty before anything is written. Otherwise its files are written and it is started as a deploy on PostgreSQL starts it, and the database checked to be empty | The wiki untouched; PostgreSQL put back exactly as it was found (its files' bytes, a container stopped again or removed, a volume removed when the move made it); a database that holds a wiki is left as it is, and refused |
 | The service stopped (it must stop), and the wiki backed up into `data/backups` | The service started again on SQLite, and PostgreSQL put back as it was found; so too for any other error in this and the next two steps |
 | `wiki-server copy-database` into PostgreSQL | The service started again on SQLite; PostgreSQL empty, as the copy left it |
-| `wiki-server rehearse --move-to-database`: the upgrade's checks (pages, accounts, home pages, roots, ways in) with this program as old and new, the old on a copy in SQLite and the new on a copy of that in PostgreSQL | The service started again on SQLite; PostgreSQL emptied again |
+| `wiki-server rehearse --move-to-database`: the upgrade's checks (links, pages, accounts, home pages, roots, ways in) with this program as old and new, the old on a copy in SQLite and the new on a copy of that in PostgreSQL | The service started again on SQLite; PostgreSQL emptied again |
 | The switch: the deployment `previous/` held moved to `previous.before-move`, `data/wiki.sqlite` set aside into `data/replaced/<time>/`, the deployment on SQLite kept in `previous/`, the page copied back, the binary, the console `bin/wiki`, the unit and the state on PostgreSQL | Switched back, undoing only the steps this run did, the last first (a journal notes each once it is done): the files this run kept in `previous/`, the SQLite file into `data/`, the deployment `previous/` held before; then PostgreSQL emptied and put back as it was found, and the service started on SQLite. A deployment kept by an earlier deploy is never restored. The switch back puts back by copies first and deletes what the move saved only once all of it is back: a step that fails stops it there, the service stopped, everything saved is where the move says, and `--rollback --yes` finishes |
 | The service started, and must answer | Switched back, as above |
 
@@ -2728,7 +2728,8 @@ password on standard input, `wiki-server users list` and its table (the check
 "ways in" reads SIGNS IN of each login before and after), the admin listener's API answered as the
 administrator without a sign-in (`info`, the spaces, their pages and a page
 at a path, and making a space and a page and setting a space's profile,
-which `toolchain/rehearse-ci.sh` seeds the wiki with), the sign-in through a
+which `toolchain/rehearse-ci.sh` seeds the wiki with, and the check "links"
+with a page that links to another), the sign-in through a
 provider with its cookies, and `api/v1/session`. Each says so in its
 documentation, and `Wiki.Server.Rehearsal` lists them. A change to one of them keeps what the
 rehearsal sends working, since the next version's rehearsal drives this

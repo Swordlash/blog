@@ -13,7 +13,7 @@ database that another version of how links are read filled, or none did
 missing page, to a missing page, or left pending; `copy-database` copies
 the table. The rehearsal's first check, `links`, makes a space with a
 page that links to another on the old program, through `POST spaces` and
-`POST spaces/<id>/pages` of the administration API, stable from now on,
+`POST spaces/<id>/pages` of the administration API, which are stable already,
 and checks that the other page lists it after the upgrade.
 
 A page's permanent address, `/l/<page id>/` with an optional `?version=`

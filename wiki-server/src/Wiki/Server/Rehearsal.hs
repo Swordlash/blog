@@ -534,7 +534,8 @@ simpleCheck name before after =
 -- checks that it did. Before the migration it makes a space of its own on
 -- the old program, with a page and a page that links to it by its title,
 -- through the administration API (@POST spaces@ and @POST
--- spaces\/\<id>\/pages@, stable from now on). After it, the first page's
+-- spaces\/\<id>\/pages@, stable already: toolchain/rehearse-ci.sh seeds a
+-- wiki with them). After it, the first page's
 -- backlinks (@GET pages\/\<id>\/backlinks@) must hold the second. The
 -- space stays in the copy, which is thrown away.
 linksCheck :: Check
