@@ -1438,7 +1438,7 @@ done and closed: WP5.86, #236; the owner, 2026-11-11: Slack's names that
 GitHub's list does not have are not needed); #189 (backlinks, done: decision 71, #239); #196 (WP5.89: an `html` block in a frame without scripts, `latex`
 as `$$`, `{.norender}`), then #200 (WP5.90: an interactive SVG in a frame
 that runs scripts and shares no origin, the frame the plugins will run
-in); #204 (WP5.91 TODO lists, WP5.92 a day's page, WP5.93 the calendar); #213 (WP5.74b3). Then the three large ones: #186 (decision 69,
+in); #204's TODO lists (WP5.91; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3). Then the three large ones: #186 (decision 69,
 WP5.84 first), with #190 (table views) after it, since the issue asks for
 it as a plugin; #187; #191. Which of #204 and #213 count as smaller is
 the session's reading, not the owner's word.
@@ -1524,7 +1524,7 @@ which the wiki pins since #227.
   its order. One pure function in wiki-core turns the text and a set of
   ticks into the new text, changing nothing but the boxes.
 - **WP5.92 A day's page: entries with a time, all-day entries, highlights
-  (#204, the second of three).** As other tools do it (Obsidian's Day
+  (#204, the second of three; after the plugins' interface, see WP5.93).** As other tools do it (Obsidian's Day
   Planner, Logseq's journal), the time belongs to the entry, not to a
   place on the page: the owner first thought of fixed sections for the
   parts of the day and agreed to this instead. A day's page is an
@@ -1538,7 +1538,14 @@ which the wiki pins since #227.
   the list; nothing is moved in the source. A pure function in wiki-core
   reads a text's entries. To settle with the owner before briefing: the
   mark that highlights, and what an item with a task box and a time is.
-- **WP5.93 The calendar, a kind of page (#204, the third of three).** A
+- **WP5.93 The calendar, a kind of page (#204, the third of three).** The
+  owner, 2026-11-11: "the calendar is a nice next example of a plugin".
+  So the day's page and the calendar are not built before the plugins'
+  interface (WP5.84): they become the third built-in plugin, after the
+  assistant and the errors, and show what the interface must give a
+  plugin that contributes a kind of page and a view of it, as #190's
+  table views will. Only the TODO lists of #204 (WP5.91) are built before
+  the plugins. A
   page of the kind "calendar" (a kind of page as presentations are, so
   one calendar a page; the owner asked what two calendars on one page
   would mean) shows its days, which are the pages under it. Views as in
@@ -1563,7 +1570,10 @@ which the wiki pins since #227.
   that lists the built-in plugins, turns them on and off and shows their
   options. No external code yet: that is the package after (the manifest,
   the upload, the sandboxed frame, the bridge and protocol version 1, an
-  example plugin and a page of the guide on writing one).
+  example plugin and a page of the guide on writing one). After the two
+  built-in plugins of the first step, the calendar of #204 (WP5.92,
+  WP5.93) is the third, and tells what a contribution of a kind of page
+  needs.
 - **WP5.74 End-to-end encrypted private spaces** (the owner, 2026-11-06,
   rewritten the same day). Two packages, a then b, built so that a single page
   can later be shared with another user.
