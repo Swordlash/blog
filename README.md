@@ -2948,7 +2948,11 @@ release, architecture, runner image and package list. Apt still installs and
 configures them normally, including TeX's format generation. A warm cache
 avoids downloading the TeX packages again; it does not skip package setup.
 Every native job restores these archives, and only postgres saves them. When
-a download fails, as when the runners cannot reach their Ubuntu mirror,
+they hold every archive the runner image's own package index names, as on an
+exact hit, the install runs at once, with no `apt-get update` and no network;
+otherwise the update runs first, with no retries and for at most 45 seconds,
+since apt waits on a name that does not resolve as long as the resolver does.
+When a download fails, as when the runners cannot reach their Ubuntu mirror,
 `toolchain/ci-native-deps.sh` installs the newest version the cache holds of
 each package it could not download, without the network, and postgres does not
 save the cache that run; a package the cache holds no version of is tried once

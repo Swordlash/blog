@@ -5,7 +5,20 @@
 # The archive cache is $APT_ARCHIVE_DIR (default ~/.cache/wiki-apt), which
 # the workflow restores before this script runs. apt takes a package from it
 # when the cached file is the version the package index names, so a warm
-# cache needs no download. When a download fails all the same (the mirror
+# cache needs no download.
+#
+# The script first asks apt what it would download against the package
+# index the runner image came with, before any apt-get update. When that is
+# nothing, it installs at once, with no update and no network. This is
+# sound: the cache's key carries the image's version, so on an exact hit
+# the archives are those the image's index names, and apt still checks
+# each one against that index's hashes. An index a week old only matters
+# when something has to be downloaded, and then the update runs. It runs
+# bounded (no retries, $APT_UPDATE_LIMIT seconds in all, default 45; a
+# healthy one takes about five), because apt waits on a name that does not
+# resolve for as long as the resolver does.
+#
+# When a download fails all the same (the mirror
 # unreachable), the script installs the newest version the cache holds of
 # each package apt could not fetch, without any download, and says so; on
 # GitHub Actions it also writes from-cache=true to the step's outputs, so
@@ -29,6 +42,7 @@ esac
 cache=${APT_ARCHIVE_DIR:-$HOME/.cache/wiki-apt}
 pause=${APT_RETRY_PAUSE:-30}
 within=${APT_RETRY_WITHIN:-120}
+update_limit=${APT_UPDATE_LIMIT:-45}
 missing=
 for list in $lists; do
   while IFS= read -r package; do
@@ -136,9 +150,25 @@ from_cache() {
 
 if [ -n "$missing" ]; then
   mkdir -p "$cache"
-  # An update that fails leaves the index the runner has, which the install
-  # and the cache can still work from.
-  sudo apt-get update || echo 'apt-get update failed; going on with the package index the machine has.'
+  # First against the index the image came with, without an update: when
+  # the cache holds every archive apt would need, install at once. apt
+  # still checks each archive against that index's hashes.
+  if needed=$(to_fetch "$missing" 2>/dev/null) && [ -z "$needed" ]; then
+    echo 'The archive cache holds every archive the index names: installing without an update or a download.'
+    # shellcheck disable=SC2086
+    apt_get install --yes --no-install-recommends --no-download $missing
+    missing=
+  fi
+fi
+
+if [ -n "$missing" ]; then
+  # Bounded: no retries, and $APT_UPDATE_LIMIT seconds in all, since apt
+  # has no timeout for a name that does not resolve. An update that fails
+  # or is stopped leaves the index the machine has (apt replaces a
+  # repository's index files together, when all of them have arrived),
+  # which the install and the cache can still work from.
+  sudo timeout "$update_limit" apt-get -o Acquire::Retries=0 update ||
+    echo "apt-get update failed or took more than $update_limit seconds; going on with the package index the machine has."
   attempt=1
   while :; do
     started=$(date +%s)

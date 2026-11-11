@@ -1,9 +1,10 @@
 #!/bin/sh
 # Regression tests of toolchain/ci-native-deps.sh, against a fake apt-get
 # whose downloads can be made to fail, as when GitHub's runners cannot
-# reach their Ubuntu mirror: the install when the download works (nothing
-# changes from before), when the cache holds the very version the index
-# names, when it holds only older versions (the newest of them is installed
+# reach their Ubuntu mirror: the install when the download works (a bounded
+# update first), when the cache holds the very version the index names (no
+# update at all), when the update fails or hangs, when it holds only older
+# versions (the newest of them is installed
 # by its path, a dependency's as well, and the step's outputs say
 # from-cache=true), when it holds no version of a package (one more try
 # after a pause, then a failure naming the package), when the download
@@ -36,9 +37,10 @@ mkdir -p "$work/bin"
 # $FAKE/downloads-fail-once (removed when used) exists or --no-download is
 # given, which fail with exit 100 before anything is installed; then dpkg
 # installs everything, unless $FAKE/dpkg-fails exists. update succeeds,
-# with apt's warning when downloads fail, as on the runners, and fails
-# when $FAKE/update-fails exists. Each call is logged, one per line, and
-# each package installed, with where from.
+# with apt's warning when downloads fail, as on the runners, fails when
+# $FAKE/update-fails exists and hangs for half a minute when
+# $FAKE/update-hangs does. Each call is logged, one per line, and each
+# package installed, with where from.
 cat >"$work/bin/apt-get" <<'FAKE'
 #!/bin/sh
 printf 'apt-get %s\n' "$*" >>"$FAKE/calls"
@@ -63,6 +65,7 @@ if [ "$command" = update ]; then
     echo 'E: The repository is not signed.'
     exit 100
   fi
+  [ ! -e "$FAKE/update-hangs" ] || exec /bin/sleep 30
   exit 0
 fi
 [ "$command" = install ] && [ -n "$archives" ] || { echo 'fake apt-get: unexpected call' >&2; exit 2; }
@@ -195,9 +198,10 @@ older='libxml2-utils_2.9.14+dfsg-1.3ubuntu3_amd64.deb libxml2-utils_2.9.14+dfsg-
 # case_ <name> <cached archives> [flag files]: runs the script's base
 # profile with the index, the image's packages installed, the archives in
 # the cache and the flags (downloads-fail, downloads-fail-once, dpkg-fails,
-# update-fails) set; $status_lines, when set, replaces the image's packages,
-# and $retry_within is the script's APT_RETRY_WITHIN (default 600, so that
-# a test's attempt is always short). Leaves the output in $work/out, the
+# update-fails, update-hangs) set; $status_lines, when set, replaces the
+# image's packages, $retry_within is the script's APT_RETRY_WITHIN (default
+# 600, so that a test's attempt is always short) and $update_limit its
+# APT_UPDATE_LIMIT (default 45). Leaves the output in $work/out, the
 # exit status in $status, the fake's log in $work/fake/calls and the
 # step's outputs in $work/output.
 case_() {
@@ -214,7 +218,7 @@ case_() {
   status=0
   PATH="$work/bin:$PATH" FAKE="$work/fake" APT_ARCHIVE_DIR="$work/cache" \
     GITHUB_OUTPUT="$work/output" APT_RETRY_PAUSE=7 \
-    APT_RETRY_WITHIN="${retry_within:-600}" \
+    APT_RETRY_WITHIN="${retry_within:-600}" APT_UPDATE_LIMIT="${update_limit:-45}" \
     sh "$script" base >"$work/out" 2>&1 || status=$?
 }
 
@@ -245,6 +249,18 @@ expect_log() {
   fi
 }
 
+# expect_before <what> <pattern> <later pattern>: the fake's log has a line
+# matching the first pattern before any line matching the second.
+expect_before() {
+  first=$(grep -n -e "$2" "$work/fake/calls" | head -n 1 | cut -d: -f1)
+  later=$(grep -n -e "$3" "$work/fake/calls" | head -n 1 | cut -d: -f1)
+  if [ -n "$first" ] && [ -n "$later" ] && [ "$first" -lt "$later" ]; then
+    echo "ok   $name: $1"
+  else
+    fail "$1: \"$2\" at line ${first:-none}, \"$3\" at line ${later:-none}"
+  fi
+}
+
 # expect_output <what> <text>: the script's output contains the text.
 expect_output() {
   if grep -q -F -e "$2" "$work/out"; then
@@ -271,9 +287,14 @@ unset status_lines
 expect_status ok
 expect_log 'no apt-get at all' '^apt-get' 0
 
+update='^apt-get -o Acquire::Retries=0 update$'
+
 case_ 'the download works' ''
 expect_status ok
-expect_log 'one update' '^apt-get update' 1
+expect_log 'one update, bounded' "$update" 1
+expect_log 'no other update' 'update$' 1
+expect_before 'asked what it would download, before the update' '--print-uris' "$update"
+expect_before 'the update before the install' "$update" 'Packages=true install'
 expect_log 'one install' 'Packages=true install' 1
 expect_log 'both archives downloaded' '^download ' 2
 expect_log 'the index version installed' '^installed libxml2-utils 2.9.14+dfsg-1.3ubuntu3.10 from libxml2-utils_' 1
@@ -286,8 +307,11 @@ done
 
 case_ 'the cache holds the index version' "$current" downloads-fail
 expect_status ok
-expect_log 'one install, no download' 'Packages=true install' 1
+expect_log 'no update at all' 'update$' 0
+expect_log 'one install, with --no-download' 'Packages=true install --yes --no-install-recommends --no-download libxml2-utils$' 1
+expect_log 'no other install' 'Packages=true install' 1
 expect_log 'the index version installed' '^installed libxml2-utils 2.9.14+dfsg-1.3ubuntu3.10 from libxml2-utils_' 1
+expect_output 'and it says so' 'installing without an update or a download'
 expect_from_cache unset
 
 case_ 'the cache holds older versions' "$older" downloads-fail
@@ -330,6 +354,14 @@ expect_output 'and it says so' 'apt-get update failed'
 expect_log 'the install goes on, from the cache' "^installed libxml2-utils 2.9.14+dfsg-1.3ubuntu3.9 from" 1
 expect_from_cache true
 
+update_limit=1
+case_ 'the update hangs' "$older" downloads-fail update-hangs
+unset update_limit
+expect_status ok
+expect_output 'it is stopped, and it says so' 'apt-get update failed or took more than 1 seconds'
+expect_log 'the install goes on, from the cache' "^installed libxml2-utils 2.9.14+dfsg-1.3ubuntu3.9 from" 1
+expect_from_cache true
+
 case_ 'the download fails once' '' downloads-fail-once
 expect_status ok
 expect_log 'one pause' '^sleep 7$' 1
@@ -337,11 +369,18 @@ expect_log 'the index version installed' '^installed libxml2-utils 2.9.14+dfsg-1
 expect_output 'and it says why it waits' 'trying again in 7 seconds'
 expect_from_cache unset
 
-case_ 'dpkg fails' "$current" dpkg-fails
+case_ 'dpkg fails after a download' '' dpkg-fails
 expect_status fails
 expect_log 'no second try' 'Packages=true install' 1
 expect_log 'no pause' '^sleep' 0
 expect_log 'no install from the cache' '--no-download' 0
+expect_from_cache unset
+
+case_ 'dpkg fails on what the cache holds' "$current" dpkg-fails
+expect_status fails
+expect_log 'no update' 'update$' 0
+expect_log 'no second try' 'Packages=true install' 1
+expect_log 'no pause' '^sleep' 0
 expect_from_cache unset
 
 if [ "$failures" -gt 0 ]; then
