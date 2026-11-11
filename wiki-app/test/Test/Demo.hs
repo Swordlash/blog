@@ -13,6 +13,7 @@ import Wiki.App.Route qualified as Route
 import Wiki.Core.Attachment (Attachment (..), FileName (..), findAttachment)
 import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Markdown.Ast (parseMarkdown)
+import Wiki.Core.Markdown.Render (linkDestinations)
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (findChild, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug)
@@ -33,10 +34,12 @@ spaceOf p = Map.lookup p.space demo.spaces
 pagePath :: Page -> [Slug]
 pagePath p = fromMaybe [] (spaceOf p >>= \s -> S.pagePath s (`Map.lookup` demo.pages) p.id)
 
--- | The targets of the Markdown links and images in a body: what is between
--- the parentheses of @](…)@.
+-- | The destinations of the Markdown links and embeds in a body, as written,
+-- as the wiki reads them ('Wiki.Core.Markdown.Render.linkDestinations'):
+-- not those in code, which a page shows as examples (the guide's
+-- interactive SVG), and nothing of a body that does not parse.
 linkTargets :: Text -> [Text]
-linkTargets body = map (T.takeWhile (/= ')')) (drop 1 (T.splitOn "](" body))
+linkTargets body = either (const []) linkDestinations (parseMarkdown body)
 
 spec :: Spec
 spec = describe "Wiki.App.Demo" $ do
