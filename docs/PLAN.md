@@ -6,7 +6,8 @@ working plan: what the wiki has to do, the decisions taken, the work still to do
 what is known to be missing.
 
 It does not keep the history of the work done. What each work package built, and why,
-is in its pull request, in the commits and in the packages' `CHANGELOG.md` files. Code
+is in its pull request, in the commits and in the changelog entries under `changelog/`
+(the packages' `CHANGELOG.md` files are frozen since #245). Code
 comments name work packages ("WP4.11 of docs/PLAN.md"); the texts of the packages done
 by 2026-10-31, and the progress log of that time, are in this file as it was at
 commit `162a94e` (`git show 162a94e:docs/PLAN.md`).
@@ -1426,6 +1427,74 @@ confirms it against reality and the plan is amended if it does not hold.
     `links-version`) and now the search text (`search-version`, beside
     `Wiki.Core.Search.bodyText`). A change to how either is read bumps
     its version.
+73. **An interactive SVG runs in a frame without the wiki's origin, and
+    only a frame gets it (WP5.90, #200, #249; the owner, 2026-11-11: only
+    when asked for).** `![flame](attachment:flame.svg){.interactive}`
+    shows an SVG attachment in an `<iframe sandbox="allow-scripts">`
+    (`scriptSandbox`, which the plugins' frames of decision 69 will have
+    too) that loads the attachment's interactive form, its own address
+    with `?interactive`; without the class an SVG stays an `<img>`. The
+    server answers the interactive form only for an attachment stored as
+    `image/svg+xml`, under `interactiveSvgPolicy`: `sandbox allow-scripts`
+    again, `default-src 'none'`, inline scripts and styles, `data:`
+    images, `frame-ancestors 'self'`. So the SVG's scripts have an opaque
+    origin (no cookie, no storage, no way into the page), no fetch, XHR,
+    beacon or WebSocket, no tab, dialog or form. The session's cookie
+    reaches the frame's first load, so a private space's SVG loads (tried
+    in Chromium before the design). **Only a frame gets it**: the answer
+    is given only to a request with `Sec-Fetch-Dest: iframe`, and
+    anything else asking with `?interactive` (a tab, an `<img>`, a
+    request without the header) gets the plain answer, a download;
+    otherwise anyone who may upload an SVG could hand out a scripted
+    page under the wiki's host name. The two answers of one address
+    carry `Vary: Sec-Fetch-Dest` and tags of their own. The page's
+    policy gains `frame-src 'self'`, not narrowed to the attachments'
+    path (`'self'` takes no path, and the origin written into every
+    page's policy would break behind a proxy that rewrites the host).
+    The frame is an island whose `src` the island sets, since setting a
+    frame's `src` again loads it again. The embed is a frame only where
+    the frame's load can reach the server: a secure context (Chromium
+    sends `Sec-Fetch-Dest` to no other), the browser online, the page
+    not the copy the service worker kept; and not inside a link.
+    Elsewhere, and in the demo, feeds and exports, it is the image. The
+    smoke test's part 9 tries each claim in Chromium against the real
+    server with a hostile SVG.
+74. **A task is ticked in the page, and ticks are saved together
+    (WP5.91, #204, #243; the owner, 2026-11-11).** Whoever may edit a
+    page ticks its tasks (`- [ ]`, the syntax kept) in the page view. A
+    tick does not save: the ticks are staged in the view, with a bar
+    saying how many and "Save" and "Discard", and a save writes one
+    version (the owner: staging as in the editor, since a version is a
+    whole copy). One pure function in wiki-core turns the text and the
+    ticks into the new text, changing nothing but the boxes
+    (`Wiki.Core.Markdown.Tasks`); a parent's and its children's boxes
+    follow each other; `{.sorted}` on the line before a list shows its
+    ticked tasks last, in the view only. The ticks live in one pure state
+    machine (`Wiki.App.View.Ticking`): they leave it only through a save
+    of this visit, Discard, a Leave the reader confirmed, a reload the
+    reader asked for, or the right to edit lost. The rules the thirteen
+    review rounds left, each closing a class rather than a case: every
+    asynchronous answer carries its visit's number and a save's its own;
+    while any write of the page the view started is out (rename, move,
+    delete, the template switch, the ticks' save) the boxes are disabled
+    and no form opens or closes; the boxes' state reads nothing that
+    `Initialize` sets, so the server's page and the program's first
+    render draw the same boxes; the view never replaces the page it
+    shows with an older version of it (`takesPage`); the shell and the
+    blog keep what they show when a reload fails under unsaved changes.
+    A line of attributes before a list now makes a `Div` around it, as
+    pandoc reads it, and the parser says which block took a line's
+    attributes.
+75. **No script or test chooses a port by number (WP5.94, #244; the
+    owner, 2026-11-11).** Wherever one needs a port, the system or Docker
+    chooses it and the script reads it back: Docker's `--publish
+    127.0.0.1::5432` with `docker port`, the server's `--listen
+    127.0.0.1:0` with the address it logs (`event=listening`), a socket
+    bound to port 0. `toolchain/ci-postgres.sh start` leaves a running
+    container as it is and takes a lock, so agents that share it by name
+    read its port and never restart it; each run of the PostgreSQL tests
+    has databases of its own name, swept after six hours. A deployment's
+    own ports stay what the operator sets.
 
 ## Repository layout
 
@@ -1445,8 +1514,10 @@ docs/                    this plan, ADRs as decisions get revisited
 
 Conventions are haskell-halogen's: fourmolu formatting, `-Wall -Wextra` in each
 `.cabal`, `-Werror` only in `cabal.project`, Haddocks that explain why, polymorphic
-components with class constraints, `RefLabel`s from `newRefLabel`, a `CHANGELOG.md`
-per package once there is a release to speak of.
+components with class constraints, `RefLabel`s from `newRefLabel`, one changelog
+entry per pull request under `changelog/`. The packages' `CHANGELOG.md` files are
+frozen (the owner, 2026-11-11, #245): two open pull requests collided in them every
+time, and the entries under `changelog/` say the same in finer grain.
 
 ## How work is organised
 
@@ -1471,6 +1542,19 @@ owner, the same day). The owner merges; the session
 merges only when asked ("nie merguj sam, chyba że poproszę"). When the owner says to
 merge a pull request as it is, without waiting for its checks, the session merges it
 past the branch's rules (`gh pr merge --admin`; the owner, 2026-11-10).
+
+Pull requests that are open together and touch common files are stacked, each on the
+branch of the one before (the owner, 2026-11-11; `AGENTS.md` has the rule, #246 made
+CI run for a pull request whatever its base). GitHub knows such a chain as a stack,
+and merges it by its own rules, learned on the first one (#247 to #249, 2026-11-11):
+`gh pr merge` refuses a stacked pull request; the merge is
+`PUT /repos/{owner}/{repo}/pulls/{n}/merge-async` with `merge_method`, `merge_action:
+direct_merge` and `bypass_rules: true`; the rules can be bypassed only for the lowest
+pull request not yet merged, so a stack is merged from the bottom, one request each;
+and after each merge GitHub rebases the branches above onto `main` itself, which
+changes their heads and starts their CI again, but no file of their trees (checked on
+each). The owner could not merge the stack in the web page for the required reviews,
+and had the session do it.
 
 The gate runs on CI, not on the machine (the owner, 2026-11-10; before that a
 package's whole gate was run locally first). All of CI runs on GitHub's runners
@@ -1515,9 +1599,9 @@ and presentations (#191) are started. In this order: #194 (persistent
 links, done: decision 70, #235); #205's last part (done: WP5.85, #237,
 decision 58); #188 (emojis: the
 done and closed: WP5.86, #236; the owner, 2026-11-11: Slack's names that
-GitHub's list does not have are not needed); #189 (backlinks, done: decision 71, #239); #196 (done: decision 72, #238), then #200 (WP5.90: an interactive SVG in a frame
+GitHub's list does not have are not needed); #189 (backlinks, done: decision 71, #239); #196 (done: decision 72, #238); #200 (done: decision 73, #249: an interactive SVG in a frame
 that runs scripts and shares no origin, the frame the plugins will run
-in); #204's TODO lists (WP5.91; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3). Then the three large ones, in the owner's order of
+in); #204's TODO lists (done: decision 74, #243; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3), which is next. Then the three large ones, in the owner's order of
 2026-11-11: #187 (autocompletion); #191 (presentations, which bring the
 notion of a kind of page); and last #186 (plugins: decision 69, WP5.84
 first), with #190 (table views) and #204's calendar after it as plugins.
@@ -1529,48 +1613,21 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
-- **WP5.90 An interactive SVG (#200; the owner, 2026-11-11: only when
-  asked for; after WP5.89).** An SVG attachment is shown as an image, in
-  which no script runs. `![flame](attachment:flame.svg){.interactive}`
-  shows it in a frame that runs its scripts and shares nothing with the
-  wiki: another origin (the sandbox without `allow-same-origin`, and the
-  server's `Content-Security-Policy: sandbox` on the answer, so that the
-  file opened by itself is no better off), no network, no way out of the
-  frame. Without the attribute it stays an image, and so in the demo,
-  which has no server to send the headers. Before it is briefed: whether
-  the session's cookie reaches a sandboxed frame's first load of a
-  private space's attachment, on which the design depends. This is the
-  frame external plugins will run in (decision 69).
-- **WP5.94 No port chosen by number in a script or a test (the owner,
-  2026-11-11: "fixed ports are stupid").** `toolchain/ci-postgres.sh`
-  publishes PostgreSQL on 55432, inside the range Linux hands out for
-  outgoing connections, and a job on a hosted runner failed to bind it;
-  `toolchain/rehearse-ci.sh` picks a port from its process number and
-  tries again on a collision. Wherever a script or a test needs a port,
-  the system or Docker chooses it and the script reads it back: Docker's
-  `--publish 127.0.0.1::5432` with `docker port`, the server's
-  `--listen 127.0.0.1:0` with the address it logs, a socket bound to
-  port 0 in Haskell. A deployment's own ports stay what the operator
-  sets (`--port`, `--db-port`): those must not move. The container CI
-  and the session's machine share by name keeps working for agents that
-  find it running: they read its port, they do not assume it.
-- **WP5.91 TODO lists: tasks ticked in the page, saved together (#204,
-  the first of three; the owner, 2026-11-11).** A task (`- [ ]`, `- [x]`,
-  the syntax the wiki has; the owner chose it over a new one) shows a box
-  that is disabled. Whoever may edit the page can now tick it in the page
-  view. A tick does not save: a version is a whole copy of the page, so
-  the ticks are held in the page view as unsaved changes, with a bar
-  saying how many and "Save" and "Discard", and a save writes one version
-  (the owner: staging as in the editor). Leaving the page with unsaved
-  ticks asks, as the editor does. The save is against the version the
-  ticks were made on, and a page changed meanwhile is a conflict the
-  reader is told of, not a silent overwrite. A ticked task's text is
-  struck through. A task with tasks under it: ticking it ticks them all,
-  and ticking the last of them ticks it; unticking one unticks it. A list
-  with the attribute `sorted` (`{.sorted}`) shows its ticked tasks after
-  the unticked ones of the same group, in the view only: the source keeps
-  its order. One pure function in wiki-core turns the text and a set of
-  ticks into the new text, changing nothing but the boxes.
+- **WP5.95 No view takes an older answer over a newer one (found by
+  Codex on #243, rounds 12 and 13; left there on purpose).** The page view
+  drops a fetched page older than the one it shows (`takesPage`, by
+  `updatedAt`). The same mechanism is open elsewhere, and was before
+  #243: the comments' threads (`loadThreads` checks the page's id, not the
+  order of answers), the space's tree in the side panel (`loadHere`), the
+  backlinks (`loadBacklinks`), and the shell's session, spaces and users
+  (`loadWorld`) each take an answer whenever it comes. And one case in the
+  page view itself: a save's own answer, arriving after the reader chose
+  to see a newer version another editor saved meanwhile, replaces the
+  page the ticks are staged on before `takesPage` looks, so the article
+  shows the older text under the newer title until the next reload. One
+  rule for all of them, stated once (an answer of a kind is taken only if
+  no newer answer of that kind was taken already), rather than a counter
+  for each request.
 - **WP5.92 A day's page: entries with a time, all-day entries, highlights
   (#204, the second of three; after the plugins' interface, see WP5.93).** As other tools do it (Obsidian's Day
   Planner, Logseq's journal), the time belongs to the entry, not to a
@@ -1930,7 +1987,9 @@ needs. Each was true when its package merged; check before relying on one.
   can run locally since 2026-11-10: rootless Docker under the session's
   account, started by its systemd session, and
   `toolchain/ci-postgres.sh start` for the container CI uses. One
-  container and one port are shared by every agent that runs them.
+  container is shared by every agent that runs them; its port is the one
+  Docker chose, read with `docker port` (decision 75), and `start`
+  leaves a running container alone.
 - **The move to PostgreSQL (WP5.80b, #233).** It ran end to end once, on
   2026-11-10, on a scratch deployment under the session's account (a real
   unit, rootless Docker, a wiki with an account, pages, an attachment and
@@ -2447,6 +2506,61 @@ needs. Each was true when its package merged; check before relying on one.
   listener returns first, so an action's focus, DOM read or `dataTransfer` read comes too
   late. `HE.preventingDefault` and `HE.stoppingPropagation` cover the two cases that
   matter most; the rest is upstream's to fix, low priority (HH-2).
+- **Interactive SVGs (WP5.90, decision 73, #249).** An interactive SVG
+  needs HTTPS or localhost: elsewhere the embed is the image, and a page
+  the server prerendered with the frame is repaired when the program
+  starts. WebRTC is not stopped in Chromium: an `RTCPeerConnection` with
+  a STUN server of the SVG's choosing sends packets (`webrtc 'block'` is
+  in the policy and Chromium does not know it); what can leave that way
+  is the SVG's own content and what the reader types into the frame,
+  never the wiki's. Offline, or on the kept copy, the image shows only if
+  the browser has the plain file: the page does not fetch it as well
+  while online. A server that goes away while a live page is open leaves
+  a frame that fails on its next load, which the page cannot tell from
+  success. `frame-src 'self'` is not narrowed to the attachments' path.
+  The guide has no live interactive example. The pull request was merged
+  on the owner's word before a CI run of its own head had finished (the
+  runs before it stopped on #243's task boxes or were restarted by the
+  stack's rebases); main's run on the merge is its first whole one.
+- **TODO lists (WP5.91, decision 74, #243).** Left on purpose: an
+  administrator switching a space between blog and ordinary while a
+  reader has unsaved ticks on its home page loses those ticks (the shell
+  swaps the two views on a successful reload); signing out unmounts an
+  editor with unsaved text (its autosaved draft remains); a task box
+  clicked before the program has loaded is ticked by the browser and set
+  back by the program's first render, with nothing staged; commonmark
+  reads an item without a box as the start of another list, so
+  `{.sorted}` reaches only the run of tasks before it. The late answers
+  left are WP5.95.
+- **CI and the runners' Ubuntu mirror (#247).** On 2026-11-11 GitHub's
+  runners could not resolve their mirror for hours. Every native job now
+  restores the cache of apt archives and installs with no `apt-get
+  update` and no network when the cache holds what the image's index
+  names; otherwise the update runs bounded (45 seconds, no retries).
+  When the mirror is down and the cache lacks a version the index names,
+  the job fails, as before: installing older cached versions was built
+  and cut, since it meant resolving dependencies by hand against apt.
+- **GitHub's cache limit and main's dependency store.** The repository's
+  10 GB of Actions caches hold about 1.3 GB for each open pull request
+  (the two cabal stores and the two build snapshots). With six open on
+  2026-11-11, GitHub evicted main's native dependency store, and every
+  new pull request then built its dependencies from scratch (30 to 45
+  minutes a job) until main saved one again. `ci-prune-caches.sh` keeps
+  one copy a ref; nothing keeps the total down. A pull request that
+  restored main's store and built no new dependency need not save a copy
+  of its own.
+- **Stacks (#246).** A stacked pull request's base is set before its
+  branch is pushed: a run takes the base its pull request had when the
+  push arrived, and a change of base starts none. After each merge of a
+  stack GitHub rebases the branches above, so their CI starts again on a
+  tree that has not changed.
+- **Tests that fail under load, cause not shown.** The server's smoke
+  test stopped in a sign-in step in 4 of 12 local runs on a loaded
+  machine ("Sign in with Fake", `signInThroughTheForm`: the steps click
+  `.sign-in-toggle` right after a plain `goto`; a click before the
+  listener is attached is the guess). wiki-core's `HtmlCost` timing test
+  ("elements nested deep") failed twice in whole-suite runs on the shared
+  machine and passed alone.
 
 ## Assumptions
 
