@@ -51,9 +51,9 @@ holding html content = (srcdocOf =<< inFrame html) `shouldReturn` frameDocument 
 
 spec :: Spec
 spec = describe "Markdown.Render, an html fence" $ do
-  describe "by default, as a feed shows it" $
-    it "writes the source as an HTML listing" $
-      "```html\n<p style=\"color: red\">x</p>\n```" `shows'` "<pre><code class=\"language-html\">&lt;p style=\"color: red\"&gt;x&lt;/p&gt;\n</code></pre>"
+  describe "by default, as a feed shows it"
+    $ it "writes the source as an HTML listing"
+    $ "```html\n<p style=\"color: red\">x</p>\n```" `shows'` "<pre><code class=\"language-html\">&lt;p style=\"color: red\"&gt;x&lt;/p&gt;\n</code></pre>"
 
   describe "in a frame" $ do
     it "writes the frame's document into its srcdoc, escaped, and nothing else" $

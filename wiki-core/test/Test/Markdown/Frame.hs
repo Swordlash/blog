@@ -23,7 +23,7 @@ spec = describe "Markdown.Frame" $ do
       for_ sandboxes $ \sandbox ->
         T.words sandbox `shouldSatisfy` all (`notElem` ["allow-forms", "allow-top-navigation", "allow-top-navigation-by-user-activation", "allow-downloads", "allow-modals"])
 
-  describe "the frame's document" $
-    it "imports the wiki's stylesheet into a layer, then holds the block in the page's wrapper" $
-      frameDocument "<p>x</p>"
-        `shouldBe` "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>@import url(\"style.css\") layer(wiki);</style></head><body class=\"html-frame\"><div class=\"page-body\"><p>x</p></div></body></html>"
+  describe "the frame's document"
+    $ it "imports the wiki's stylesheet into a layer, then holds the block in the page's wrapper"
+    $ frameDocument "<p>x</p>"
+      `shouldBe` "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>@import url(\"style.css\") layer(wiki);</style></head><body class=\"html-frame\"><div class=\"page-body\"><p>x</p></div></body></html>"
