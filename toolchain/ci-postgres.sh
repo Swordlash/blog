@@ -112,7 +112,9 @@ create() {
       break
     fi
     attempt=$((attempt + 1))
-    if grep -q 'address already in use' "$scratch/error" && [ "$attempt" -lt 10 ]; then
+    # Rootless Docker says "address already in use"; Docker as root has
+    # said "failed to bind host port" and "port is already allocated".
+    if grep -q 'address already in use\|failed to bind host port\|port is already allocated' "$scratch/error" && [ "$attempt" -lt 10 ]; then
       [ ! -s "$scratch/id" ] || docker rm -f "$(cat "$scratch/id")" >/dev/null 2>&1 || true
       continue
     fi
@@ -168,6 +170,13 @@ EOF
 case ${1:-} in
   start)
     docker_answers
+    # A container another `start` is making is "created" for a moment
+    # before it runs: wait for it to run before judging it.
+    tries=0
+    while [ "$(docker inspect --format '{{.State.Status}}' "$name" 2>/dev/null || true)" = created ] && [ "$tries" -lt 30 ]; do
+      tries=$((tries + 1))
+      sleep 1
+    done
     seen=$(docker inspect --format '{{.Id}}' "$name" 2>/dev/null || true)
     if ! published || ! answers_soon; then
       create "$seen"
