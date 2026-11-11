@@ -8,6 +8,7 @@ module Wiki.App.View.Common
     Context (..)
   , PageWidth (..)
   , ViewOutput (..)
+  , ViewQuery (..)
 
     -- * Permissions, as the client hides what they forbid
   , principalOf
@@ -32,6 +33,7 @@ module Wiki.App.View.Common
     -- * HTML
   , errorView
   , failureView
+  , staleNotice
   , errorMessage
   , pageTree
   , spaceIcon
@@ -124,6 +126,14 @@ data ViewOutput
     Entered
   | -- | The reader chose how wide pages are laid out: the shell keeps it.
     ChoseWidth PageWidth
+
+-- | What the shell asks a view. A view that does not answer is taken to
+-- have nothing to say.
+data ViewQuery a
+  = -- | Whether leaving the view would lose changes the reader has not
+    -- saved, which the shell then asks about before it follows a route
+    -- away: the page view's unsaved ticks ("Wiki.App.View.Page").
+    HasUnsaved (Bool -> a)
 
 -- | The wiki's built-in math macros as the administration keeps them, as
 -- the first block of a formula's macros, marked so that the islands read
@@ -232,6 +242,20 @@ failureView e again = case e of
       </div>
     |]
   _ -> errorView e
+
+-- | The line above content kept on screen after its reload failed,
+-- because it holds changes not saved (an editor's text, a page's ticks):
+-- what failed, that the content stays, and a button to try again. A view
+-- that mounts the page view or the editor shows it rather than replace
+-- the content with 'failureView', which would unmount it and lose them.
+staleNotice :: WikiError -> i -> HH.HTML w i
+staleNotice e again =
+  [hh|
+    <div class="error stale-reload" role="alert">
+      <p>{{ "The wiki could not be loaded again: " <> errorMessage e <> " What is shown stays, with the changes you have not saved." :: Text }}</p>
+      <button type="button" class="retry" onClick={{ const again }}>Try again</button>
+    </div>
+  |]
 
 errorMessage :: WikiError -> Text
 errorMessage = \case

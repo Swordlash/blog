@@ -50,10 +50,25 @@ A page with three headings or more has a "Contents" panel beside it (above it on
 1. Numbered lists use `1.` or `1)`.
 2. They may start from any number.
 
-Task lists show a checkbox:
+Task lists show a checkbox, and a done task is struck through:
 
 - [x] write the page
 - [ ] review it
+
+Whoever may edit a page ticks its tasks in the page itself, without the editor. A tick is not saved at once, since every save keeps a whole copy of the page: the ticks are held as changes not saved yet, and a bar at the bottom of the page counts the boxes changed, with "Save", which saves them all as one version, and "Discard", which drops them. The version saved differs from the page only in its boxes: a box ticked is written `[x]`, one unticked `[ ]`, and a box left as it was keeps its spelling (`[X]` stays). Leaving the page with ticks not saved asks first, as leaving the editor does, and so does the browser before the tab is closed. Rename, Move and Delete ask you to save or discard the ticks first. A version of the page, its source, its history, its slides, comments and the editor's preview show the boxes as they are, not to be ticked.
+
+A task with tasks under it (in the list nested in its item) goes with them: ticking it ticks every task under it, ticking the last task under it not done ticks it too, at every depth, and unticking a task unticks the tasks above it.
+
+If someone else saves the page while you have ticks not saved, "Save" does not overwrite their version. When their version has the same tasks (as many, in the same places, each written the same but for its box: a changed word, link, image or line under a task makes it another task; text outside the tasks may change), your ticks are kept on it, and the bar asks you to save again; when it has not, nothing is saved, and the bar offers to reload the page, which loses your ticks.
+
+`{.sorted}` on the line before a list of tasks shows its done tasks after the others, each part in its order, and so does every list nested in it, each by itself. Only the page shows them so: the text keeps its order, and the exports too.
+
+{.sorted}
+- [x] book the room
+- [ ] send the invitations
+- [ ] order the cake
+
+An item without a box ends a list of tasks there (the next items are another list), so `{.sorted}` sorts the tasks up to it. To sort several lists, put them in a box of the class: `[[!div]]{.sorted}` … `[[/div]]`.
 
 ## Links
 

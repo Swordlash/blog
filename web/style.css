@@ -1634,6 +1634,56 @@ pre.numbered > code {
   margin: 0 0.4rem 0 -1.2rem;
 }
 
+/* A done task (Wiki.Core.Markdown.Render), wherever tasks are rendered:
+   its own text struck through, its first paragraph's and its other
+   paragraphs, but not the lists in it, whose tasks are struck through
+   only when they are done too. */
+.task-list-item.task-done > .task-text,
+.task-list-item.task-done > p {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+/* A box the reader may tick in the page view (Wiki.App.View.Page). */
+.page-body .task-list-item input:enabled {
+  cursor: pointer;
+}
+
+/* The bar of a page's unsaved ticks (Wiki.App.View.Page): at the bottom
+   of the window while the page's text is read, and under the text once
+   its end is reached. Empty, it takes no room; it stays in the page so
+   that a screen reader announces what it starts to say. */
+.page-ticks {
+  position: sticky;
+  bottom: 0;
+  z-index: 15;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 1rem 0;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 -2px 8px rgb(0 0 0 / 12%);
+}
+
+.page-ticks:empty {
+  display: none;
+}
+
+.page-ticks-count {
+  font-weight: 600;
+}
+
+.page-ticks-changed,
+.page-ticks-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+}
+
 /* An item of a bulleted list whose text starts with an emoji shows the
    emoji in the bullet's place (Wiki.Core.Markdown.Render's renderItem):
    no bullet, the emoji in a box just left of the text, where the bullet

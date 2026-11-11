@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The page view: a page as a reader sees it. It shows the page's
@@ -82,12 +83,47 @@
 -- editing this page."). It also learns of each save of the page, and then
 -- shows the page as saved: at once, unless the reader is in the middle of
 -- something the new version would discard (text selected, a quote being
--- commented on, a rename or a move half typed). In that case the bar says
--- the page has changed, with a button to show it.
+-- commented on, a rename or a move half typed, ticks not saved). In that
+-- case the bar says the page has changed, with a button to show it.
+--
+-- = Ticking its tasks
+--
+-- Whoever may edit the page ticks its tasks in the page itself (WP5.91 of
+-- docs/PLAN.md): the boxes of the page as it is (not of a version) are
+-- enabled once the program runs. A click does not save, since a version
+-- is a whole copy of the page: it applies the rules for the tasks under a
+-- task ("Wiki.Core.Markdown.Tasks"' 'tick') and holds the result as
+-- unsaved ticks, in the view's staging ("Wiki.App.View.Ticking"). The page
+-- shows its text with the ticks written into it, so a ticked task is
+-- struck through at once, and what is shown is what is saved. A bar at
+-- the bottom of the view says how many boxes changed, with "Save" and
+-- "Discard". "Save" saves the text with the ticks against the version
+-- they were made on: one version, which differs from it in the boxes
+-- alone. A page saved elsewhere meanwhile is a conflict: the view fetches
+-- the page as it is, and keeps the ticks on it when it has the same tasks;
+-- when it has not, the ticks stay on the page shown, nothing is saved, and
+-- the bar offers to reload the page and lose them. Leaving the page with
+-- unsaved ticks asks first, as leaving the editor does: the shell asks the
+-- view ('HasUnsaved'), and the browser asks before the tab is closed or
+-- reloaded ('guardUnload').
+--
+-- The ticks leave the staging only for the reasons
+-- "Wiki.App.View.Ticking" lists (a save of this visit, Discard, a Leave,
+-- a reload asked for, the right to edit lost), and only 'stage' changes
+-- it. A form of the page (Rename, Move, Delete) opens only without
+-- unsaved ticks, and the boxes are disabled while one is open, and while
+-- any write of the page the view started is out ('writeOut'), whose form
+-- then stays until the answer. Each visit
+-- of an address has a number ('visit'), and an answer to a request of an
+-- earlier visit changes nothing of this one; a fetch's answer is shown
+-- only if it is the latest fetch ('fetches'). The page shown is never
+-- replaced by an older version of itself ('takesPage'), whatever asked
+-- for it and whenever the answer comes.
 module Wiki.App.View.Page
   ( Input (..)
   , Slots
   , component
+  , takesPage
   )
 where
 
@@ -109,11 +145,12 @@ import Protolude hiding (State)
 import Web.Event.Event (EventType (..))
 import Wiki.Api.Events (PageEvent (..), Readers (..), applyEvent, noReaders)
 import Wiki.Api.Export (ExportFormat, pageFormats)
-import Wiki.App.Backend (ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (exports, user), WikiError)
+import Wiki.App.Backend (ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (exports, user), WikiError (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Browser (ArticleLink (..), Selected (..), absoluteUrl, clickedThread, copyText, followArticleLink, markFragment, readSelection, reveal, revealFragment)
+import Wiki.App.Editor.Browser (focusInView, guardUnload)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Live (Feed (..), Heard)
 import Wiki.App.Live qualified as Live
@@ -123,6 +160,8 @@ import Wiki.App.View.Comments qualified as CommentsView
 import Wiki.App.View.Common
 import Wiki.App.View.Export qualified as ExportView
 import Wiki.App.View.Star qualified as StarView
+import Wiki.App.View.Ticking (Clearing (..), Staging (..), TickNote (..))
+import Wiki.App.View.Ticking qualified as Ticking
 import Wiki.App.View.Watch qualified as WatchView
 import Wiki.Core.Anchor (Anchor, BlockText (..), Located (..), Marking (Marking), Range (..), highlight, locate, renderedBlocks, renderedText, textFragment)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
@@ -227,6 +266,25 @@ data State = State
   , copiedText :: H.RefLabel
   -- ^ The notice's address, which the copy selects where the browser has
   -- no asynchronous clipboard.
+  , staging :: Staging
+  -- ^ The ticks not saved yet, with the page they were made on
+  -- ("Wiki.App.View.Ticking"). Changed only by 'stage'.
+  , visit :: Int
+  -- ^ Which visit of an address the view is on: one more each time it
+  -- shows another page or version. An answer to a write asked for on an
+  -- earlier visit changes nothing of this one.
+  , fetches :: Int
+  -- ^ How many fetches of the page the view has started: only the answer
+  -- to the latest, on this visit, is shown.
+  , writing :: Bool
+  -- ^ Whether a write of the page that the view started (a rename, a
+  -- move, a delete, the template switch) is out, until its answer on
+  -- this visit. With the ticks' own save ('Staging''s @saving@), what
+  -- 'writeOut' reads.
+  , lastBox :: Maybe Int
+  -- ^ The task whose box the reader set last, by its index: its box has
+  -- the focus again after a render that moved it, drew it anew, or took
+  -- the focus away with the bar's buttons (Discard, a save).
   }
 
 -- | An address put on the clipboard: by a click on a heading's or a box's
@@ -267,8 +325,13 @@ data Action
   | CopySelection BlockText
   | CopyPermanentLink
   | ChooseWidth PageWidth
+  | Tick Int Bool
+  | SaveTicks
+  | DiscardTicks
+  | ReloadLosingTicks
+  | DismissTickNote
 
-component :: forall query m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component ViewQuery Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -307,12 +370,18 @@ component =
               , copied = Nothing
               , copiedWait = Nothing
               , copiedText
+              , staging = maybe Ticking.unstaged (\p -> Ticking.step (Ticking.Offered p) Ticking.unstaged) (pageOf loaded)
+              , visit = 0
+              , fetches = 0
+              , lastBox = Nothing
+              , writing = False
               }
       , render
       , eval =
           H.mkEval
             H.defaultEval
               { H.handleAction = handleAction
+              , H.handleQuery = handleQuery
               , H.initialize = Just Initialize
               , H.finalize = Just Finalize
               , H.receive = Just . Receive
@@ -350,12 +419,13 @@ component =
                 <> titleRow
                 <> toList (postInfo input page)
                 <> [textAndPanel st place rendered text page contents]
+                <> [ticksBar st]
                 <> attachments page urls
                 <> [commentsOf st place text page CommentsView.Below | commentsHere input]
           place = placeOf input page urls st.people.found
           -- Rendered once: the article shows it with its quotes
           -- highlighted, and its text is where the quotes are looked for.
-          rendered = Body.rendered place page.body
+          rendered = Body.renderedTicking (Tick <$ guard (boxesEnabled st)) (\i -> Map.findWithDefault 0 i st.staging.drawn) place st.staging.shown
           text = either (const "") renderedText rendered
           -- The title and who reads the page, on one row, with who wrote
           -- it under them; when the Markdown has its own title, the
@@ -624,6 +694,44 @@ component =
       where
         me = (\u -> u.id) <$> st.input.context.session.user
 
+    -- The bar of unsaved ticks, at the bottom of the view while the page
+    -- is read (web/style.css): how many boxes changed, with "Save" and
+    -- "Discard", and what happened to the ticks, if anything did. It is
+    -- always there, empty when there is nothing to say, so that a screen
+    -- reader announces what it starts to say, as the notice of a copied
+    -- link is.
+    ticksBar :: State -> H.ComponentHTML Action Slots m
+    ticksBar st =
+      [hh|
+        <div class="page-ticks" role="status">
+          {% if count > 0 %}
+            <span class="page-ticks-count">{{ countText }}</span>
+            {% if st.changed %}<span class="page-ticks-changed">The page was saved elsewhere since: "Save" keeps your ticks if its tasks are still the same.</span>{% end %}
+            <button type="button" class="primary page-ticks-save" disabled={{ st.staging.saving }} onClick={{ const SaveTicks }}>Save</button>
+            <button type="button" class="page-ticks-discard" disabled={{ st.staging.saving }} onClick={{ const DiscardTicks }}>Discard</button>
+          {% end %}
+          {% for said in maybeToList st.staging.note %}
+            <p class="page-ticks-note">{{ noteText said }}</p>
+            {% if reloads said %}
+              <button type="button" class="danger page-ticks-reload" onClick={{ const ReloadLosingTicks }}>Reload and lose my ticks</button>
+            {% elif count == 0 %}
+              <button type="button" class="page-ticks-dismiss" onClick={{ const DismissTickNote }}>OK</button>
+            {% end %}
+          {% end %}
+        </div>
+      |]
+      where
+        count = Map.size st.staging.ticks
+        countText = (if count == 1 then "1 box changed" else show count <> " boxes changed") <> ", not saved yet." :: Text
+        reloads = \case
+          TasksChanged -> True
+          _ -> False
+        noteText = \case
+          KeptOnNewer -> "The page was saved since you ticked its tasks. It has the same tasks, so your ticks are kept on the new version: save them, or discard them."
+          TasksChanged -> "The page was saved elsewhere since you ticked its tasks, and its tasks are not the same now, so your ticks are not saved. They are kept here, on the page as you ticked it. Reload the page to see it as it is: your ticks will be lost."
+          Dropped why -> why
+          TickProblem why -> why
+
     -- Who else reads the page: a stack of their avatars, as the module's
     -- Haddock says; nothing when nobody does.
     readersStack :: State -> [H.ComponentHTML Action Slots m]
@@ -682,7 +790,12 @@ component =
             gets (\st -> st.threads) >>= \case
               ThreadsLoading -> loadThreads
               _ -> pass
-      Finalize -> disconnectFeed
+      -- The browser's question before closing the tab is the view's only
+      -- while it has ticks: the editor sets it too, and may be the next
+      -- view.
+      Finalize -> do
+        disconnectFeed
+        whenM (gets unsaved) (H.liftEffect (guardUnload False))
       Retry -> do
         modify (\st -> st {loaded = Loading})
         load
@@ -693,9 +806,18 @@ component =
         modify (\st -> st {input})
         when gainedFeed subscribeFeed
         let elsewhere = old.space.id /= input.space.id || old.path /= input.path || old.version /= input.version
+        -- A reader who may no longer edit the page (their rights changed,
+        -- or they signed out) cannot save their ticks. Only the right to
+        -- edit counts here, not whether the boxes are enabled just now.
+        barred <- gets (\st -> not elsewhere && unsaved st && not (mayEditShown st))
+        when barred $ stage (Ticking.Clear MayNoLongerEdit)
         when elsewhere $ do
           unwatchAll
-          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders})
+          -- Another page or version: the shell asked before leaving the
+          -- ticks ('HasUnsaved'), and the reader chose Leave.
+          stage (Ticking.Clear LeftConfirmed)
+          modify (\st -> st {lastBox = Nothing, writing = False})
+          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
           -- The people mentioned are looked up again: the current user may
           -- be someone else now.
@@ -730,19 +852,38 @@ component =
                 here <- gets pageAddress >>= absoluteUrl
                 copyAddress False (here <> "#" <> textFragment blocks s.anchor)
             )
-      Open mode -> modify (\st -> st {mode, problem = Nothing})
+      -- A form of the page (Rename, Delete) opens only without unsaved
+      -- ticks, as Move does: each may replace the page or take it
+      -- elsewhere, where the shell does not ask about them.
+      --
+      -- While a write is out ('writeOut'), the form stays as it is (Cancel
+      -- does nothing): a form closed then would let ticks be staged that
+      -- the write's answer (a move's, a delete's) would leave behind.
+      Open mode -> modify $ \st -> case mode of
+        _ | writeOut st -> st
+        Viewing -> st {mode, problem = Nothing}
+        _
+          | unsaved st -> st {problem = Just ticksFirst}
+          | otherwise -> st {mode, problem = Nothing}
       Typed t -> modify $ \st -> case st.mode of
         Renaming _ -> st {mode = Renaming t}
         other -> st {mode = other}
+      -- A form of the page, as 'Open' says.
       StartMove -> withPage $ \page -> do
         input <- gets (\st -> st.input)
         let spaces = targetSpaces input.context page
             here = fromMaybe 0 (head [n | (n, s) <- zip [0 ..] spaces, s.id == page.space])
-        modify (\st -> st {mode = Moving here input.pages page.parent, problem = Nothing})
+        modify $ \st ->
+          if
+            | writeOut st -> st
+            | unsaved st -> st {problem = Just ticksFirst}
+            | otherwise -> st {mode = Moving here input.pages page.parent, problem = Nothing}
       ChoseSpace n -> withPage $ \page -> do
-        ctx <- gets (\st -> st.input.context)
-        for_ (atMay (targetSpaces ctx page) n) $ \s ->
-          listPages s.id >>= \case
+        input <- gets (\st -> st.input)
+        asked' <- gets (\st -> st.visit)
+        for_ (atMay (targetSpaces input.context page) n) $ \s -> do
+          listed <- listPages s.id
+          onVisit asked' $ case listed of
             Left e -> modify (\st -> st {problem = Just e})
             Right ps -> modify (\st -> st {mode = Moving n ps Nothing})
       ChoseParent n -> withPage $ \page ->
@@ -752,8 +893,8 @@ component =
              in st {mode = Moving chosen ps (join (atMay (Nothing : map Just (allowedParents page target ps)) n))}
           other -> st {mode = other}
       Submit -> do
-        withPage $ \page -> do
-          State {input, mode} <- get
+        withPage $ \page -> whenM (gets (not . writeOut)) $ do
+          st@State {input, mode, visit} <- get
           let ctx = input.context
           case mode of
             -- The title is the text's first line too (WP5.39 of
@@ -761,10 +902,15 @@ component =
             -- A template's first line is the heading of the pages made from
             -- it, @# {{title}}@, which stays.
             Renaming title ->
-              savePage page.id page.updatedAt title (if page.template then page.body else retitled title page.body) >>= done (const Nothing)
-            Moving chosen ps parent -> for_ (atMay (targetSpaces ctx page) chosen) $ \target ->
-              movePage page.id target.id parent
-                >>= done (\moved -> Just (Page (spacePathOf ctx.spaces target.id) (maybe [] (fromMaybe [] . pagePathOf target ps) parent <> [moved.slug])))
+              startWrite >> savePage page.id page.updatedAt title (if page.template then page.body else retitled title page.body) >>= done visit (const Nothing)
+            -- No form opens with ticks, and the boxes are disabled while
+            -- one is open ('boxesEnabled'); this is the last check.
+            Moving chosen ps parent
+              | unsaved st -> modify (\s -> s {problem = Just ticksFirst})
+              | otherwise -> for_ (atMay (targetSpaces ctx page) chosen) $ \target ->
+                  startWrite
+                    >> movePage page.id target.id parent
+                    >>= done visit (\moved -> Just (Page (spacePathOf ctx.spaces target.id) (maybe [] (fromMaybe [] . pagePathOf target ps) parent <> [moved.slug])))
             _ -> pass
       FromComments out -> case out of
         CommentsView.Did event -> do
@@ -823,31 +969,102 @@ component =
         modify (\st -> st {panelOpen = True, focused = Just tid})
         reveal ("#" <> CommentsView.threadElementId tid)
       -- The shell reloads what it shows, including the page and its tree.
-      ShowChanged -> H.raise (Changed Nothing)
+      -- With unsaved ticks, the page as it is now is shown here, with
+      -- the ticks on it, or not shown, as after a save's conflict.
+      ShowChanged ->
+        gets unsaved >>= \case
+          False -> H.raise (Changed Nothing)
+          True -> catchUp
       ChooseWidth width -> H.raise (ChoseWidth width)
-      SetTemplate template -> withPage $ \page -> setPageTemplate page.id template >>= done (const Nothing)
-      Delete -> withPage $ \page -> do
+      -- A box changed: the rules for the tasks under a task decide the
+      -- ticks, and the page shows its text with them. A click on a box the
+      -- view does not take now has the box drawn anew ('Ticking.step').
+      -- The box toggled keeps the focus, though a sorted list moved its
+      -- item (a keyed element moved with insertBefore loses the focus) or
+      -- the box was drawn anew; the boxes the rules changed with it do not
+      -- take it.
+      Tick i ticked -> do
+        gets boxesEnabled >>= \case
+          True -> stage (Ticking.Clicked i ticked)
+          False -> stage (Ticking.Refused i)
+        modify (\st -> st {lastBox = Just i})
+        focusLastBox
+      -- One save of the text with the ticks, against the version they
+      -- were made on.
+      SaveTicks -> do
+        st <- get
+        for_ st.staging.page $ \base -> when (boxesEnabled st && unsaved st) $ do
+          stage Ticking.Saving
+          token <- gets (\now -> now.staging.save)
+          result <- savePage base.id base.updatedAt base.title st.staging.shown
+          -- The answer is taken only if this save is still the current
+          -- one ('Ticking.answers'): not when the ticks were dropped,
+          -- discarded or left meanwhile, though the page shown be the same
+          -- again. Then the page shown keeps its own state, and the shell
+          -- reloads what changed, which shows the save if the page is shown
+          -- ('adopt').
+          current <- gets (\now -> Ticking.answers token now.staging)
+          if not current
+            then when (isRight result) (H.raise (Changed Nothing))
+            else case result of
+              Right saved -> do
+                stage (Ticking.Saved token saved)
+                -- The Save button that had the focus is gone with the
+                -- ticks: the focus goes back to the box set last.
+                focusLastBox
+                modify $ \s ->
+                  s
+                    { loaded = case s.loaded of
+                        Ready shown urls deck contents | takesPage (Just shown) saved -> Ready saved urls deck contents
+                        other -> other
+                    , changed = False
+                    }
+                H.raise (Showing saved)
+                H.raise (Changed Nothing)
+              -- Saved elsewhere meanwhile: the page as it is now, with the
+              -- ticks on it if it has the same tasks; otherwise the ticks
+              -- stay on the page shown, and the bar says so.
+              Left (Conflict _) -> stage (Ticking.Conflicted token) >> catchUp
+              Left e -> stage (Ticking.SaveFailed token ("The ticks could not be saved: " <> errorMessage e))
+      -- The Discard button that had the focus is gone with the ticks: the
+      -- focus goes back to the box set last.
+      DiscardTicks -> do
+        stage (Ticking.Clear Discarded)
+        focusLastBox
+      -- The page as it is now, the ticks lost, as the bar said.
+      ReloadLosingTicks -> do
+        stage (Ticking.Clear ReloadConfirmed)
+        H.raise (Changed Nothing)
+      DismissTickNote -> stage Ticking.Dismissed
+      -- A write that makes the shell reload, so, as a form, only without
+      -- unsaved ticks.
+      SetTemplate template -> withPage $ \page ->
+        gets (\st -> (writeOut st, unsaved st)) >>= \case
+          (True, _) -> pass
+          (_, True) -> modify (\st -> st {problem = Just ticksFirst})
+          _ -> do
+            asked' <- gets (\st -> st.visit)
+            startWrite
+            setPageTemplate page.id template >>= done asked' (const Nothing)
+      Delete -> withPage $ \page -> whenM (gets (not . writeOut)) $ do
         input <- gets (\st -> st.input)
+        asked' <- gets (\st -> st.visit)
         let spacePath = spacePathOf input.context.spaces input.space.id
             -- The page above it, or the space for a page under the home
             -- page, whose path is one slug.
             parentRoute = pageRoute spacePath (take (length input.path - 1) input.path)
-        deletePage page.id >>= done (const (Just parentRoute))
+        startWrite
+        deletePage page.id >>= done asked' (const (Just parentRoute))
 
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
-      input <- gets (\st -> st.input)
-      loaded <- fetch input
-      -- Only if the requested page, and its version, is still the one to
-      -- show: another navigation may have overtaken this load.
-      now <- gets (\st -> st.input)
-      when (now.space.id == input.space.id && now.path == input.path && now.version == input.version) $ do
-        modify (\st -> st {loaded})
-        resolvePeople
-        for_ (pageOf loaded) (H.raise . Showing)
+      latest <- startFetch
+      loaded <- gets (\st -> st.input) >>= fetch
+      -- Only the answer to the latest fetch of this visit: another
+      -- navigation, or another reload, may have overtaken this one.
+      onFetch latest $ do
+        void (takeFetched loaded)
         H.raise Loaded
-        watch
-        loadThreads
 
     -- Fetch the page's comments (again).
     loadThreads :: H.HalogenM State Action Slots ViewOutput m ()
@@ -928,18 +1145,138 @@ component =
         modify (\st -> st {copied = Nothing, copiedWait = Nothing})
       modify (\st -> st {copiedWait = Just waiting})
 
+    -- Show a page just fetched. The staging takes it ('Ticking.Offered'):
+    -- with the ticks moved onto it when it has the same tasks, or, when it
+    -- has not, the ticks kept on the page shown, which stays. A reader
+    -- who may no longer edit the page loses the ticks first, with a note.
+    -- A failed fetch with ticks keeps the page shown and the ticks, and
+    -- says why; without ticks, the view shows the failure, as before.
+    adopt :: Loaded -> H.HalogenM State Action Slots ViewOutput m ()
+    adopt loaded = case loaded of
+      Ready new _ _ _ -> do
+        st <- get
+        when (unsaved st && not (mayEditPage st.input.context new.space new.id)) $ stage (Ticking.Clear MayNoLongerEdit)
+        stage (Ticking.Offered new)
+        taken <- gets (\now -> now.staging.page == Just new)
+        when taken $ modify (\now -> now {loaded})
+      Failed e ->
+        gets unsaved >>= \case
+          False -> modify (\st -> st {loaded})
+          True -> stage (Ticking.Problem ("The page could not be read again: " <> errorMessage e <> " Your ticks are kept."))
+      Loading -> modify (\st -> st {loaded})
+
+    -- A page fetched, as every fetch of the view takes it: shown as 'adopt'
+    -- shows it, then what the page shown needs looked up again: the people
+    -- its text and its comments mention, and their avatars
+    -- ('resolvePeople'); the shell told which page is shown ('Showing');
+    -- the live channel watching it ('watch'); its comments
+    -- ('loadThreads'). Both fetches ('load', 'catchUp') go through here,
+    -- so that none of these is forgotten by one of them.
+    --
+    -- An older version of the page shown is dropped here, with nothing
+    -- done ('takesPage'): a fetch asked for before a save may answer after
+    -- it. Whether the page was taken is the result.
+    takeFetched :: Loaded -> H.HalogenM State Action Slots ViewOutput m Bool
+    takeFetched loaded = do
+      shown <- gets (\st -> pageOf st.loaded)
+      case loaded of
+        Ready new _ _ _ | not (takesPage shown new) -> pure False
+        _ -> do
+          adopt loaded
+          resolvePeople
+          gets (\st -> pageOf st.loaded) >>= traverse_ (H.raise . Showing)
+          watch
+          loadThreads
+          pure True
+
+    -- The page as it is now, fetched while there are unsaved ticks (after
+    -- a save's conflict, or when the reader asks to see the new version),
+    -- as 'adopt' shows it.
+    catchUp :: H.HalogenM State Action Slots ViewOutput m ()
+    catchUp = do
+      latest <- startFetch
+      now <- gets (\st -> st.input) >>= fetch
+      onFetch latest $
+        whenM (takeFetched now) (modify (\s -> s {changed = False}))
+
+    -- The staging after an event ("Wiki.App.View.Ticking"'s 'Ticking.step'),
+    -- and the browser's question before closing the tab, which it asks
+    -- while there are ticks. The only code that changes the staging, so
+    -- ticks leave it only as 'Ticking.step' lets them.
+    stage :: Ticking.Event -> H.HalogenM State Action Slots ViewOutput m ()
+    stage event = do
+      before <- gets unsaved
+      modify (\st -> st {staging = Ticking.step event st.staging})
+      after <- gets unsaved
+      when (before /= after) $ H.liftEffect (guardUnload after)
+
+    -- Give the box set last the focus, scrolled into view by the least
+    -- amount, once the render that follows a change is done (a change of
+    -- the state renders before the action goes on). A disabled box has no
+    -- index ("Wiki.Core.Markdown.Render"), so while the boxes are disabled
+    -- (a save under way) nothing is focused, and the focus stays where it
+    -- was, or on the page itself; the page does not scroll.
+    focusLastBox :: H.HalogenM State Action Slots ViewOutput m ()
+    focusLastBox = do
+      st <- get
+      for_ st.lastBox $ \i -> do
+        holder <- H.getRef st.text
+        for_ holder $ \h -> H.liftEffect (liftIO (h.querySelector ("input[data-task=\"" <> show i <> "\"]") >>= traverse_ focusInView))
+
+    -- A fetch of the page begins: its number, with the visit's.
+    startFetch :: H.HalogenM State Action Slots ViewOutput m (Int, Int)
+    startFetch = do
+      modify (\st -> st {fetches = st.fetches + 1})
+      gets (\st -> (st.visit, st.fetches))
+
+    -- Run what an answer to this fetch does, if it is still the latest
+    -- fetch of the visit.
+    onFetch :: (Int, Int) -> H.HalogenM State Action Slots ViewOutput m () -> H.HalogenM State Action Slots ViewOutput m ()
+    onFetch which act = gets (\st -> (st.visit, st.fetches) == which) >>= (`when` act)
+
+    -- Run what an answer to a request made on this visit does, if the view
+    -- is still on it.
+    onVisit :: Int -> H.HalogenM State Action Slots ViewOutput m () -> H.HalogenM State Action Slots ViewOutput m ()
+    onVisit which act = gets (\st -> st.visit == which) >>= (`when` act)
+
+    handleQuery :: forall a. ViewQuery a -> H.HalogenM State Action Slots ViewOutput m (Maybe a)
+    handleQuery (HasUnsaved answer) = Just . answer <$> gets unsaved
+
     withPage :: (Page -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()
     withPage k =
       gets (\st -> st.loaded) >>= \case
         Ready page _ _ _ -> k page
         _ -> pass
 
-    done :: (a -> Maybe Route) -> Either WikiError a -> H.HalogenM State Action Slots ViewOutput m ()
-    done next = \case
-      Left e -> modify (\st -> st {problem = Just e})
-      Right a -> do
-        modify (\st -> st {mode = Viewing, problem = Nothing})
-        H.raise (Changed (next a))
+    -- The answer to a write the view asked for on this visit. When the
+    -- reader has gone to another page meanwhile, the page shown keeps its
+    -- own state, and the shell only reloads what changed.
+    done :: Int -> (a -> Maybe Route) -> Either WikiError a -> H.HalogenM State Action Slots ViewOutput m ()
+    done which next result =
+      gets (\st -> st.visit == which) >>= \case
+        False -> when (isRight result) (H.raise (Changed Nothing))
+        True -> do
+          modify (\st -> st {writing = False})
+          case result of
+            Left e -> modify (\st -> st {problem = Just e})
+            Right a -> do
+              -- No tick can be staged while the write is out
+              -- ('boxesEnabled'), so there are none here; if there were,
+              -- the view would not take the reader elsewhere over them: it
+              -- keeps the page, says what happened, and the shell reloads.
+              held <- gets unsaved
+              case next a of
+                Just _ | held -> do
+                  modify (\st -> st {mode = Viewing, problem = Just (Invalid "The page was moved or deleted while you had ticks not saved. It stays shown here, but the ticks cannot be saved where it was: discard them to go on.")})
+                  H.raise (Changed Nothing)
+                route -> do
+                  modify (\st -> st {mode = Viewing, problem = Nothing})
+                  H.raise (Changed route)
+
+    -- A write of the page begins: until its answer ('done'), the boxes are
+    -- disabled and the form stays ('writeOut').
+    startWrite :: H.HalogenM State Action Slots ViewOutput m ()
+    startWrite = modify (\st -> st {writing = True})
 
 -- | Fetch the page the input names, with the URL of each of its
 -- attachments, or the reason it cannot be shown.
@@ -1112,6 +1449,26 @@ pageOf = \case
   Ready page _ _ _ -> Just page
   _ -> Nothing
 
+-- | Whether the view takes a page it was given (a fetch's answer, a
+-- save's), with the page it shows: not when the two are the same page
+-- (the same 'Page.id') and the one given is an older version.
+--
+-- A version is the page's @updatedAt@, which the backend sets on every
+-- save of the title or the text, later than the one before. Restoring an
+-- old version saves it again, as a newer version, which is taken. A page
+-- deleted and made again at the same address has another id, and is
+-- taken. The same version is taken: it has the same title and text.
+-- What a save does not version (the page's place in the tree, the
+-- template mark, the attachments) comes as the answer has it, which a
+-- late answer may have older.
+--
+-- So the order the answers come in cannot put an older version back: a
+-- fetch asked for before a save and answered after it is dropped.
+takesPage :: Maybe Page -> Page -> Bool
+takesPage shown given = case shown of
+  Just page | page.id == given.id -> given.updatedAt >= page.updatedAt
+  _ -> True
+
 -- | The place the page's links, and its comments' links, are resolved
 -- from: where the page is.
 placeOf :: Input -> Page -> Map AttachmentId Text -> Map Text Author -> Body.Place
@@ -1128,7 +1485,7 @@ bodiesOf loaded threads = case loaded of
 -- in it, a quote being commented on, or a rename or a move begun. A new
 -- version of the page would discard that.
 busy :: State -> Bool
-busy st = isJust st.selected || isJust st.quoting || not viewing
+busy st = isJust st.selected || isJust st.quoting || not viewing || unsaved st
   where
     viewing = case st.mode of
       Viewing -> True
@@ -1166,6 +1523,50 @@ copiedLabel c = case c.outcome of
     | c.pinned -> "Link to this version copied:"
     | otherwise -> "Link copied:"
   Just False -> "The link could not be copied. It is selected, to copy by hand:"
+
+-- | Whether the reader may edit the page shown: the right that unsaved
+-- ticks need ('Ticking.MayNoLongerEdit' when it is gone).
+mayEditShown :: State -> Bool
+mayEditShown st = maybe False (\p -> mayEditPage st.input.context p.space p.id) (pageOf st.loaded)
+
+-- | Whether the page's boxes are enabled now: the reader may edit the
+-- page, the page is the page as it is (not a version), no write of the
+-- page is out ('writeOut': the ticks' save, a rename, a move, a delete,
+-- the template switch), and no form of the page is open (Rename, Move,
+-- Delete). Disabled boxes keep the ticks as they are.
+--
+-- It reads nothing that 'Initialize' sets. The prerender writes the page
+-- after its 'Initialize' has run, and the program adopts that page with a
+-- first render made before its own 'Initialize'. Both draw the same boxes
+-- for the same reader, so adopting the page changes none of them. A box
+-- clicked before the program has started stages nothing: the browser
+-- ticks it, and the program's first render sets it back as the page has
+-- it.
+boxesEnabled :: State -> Bool
+boxesEnabled st =
+  isNothing st.input.version
+    && not (writeOut st)
+    && plainView
+    && mayEditShown st
+  where
+    plainView = case st.mode of
+      Viewing -> True
+      _ -> False
+
+-- | Whether a write of the page that the view started is out: the ticks'
+-- save, a rename, a move, a delete or the template switch. While one is,
+-- the boxes are disabled and the page's forms stay as they are, so that
+-- no tick is staged that the write's answer could leave behind.
+writeOut :: State -> Bool
+writeOut st = st.writing || st.staging.saving
+
+-- | Whether there are ticks not saved.
+unsaved :: State -> Bool
+unsaved st = not (Map.null st.staging.ticks)
+
+-- | Why a form of the page does not open: there are unsaved ticks.
+ticksFirst :: WikiError
+ticksFirst = Invalid "Save or discard the ticked tasks first."
 
 -- | Whether the page has comments: not on the wiki's home page, and not in
 -- an encrypted space, whose comments are not encrypted yet. A comment on

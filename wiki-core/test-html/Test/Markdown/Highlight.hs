@@ -60,3 +60,11 @@ spec = describe "Anchor.highlight" $ do
     doc <- renderMarkdownOr defaultOptions "A list:\n\n- one\n- two *three*" :: IO [Html]
     let text = renderedText doc
     renderedText (highlight [Marking (CommentThreadId "t") (Range 3 12) False] doc) `shouldBe` text
+
+  it "finds and marks a quote across tasks as across any items: the boxes and their wrappers add no text" $ do
+    doc <- renderMarkdownOr defaultOptions "- [x] Buy milk\n- [ ] Pack" :: IO [Html]
+    renderedText doc `shouldBe` " Buy milk Pack"
+    marked "- [x] Buy milk\n- [ ] Pack" [("t1", "milk Pa", False)]
+      `shouldReturn` ( "<ul class=\"task-list\"><li class=\"task-list-item task-done\"><input aria-label=\"Buy milk\" checked disabled type=\"checkbox\"> <span class=\"task-text\">Buy <mark class=\"comment-mark\" data-thread=\"t1\">milk</mark></span></li>"
+                         <> "<li class=\"task-list-item\"><input aria-label=\"Pack\" disabled type=\"checkbox\"><mark class=\"comment-mark\" data-thread=\"t1\"> </mark><span class=\"task-text\"><mark class=\"comment-mark\" data-thread=\"t1\">Pa</mark>ck</span></li></ul>"
+                     )

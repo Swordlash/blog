@@ -100,12 +100,17 @@
 -- application, the header has an "Install" button.
 --
 -- The one route change the shell does not simply follow is one away from
--- an editor with unsaved changes. It asks the editor ('Editor.IsDirty')
--- and, if the draft would be lost, asks the reader in place whether to
--- leave. By then the browser's address is already the new route's (a link
+-- unsaved changes: an editor's, or the ticks of a page's tasks not saved
+-- yet ("Wiki.App.View.Page"). It asks the editor ('Editor.IsDirty') and
+-- the view ('HasUnsaved') and, if something would be lost, asks the reader
+-- in place whether to leave. By then the browser's address is already the new route's (a link
 -- was followed, or the back button pressed). So staying goes back through
 -- the session history to the editor's entry, by as many entries as lie in
 -- between ('historyEntry' numbers them), as the browser's buttons would.
+-- For the same reason a reload of the wiki or of the space that fails
+-- while the content has unsaved changes does not put its failure in the
+-- content's place, which would unmount it: the content stays, and a line
+-- above it says the reload failed, with a button to try again ('stale').
 module Wiki.App.Shell
   ( Input (..)
   , Query (..)
@@ -258,7 +263,7 @@ type Slots =
      , "part" :-> H.Slot (Const Void) Void PartSlot
      , "reset" :-> H.Slot (Const Void) ResetView.Output ()
      , "signIn" :-> H.Slot SignInView.Query SignInView.Output ()
-     , "view" :-> H.Slot (Const Void) ViewOutput ViewSlot
+     , "view" :-> H.Slot ViewQuery ViewOutput ViewSlot
      ]
 
 -- | 'ViewSlot' is the index of a child under the label "view". These
@@ -387,9 +392,9 @@ data State m = State
   , kept :: Bool
   -- ^ Whether the demo's changes are saved in the browser ('demoKept').
   , settled :: Bool
-  , leaving :: Maybe Route
-  -- ^ A route followed away from an editor with unsaved changes, about
-  -- which the reader is being asked.
+  , leaving :: Maybe (Route, Unsaved)
+  -- ^ A route followed away from unsaved changes, about which the reader
+  -- is being asked, and whose changes they are.
   , entry :: Int
   -- ^ The number of the session history entry for the route shown
   -- ('historyEntry'), which staying in the editor goes back to.
@@ -420,7 +425,21 @@ data State m = State
   -- when they never opened it. 'Nothing' until the shell has read it,
   -- after its first render, since a page the server prerendered cannot
   -- know it; and always natively, where there is no reader's browser.
+  , stale :: Maybe WikiError
+  -- ^ Why the last reload of the wiki or of the space failed, when it
+  -- failed while what is shown had changes not saved ('unsavedShown'):
+  -- what is shown then stays, since showing the failure in its place
+  -- would unmount it and lose them, and a line above it says so. The
+  -- next reload that succeeds clears it.
   }
+
+-- | Whose changes a route followed away would lose ('leaving'): what the
+-- question before leaving names.
+data Unsaved
+  = -- | An editor's text.
+    EditorChanges
+  | -- | The ticks of a page's tasks, made in the page view and not saved.
+    PageTicks
 
 -- | What the administration's section on the wiki's data shows.
 data Panel
@@ -459,6 +478,7 @@ data Action
   | Stay
   | RetryWorld
   | RetryHere
+  | RetryStale
   | FromAccount SignInView.Output
   | SessionChanged Session
   | OpenSignIn
@@ -539,6 +559,7 @@ component =
                   , shown = Nothing
                   , backlinks = Nothing
                   , seen = Nothing
+                  , stale = Nothing
                   }
           -- The page's backlinks too, if the backend has them at once, so
           -- that the sidebar's first render is the prerendered one; else
@@ -580,8 +601,9 @@ component =
             </button>
             <main class="wiki-content">
               {{ offlineCopyLine st }}
-              {% if isJust st.leaving %}
-                {{ leaveConfirm }}
+              {% for e in maybeToList st.stale %}{{ staleNotice e RetryStale }}{% end %}
+              {% for (_, unsaved) in maybeToList st.leaving %}
+                {{ leaveConfirm unsaved }}
               {% end %}
               {{ content st }}
             </main>
@@ -1275,15 +1297,20 @@ component =
     loading = [hh|<p class="loading">Loading…</p>|]
 
     -- Asked when a route is followed away from unsaved changes ('leaving').
-    leaveConfirm :: H.ComponentHTML Action Slots m
-    leaveConfirm =
+    leaveConfirm :: Unsaved -> H.ComponentHTML Action Slots m
+    leaveConfirm unsaved =
       [hh|
         <div class="confirm leave-confirm" role="alertdialog">
-          <p>This page has changes that are not saved. Leave the editor and lose them?</p>
+          <p>{{ question }}</p>
           <button type="button" class="danger" onClick={{ const Leave }}>Leave</button>
           <button type="button" onClick={{ const Stay }}>Stay</button>
         </div>
       |]
+      where
+        question :: Text
+        question = case unsaved of
+          EditorChanges -> "This page has changes that are not saved. Leave the editor and lose them?"
+          PageTicks -> "This page has ticked tasks that are not saved. Leave the page and lose them?"
 
     notFound :: State m -> H.ComponentHTML Action Slots m
     notFound st =
@@ -1357,6 +1384,7 @@ component =
         modify (\st -> st {world = WorldLoading})
         loadEverything
       RetryHere -> loadHere True
+      RetryStale -> reload Nothing
       Online False -> modify (\st -> st {offline = True})
       -- Back online: whatever failed to load because the server could not
       -- be reached is loaded again, as "Try again" would. A view whose own
@@ -1389,24 +1417,24 @@ component =
             modify (\st -> st {entry = now})
             H.liftEffect revealFragment
           else do
-            dirty <- or <$> H.queryAll "editor" (Editor.IsDirty identity)
-            if dirty
-              then do
+            unsaved <- unsavedShown
+            case unsaved of
+              Just what -> do
                 shut <- shutMenu
-                modify (shut . \st -> st {leaving = Just r})
-              else arrive r now
+                modify (shut . \st -> st {leaving = Just (r, what)})
+              Nothing -> arrive r now
       Leave -> do
         now <- H.liftEffect historyEntry
-        gets (\st -> st.leaving) >>= traverse_ (`arrive` now)
+        gets (\st -> st.leaving) >>= traverse_ ((`arrive` now) . fst)
       Stay -> do
         st <- get
         modify (\s -> s {leaving = Nothing})
         -- The address is that of the route not followed. Going back to the
-        -- editor's entry leaves the history as the browser's buttons
-        -- would, with the route not followed ahead of it; the router
-        -- announces the route already shown. Without a number for that
-        -- entry (there is none natively), the editor's address replaces
-        -- the other.
+        -- entry of the route shown (the editor's, or the page's with its
+        -- ticks) leaves the history as the browser's buttons would, with
+        -- the route not followed ahead of it; the router announces the
+        -- route already shown. Without a number for that entry (there is
+        -- none natively), the shown route's address replaces the other.
         now <- H.liftEffect historyEntry
         if st.entry /= now
           then H.liftEffect (historyGo (st.entry - now))
@@ -1623,11 +1651,28 @@ component =
       demo <- gets (\st -> st.demo)
       lift (attempt (fetchWorld demo)) >>= \case
         Right w -> do
-          modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady})
+          modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady, stale = Nothing})
           -- A session loaded now may name a newer entry than the page
           -- shown has marked seen.
           whatsNewSeen
-        Left e -> modify (\st -> st {world = WorldFailed e})
+        Left e -> do
+          -- A reload that fails while what is shown has unsaved changes
+          -- keeps it ('stale').
+          keep <- (&&) <$> gets (\st -> st.world == WorldReady) <*> (isJust <$> unsavedShown)
+          modify (\st -> if keep then st {stale = Just e} else st {world = WorldFailed e})
+
+    -- Whose changes not saved the content shown holds, if any: an
+    -- editor's, or a page view's ticks. Asked before a route away
+    -- ('leaving'), and when a reload fails ('stale').
+    unsavedShown :: H.HalogenM (State m) Action Slots output m (Maybe Unsaved)
+    unsavedShown = do
+      editing <- or <$> H.queryAll "editor" (Editor.IsDirty identity)
+      ticked <- or <$> H.queryAll "view" (HasUnsaved identity)
+      pure $
+        if
+          | editing -> Just EditorChanges
+          | ticked -> Just PageTicks
+          | otherwise -> Nothing
 
     -- Load the space the route is in, unless it is the one loaded already
     -- (or even then, if forced).
@@ -1645,10 +1690,15 @@ component =
               -- meanwhile.
               unless (hereIs path st.here) $ modify (\s -> s {here = LoadingSpace path})
               result <- fetchHere path
-              -- Unless the route has moved to another space meanwhile.
+              -- Unless the route has moved to another space meanwhile. A
+              -- reload of the space shown that fails while it has unsaved
+              -- changes keeps it ('stale').
               now <- gets (\s -> s.route)
+              keep <- case result of
+                SpaceFailed _ _ e | hereIs path st.here -> unsavedShown >>= \u -> pure (e <$ u)
+                _ -> pure Nothing
               when (spaceOfRoute now == Just path) $
-                modify (\s -> s {here = result})
+                modify (\s -> maybe s {here = result} (\e -> s {stale = Just e}) keep)
       -- Loaded again, or loaded for the first time, as for the server's
       -- prerender: the backlinks are part of what settles. Otherwise
       -- the route has moved within what was shown, and is announced

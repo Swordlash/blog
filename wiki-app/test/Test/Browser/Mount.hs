@@ -7,6 +7,7 @@ module Test.Browser.Mount
   , startWith
   , startOn
   , startChanged
+  , startChangedWith
   , startChangedAgain
   , startAgain
   , adopt
@@ -91,10 +92,22 @@ startChanged
   -> Maybe Text
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
-startChanged m change who at = do
+startChanged m change who at = fst <$> startChangedWith m change who at
+
+-- | 'startChanged', and the wiki it runs over, for a test to read what the
+-- application wrote, or to write behind its back.
+startChangedWith
+  :: forall m
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  => (MemState -> MemState)
+  -> Maybe Text
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m, IORef MemState)
+startChangedWith m change who at = do
   (wiki, router) <- prepare who at
   unsafeIOToPageM (modifyIORef' wiki change)
-  mount m (H.hoist (NT (runMemWiki wiki)) component) (input router)
+  ui <- mount m (H.hoist (NT (runMemWiki wiki)) component) (input router)
+  pure (ui, wiki)
 
 -- | 'startChanged', keeping what the browser's local storage holds from
 -- before: the same page mounted again over the same change, as after a

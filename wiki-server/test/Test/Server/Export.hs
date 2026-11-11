@@ -192,6 +192,72 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     headers bs `shouldBe` [(1, "a")]
     filter (== "toc") (query (\case P.Str t -> [t]; _ -> []) bs) `shouldBe` ["toc", "toc"]
 
+  it "leaves out a line of attributes alone, and keeps a sorted list's tasks in the order of the source" $ do
+    bs <- blocksOf ToOther place "Before.\n\n{.sorted}\n- [x] Old\n- [ ] New\n"
+    show bs `shouldNotSatisfy` T.isInfixOf "sorted"
+    filter (`elem` ["Old", "New"]) (query (\case P.Str t -> [t]; _ -> []) bs) `shouldBe` ["Old", "New"]
+    query (\case P.Str t -> [t]; _ -> []) bs `shouldSatisfy` elem "\9746"
+
+  it "leaves out a line of attributes alone and keeps what opens the blocks around it: a footnote, a list item, a quotation, a box" $ do
+    let lists = query (\case P.BulletList items -> [length items]; _ -> [])
+        codes = query (\case P.CodeBlock _ t -> [t]; _ -> [])
+        notes = query (\case P.Note bs -> [lists bs]; _ -> [])
+    noted <- blocksOf ToOther place "See[^n].\n\n[^n]: {.sorted}\n    - [x] Old\n    - [ ] New\n"
+    show noted `shouldNotSatisfy` T.isInfixOf "sorted"
+    notes noted `shouldBe` [[2]]
+    codes noted `shouldBe` []
+    itemed <- blocksOf ToOther place "- {.sorted}\n  - [x] Old\n  - [ ] New\n"
+    show itemed `shouldNotSatisfy` T.isInfixOf "sorted"
+    lists itemed `shouldBe` [1, 2]
+    codes itemed `shouldBe` []
+    quoted <- blocksOf ToOther place "> {.sorted}\n> - [x] Old\n> - [ ] New\n"
+    show quoted `shouldNotSatisfy` T.isInfixOf "sorted"
+    query (\case P.BlockQuote bs -> [lists bs]; _ -> []) quoted `shouldBe` [[2]]
+    boxed <- blocksOf ToOther place "> [!NOTE]\n> {.sorted}\n> - [x] Old\n> - [ ] New\n"
+    show boxed `shouldNotSatisfy` T.isInfixOf "sorted"
+    lists boxed `shouldBe` [2]
+    filter (`elem` ["Old", "New"]) (query (\case P.Str t -> [t]; _ -> []) boxed) `shouldBe` ["Old", "New"]
+
+  it "gives a fence the line of attributes before it, as the page does, and the list before it none" $ do
+    let codes = query (\case P.CodeBlock (_, cls, _) t -> [(cls, t)]; _ -> [])
+        lists = query (\case P.BulletList items -> [length items]; _ -> [])
+    listed <- blocksOf ToOther place "{.norender}\n```html\n<b>x</b>\n```\n"
+    codes listed `shouldBe` [(["html"], "<b>x</b>")]
+    show listed `shouldNotSatisfy` T.isInfixOf "norender"
+    fenceAfter <- blocksOf ToOther place "- [ ] a\n\n{.norender}\n```mermaid {.numbered}\ngraph TD\n```\n"
+    lists fenceAfter `shouldBe` [1]
+    codes fenceAfter `shouldBe` [(["mermaid", "numberLines"], "graph TD")]
+    show fenceAfter `shouldNotSatisfy` T.isInfixOf "island-note"
+    listFirst <- blocksOf ToOther place "{.sorted}\n- [ ] a\n\n```mermaid\ngraph TD\n```\n"
+    lists listFirst `shouldBe` [1]
+    show listFirst `shouldSatisfy` T.isInfixOf "island-note"
+
+  it "gives a fence the attributes of a line before it only where the page does, in any container" $ do
+    let codes = query (\case P.CodeBlock (_, cls, _) t -> [(cls, t)]; _ -> [])
+        lists = query (\case P.BulletList items -> [length items]; _ -> [])
+    -- A quotation that starts with a fence takes the line, not the fence:
+    -- the page renders the HTML, and so does the document.
+    beforeQuote <- blocksOf ToOther place "{.norender}\n> ```html\n> <b>x</b>\n> ```\n"
+    codes beforeQuote `shouldBe` []
+    show beforeQuote `shouldNotSatisfy` T.isInfixOf "norender"
+    quoted <- blocksOf ToOther place "> {.norender}\n> ```html\n> <b>x</b>\n> ```\n"
+    query (\case P.BlockQuote bs -> [codes bs]; _ -> []) quoted `shouldBe` [[(["html"], "<b>x</b>")]]
+    itemed <- blocksOf ToOther place "- item\n\n  {.norender}\n  ```html\n  <b>x</b>\n  ```\n"
+    codes itemed `shouldBe` [(["html"], "<b>x</b>")]
+    noted <- blocksOf ToOther place "See[^n].\n\n[^n]: Note.\n\n    {.norender}\n    ```html\n    <b>x</b>\n    ```\n"
+    query (\case P.Note bs -> [codes bs]; _ -> []) noted `shouldBe` [[(["html"], "<b>x</b>")]]
+    -- A quotation that starts with a list takes the line, and the list is
+    -- not sorted, in the page and in the document.
+    quotedList <- blocksOf ToOther place "{.sorted}\n> - [x] a\n> - [ ] b\n"
+    query (\case P.BlockQuote bs -> [lists bs]; _ -> []) quotedList `shouldBe` [[2]]
+    show quotedList `shouldNotSatisfy` T.isInfixOf "sorted"
+
+  it "keeps a brace line that is no line of attributes to the wiki: in code, in a paragraph" $ do
+    coded <- blocksOf ToOther place "```\n{.sorted}\n```\n"
+    query (\case P.CodeBlock _ t -> [t]; _ -> []) coded `shouldBe` ["{.sorted}"]
+    texted <- blocksOf ToOther place "Text\n{.sorted}\n"
+    T.concat (query (\case P.Str t -> [t]; _ -> []) texted) `shouldSatisfy` T.isInfixOf "{.sorted}"
+
   it "lets through only what the allowlist keeps of raw HTML, and reads it as pandoc's own" $ do
     bs <- blocksOf ToOther place "<script>alert('no')</script>\n\nPress <kbd>Ctrl</kbd> and <b onclick=\"steal()\">this</b>.\n\n<div class=\"box\"><img src=\"tree.png\" alt=\"A tree\" onerror=\"steal()\"></div>\n"
     raw bs `shouldBe` []

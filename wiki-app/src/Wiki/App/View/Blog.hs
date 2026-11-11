@@ -92,19 +92,24 @@ data Loaded
 data State = State
   { input :: Input
   , loaded :: Loaded
+  , stale :: Maybe WikiError
+  -- ^ Why the last reload failed, when it failed while the home page's
+  -- view had changes not saved: the blog then keeps what it showed, the
+  -- home page's view mounted, and says so above it ('staleNotice').
   }
 
-type Slots = Body.IslandSlots .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("home" .== H.Slot (Const Void) ViewOutput ())
+type Slots = Body.IslandSlots .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("home" .== H.Slot ViewQuery ViewOutput ())
 
 data Action
   = Initialize
   | Receive Input
   | Followed (Follow Route)
   | Retry
+  | RetryStale
   | -- | What the home page's view tells: passed on to the shell.
     FromHome ViewOutput
 
-component :: forall query m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component ViewQuery Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -113,19 +118,22 @@ component =
         -- 'Initialize'.
         initialState = \input -> do
           loaded <- fromMaybe Loading <$> atOnce (fetch input)
-          pure State {input, loaded}
+          pure State {input, loaded, stale = Nothing}
       , render
       , eval =
           H.mkEval
             H.defaultEval
               { H.handleAction = handleAction
+              , -- The shell's question is the home page's to answer: its
+                -- ticks are the blog's unsaved changes.
+                H.handleQuery = H.query "home" ()
               , H.initialize = Just Initialize
               , H.receive = Just . Receive
               }
       }
   where
     render :: State -> H.ComponentHTML Action Slots m
-    render State {input = Input {context = ctx, space, pages, page, feed}, loaded} =
+    render State {input = Input {context = ctx, space, pages, page, feed}, loaded, stale} =
       [hh|
         <section class="blog-view">
           <header class="view-header space-header">
@@ -136,6 +144,7 @@ component =
           {% if mayEdit ctx space.id || notified ctx || not (null homeActions) %}
             <div class="actions">{{ [Router.link ctx.router Followed (NewPage path Nothing) [HP.class_ "button new-post"] [HH.text "New post"] | mayEdit ctx space.id] }}{{ homeActions }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = ctx, target = WatchSpace space.id} | notified ctx] }}</div>
           {% end %}
+          {% for e in maybeToList stale %}{{ staleNotice e RetryStale }}{% end %}
           {{ body }}
         </section>
       |]
@@ -224,17 +233,27 @@ component =
       Retry -> do
         modify (\st -> st {loaded = Loading})
         load
+      RetryStale -> load
       FromHome out -> H.raise out
 
     -- Load on a worker thread, as every view does; the shell is told
-    -- either way.
+    -- either way. While the home page's view has changes not saved (its
+    -- ticks), nothing a reload brings unmounts it: a failure keeps what
+    -- is shown and says so ('stale'), and a home page that would no
+    -- longer be shown stays. A first load, or a reload with nothing
+    -- unsaved, shows what it brings, a failure too.
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
       loaded <- lift (either Failed identity <$> attempt (fetch input))
       -- Unless the space has changed meanwhile.
       now <- gets (\st -> st.input.space.id)
-      when (now == input.space.id) $ modify (\st -> st {loaded})
+      when (now == input.space.id) $ do
+        held <- fromMaybe False <$> H.query "home" () (HasUnsaved identity)
+        modify $ \st -> case (st.loaded, loaded) of
+          (Ready _ _, Failed e) | held -> st {stale = Just e}
+          (Ready _ home, Ready details Nothing) | held -> st {loaded = Ready details home, stale = Nothing}
+          _ -> st {loaded, stale = Nothing}
       H.raise Loaded
 
 -- | Fetch the details the posts are listed with, and the home page, which

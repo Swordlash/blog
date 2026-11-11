@@ -48,6 +48,7 @@ module Wiki.App.View.Body
   , article
   , articleLines
   , rendered
+  , renderedTicking
   , articleOf
   , commentBodies
   , startsWithHeading
@@ -206,7 +207,23 @@ rendered
   => Place
   -> Text
   -> Either Md.ParseError [H.ComponentHTML action slots m]
-rendered place = Md.renderMarkdown (options place)
+rendered = renderedTicking Nothing (const 0)
+
+-- | 'rendered', with the page's task boxes enabled when @onTick@ is given:
+-- a change of a box gives it the task's index and whether the box is now
+-- ticked ("Wiki.Core.Markdown.Tasks"). Only the page view does, for a
+-- reader who may edit the page; anywhere else the boxes are disabled.
+-- @drawn@ says how many times each box was drawn anew (the renderer's
+-- 'Md.taskDrawn').
+renderedTicking
+  :: forall action slots m
+   . (MonadIslands m, MonadUUID m, HasIslands slots)
+  => Maybe (Int -> Bool -> action)
+  -> (Int -> Int)
+  -> Place
+  -> Text
+  -> Either Md.ParseError [H.ComponentHTML action slots m]
+renderedTicking onTick drawn place = Md.renderMarkdown (options place) {Md.taskBoxes = onTick, Md.taskDrawn = drawn}
 
 -- | 'article', from the result of 'rendered' (and the source, shown if it
 -- could not be parsed).

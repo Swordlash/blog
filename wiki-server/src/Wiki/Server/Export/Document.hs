@@ -392,6 +392,16 @@ data MarkerEdit
     -- deck's look and the table of contents' place, which a document
     -- gets from the writer.
     DropLine
+  | -- | A line of attributes alone, @{.sorted}@, from its column to the
+    -- end of the line. What comes before on the line stays: whatever opens
+    -- the blocks the attributes are in (a quotation's @>@, a list item's
+    -- marker, a footnote's label), so that pandoc reads the same blocks
+    -- around what follows.
+    DropAttributes
+  | -- | A fence that took the attributes of a line before it, as the
+    -- wiki's parser says ('TakesAttributes'): these, put after its fence,
+    -- where pandoc reads them.
+    TakeAttributes Attributes
   | -- | A heading spoiler's marker, from its column up to this one,
     -- where the heading's text starts, taken out of the line.
     DropMarker Int
@@ -432,6 +442,35 @@ markerEdits doc markers = Map.fromList [(m.lineAt, (m.columnAt, e)) | m <- marke
       HeadingMarker end -> Just (DropMarker end)
       -- An inline spoiler's bars are rewritten apart ('withBoxes').
       InlineBars _ _ -> Nothing
+      -- A line of attributes alone, @{.sorted}@, which pandoc's reader
+      -- would show as text.
+      SetsAttributes -> Just DropAttributes
+      TakesAttributes attrs -> Just (TakeAttributes attrs)
+
+-- | Whether a fence opens at the start of a text: three backticks or
+-- three tildes. The text starts where the wiki's parser says a fence that
+-- took attributes starts ('TakesAttributes'), so an indented code block,
+-- which takes them too and has no fence to carry them, is left as it is.
+opensFence :: Text -> Bool
+opensFence rest = any (`T.isPrefixOf` rest) ["```", "~~~"]
+
+-- | A fence's opening line, from where the fence starts, with more
+-- attributes, written as pandoc reads a fence's attributes: one pair of
+-- braces after the fence, with the language as the first class
+-- (@```{.mermaid .norender}@). The fence's own attributes come first, then
+-- the others, in their order. What is before the fence on the line (the
+-- blocks it is in) stays.
+withFenceAttributes :: Attributes -> Text -> Text -> Text
+withFenceAttributes added before rest =
+  let (fence, info) = T.span (\c -> Just c == fmap fst (T.uncons rest)) rest
+      (word, braces) = T.breakOn "{" (T.strip info)
+      lang = T.strip word
+      inside t = T.unwords [T.strip (T.dropWhile (== '{') g) | g <- T.splitOn "}" t, not (T.null (T.strip (T.dropWhile (== '{') g)))]
+      written = \case
+        ("id", v) -> "#" <> v
+        ("class", v) -> T.unwords (map ("." <>) (T.words v))
+        (k, v) -> k <> "=\"" <> T.replace "\"" "\\\"" v <> "\""
+   in before <> fence <> "{" <> T.unwords (filter (not . T.null) (["." <> lang | not (T.null lang)] <> [inside braces] <> map written added)) <> "}"
 
 -- | A text with every line ended by @\\n@: CommonMark ends a line at
 -- @\\r\\n@, at @\\r@ and at @\\n@ alike, so the lines of the result are
@@ -572,6 +611,10 @@ withBoxes source markers edits bars = case family of
                      in case e of
                           OpenBox _ -> around [before <> placeholder <> " " <> descriptionIn (T.drop i text)]
                           DropLine -> [quoteOnly before]
+                          DropAttributes -> [before]
+                          TakeAttributes attrs
+                            | opensFence (T.drop i text) -> [withFenceAttributes attrs before (T.drop i text)]
+                            | otherwise -> [text]
                           DropMarker end -> case indexAt text end of
                             Just j | markerAt (T.drop i text) == Just (Opening SpoilerName) -> [before <> T.drop j text]
                             _ -> [text]

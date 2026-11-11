@@ -166,6 +166,7 @@ library
       Wiki.App.View.Star
       Wiki.App.View.Starred
       Wiki.App.View.Status
+      Wiki.App.View.Ticking
       Wiki.App.View.Unsubscribe
       Wiki.App.View.UserDialog
       Wiki.App.View.UserSpaces
@@ -349,6 +350,7 @@ test-suite wiki-app-test
         Test.Scripted
         Test.Server
         Test.Shell
+        Test.Ticking
     build-depends:
         HUnit,
         QuickCheck,
@@ -433,6 +435,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Spaces
       Test.Browser.Spoilers
       Test.Browser.Stars
+      Test.Browser.Tasks
       Test.Browser.WhatsNew
       Test.Browser.Text
       Test.Browser.Vault

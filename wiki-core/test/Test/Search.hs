@@ -90,6 +90,12 @@ spec = describe "Wiki.Core.Search" $ do
       map (\h -> marks h.snippet) (search "drawn by mermaid" (take 1 pages))
         `shouldBe` [["mermaid", "drawn", "by", "Mermaid"]]
 
+    it "searches a task's text, in a sorted list too, and not its box or the list's attributes" $ do
+      let tasks = [page "docs" "Chores" "{.sorted}\n- [x] Buy milk\n- [ ] Pack the bags\n" ["chores"]]
+      titles (search "milk pack bags" tasks) `shouldBe` ["Chores"]
+      search "sorted" tasks `shouldBe` []
+      search "[x]" tasks `shouldBe` []
+
     it "searches the sources of code, diagrams and formulas" $ do
       titles (search "flowchart" pages) `shouldBe` ["Diagrams"]
       titles (search "e^{i\\pi}" pages) `shouldBe` ["Mathematics"]
