@@ -658,8 +658,8 @@ renamedLogins backing = describe "a login step 15 of the schema renamed" $
         pure (token, space)
       said <- withConnectionTo at $ \c -> withTransaction True c (case step0015 of CodeStep {run} -> run c)
       said
-        `shouldBe` [ "Renamed the login \"łucja\" of the user user-editor to \"user-useredit\": a login has only ASCII letters, digits and punctuation now. The user signs in with the same password under the new login."
-                   , "Renamed the login \"żaneta\" of the user user-reader to \"user-userread\": a login has only ASCII letters, digits and punctuation now. The user signs in with the same password under the new login."
+        `shouldBe` [ "Renamed the login \"łucja\" of the user user-editor to \"user-useredit\", since a login is now ASCII letters, digits and punctuation, with a letter or digit, at most 64 characters and not ~ first. The user signs in with the same password under the new login."
+                   , "Renamed the login \"żaneta\" of the user user-reader to \"user-userread\", since a login is now ASCII letters, digits and punctuation, with a letter or digit, at most 64 characters and not ~ first. The user signs in with the same password under the new login."
                    ]
       serve $ \r -> do
         -- The session from before is the same user's, under the new login.

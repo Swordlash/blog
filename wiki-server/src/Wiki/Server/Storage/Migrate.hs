@@ -160,10 +160,7 @@ migrate = fmap fst . migrateSaying
 -- in the order of the steps: what @wiki-server migrate@ prints, and the
 -- server logs, once the migration is committed.
 migrateSaying :: (Backend be) => Connection be -> IO ([Int], [Text])
-migrateSaying c = do
-  let steps = stepsFor (schemaSuffix c)
-  for_ (misnumbered steps) (throwIO . StepsMisnumbered)
-  withTransaction True c (pendingSteps steps c)
+migrateSaying c = applyStepsSaying (stepsFor (schemaSuffix c)) c
 
 -- | Apply the schema files a database has not had yet, as 'applySteps'
 -- does: for steps that are all SQL.
@@ -178,9 +175,13 @@ applyMigrations = applySteps . map InSql
 -- and so is one that holds tables but no version of this schema
 -- ('OldSchema'); either is left alone.
 applySteps :: (Backend be) => [Step] -> Connection be -> IO [Int]
-applySteps given c = do
+applySteps given = fmap fst . applyStepsSaying given
+
+-- | 'applySteps', with the lines the steps applied have to tell.
+applyStepsSaying :: (Backend be) => [Step] -> Connection be -> IO ([Int], [Text])
+applyStepsSaying given c = do
   for_ (misnumbered given) (throwIO . StepsMisnumbered)
-  fst <$> withTransaction True c (pendingSteps given c)
+  withTransaction True c (pendingSteps given c)
 
 -- | 'migrateWithin' is 'migrate' in a transaction the caller has begun and
 -- ends: the steps are applied and recorded as 'migrate' applies them, and

@@ -202,7 +202,7 @@ renameLogins c = do
               , address = "migration"
               }
           ]
-    pure ("Renamed the login \"" <> printable r.was <> "\" of the user " <> printable r.user <> " to \"" <> r.now <> "\": a login has only ASCII letters, digits and punctuation now. The user signs in with the same password under the new login.")
+    pure ("Renamed the login \"" <> printable r.was <> "\" of the user " <> printable r.user <> " to \"" <> r.now <> "\", since a login is now ASCII letters, digits and punctuation, with a letter or digit, at most 64 characters and not ~ first. The user signs in with the same password under the new login.")
 
 -- | A text as a line of the output shows it: each control character (of
 -- ASCII and the C1 ones after it), a line break above all, written as

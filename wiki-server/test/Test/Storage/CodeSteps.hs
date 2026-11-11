@@ -632,7 +632,7 @@ step0015Spec backing = describe "step 15, every login is ASCII" $ do
       withConnectionTo at $ \c -> writeVersion14 c [(lucja, "łucja"), ("u2", "ada")]
       migrated <- migrateDatabase at
       migrated.said
-        `shouldBe` ["Renamed the login \"łucja\" of the user 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d to \"user-1a2b3c4d\": a login has only ASCII letters, digits and punctuation now. The user signs in with the same password under the new login."]
+        `shouldBe` ["Renamed the login \"łucja\" of the user 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d to \"user-1a2b3c4d\", since a login is now ASCII letters, digits and punctuation, with a letter or digit, at most 64 characters and not ~ first. The user signs in with the same password under the new login."]
       withConnectionTo at $ \c -> do
         loginsOf c `shouldReturn` [(lucja, "user-1a2b3c4d"), ("u2", "ada")]
         entries <- runDb c loadAuditLog

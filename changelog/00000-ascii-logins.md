@@ -13,7 +13,7 @@ title: Every login is ASCII
 
   ```text
   Migrated the database from version 14 to 15 of the schema.
-  Renamed the login "łucja" of the user 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d to "user-1a2b3c4d": a login has only ASCII letters, digits and punctuation now. The user signs in with the same password under the new login.
+  Renamed the login "łucja" of the user 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d to "user-1a2b3c4d", since a login is now ASCII letters, digits and punctuation, with a letter or digit, at most 64 characters and not ~ first. The user signs in with the same password under the new login.
   ```
 
   The administration's Activity lists the same rename, "Changed a user's
