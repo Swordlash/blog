@@ -179,6 +179,37 @@ spec = describe "Markdown.Ast" $ do
         `parses` [Tikz "\\begin{tikzpicture}\n\\draw (0,0) circle (1);\n\\end{tikzpicture}\n"]
     it "reads a math fence as display math" $
       "```math\nx^2\n```" `parses` [MathBlock "x^2\n"]
+    it "reads a latex fence as display math, as a math fence" $ do
+      "```latex\n\\frac{1}{2}\n```" `parses` [MathBlock "\\frac{1}{2}\n"]
+      "```{.latex}\nx\n```" `parses` [MathBlock "x\n"]
+    it "reads an html fence as an html block, with its info word or its class" $ do
+      "```html\n<p style=\"color: red\">hi</p>\n```" `parses` [HtmlBlock "<p style=\"color: red\">hi</p>\n"]
+      "```{.html}\n<p>hi</p>\n```" `parses` [HtmlBlock "<p>hi</p>\n"]
+      "```{.numbered .html}\n<p>hi</p>\n```" `parses` [HtmlBlock "<p>hi</p>\n"]
+    it "keeps tex, xml and svg fences listings" $ do
+      "```tex\nx\n```" `parses` [CodeBlock [] (Just "tex") "x\n"]
+      "```xml\n<a/>\n```" `parses` [CodeBlock [] (Just "xml") "<a/>\n"]
+      "```svg\n<svg/>\n```" `parses` [CodeBlock [] (Just "svg") "<svg/>\n"]
+
+  describe "norender" $ do
+    it "keeps a fence that would be rendered a listing of its language, the class after the info word" $ do
+      "```html {.norender}\n<b>x</b>\n```" `parses` [CodeBlock [("class", "norender")] (Just "html") "<b>x</b>\n"]
+      "```mermaid {.norender}\ngraph TD\n```" `parses` [CodeBlock [("class", "norender")] (Just "mermaid") "graph TD\n"]
+      "```tikz {.norender}\n\\draw;\n```" `parses` [CodeBlock [("class", "norender")] (Just "tikz") "\\draw;\n"]
+      "```latex {.norender}\nx\n```" `parses` [CodeBlock [("class", "norender")] (Just "latex") "x\n"]
+    it "does the same with the language among the classes, in either order" $ do
+      "```{.html .norender}\n<b>x</b>\n```" `parses` [CodeBlock [("class", "html"), ("class", "norender")] (Just "html") "<b>x</b>\n"]
+      "```{.norender .mermaid}\ngraph TD\n```" `parses` [CodeBlock [("class", "norender"), ("class", "mermaid")] (Just "mermaid") "graph TD\n"]
+    it "makes a math fence a latex listing, as a latex fence, however it is written" $ do
+      "```math {.norender}\nx\n```" `parses` [CodeBlock [("class", "norender")] (Just "latex") "x\n"]
+      "```{.math .norender}\nx\n```" `parses` [CodeBlock [("class", "math"), ("class", "norender")] (Just "latex") "x\n"]
+    it "keeps the fence's other attributes" $
+      "```html {.norender .numbered rows=2}\n<b>x</b>\n```"
+        `parses` [CodeBlock [("class", "norender"), ("class", "numbered"), ("rows", "2")] (Just "html") "<b>x</b>\n"]
+    it "changes nothing on a listing" $
+      "```haskell {.norender}\nx\n```" `parses` [CodeBlock [("class", "norender")] (Just "haskell") "x\n"]
+    it "is no language" $
+      "```{.norender}\nx\n```" `parses` [CodeBlock [("class", "norender")] Nothing "x\n"]
 
   describe "math" $ do
     it "reads inline math" $

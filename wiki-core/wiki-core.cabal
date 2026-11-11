@@ -167,6 +167,7 @@ test-suite wiki-core-test
       Test.Markdown.Comments
       Test.Markdown.Edit
       Test.Markdown.Emoji
+      Test.Markdown.Frame
       Test.Markdown.Link
       Test.Markdown.Markers
       Test.Markdown.Mention
@@ -240,6 +241,7 @@ test-suite wiki-core-html-test
         Test.Markdown.Document
         Test.Markdown.Highlight
         Test.Markdown.Html
+        Test.Markdown.HtmlBlock
         Test.Markdown.RawHtml
         Test.Markdown.Render
         Test.Markdown.Slides
@@ -250,5 +252,6 @@ test-suite wiki-core-html-test
         haskell-halogen-core,
         protolude,
         row-types,
+        tagsoup,
         text,
         wiki-core
