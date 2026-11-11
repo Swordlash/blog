@@ -2,7 +2,8 @@
 --
 -- These links are for two uses. The application puts some of them into
 -- its pages, for the browser to follow or load rather than for the
--- application to fetch: an attachment's bytes ('attachmentUrl'), a
+-- application to fetch: an attachment's bytes ('attachmentUrl') and an
+-- SVG's interactive form ('attachmentFrameUrl'), a
 -- space's icon ('spaceIconUrl'), a user's avatar ('avatarUrl'), the exports ('pageExportUrl',
 -- 'spaceExportUrl', 'archiveExportUrl'). And the server's tests of the API
 -- send their requests to 'links' and 'searchUrl'.
@@ -25,6 +26,9 @@ module Wiki.Api.Links
   ( links
   , linkText
   , attachmentUrl
+  , attachmentFrameUrl
+  , interactiveForm
+  , interactiveParameter
   , spaceIconUrl
   , avatarUrl
   , pageExportUrl
@@ -42,8 +46,9 @@ import Servant.Links (AsLink, allLinks')
 import Servant.Multipart.API (Tmp)
 import Wiki.Api (ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), UsersApi (..), WikiApi (..), api)
 import Wiki.Api.Export (ExportFormat)
-import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), MimeType (..), Source (..))
 import Wiki.Core.Id (PageId, SpaceId, UserId)
+import Wiki.Core.Markdown.Frame (framesInteractively)
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
 import Wiki.Core.Space (Icon (..), Space (..))
 import Wiki.Core.Url (Url (..))
@@ -66,6 +71,28 @@ attachmentUrl :: Attachment -> Text
 attachmentUrl a = case a.source of
   SourceUrl url -> url.text
   SourceBlob _ -> links.attachments.content a.id a.name
+
+-- | The URL a frame loads an SVG attachment's interactive form from: the
+-- attachment's own URL with @?interactive@ ('interactiveForm'), which the
+-- server answers with the headers that let the SVG's scripts run cut off
+-- from the wiki ("Wiki.Core.Markdown.Frame"). Only an attachment whose
+-- bytes the server stores and whose stored type is SVG has one
+-- ('Wiki.Core.Markdown.Frame.framesInteractively'); an attachment that
+-- lives elsewhere on the web is never framed.
+attachmentFrameUrl :: Attachment -> Maybe Text
+attachmentFrameUrl a = case a.source of
+  SourceBlob _ | framesInteractively a.mediaType.text -> Just (interactiveForm (attachmentUrl a))
+  _ -> Nothing
+
+-- | An attachment's URL as its interactive form: with the query parameter
+-- 'interactiveParameter'.
+interactiveForm :: Text -> Text
+interactiveForm url = url <> "?" <> interactiveParameter
+
+-- | The query parameter that asks the server for an attachment's
+-- interactive form. Its presence is what counts; a value is ignored.
+interactiveParameter :: Text
+interactiveParameter = "interactive"
 
 -- | The URL a browser fetches a space's icon image from: @spaceIconUrl@
 -- over HTTP. The empty text for a space whose icon is not an image.

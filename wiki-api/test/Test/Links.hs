@@ -79,6 +79,12 @@ spec = describe "Wiki.Api.Links" $ do
     attachmentUrl (attachment (SourceUrl (Url "https://example.org/x.png")) "x.png")
       `shouldBe` "https://example.org/x.png"
 
+  it "gives a stored SVG an interactive form, its address with ?interactive, and no other attachment one" $ do
+    let svg source name = Attachment {id = AttachmentId "a1", name = FileName name, mediaType = MimeType "image/svg+xml", size = 1, source}
+    attachmentFrameUrl (svg (SourceBlob (BlobId "b1")) "flame graph.svg") `shouldBe` Just "api/v1/attachments/a1/flame%20graph.svg?interactive"
+    attachmentFrameUrl (attachment (SourceBlob (BlobId "b1")) "flame.svg") `shouldBe` Nothing
+    attachmentFrameUrl (svg (SourceUrl (Url "https://example.org/flame.svg")) "flame.svg") `shouldBe` Nothing
+
   it "writes every field of a search into its address" $ do
     searchUrl (searchQuery "mermaid diagrams") `shouldBe` "api/v1/search?q=mermaid%20diagrams&limit=50"
     searchUrl (narrow "x")

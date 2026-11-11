@@ -7,7 +7,7 @@
          read by Wiki.Api.ContentPolicy when wiki-api is compiled. The
          server folds its administrator's assistant hosts into connect-src,
          here and in its header alike. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' https://api.anthropic.com https://api.openai.com; img-src 'self' https: data: blob:; media-src 'self' https: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' https://api.anthropic.com https://api.openai.com; img-src 'self' https: data: blob:; media-src 'self' https: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'self'">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Wiki</title>
     <!-- Where the program keeps the wiki: "demo" in the browser, or "server"
