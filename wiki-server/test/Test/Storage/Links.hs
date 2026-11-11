@@ -163,7 +163,7 @@ randomChange gen st = do
     n <- below gen 4
     destinations <- replicateM n $ do
       byId <- pick gen plain
-      pick gen (["[[Apple]]", "[x](banana)", "[x](apple/cherry)", "[x](../banana)", "[x](.)", "[x](home/apple)", "[x](/docs/apple)", "[x](/alpha/banana)", "[x](/beta/cherry/apple)", "[x](/alpha)", "[x](/s/docs/p/cherry/)", "![x](apple)", "<a href=\"/blog/banana\">x</a>"] <> ["[x](/l/" <> p.id.text <> "/)" | p <- toList byId])
+      pick gen (["[[Apple]]", "[x](banana)", "[x](apple/cherry)", "[x](../banana)", "[x](.)", "[x](home/apple)", "[x](/docs/apple)", "[x](/alpha/banana)", "[x](/beta/cherry/apple)", "[x](/alpha)", "[x](/s/docs/p/cherry/)", "[x](/s/docs/p/%61pple/)", "[x](/s/docs/p/%62anana/%63herry/)", "[x](/s/docs/p/~home/)", "[x](%61pple)", "[x](/docs/%62anana)", "[[Cherry]]", "[x](/s/docs/p/apple?version=2026-11-01T10:00:00Z#x)", "![x](apple)", "<a href=\"/blog/banana\">x</a>"] <> ["[x](/l/" <> p.id.text <> "/)" | p <- toList byId])
     pure (T.intercalate "\n\n" (catMaybes destinations))
   kind <- below gen 7
   case kind of

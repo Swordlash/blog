@@ -136,6 +136,16 @@ creating = describe "a page created" $ do
     below <- madeUnder run later "Below" ""
     linking run admin below `shouldReturn` [source.id]
 
+  -- The route codec decodes a page's own address; the name the server
+  -- marks the link by must be the slug it decodes to.
+  it "lists a page that linked to its own address, percent-encoded, before it was there" $ \(Fixture run) -> do
+    docs <- spaceAt run "docs"
+    source <- made run docs "Source" "[it](/s/docs/p/%74arget/), [again](/s/docs/p/t%61rget/b%65low/)"
+    target <- made run docs "Target" ""
+    linking run admin target `shouldReturn` [source.id]
+    below <- madeUnder run target "Below" ""
+    linking run admin below `shouldReturn` [source.id]
+
   it "takes a link that an old address led elsewhere, once a page is at that address as written" $ \(Fixture run) -> do
     docs <- spaceAt run "docs"
     tour <- pageAt run "docs" ""

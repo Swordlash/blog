@@ -99,6 +99,10 @@ module Wiki.App.Route
   , PageLink (..)
   , resolvePageLink
   , resolvePageLinkWith
+  , LinkReading (..)
+  , Step (..)
+  , Reading (..)
+  , readLink
   , linkName
   )
 where
@@ -708,25 +712,24 @@ resolvePageLinkWith
   -> Text
   -- ^ The destination, as written.
   -> Maybe PageLink
-resolvePageLinkWith spaces spacePath home pageById childOf pagePath destination
-  | ToPageId pid version fragment <- classifyDestination destination = Just (PageLink (byId pid version) fragment)
-  | otherwise = do
-      let (pathPart, fragment) = destinationPath destination
-          segments = T.splitOn "/" pathPart
-      target <- case T.uncons pathPart of
-        Just ('/', _)
-          | Right (Page sp pp) <- Duplex.parse route pathPart -> addressed sp pp
-          -- A space's own address, the address of its home page.
-          | Right (Space sp) <- Duplex.parse route pathPart -> Space sp <$ rightToMaybe (resolvePath (findChild spaces) sp)
-          | otherwise -> absolute (filter (not . T.null) segments)
-        _ -> relative segments
-      -- A version after a page's address or path
-      -- ('Wiki.Core.Markdown.Link.destinationVersion'), which a followed
-      -- permanent address leaves in the address bar, is kept: the link
-      -- leads to that version ('PageAtVersion'). Any other parameter is
-      -- dropped.
-      pure (PageLink (maybe target (atVersion target) (destinationVersion destination)) fragment)
+resolvePageLinkWith spaces spacePath home pageById childOf pagePath destination = do
+  Reading reading version fragment <- readLink destination
+  target <- case reading of
+    ById pid -> Just (byId pid version)
+    ByAddress (Page sp pp) -> addressed sp pp
+    -- A space's own address, the address of its home page.
+    ByAddress (Space sp) -> Space sp <$ rightToMaybe (resolvePath (findChild spaces) sp)
+    ByAddress _ -> Nothing
+    FromTop wanted -> absolute wanted
+    Relative steps -> relative steps
+  -- A version after a page's address or path, which a followed permanent
+  -- address leaves in the address bar, is kept: the link leads to that
+  -- version ('PageAtVersion'). A permanent address has its own already.
+  pure $ PageLink (if isById reading then target else maybe target (atVersion target) version) fragment
   where
+    isById = \case
+      ById _ -> True
+      _ -> False
     atVersion target t = case target of
       Page sp pp -> PageAtVersion sp pp t
       Space sp -> PageAtVersion sp [] t
@@ -749,20 +752,17 @@ resolvePageLinkWith spaces spacePath home pageById childOf pagePath destination
         then here pp
         else pure (pageRoute sp pp)
 
-    relative segments = do
-      path <- foldM step (take (length pagePath - 1) pagePath) segments
+    relative steps = do
+      path <- foldM step (take (length pagePath - 1) pagePath) steps
       if null path
         then pure (Space spacePath)
         else here path
 
     step path = \case
-      "" -> Just path
-      "." -> Just path
-      ".." -> fst <$> unsnoc path
-      s -> (\slug -> path <> [slug]) <$> asSlug s
+      Up -> fst <$> unsnoc path
+      Into slug -> Just (path <> [slug])
 
-    absolute segments = do
-      wanted <- traverse asSlug segments
+    absolute wanted = do
       let chains = [chain | n <- reverse [1 .. length wanted], Right chain <- [resolvePath (findChild spaces) (take n wanted)]]
       chain <- head chains
       let spaceSlugs = map (\s -> s.slug) chain
@@ -781,13 +781,61 @@ resolvePageLinkWith spaces spacePath home pageById childOf pagePath destination
       top : rest | Just (nodeId top) == home -> rest
       chain -> chain
 
--- | The path a destination written as a path holds, without its query,
--- and its fragment (with its @#@, or empty): what 'resolvePageLink' and
--- 'linkName' read.
-destinationPath :: Text -> (Text, Text)
-destinationPath destination = (T.takeWhile (/= '?') beforeFragment, fragment)
+-- | 'LinkReading' is a destination as 'resolvePageLink' reads it before it
+-- looks at the wiki: what its text names, each segment decoded and made a
+-- slug once, here. The resolver walks the slugs a reading holds, and
+-- 'linkName' takes the last of them, so the two cannot read one
+-- destination two ways.
+data LinkReading
+  = -- | A page's permanent address (@\/l\/\<page id>\/@): the page's id,
+    -- decoded ('Wiki.Core.Markdown.Link.classifyDestination').
+    ById PageId
+  | -- | A page's or a space's own address, as the route codec reads it,
+    -- percent-escapes and a slug's @~@ decoded: 'Page' or 'Space'.
+    ByAddress Route
+  | -- | Any other path from the top of the wiki: its segments, empty ones
+    -- left out, each as a slug ('asSlug').
+    FromTop [Slug]
+  | -- | A relative path, read from the page's parent: a slug down, or one
+    -- level up for @..@; empty segments and @.@ stay where they are.
+    Relative [Step]
+  deriving stock (Eq, Show)
+
+-- | One step of a relative path.
+data Step = Up | Into Slug
+  deriving stock (Eq, Show)
+
+-- | 'Reading' is a destination's 'LinkReading', with the version it names
+-- (@?version=@, 'Wiki.Core.Markdown.Link.destinationVersion'), and the
+-- fragment (with its @#@, or empty).
+data Reading = Reading LinkReading (Maybe UTCTime) Text
+  deriving stock (Eq, Show)
+
+-- | 'readLink' reads a destination as 'resolvePageLink' does: a permanent
+-- address by its id, and anything else as a path, without its query and
+-- its fragment. A path from the top that the route codec reads as a page's
+-- or a space's own address is that address; any other is its segments.
+-- 'Nothing' for a path with a segment no slug can be made of, which leads
+-- nowhere.
+readLink :: Text -> Maybe Reading
+readLink destination = case classifyDestination destination of
+  ToPageId pid version named -> Just (Reading (ById pid) version named)
+  _ -> (\r -> Reading r (destinationVersion destination) fragment) <$> pathReading
   where
     (beforeFragment, fragment) = T.breakOn "#" destination
+    pathPart = T.takeWhile (/= '?') beforeFragment
+    segments = T.splitOn "/" pathPart
+    pathReading = case T.uncons pathPart of
+      Just ('/', _)
+        | Right r@(Page _ _) <- Duplex.parse route pathPart -> Just (ByAddress r)
+        | Right r@(Space _) <- Duplex.parse route pathPart -> Just (ByAddress r)
+        | otherwise -> FromTop <$> traverse asSlug (filter (not . T.null) segments)
+      _ -> Relative . catMaybes <$> traverse relativeStep segments
+    relativeStep = \case
+      "" -> Just Nothing
+      "." -> Just Nothing
+      ".." -> Just (Just Up)
+      written -> Just . Into <$> asSlug written
 
 -- | A segment of a path in a link as a slug: a slug as written, or else a
 -- title's slug ('slugify'), so that a wiki link names a page by its title.
@@ -795,28 +843,27 @@ asSlug :: Text -> Maybe Slug
 asSlug s = rightToMaybe (mkSlug s) <|> slugify s
 
 -- | 'linkName' is what a page must be named for a link to lead to it
--- when the page is created or moved: the slug of the last page the
--- destination's path names, read as 'resolvePageLink' reads the path
--- (@.@ and @..@ followed, a segment read as a title's slug where it is
--- not a slug), or the id a page's permanent address names. 'Nothing' for
--- a path that ends at a page the link's own page is under (@..@, @.@),
--- which is never a page created or moved without that page moving too,
--- and for a destination that is not a page's path or id. The server
--- stores a link with its name, and when a page is created or moved
--- resolves again only the links named as it is (see
--- "Wiki.Server.Storage.Rows", "Links").
+-- when the page is created or moved: the last slug of the destination's
+-- 'readLink', the slug the resolver looks the page up by last, or the id a
+-- page's permanent address names. A relative path's steps are taken from
+-- an unknown place: 'Nothing' when they end at a page the link's own page
+-- is under (@..@, @.@), which is never a page created or moved without
+-- that page moving too. A space's own address is its home page, which
+-- comes with its space, so it has none either, nor has a destination that
+-- is not a page's path or id. The server stores a link with its name, and
+-- when a page is created or moved resolves again only the links named as
+-- it is (see "Wiki.Server.Storage.Rows", "Links").
 linkName :: Text -> Maybe Text
 linkName destination = case classifyDestination destination of
-  ToPageId pid _ _ -> Just pid.text
-  ToPath _ -> do
-    -- The slugs the path names after the page's place, newest first; a
-    -- step above them goes into the page's own path, which ends at a
-    -- page above it.
-    let step names = \case
-          "" -> Just names
-          "." -> Just names
-          ".." -> Just (drop 1 names)
-          written -> (: names) <$> asSlug written
-    names <- foldM step [] (T.splitOn "/" (fst (destinationPath destination)))
-    slugText <$> head names
+  ToPageId {} -> named
+  ToPath _ -> named
   _ -> Nothing
+  where
+    named =
+      readLink destination >>= \(Reading reading _ _) -> case reading of
+        ById pid -> Just pid.text
+        ByAddress (Page _ path) -> slugText <$> lastMay path
+        ByAddress _ -> Nothing
+        FromTop wanted -> slugText <$> lastMay wanted
+        -- The slugs below the unknown place, the last first.
+        Relative steps -> slugText <$> head (foldl' (\below -> \case Up -> drop 1 below; Into slug -> slug : below) [] steps)

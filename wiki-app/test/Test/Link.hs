@@ -16,7 +16,7 @@ import Wiki.Core.Id (PageId (..), SpaceId (..))
 import Wiki.Core.Markdown (Destination (..), classifyDestination)
 import Wiki.Core.Page (Page (body, id, space, title))
 import Wiki.Core.Path (pathOf)
-import Wiki.Core.Slug (Slug, mkSlug)
+import Wiki.Core.Slug (Slug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Space (id, slug))
 import Wiki.Core.Space qualified as S
 
@@ -75,6 +75,69 @@ naming = describe "linkName" $ do
     linkName "/l/4f1c/" `shouldBe` Just "4f1c"
     linkName "/l/4f1c/?version=2026-11-10T09:30:12Z#setup" `shouldBe` Just "4f1c"
 
+  it "is the slug the route codec decodes a page's own address to" $ do
+    linkName "/s/docs/p/%74arget/" `shouldBe` Just "target"
+    linkName "/s/docs/p/%74%61rget/" `shouldBe` Just "target"
+    linkName "/s/docs/p/guide/%6Fn-call/" `shouldBe` Just "on-call"
+    linkName "/s/docs/p/guide/%6fn-call/#rota" `shouldBe` Just "on-call"
+    linkName "/s/docs/p/~edit/?version=2026-11-10T09:30:12Z" `shouldBe` Just "edit"
+
+  it "is the slug a wiki link's title makes, as the resolver makes it" $ do
+    linkName "On-call" `shouldBe` Just "on-call"
+    linkName "Zażółć" `shouldBe` (slugText <$> slugify "Zażółć")
+    linkName "/Team/On call" `shouldBe` Just "on-call"
+
+  it "is the id a permanent address names, decoded" $
+    linkName "/l/a%2Fb/" `shouldBe` Just "a/b"
+
+  -- The invariant the server's table rests on: whatever a destination is
+  -- resolved to, its name is that page's slug (or, for a permanent
+  -- address, its id), however the destination spells it.
+  it "names the page a destination resolves to, in every spelling" $ do
+    let diagrams = maybe (panic "no Diagrams") (\p -> p.id) (find (\p -> p.title == "Diagrams") (Map.elems demo.pages))
+        spellings =
+          [ "markdown-guide"
+          , "Markdown guide"
+          , "markdown-guide/"
+          , "markdown-guide/diagrams/.."
+          , "markdown-guide/./diagrams"
+          , "./markdown-guide/diagrams/"
+          , "markdown-guide/diagrams?version=2026-11-01T10:00:00Z#x"
+          , "%6Darkdown-guide"
+          , "markdown%2Dguide"
+          , "tour/markdown-guide"
+          , "/docs/markdown-guide/diagrams"
+          , "/docs/%6Darkdown-guide"
+          , "/docs//markdown-guide/"
+          , "/s/docs/p/%6Darkdown-guide/"
+          , "/s/docs/p/%6darkdown-guide/diagrams/"
+          , "/s/docs/p/markdown-guide/%64iagrams/"
+          , "/s/docs/p/markdown-guide%2Fdiagrams/"
+          , "/s/docs/p/markdown%2Dguide/"
+          , "/s/docs/p/markdown-guide"
+          , "/s/docs/p/~markdown-guide/"
+          , "/s/docs/p/%C5%82/"
+          , "/s/docs/p/markdown%20guide/"
+          , "/l/" <> diagrams.text <> "/"
+          , "/l/" <> T.replace "-" "%2D" diagrams.text <> "/?version=2026-11-01T10:00:00Z"
+          ]
+        resolved d = case (classifyDestination d, fromDocs ["markdown-guide", "mathematics"] d) of
+          -- A permanent address is named by its id, wherever it leads.
+          (ToPageId pid _ _, Just _) -> Just (Just (Just pid.text))
+          (_, Just (PageLink (Page _ path) _)) -> Just (Just (slugText <$> lastMay path))
+          (_, Just (PageLink (PageAtVersion _ path _) _)) -> Just (Just (slugText <$> lastMay path))
+          _ -> Nothing
+    for_ spellings $ \d -> for_ (resolved d) $ \name -> (d, linkName d) `shouldBe` (d, join name)
+    -- The server marks the links read from the top of the wiki by their
+    -- text starting with a slash (@LIKE '/%'@): every one the reader reads
+    -- so must be among them.
+    for_ (spellings <> [" /docs/x", "?x=/docs", "#/docs", "//host/docs", "/l/x/", " /l/x/"]) $ \d -> case readLink d of
+      Just (Reading reading _ _)
+        | fromTop reading -> (d, "/" `T.isPrefixOf` d) `shouldBe` (d, True)
+      _ -> pass
+    -- The reviewer's spelling resolves, and is named as its page.
+    resolved "/s/docs/p/%6Darkdown-guide/" `shouldBe` Just (Just (Just "markdown-guide"))
+
   it "is nothing for a path that ends above the link's own page, and for what is not a page" $ do
     linkName ".." `shouldBe` Nothing
     linkName "." `shouldBe` Nothing
@@ -82,6 +145,13 @@ naming = describe "linkName" $ do
     linkName "#part" `shouldBe` Nothing
     linkName "https://example.com/a" `shouldBe` Nothing
     linkName "attachment:a.pdf" `shouldBe` Nothing
+
+-- | Whether a reading is of a path from the top of the wiki.
+fromTop :: LinkReading -> Bool
+fromTop = \case
+  ByAddress _ -> True
+  FromTop _ -> True
+  _ -> False
 
 resolving :: Spec
 resolving = describe "resolvePageLink" $ do
