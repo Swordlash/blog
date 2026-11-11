@@ -440,8 +440,9 @@ const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser
 // line and the end of its last, so that a fold leaves its first line in
 // sight. They are set for the text they were found in (offerFolds), and
 // follow each change of the text until the next ones come: text typed at
-// the end of a first line stays before its fold, and a range a change
-// touches (as a fold, below) is dropped until then.
+// the end of a first line stays before its fold, and text typed inside a
+// spoiler's lines stays inside its range, so that its marker stays while
+// the author types there.
 const offerFolds = StateEffect.define();
 
 const offered = StateField.define({
@@ -450,8 +451,8 @@ const offered = StateField.define({
     for (const effect of tr.effects) if (effect.is(offerFolds)) return effect.value;
     if (!tr.docChanged) return ranges;
     return ranges
-      .filter((range) => !touches(tr.changes, range.from, range.to))
-      .map((range) => ({ from: tr.changes.mapPos(range.from, 1), to: tr.changes.mapPos(range.to, -1) }));
+      .map((range) => ({ from: tr.changes.mapPos(range.from, 1), to: tr.changes.mapPos(range.to, -1) }))
+      .filter((range) => range.to > range.from);
   },
 });
 
