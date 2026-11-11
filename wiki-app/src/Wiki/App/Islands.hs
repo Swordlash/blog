@@ -156,17 +156,21 @@ islands toOutput =
         HH.pre
           (scrollingCode rows (["wiki-code"] <> ["numbered" | numbered]))
           ([lineNumbers code | numbered] <> [HH.code [HP.ref ref] []])
-      -- The document is an attribute, written by Halogen as any other, so
-      -- that the prerendered page carries the frame too, escaped as an
-      -- attribute's value. The sandbox comes before the document: a frame
-      -- reads its sandbox when it loads a document.
+      -- The document is the frame's srcdoc, which Halogen writes as any
+      -- other property, so that the prerendered page carries the frame
+      -- too, escaped as an attribute's value. A property rather than an
+      -- attribute: setting the attribute loads the document again even
+      -- when it is the same, and the program adopting a prerendered page
+      -- would load every frame twice; Halogen sets a property only when it
+      -- differs. The sandbox comes before the document: a frame reads its
+      -- sandbox when it loads a document.
       HtmlFrame document ->
         HH.iframe
           [ HP.ref ref
           , HP.class_ (HH.ClassName "wiki-html")
           , HP.title "HTML block"
           , HP.attr (HH.AttrName "sandbox") frameSandbox
-          , HP.attr (HH.AttrName "srcdoc") document
+          , HP.srcDoc document
           ]
       LocalTime at -> [hh|<time ref={{ ref }} class="wiki-time" datetime={{ iso at }}></time>|]
 
