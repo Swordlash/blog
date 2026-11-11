@@ -97,15 +97,21 @@ spec = describe "Markdown.Render, an html fence" $ do
         T.count "<" markup `shouldBe` 2
         markup `shouldSatisfy` T.isPrefixOf "<iframe "
         markup `shouldSatisfy` T.isSuffixOf "\"></iframe>"
-      it "writes each string escaped in the document, and a style's CSS as it is with </ made <\\/" $
+      it "writes each string escaped in the document, and a style's CSS as it is" $
         hostile
           `holding` T.intercalate
             "\n"
             [ "<p title=\"&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;\">&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt; &lt;/iframe&gt; &quot; &amp;quot; &lt;/style&gt;&lt;script&gt;</p>"
-            , "<style><\\/style><script>alert(2)<\\/script></style>"
+            , "<style>&lt;/style&gt;&lt;script&gt;alert(2)&lt;/script&gt;</style>"
             , "<style>p { content: \"</style>&quot; }"
             , "&quot;&gt;\n"
             ]
+
+      it "writes a style never ended, its </style written <\\/style, so that it ends nothing" $ do
+        -- </styleX is no end tag, so the style runs to the end of the block.
+        "<p>a</p><style>p {}</styleX" `holding` "<p>a</p><style>p {}<\\/styleX\n</style>"
+        -- The fence's last line break follows </style, which ends it there.
+        "<p>a</p><style>p {}</style" `holding` "<p>a</p><style>p {}</style>"
 
   describe "latex and norender" $ do
     it "renders a latex fence as display math, as $$ and a math fence" $ do

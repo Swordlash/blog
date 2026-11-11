@@ -194,7 +194,9 @@ anonymous backing = describe "for someone not signed in" $ do
     T.count "<" frame `shouldBe` 1
     T.count "\"" frame `shouldBe` 8
     frame `shouldSatisfy` T.isInfixOf "&amp;lt;/iframe&amp;gt;"
-    frame `shouldSatisfy` T.isInfixOf "&lt;style&gt;&lt;\\/style&gt;&lt;script&gt;alert(3)&lt;\\/script&gt;&lt;/style&gt;"
+    -- A style's CSS as written, character references and all, escaped
+    -- once more as the attribute's value.
+    frame `shouldSatisfy` T.isInfixOf "&lt;style&gt;&amp;lt;/style&amp;gt;&amp;lt;script&amp;gt;alert(3)&amp;lt;/script&amp;gt;&lt;/style&gt;"
     -- Before and after it, the page's own paragraphs, and nothing of the
     -- block.
     ahead `shouldSatisfy` T.isInfixOf "<p>Before.</p>"

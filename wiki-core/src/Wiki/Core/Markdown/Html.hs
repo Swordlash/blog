@@ -96,9 +96,10 @@ module Wiki.Core.Markdown.Html
   )
 where
 
+import Data.Char (isAsciiUpper)
 import Data.Text qualified as T
 import Protolude
-import Text.HTML.TagSoup (Tag (..), parseTags, renderOptions, renderTagsOptions)
+import Text.HTML.TagSoup (Tag (..), parseOptions, parseTagsOptions, renderOptions, renderTagsOptions)
 import Text.HTML.TagSoup qualified as TagSoup
 import Wiki.Core.Markdown.Link (urlScheme)
 
@@ -153,7 +154,7 @@ parseFrameHtml :: Text -> [Node Void]
 parseFrameHtml = parseDocument FrameHtml
 
 parseDocument :: Allowlist -> Text -> [Node Void]
-parseDocument allowlist raw = trim (build allowlist Flow (map Tag (parseTags raw)))
+parseDocument allowlist raw = trim (build allowlist Flow (map Tag (htmlTokens raw)))
   where
     trim = reverse . dropWhile blank . reverse . dropWhile blank
     blank = \case
@@ -168,8 +169,105 @@ parseFragments :: Context -> [Fragment a] -> [Node a]
 parseFragments context fragments = build PageHtml context (concatMap tokens fragments)
   where
     tokens = \case
-      Markup t -> map Tag (parseTags t)
+      Markup t -> map Tag (htmlTokens t)
       Markdown a -> [Other a]
+
+-- | 'htmlTokens' is HTML cut into tokens as a browser's tokenizer cuts it,
+-- where tagsoup alone would not. Tagsoup reads tags everywhere but in a
+-- @\<script>@. The HTML parser reads the content of some elements as text
+-- instead ('rawTextElements': @\<style>@, @\<textarea>@, @\<title>@ and
+-- the others), up to the first end tag of the element's own name: @<\/@,
+-- the name in any case, then white space, @\/@ or @>@. So @<\/styleX@ does
+-- not end a @\<style>@, @<\/STYLE >@ does, and a @\<style>@ never ended
+-- holds the rest of the HTML. The content is one text token, as written:
+-- no tag in it, and no character reference decoded. A @\<plaintext>@
+-- holds the rest of the HTML whatever follows.
+--
+-- This matters in two ways. A @\<style>@ in a frame keeps its CSS byte
+-- for byte, a string such as @content: "<a href='x'>"@ included. And an
+-- element the allowlist drops with its content ('droppedElements') ends
+-- where the browser ends it, so that what follows is read as the browser
+-- reads it, and nothing after it is swallowed.
+--
+-- Inside @\<svg>@ and @\<math>@ (the browser's foreign content) the
+-- elements are not read as text, and neither are they here. The rest of
+-- the HTML parser's rules for foreign content are not followed (an
+-- element such as @\<p>@ that ends an @\<svg>@ early is read inside it);
+-- the allowlist drops both elements with everything in them, so that
+-- shows less, never more.
+htmlTokens :: Text -> [Tag Text]
+htmlTokens = go 0
+  where
+    go :: Int -> Text -> [Tag Text]
+    go outer raw = scan outer (parseTagsOptions parseOptions {TagSoup.optTagPosition = True} raw)
+      where
+        scan :: Int -> [Tag Text] -> [Tag Text]
+        scan depth = \case
+          [] -> []
+          TagPosition row column : t@(TagOpen n _) : rest
+            | depth == 0, name `elem` rawTextElements -> t : rawContent depth name (row, column) rest
+            | name `elem` foreignElements -> t : scan (depth + 1) rest
+            where
+              name = T.toLower n
+          TagPosition _ _ : rest -> scan depth rest
+          t@(TagClose n) : rest
+            | T.toLower n `elem` foreignElements, depth > 0 -> t : scan (depth - 1) rest
+          t : rest -> t : scan depth rest
+
+        -- The content of an element read as text, which starts where the
+        -- tag after its start tag starts (a start tag written @\<style/>@
+        -- is followed by an end tag tagsoup makes up, at the same place),
+        -- and what follows it, tokenized afresh.
+        rawContent depth name start rest = case [at | TagPosition r c <- rest, (r, c) > start, let at = offsetOf raw (r, c)] of
+          [] -> []
+          at : _ ->
+            let (content, after) = if name == "plaintext" then (T.drop at raw, "") else endTag name (T.drop at raw)
+             in [TagText content | not (T.null content)] <> go depth after
+
+-- | Text cut at the first end tag of an element of this name, as the HTML
+-- parser finds it ('htmlTokens'): what is before it, and the end tag with
+-- what follows; all of it, and nothing, when there is none.
+endTag :: Text -> Text -> (Text, Text)
+endTag name = go ""
+  where
+    go before text = case T.breakOn "</" text of
+      (_, "") -> (before <> text, "")
+      (ahead, tag)
+        | ends (T.drop 2 tag) -> (before <> ahead, tag)
+        | otherwise -> go (before <> ahead <> T.take 2 tag) (T.drop 2 tag)
+    ends t =
+      T.map asciiLower (T.take (T.length name) t) == name
+        && maybe False ((`elem` ("\t\n\f\r />" :: [Char])) . fst) (T.uncons (T.drop (T.length name) t))
+
+-- | Where in a text a position tagsoup gives is: tagsoup counts rows and
+-- columns from 1, and a tab moves to the column after the next multiple
+-- of eight.
+offsetOf :: Text -> (Int, Int) -> Int
+offsetOf text position = go 0 (1, 1) (T.unpack text)
+  where
+    go :: Int -> (Int, Int) -> [Char] -> Int
+    go i (r, c) rest
+      | (r, c) >= position = i
+      | otherwise = case rest of
+          [] -> i
+          x : more -> go (i + 1) (next r c x) more
+    next r c = \case
+      '\n' -> (r + 1, 1)
+      '\t' -> (r, c + 8 - (c - 1) `mod` 8)
+      _ -> (r, c + 1)
+
+-- | The elements whose content the HTML parser reads as text, up to their
+-- end tag ('htmlTokens'): raw text (@style@, @xmp@, @iframe@, @noembed@,
+-- @noframes@, and @noscript@ in a page, where scripts run), text in which
+-- character references are read (@textarea@, @title@), a script, and
+-- @plaintext@, which nothing ends.
+rawTextElements :: [Text]
+rawTextElements = ["style", "script", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "noscript", "plaintext"]
+
+-- | The elements of foreign content, in which no element's content is read
+-- as text.
+foreignElements :: [Text]
+foreignElements = ["svg", "math"]
 
 -- | The text of some nodes, as a reader sees it, with blocks on lines of
 -- their own; what is not HTML gives nothing. The search uses this to read
@@ -195,10 +293,13 @@ htmlText = foldMap $ \case
 -- Tagsoup's renderer writes the tags and escapes text and attribute
 -- values, so that the HTML read back is exactly this tree: no text or
 -- value can end an element or an attribute early. A @\<style>@ element's
--- CSS cannot be escaped (a browser reads it as it is, up to the end tag),
--- so it is written as it is, with each @<\/@ written @<\\/@, which means
--- the same in CSS and ends nothing. A @\<pre>@ whose text starts with a
--- newline gets one more, which the browser drops ('finishChildren').
+-- CSS cannot be escaped (a browser reads it as it is, up to its end tag,
+-- with no character reference in it), so it is written as it is, but for
+-- @<\/style@, in any case, which is written @<\\/style@: the same in CSS,
+-- and no end tag. CSS read by 'htmlTokens' holds none (its element ended
+-- there) unless it was never ended, and then only at its very end. A
+-- @\<pre>@ whose text starts with a newline gets one more, which the
+-- browser drops ('finishChildren').
 renderHtml :: [Node Void] -> Text
 renderHtml = renderTagsOptions renderOptions {TagSoup.optRawTag = (== "style")} . concatMap tags
   where
@@ -206,7 +307,7 @@ renderHtml = renderTagsOptions renderOptions {TagSoup.optRawTag = (== "style")} 
     tags = \case
       Element name attrs children
         | name `elem` voidElements -> [TagOpen name attrs]
-        | name == "style" -> [TagOpen name attrs, TagText (T.replace "</" "<\\/" (foldMap textOf children)), TagClose name]
+        | name == "style" -> [TagOpen name attrs, TagText (unendedCss (foldMap textOf children)), TagClose name]
         | name == "pre", TextNode t : _ <- children, "\n" `T.isPrefixOf` t -> [TagOpen name attrs, TagText "\n"] <> concatMap tags children <> [TagClose name]
         | otherwise -> [TagOpen name attrs] <> concatMap tags children <> [TagClose name]
       TextNode t -> [TagText t]
@@ -395,9 +496,9 @@ data Builder a = Builder
   , skipping :: Maybe (Text, Int)
   -- ^ Inside a dropped element: its name and how many elements of that
   -- name inside it are open.
-  , styling :: Maybe [Tag Text]
-  -- ^ Inside a @\<style>@ element in a frame's HTML: the tokens read in
-  -- it so far, the last first.
+  , styling :: Maybe [Text]
+  -- ^ Inside a @\<style>@ element in a frame's HTML: the text read in it
+  -- so far, the last first.
   }
 
 build :: forall a. Allowlist -> Context -> [Token a] -> [Node a]
@@ -405,13 +506,12 @@ build allowlist context = finish . foldl' step (Builder [Open "" [] []] Nothing 
   where
     step :: Builder a -> Token a -> Builder a
     step b token = case (b.styling, b.skipping) of
-      -- A browser reads what is in a style element as text, up to its end
-      -- tag; tagsoup reads tags in it. The tokens are written back as the
-      -- CSS was written, up to the end tag ('styleElement').
+      -- What is in a style element is its CSS, one text token as written
+      -- ('htmlTokens'), up to its end tag.
       (Just inside, _) -> case token of
         Tag (TagClose n) | T.toLower n == "style" -> b {styling = Nothing, stack = append (styleElement inside) b.stack}
-        Tag t -> b {styling = Just (t : inside)}
-        Other _ -> b
+        Tag (TagText t) -> b {styling = Just (t : inside)}
+        _ -> b
       (Nothing, Just (name, depth)) -> case token of
         Tag (TagOpen n _) | T.toLower n == name -> b {skipping = Just (name, depth + 1)}
         Tag (TagClose n)
@@ -490,16 +590,29 @@ finish b = case closeN (length atEnd - 1) atEnd of
   where
     atEnd = maybe b.stack (\inside -> append (styleElement inside) b.stack) b.styling
 
--- | A @\<style>@ element with the CSS of the tokens read in it, the last
--- first: the tokens written out as they were read, with nothing escaped.
--- The text is what the browser would read there, except for character
--- references, which tagsoup has decoded (@&lt;@ in the CSS becomes @<@).
--- What the CSS holds cannot end the element when it is written out again
--- ('renderHtml').
-styleElement :: [Tag Text] -> Node a
+-- | A @\<style>@ element with the CSS read in it, the last piece first:
+-- the text as written, which is what the browser reads there
+-- ('htmlTokens'). What it holds cannot end the element when it is written
+-- out again ('renderHtml').
+styleElement :: [Text] -> Node a
 styleElement inside = Element "style" [] [TextNode css | not (T.null css)]
   where
-    css = renderTagsOptions renderOptions {TagSoup.optEscape = identity} (reverse inside)
+    css = T.concat (reverse inside)
+
+-- | CSS that cannot end its style element: each @<\/style@ in it, in any
+-- case, written @<\\/style@, in the case it had, which CSS reads as the
+-- same text ('renderHtml').
+unendedCss :: Text -> Text
+unendedCss css = case T.breakOn "</style" (T.map asciiLower css) of
+  (_, "") -> css
+  (ahead, _) ->
+    let n = T.length ahead
+     in T.take n css <> "<\\/" <> T.take 5 (T.drop (n + 2) css) <> unendedCss (T.drop (n + 7) css)
+
+-- | A letter of ASCII in lower case; any other character as it is, so that
+-- a text keeps its length.
+asciiLower :: Char -> Char
+asciiLower c = if isAsciiUpper c then toLower c else c
 
 -- | A @pre@'s first newline is not part of its text: the parser drops it.
 finishChildren :: Text -> [Node a] -> [Node a]
