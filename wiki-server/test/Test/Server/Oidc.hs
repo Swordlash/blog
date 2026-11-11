@@ -43,7 +43,7 @@ import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Url (Url (..))
-import Wiki.Core.User (Email (..), Login (..), SignInProvider (..), Standing (..), User (..))
+import Wiki.Core.User (Email (..), Login (..), SignInProvider (..), Standing (..), User (..), parseLogin)
 import Wiki.Server.Accounts (Claimed (..), loginCandidates)
 import Wiki.Server.Auth (safeNext)
 import Wiki.Server.Console (OidcCheck (..), runOidcCheck)
@@ -609,6 +609,10 @@ logins = describe "the logins of accounts made with a provider" $ do
   it "are no longer than 40 characters, and never blank" $ do
     all (\l -> T.length l <= 40) (take 1 (loginCandidates (claimed (Just (T.replicate 100 "a")) Nothing Nothing))) `shouldBe` True
     take 1 (loginCandidates (claimed (Just "日本") Nothing Nothing)) `shouldBe` ["user"]
+  it "pass over a login of dots and underscores alone, which the rule of logins refuses" $ do
+    take 1 (loginCandidates (claimed (Just "__") (Just "ada@example.org") Nothing)) `shouldBe` ["ada"]
+    take 1 (loginCandidates (claimed (Just "...") Nothing Nothing)) `shouldBe` ["user"]
+    all (isRight . parseLogin) (take 100 (loginCandidates (claimed (Just "._.") Nothing (Just "_")))) `shouldBe` True
 
 checking :: Backing -> Spec
 checking backing = describe "wiki-server oidc check" $ do
