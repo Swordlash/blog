@@ -421,6 +421,7 @@ comparedTables =
   , ("comments", rowsIn wikiDb.comments)
   , ("watches", rowsIn wikiDb.watches)
   , ("stars", rowsIn wikiDb.stars)
+  , ("page_links", rowsIn wikiDb.page_links)
   , ("notifications", rowsIn wikiDb.notifications)
   , ("settings", rowsIn wikiDb.settings)
   , ("sign_in_providers", rowsIn wikiDb.sign_in_providers)

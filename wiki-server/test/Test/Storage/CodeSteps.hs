@@ -253,45 +253,47 @@ unitSpec = describe "the schema's steps, in SQL and in code" $ do
 
 spec :: Backing -> Spec
 spec backing = describe "the schema's steps in code" $ do
+  -- The program's own steps, files and code, and a test's step after the
+  -- last of them.
   it "run after the files numbered before them, and are recorded as the files are" $
     withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
-      let files = migrationsFor (schemaSuffix c)
-          n = length files
-      applySteps (arrange files [noteStep (n + 1)]) c `shouldReturn` [1 .. n + 1]
+      let steps = stepsFor (schemaSuffix c)
+          n = knownVersion (schemaSuffix c)
+      applySteps (steps <> arrange [] [noteStep (n + 1)]) c `shouldReturn` [1 .. n + 1]
       settingsOf c `shouldReturn` [("code-step", "ran")]
       schemaVersion c `shouldReturn` n + 1
       databaseVersion c `shouldReturn` n + 1
       versionsOf c `shouldReturn` [1 .. n + 1]
       -- Applied once only, in whatever order the steps are given.
-      applySteps (reverse (arrange files [noteStep (n + 1)])) c `shouldReturn` []
+      applySteps (reverse (steps <> arrange [] [noteStep (n + 1)])) c `shouldReturn` []
 
   it "read and rewrite rows written before them, through tables of their own" $
     withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
-      let files = migrationsFor (schemaSuffix c)
-          n = length files
-      _ <- applySteps (arrange files []) c
+      let steps = stepsFor (schemaSuffix c)
+          n = knownVersion (schemaSuffix c)
+      _ <- applySteps steps c
       writeSettings c [("plain", "no marker"), ("quoted", "it's [[a]] and [[b]]")]
-      applySteps (reverse (arrange files [rewriteStep (n + 1)])) c `shouldReturn` [n + 1]
+      applySteps (reverse (steps <> arrange [] [rewriteStep (n + 1)])) c `shouldReturn` [n + 1]
       settingsOf c `shouldReturn` [("plain", "no marker"), ("quoted", "it's {{a}} and {{b}}")]
 
   it "that fail leave the database at the version before them, and what they wrote is undone" $
     withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
-      let files = migrationsFor (schemaSuffix c)
-          n = length files
-      _ <- applySteps (arrange files []) c
+      let steps = stepsFor (schemaSuffix c)
+          n = knownVersion (schemaSuffix c)
+      _ <- applySteps steps c
       writeSettings c [("quoted", "it's [[a]]")]
-      result <- try @IOException (applySteps (arrange files [failingStep (n + 1)]) c)
+      result <- try @IOException (applySteps (steps <> arrange [] [failingStep (n + 1)]) c)
       result `shouldSatisfy` isLeft
       schemaVersion c `shouldReturn` n
       versionsOf c `shouldReturn` [1 .. n]
       settingsOf c `shouldReturn` [("quoted", "it's [[a]]")]
       -- And once the step is right, it is applied.
-      applySteps (arrange files [rewriteStep (n + 1)]) c `shouldReturn` [n + 1]
+      applySteps (steps <> arrange [] [rewriteStep (n + 1)]) c `shouldReturn` [n + 1]
 
   it "share the transaction of the files: a step in code that fails undoes the files applied before it" $
     withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
-      let files = migrationsFor (schemaSuffix c)
-      result <- try @IOException (applySteps (arrange files [failingStep (length files + 1)]) c)
+      let steps = stepsFor (schemaSuffix c)
+      result <- try @IOException (applySteps (steps <> arrange [] [failingStep (knownVersion (schemaSuffix c) + 1)]) c)
       result `shouldSatisfy` isLeft
       schemaVersion c `shouldReturn` 0
       runDb c tableNames `shouldReturn` []
@@ -302,9 +304,10 @@ spec backing = describe "the schema's steps in code" $ do
   it "are refused when misnumbered, before the database is touched" $
     withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
       let files = migrationsFor (schemaSuffix c)
-      result <- try @StepsMisnumbered (applySteps (arrange files [noteStep (length files)]) c)
+          lastFile = maybe 0 (\m -> m.version) (lastMay files)
+      result <- try @StepsMisnumbered (applySteps (arrange files [noteStep lastFile]) c)
       case result of
-        Left (StepsMisnumbered why) -> why `shouldSatisfy` T.isPrefixOf ("step " <> show (length files) <> " is both ")
+        Left (StepsMisnumbered why) -> why `shouldSatisfy` T.isPrefixOf ("step " <> show lastFile <> " is both ")
         Right applied -> expectationFailure ("applied " <> show applied)
       runDb c tableNames `shouldReturn` []
 
@@ -392,6 +395,8 @@ step0013Spec backing = describe "step 13, the home page is the root of a space's
         after' <- runDb c (runSelectReturningList (select (all_ oldDb.pages)))
         sortOn fst [(p.id, (p.title, p.body, p.search_text, p.search_fold, p.updated_at)) | p <- after']
           `shouldBe` sortOn fst [(p.id, (p.title, p.body, p.search_text, p.search_fold, p.updated_at)) | p <- written]
+        -- The steps after it, which the program and its check need.
+        void (applySteps (stepsFor (schemaSuffix c)) c)
       -- The live program reads every page at its address from under the
       -- home page, and an old address through the rule for old ones.
       checkDatabase at >>= (`shouldSatisfy` isRight)

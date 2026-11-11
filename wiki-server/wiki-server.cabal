@@ -373,6 +373,7 @@ test-suite wiki-server-test
         Test.Storage.Fixture
         Test.Storage.Encrypted
         Test.Storage.Keys
+        Test.Storage.Links
         Test.Storage.Migrate
         Test.Storage.Permissions
         Test.Storage.Removal

@@ -49,6 +49,7 @@ import Test.Storage.Contract qualified as Contract
 import Test.Storage.Copy qualified as Copy
 import Test.Storage.Encrypted qualified as Encrypted
 import Test.Storage.Keys qualified as Keys
+import Test.Storage.Links qualified as Links
 import Test.Storage.Migrate qualified as Migrate
 import Test.Storage.Permissions qualified as Permissions
 import Test.Storage.Removal qualified as Removal
@@ -95,6 +96,7 @@ main = secureMain $ do
           StorageAccounts.spec b
           Removal.spec b
           Keys.spec b
+          Links.spec b
           Encrypted.spec b
           Options.spec b
           Api.spec b

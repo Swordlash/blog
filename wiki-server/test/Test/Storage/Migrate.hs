@@ -39,6 +39,7 @@ wikiTables =
   , "key_grants"
   , "notifications"
   , "page_keys"
+  , "page_links"
   , "page_versions"
   , "pages"
   , "passkeys"

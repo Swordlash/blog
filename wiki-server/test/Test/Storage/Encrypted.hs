@@ -36,6 +36,7 @@ import Wiki.App.Backend (MonadWiki (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.Core.Backlink (Backlink (..))
 import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (..), PageKey (..), SealedContent (..), SealedHeading (..), VersionTag (..))
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Id (PageId (..), SpaceId, UserId (..))
@@ -50,7 +51,7 @@ import Wiki.Core.Vault
 import Wiki.Core.Version (VersionsQuery (..))
 import Wiki.Server.Accounts (createAccount)
 import Wiki.Server.Storage
-import Wiki.Server.Storage.Schema (KeyGrants (..), Pages (..), PublicKeys (..), Vaults (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (KeyGrants (..), PageLinks (..), Pages (..), PublicKeys (..), Vaults (..), WikiDb (..), wikiDb)
 import Wiki.Server.Vault (keyIdOf, storeVault)
 import Wiki.Server.WebAuthn (toBase64Url)
 
@@ -184,6 +185,22 @@ spec backing = describe "encrypted spaces in the storage" $ do
     ok =<< as p.ada (deleteSpace secret.id)
     count <- reading st (length <$> runSelectReturningList (select (all_ wikiDb.key_grants)))
     count `shouldBe` 0
+
+  -- Backlinks (WP5.88 of docs/PLAN.md): the server cannot read what an
+  -- encrypted page links to, so its pages have no list and are in none.
+  it "gives a page of an encrypted space no backlinks, and lists none of its pages among another's" $ withEncrypted backing $ \st p secret -> do
+    let as :: UserId -> StoredWiki IO a -> IO a
+        as u = runStoredWiki st (AsUser u)
+        pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+    made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
+    plain <- ok =<< as p.ada (createSpace Nothing "Plain")
+    target <- ok =<< as p.ada (createPage plain.id Nothing "Target" "")
+    source <- ok =<< as p.ada (createPage plain.id Nothing "Source" ("[it](/l/" <> pid.text <> "/), [its path](/secret/" <> slugText made.slug <> ") and [[Target]]"))
+    as p.ada (pageBacklinks made.id) `shouldReturn` Right []
+    map (\b -> b.page) <$> (ok =<< as p.ada (pageBacklinks target.id)) `shouldReturn` [source.id]
+    -- No link is kept for a page of the encrypted space.
+    kept <- reading st (runSelectReturningList (select (filter_ (\r -> r.source_id ==. val_ pid.text) (all_ wikiDb.page_links))))
+    length kept `shouldBe` 0
 
   it "refuses every plain path that reads or writes a page's text in an encrypted space, and searches it not" $ withEncrypted backing $ \st p secret -> do
     let as :: UserId -> StoredWiki IO a -> IO a
