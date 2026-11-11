@@ -59,6 +59,16 @@
 -- is not reopened afterwards (the parser's \"adoption agency\"), and a
 -- @table@ inside a table but outside a cell is dropped rather than ending
 -- the first table.
+--
+-- __In a frame.__ An @html@ fence is shown in a frame of its own
+-- ("Wiki.Core.Markdown.Frame"), where its styles cannot reach the page.
+-- There the allowlist is widened by styles, and by nothing else
+-- ('FrameHtml'; 'parseFrameHtml'): a @style@ attribute on every element,
+-- and @\<style>@ elements, whose CSS is kept as it is. Everything else is
+-- as in a page, so no script, event handler, frame, form, @\<meta>@,
+-- @\<base>@ or @\<link>@ reaches the frame either. The tree is written
+-- out as HTML again for the frame ('renderHtml'). Raw HTML in the page
+-- itself keeps the narrower allowlist ('PageHtml'), without @style@.
 module Wiki.Core.Markdown.Html
   ( -- * The tree
     Node (..)
@@ -68,10 +78,15 @@ module Wiki.Core.Markdown.Html
   , Fragment (..)
   , Context (..)
   , parseHtml
+  , parseFrameHtml
   , parseFragments
   , htmlText
 
+    -- * Writing HTML
+  , renderHtml
+
     -- * The allowlist
+  , Allowlist (..)
   , allowedElements
   , phrasingElements
   , droppedElements
@@ -83,7 +98,8 @@ where
 
 import Data.Text qualified as T
 import Protolude
-import Text.HTML.TagSoup (Tag (..), parseTags)
+import Text.HTML.TagSoup (Tag (..), parseTags, renderOptions, renderTagsOptions)
+import Text.HTML.TagSoup qualified as TagSoup
 import Wiki.Core.Markdown.Link (urlScheme)
 
 -- | An attribute the allowlist accepts: its name, lowercase, and its
@@ -128,7 +144,16 @@ data Context
 -- element and after its last (the newline CommonMark leaves at the end of
 -- a block) is left out, as it shows nothing between blocks.
 parseHtml :: Text -> [Node Void]
-parseHtml raw = trim (parseFragments Flow [Markup raw])
+parseHtml = parseDocument PageHtml
+
+-- | Parse an @html@ fence's HTML as one document, as 'parseHtml' does,
+-- through the allowlist widened for a frame ('FrameHtml'): with the
+-- author's @style@ attributes and @\<style>@ elements.
+parseFrameHtml :: Text -> [Node Void]
+parseFrameHtml = parseDocument FrameHtml
+
+parseDocument :: Allowlist -> Text -> [Node Void]
+parseDocument allowlist raw = trim (build allowlist Flow (map Tag (parseTags raw)))
   where
     trim = reverse . dropWhile blank . reverse . dropWhile blank
     blank = \case
@@ -137,9 +162,10 @@ parseHtml raw = trim (parseFragments Flow [Markup raw])
 
 -- | Parse markup and what is between it as one document: an element opened
 -- in one piece of markup contains what follows until a later piece closes
--- it, or until the end.
+-- it, or until the end. Always through the page's allowlist ('PageHtml'):
+-- this is HTML among a page's Markdown.
 parseFragments :: Context -> [Fragment a] -> [Node a]
-parseFragments context fragments = build context (concatMap tokens fragments)
+parseFragments context fragments = build PageHtml context (concatMap tokens fragments)
   where
     tokens = \case
       Markup t -> map Tag (parseTags t)
@@ -148,8 +174,12 @@ parseFragments context fragments = build context (concatMap tokens fragments)
 -- | The text of some nodes, as a reader sees it, with blocks on lines of
 -- their own; what is not HTML gives nothing. The search uses this to read
 -- a page's text.
+--
+-- A @\<style>@ element (in a frame's HTML) gives nothing either: its CSS
+-- is not text a reader sees.
 htmlText :: [Node a] -> Text
 htmlText = foldMap $ \case
+  Element "style" _ _ -> ""
   Element name _ children
     | name `elem` ["br", "hr"] -> "\n"
     | name `elem` phrasingElements -> htmlText children
@@ -158,7 +188,46 @@ htmlText = foldMap $ \case
   Content _ -> ""
 
 ----------------------------------------------------------------------
+-- Writing HTML
+
+-- | Nodes the allowlist kept, written out as HTML again: what the frame of
+-- an @html@ fence shows, and what the export gives pandoc's HTML reader.
+-- Tagsoup's renderer writes the tags and escapes text and attribute
+-- values, so that the HTML read back is exactly this tree: no text or
+-- value can end an element or an attribute early. A @\<style>@ element's
+-- CSS cannot be escaped (a browser reads it as it is, up to the end tag),
+-- so it is written as it is, with each @<\/@ written @<\\/@, which means
+-- the same in CSS and ends nothing. A @\<pre>@ whose text starts with a
+-- newline gets one more, which the browser drops ('finishChildren').
+renderHtml :: [Node Void] -> Text
+renderHtml = renderTagsOptions renderOptions {TagSoup.optRawTag = (== "style")} . concatMap tags
+  where
+    tags :: Node Void -> [Tag Text]
+    tags = \case
+      Element name attrs children
+        | name `elem` voidElements -> [TagOpen name attrs]
+        | name == "style" -> [TagOpen name attrs, TagText (T.replace "</" "<\\/" (foldMap textOf children)), TagClose name]
+        | name == "pre", TextNode t : _ <- children, "\n" `T.isPrefixOf` t -> [TagOpen name attrs, TagText "\n"] <> concatMap tags children <> [TagClose name]
+        | otherwise -> [TagOpen name attrs] <> concatMap tags children <> [TagClose name]
+      TextNode t -> [TagText t]
+    textOf = \case
+      TextNode t -> t
+      _ -> ""
+
+----------------------------------------------------------------------
 -- The allowlist
+
+-- | 'Allowlist' says which of the two allowlists HTML is read through.
+data Allowlist
+  = -- | HTML in a page: the elements and attributes this module's comment
+    -- lists, without styles.
+    PageHtml
+  | -- | An @html@ fence's HTML, shown in a frame of its own: the page's
+    -- allowlist with a @style@ attribute on every element, and @\<style>@
+    -- elements with their CSS. The frame keeps the author's styles off the
+    -- page ("Wiki.Core.Markdown.Frame").
+    FrameHtml
+  deriving stock (Eq, Show)
 
 -- | Every element that is kept.
 allowedElements :: [Text]
@@ -283,6 +352,8 @@ attributeValue name value = case name of
   "href" -> url Href
   "src" -> url Src
   "poster" -> url Src
+  -- Only in a frame ('keptAttributes'), whose page the CSS cannot reach.
+  "style" -> Just value
   _ -> Nothing
   where
     stripped = T.strip value
@@ -292,15 +363,16 @@ attributeValue name value = case name of
     url use = if urlAllowed use value then Just (T.strip value) else Nothing
 
 -- | An element's attributes as kept: names lowercased, the first of each
--- name, then only those the allowlist accepts.
-keptAttributes :: Text -> [(Text, Text)] -> [Attribute]
-keptAttributes element attrs =
+-- name, then only those the allowlist accepts. In a frame, @style@ too.
+keptAttributes :: Allowlist -> Text -> [(Text, Text)] -> [Attribute]
+keptAttributes allowlist element attrs =
   [ (name, v)
   | (name, value) <- firstOfEach [(T.toLower k, v) | (k, v) <- attrs]
-  , name `elem` allowedAttributes element
+  , name `elem` allowed
   , Just v <- [attributeValue name value]
   ]
   where
+    allowed = allowedAttributes element <> ["style" | allowlist == FrameHtml]
     firstOfEach = go []
     go seen = \case
       [] -> []
@@ -323,19 +395,29 @@ data Builder a = Builder
   , skipping :: Maybe (Text, Int)
   -- ^ Inside a dropped element: its name and how many elements of that
   -- name inside it are open.
+  , styling :: Maybe [Tag Text]
+  -- ^ Inside a @\<style>@ element in a frame's HTML: the tokens read in
+  -- it so far, the last first.
   }
 
-build :: forall a. Context -> [Token a] -> [Node a]
-build context = finish . foldl' step (Builder [Open "" [] []] Nothing)
+build :: forall a. Allowlist -> Context -> [Token a] -> [Node a]
+build allowlist context = finish . foldl' step (Builder [Open "" [] []] Nothing Nothing)
   where
     step :: Builder a -> Token a -> Builder a
-    step b token = case b.skipping of
-      Just (name, depth) -> case token of
+    step b token = case (b.styling, b.skipping) of
+      -- A browser reads what is in a style element as text, up to its end
+      -- tag; tagsoup reads tags in it. The tokens are written back as the
+      -- CSS was written, up to the end tag ('styleElement').
+      (Just inside, _) -> case token of
+        Tag (TagClose n) | T.toLower n == "style" -> b {styling = Nothing, stack = append (styleElement inside) b.stack}
+        Tag t -> b {styling = Just (t : inside)}
+        Other _ -> b
+      (Nothing, Just (name, depth)) -> case token of
         Tag (TagOpen n _) | T.toLower n == name -> b {skipping = Just (name, depth + 1)}
         Tag (TagClose n)
           | T.toLower n == name -> b {skipping = if depth == 0 then Nothing else Just (name, depth - 1)}
         _ -> b
-      Nothing -> case token of
+      (Nothing, Nothing) -> case token of
         Other a -> b {stack = appendContent (Content a) b.stack}
         Tag (TagText t) -> b {stack = appendContent (TextNode t) b.stack}
         Tag (TagOpen n attrs) -> start (T.toLower n) attrs b
@@ -346,6 +428,8 @@ build context = finish . foldl' step (Builder [Open "" [] []] Nothing)
     start name attrs b
       -- An embed has neither end tag nor content: it is dropped alone.
       | name == "embed" = b
+      -- A frame's HTML keeps its styles ('FrameHtml').
+      | name == "style" && allowlist == FrameHtml = b {styling = Just []}
       | name `elem` droppedElements = b {skipping = Just (name, 0)}
       | not (allowedHere name) = b
       | inTableStructure b.stack && name `notElem` tableElements = b
@@ -355,7 +439,7 @@ build context = finish . foldl' step (Builder [Open "" [] []] Nothing)
             | name `elem` voidElements -> b {stack = append (Element name kept []) s}
             | otherwise -> b {stack = Open name kept [] : s}
       where
-        kept = keptAttributes name attrs
+        kept = keptAttributes allowlist name attrs
 
     allowedHere name = case context of
       Flow -> name `elem` allowedElements
@@ -397,10 +481,25 @@ closeOne = \case
 closeN :: Int -> [Open a] -> [Open a]
 closeN n s = foldl' (\acc _ -> closeOne acc) s [1 .. n]
 
+-- | The document: the elements still open closed, and a style element
+-- still open ended where the HTML ends, as a browser ends it.
 finish :: Builder a -> [Node a]
-finish b = case closeN (length b.stack - 1) b.stack of
+finish b = case closeN (length atEnd - 1) atEnd of
   Open _ _ children : _ -> reverse children
   [] -> []
+  where
+    atEnd = maybe b.stack (\inside -> append (styleElement inside) b.stack) b.styling
+
+-- | A @\<style>@ element with the CSS of the tokens read in it, the last
+-- first: the tokens written out as they were read, with nothing escaped.
+-- The text is what the browser would read there, except for character
+-- references, which tagsoup has decoded (@&lt;@ in the CSS becomes @<@).
+-- What the CSS holds cannot end the element when it is written out again
+-- ('renderHtml').
+styleElement :: [Tag Text] -> Node a
+styleElement inside = Element "style" [] [TextNode css | not (T.null css)]
+  where
+    css = renderTagsOptions renderOptions {TagSoup.optEscape = identity} (reverse inside)
 
 -- | A @pre@'s first newline is not part of its text: the parser drops it.
 finishChildren :: Text -> [Node a] -> [Node a]
