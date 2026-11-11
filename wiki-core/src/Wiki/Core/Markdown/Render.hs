@@ -879,7 +879,16 @@ linkDestinations = concatMap block
         | otherwise -> inlines False h.description <> linkDestinations bs
       Footnotes notes -> concat [linkDestinations bs | Footnote _ _ bs <- notes]
       RawHtmlBlock raw -> html (const absurd) False (Html.parseHtml raw)
-      _ -> []
+      -- Every other block, named, so that a block added later is a
+      -- decision of its own here.
+      ThematicBreak -> []
+      Pause -> []
+      CodeBlock {} -> []
+      Mermaid _ -> []
+      Tikz _ -> []
+      MathBlock _ -> []
+      MarkerError _ _ -> []
+      TableOfContents -> []
     -- As 'renderBlocks' reads them: raw HTML among the inlines is parsed
     -- with the Markdown around it, in a link's text with no @a@ allowed.
     inlines :: Bool -> [Inline] -> [Text]
@@ -903,7 +912,14 @@ linkDestinations = concatMap block
       Link _ dest _ xs -> dest : inlines True xs
       Image _ dest _ _ -> [dest]
       RawHtml raw -> html inline inLink (Html.parseFragments (htmlContext inLink) [Html.Markup raw])
-      _ -> []
+      Str _ -> []
+      SoftBreak -> []
+      LineBreak -> []
+      Code _ _ -> []
+      Math _ _ -> []
+      FootnoteRef _ _ -> []
+      Emoji _ _ -> []
+      Mention _ -> []
     htmlContext inLink = if inLink then Html.PhrasingInLink else Html.Phrasing
     -- Every @a@ with an @href@ ('htmlElement' makes each a link), and the
     -- Markdown among the elements, which inside an @a@ is a link's text.

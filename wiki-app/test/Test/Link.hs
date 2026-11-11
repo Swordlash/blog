@@ -51,7 +51,37 @@ docsPage :: [Text] -> Maybe PageLink
 docsPage path = Just (PageLink (Page (slugs ["docs"]) (slugs path)) "")
 
 spec :: Spec
-spec = describe "resolvePageLink" $ do
+spec = do
+  resolving
+  naming
+
+-- | What a link is marked by in the server's table of links: the name a
+-- page created or moved must have for the link to lead to it.
+naming :: Spec
+naming = describe "linkName" $ do
+  it "is the slug a path ends at, read as resolvePageLink reads it" $ do
+    linkName "on-call" `shouldBe` Just "on-call"
+    linkName "On-call" `shouldBe` Just "on-call"
+    linkName "/team/handbook/on-call/" `shouldBe` Just "on-call"
+    linkName "/s/team/p/handbook/on-call/" `shouldBe` Just "on-call"
+    linkName "../on-call#rota?version=x" `shouldBe` Just "on-call"
+    linkName "handbook/x/.." `shouldBe` Just "handbook"
+    linkName "a/./b" `shouldBe` Just "b"
+
+  it "is the id a permanent address names" $ do
+    linkName "/l/4f1c/" `shouldBe` Just "4f1c"
+    linkName "/l/4f1c/?version=2026-11-10T09:30:12Z#setup" `shouldBe` Just "4f1c"
+
+  it "is nothing for a path that ends above the link's own page, and for what is not a page" $ do
+    linkName ".." `shouldBe` Nothing
+    linkName "." `shouldBe` Nothing
+    linkName "x/../.." `shouldBe` Nothing
+    linkName "#part" `shouldBe` Nothing
+    linkName "https://example.com/a" `shouldBe` Nothing
+    linkName "attachment:a.pdf" `shouldBe` Nothing
+
+resolving :: Spec
+resolving = describe "resolvePageLink" $ do
   -- The tour is the home page of Docs, the root of its pages: its path is
   -- empty, and the Markdown guide is under it (WP5.78 of docs/PLAN.md).
   it "reads a relative path from the page's parent, as a browser does" $ do

@@ -11,6 +11,7 @@ import Test.QuickCheck (Gen, elements, forAll, listOf1, (===))
 import Wiki.Core.Id (PageId (..))
 import Wiki.Core.Markdown.Ast (Block (..), Inline (..), parseMarkdown, plainText)
 import Wiki.Core.Markdown.Link
+import Wiki.Core.Markdown.Render (linkDestinations)
 
 spec :: Spec
 spec = describe "Markdown.Link" $ do
@@ -56,6 +57,48 @@ spec = describe "Markdown.Link" $ do
       classifyDestination "/l//" `shouldBe` ToPath "/l//"
       classifyDestination "/l/17/more/" `shouldBe` ToPath "/l/17/more/"
       classifyDestination "l/17/" `shouldBe` ToPath "l/17/"
+
+  describe "linkDestinations" $ do
+    let destinations = either (const []) linkDestinations . parseMarkdown
+    it "finds a link's, a wiki link's and an embed's destination, in the order written" $
+      destinations "See [a](one), [[Two]] and ![c](three.png).\n\n![page](four)"
+        `shouldBe` ["one", "Two", "three.png", "four"]
+    it "finds links in headings, lists, tables, quotes, boxes, spoilers and footnotes" $
+      destinations
+        ( T.unlines
+            [ "# [h](heading)"
+            , ""
+            , "- [l](item)"
+            , ""
+            , "| [t](cell) |"
+            , "| --- |"
+            , ""
+            , "> [q](quote)"
+            , ""
+            , "> [!NOTE] [b](box-title)"
+            , "> [i](box)"
+            , ""
+            , "[[!spoiler]]{s}(Open me)"
+            , "[x](inside)"
+            , "[[/spoiler]]"
+            , ""
+            , "Note.[^1]"
+            , ""
+            , "[^1]: [f](footnote)"
+            ]
+        )
+        `shouldBe` ["heading", "item", "cell", "quote", "box-title", "box", "inside", "footnote"]
+    it "finds the href of an a in raw HTML, inline and as a block, but not an image's src" $ do
+      destinations "A <a href=\"inline\">link</a> and <img src=\"picture\">." `shouldBe` ["inline"]
+      destinations "<div>\n<a href=\"/block\">link</a>\n<img src=\"pic\">\n</div>" `shouldBe` ["/block"]
+    it "finds nothing in code, in a fence, in a formula or in a diagram" $
+      destinations "`[a](code)`\n\n```\n[b](fence)\n```\n\n$[c](math)$\n\n```mermaid\nclick A \"x\"\n```" `shouldBe` []
+    it "takes no link inside a link's text, but the link around it" $
+      destinations "[<a href=\"inner\">x</a>](outer)" `shouldBe` ["outer"]
+    it "takes no link from an embed's caption" $
+      destinations "![[x](caption)](picture.png)" `shouldBe` ["picture.png"]
+    it "keeps the fragment and the query, for the resolver to read" $
+      destinations "[a](page#part) [b](/l/17/?version=2026-11-01T10:00:00Z)" `shouldBe` ["page#part", "/l/17/?version=2026-11-01T10:00:00Z"]
 
   describe "pageIdSegment" $ do
     it "escapes the ids a segment cannot hold, and those starting with ~" $
