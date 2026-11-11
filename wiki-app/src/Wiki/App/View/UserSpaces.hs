@@ -188,12 +188,14 @@ shown = 50
 -- | Whether a personal space is one the text finds: its owner's display
 -- name contains the text, ignoring case and the spaces around it, or its
 -- slug contains the text made a slug the same way. The slug is the owner's
--- login made a slug ('Wiki.Core.Slug.slugify'), which turns punctuation
--- into dashes and spells letters in ASCII, so a login is found whether it
--- is typed as it is (@rita\@example.org@) or as it reads in the space's
--- address (@rita-example-org@). Logins are ASCII ('Wiki.Core.User.parseLogin'),
--- so every login made since is found this way. An empty text finds every
--- space.
+-- login made a slug ('Wiki.Core.Slug.slugify') when the space was made,
+-- which turns punctuation into dashes and spells letters in ASCII, so a
+-- login is found whether it is typed as it is (@rita\@example.org@) or as
+-- it reads in the space's address (@rita-example-org@). Logins are ASCII
+-- ('Wiki.Core.User.parseLogin'), so every login is found this way, but one
+-- renamed after its space was made (step 15 of the server's schema), whose
+-- space keeps its slug and is found by its owner's name. An empty text
+-- finds every space.
 matches :: Text -> Space -> Bool
 matches typed s =
   T.null needle

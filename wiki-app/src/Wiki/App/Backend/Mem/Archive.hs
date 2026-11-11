@@ -20,7 +20,7 @@ import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions, 
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Attachment qualified as A
 import Wiki.Core.Comment (Comment (..), Thread (..))
-import Wiki.Core.Export (Archive (..), threadsAmong, withoutHomeDocument)
+import Wiki.Core.Export (Archive (..), checkLogins, threadsAmong, withoutHomeDocument)
 import Wiki.Core.HomePage (HomeDocument (..), HomePage (..))
 import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
@@ -116,8 +116,10 @@ fromArchive a =
 
 -- | Replace user content while importing the root into its existing identity.
 -- An older or space-only archive leaves the root, its attachments and history.
+-- An archive with a login the wiki refuses is refused ('checkLogins').
 replaceFromArchive :: UTCTime -> MemState -> Archive -> Either Text MemState
 replaceFromArchive time old a = do
+  checkLogins a.users
   for_ root.attachments $ \attachment -> case attachment.source of
     SourceBlob b | Map.notMember b sourceBlobs -> Left ("The home attachment " <> attachment.name.text <> " has no stored bytes.")
     _ -> pure ()

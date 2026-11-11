@@ -79,6 +79,7 @@ module Wiki.Core.Export
   , ArchiveFile (..)
   , archiveFiles
   , readArchive
+  , checkLogins
   , safeDirectoryName
   , safeFileName
 
@@ -136,7 +137,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), rootedPagesOf)
-import Wiki.Core.User (Group (..), Login (..), Membership, User (..))
+import Wiki.Core.User (Group (..), Login (..), Membership, User (..), loginProblem)
 import Wiki.Core.Version (Author (..), Version (..))
 
 -- | A whole wiki: its users, its grants, its spaces and pages (each page
@@ -434,6 +435,28 @@ readArchive entries = do
       | otherwise = case Map.lookup version migrations of
           Nothing -> Left ("There is no way from version " <> show version <> " of the export format to the next.")
           Just step -> step manifest files >>= migrate manifest (version + 1)
+
+-- | 'checkLogins' refuses the users of an archive when one of them has a
+-- login the wiki's rules refuse ('Wiki.Core.User.loginProblem'), naming
+-- the first in the order of @users.json@. An archive written before the
+-- rule (2026-11-06), or before the server renamed such logins (step 15 of
+-- its schema), may hold one. 'readArchive' does not refuse it, since an
+-- import that merges the archive into a wiki brings none of its users. An
+-- import that brings them, the server's import into an empty wiki and the
+-- demo's, calls this first, so that no login the wiki refuses enters it.
+checkLogins :: [User] -> Either Text ()
+checkLogins users = case [(u, why) | u <- users, Just why <- [loginProblem u.login]] of
+  [] -> Right ()
+  (u, why) : _ ->
+    Left
+      ( "users.json: the user "
+          <> show u.id.text
+          <> " has the login \""
+          <> u.login.text
+          <> "\", which the wiki no longer takes: "
+          <> why
+          <> " Give the user a login of ASCII letters, digits and punctuation in users.json, and import the archive again."
+      )
 
 parseManifest :: Value -> Parser Manifest
 parseManifest = withObject "manifest" $ \o -> do

@@ -52,8 +52,9 @@ data AuditEntry = AuditEntry
   , detail :: Map Text Text
   -- ^ What changed, by field, as text: never a secret.
   , address :: Text
-  -- ^ The network address the request came from, or @console@ for the
-  -- server's console; empty when unknown.
+  -- ^ The network address the request came from, @console@ for the
+  -- server's console, or @migration@ for a step of the server's schema
+  -- (the logins step 15 renamed); empty when unknown.
   }
   deriving stock (Eq, Show)
 
@@ -113,6 +114,7 @@ actionText a = Map.findWithDefault a a actions
         , ("user.remove", "Removed a user's account")
         , ("user.second-factor-remove", "Removed a user's second factor")
         , ("user.identity-remove", "Disconnected a user's account at a provider")
+        , ("user.rename", "Changed a user's login")
         , ("group.create", "Made a group")
         , ("group.rename", "Renamed a group")
         , ("group.delete", "Deleted a group")
