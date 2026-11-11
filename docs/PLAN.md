@@ -1438,8 +1438,7 @@ done and closed: WP5.86, #236; the owner, 2026-11-11: Slack's names that
 GitHub's list does not have are not needed); #189 (backlinks, done: decision 71, #239); #196 (WP5.89: an `html` block in a frame without scripts, `latex`
 as `$$`, `{.norender}`), then #200 (WP5.90: an interactive SVG in a frame
 that runs scripts and shares no origin, the frame the plugins will run
-in); #204 (TODO lists first, then the
-calendar); #213 (WP5.74b3). Then the three large ones: #186 (decision 69,
+in); #204 (WP5.91 TODO lists, WP5.92 a day's page, WP5.93 the calendar); #213 (WP5.74b3). Then the three large ones: #186 (decision 69,
 WP5.84 first), with #190 (table views) after it, since the issue asks for
 it as a plugin; #187; #191. Which of #204 and #213 count as smaller is
 the session's reading, not the owner's word.
@@ -1507,6 +1506,53 @@ which the wiki pins since #227.
   with the same password under the new login: the OPAQUE record is bound
   to the user's id, not to the login, and a hash from before OPAQUE knows
   no login.
+- **WP5.91 TODO lists: tasks ticked in the page, saved together (#204,
+  the first of three; the owner, 2026-11-11).** A task (`- [ ]`, `- [x]`,
+  the syntax the wiki has; the owner chose it over a new one) shows a box
+  that is disabled. Whoever may edit the page can now tick it in the page
+  view. A tick does not save: a version is a whole copy of the page, so
+  the ticks are held in the page view as unsaved changes, with a bar
+  saying how many and "Save" and "Discard", and a save writes one version
+  (the owner: staging as in the editor). Leaving the page with unsaved
+  ticks asks, as the editor does. The save is against the version the
+  ticks were made on, and a page changed meanwhile is a conflict the
+  reader is told of, not a silent overwrite. A ticked task's text is
+  struck through. A task with tasks under it: ticking it ticks them all,
+  and ticking the last of them ticks it; unticking one unticks it. A list
+  with the attribute `sorted` (`{.sorted}`) shows its ticked tasks after
+  the unticked ones of the same group, in the view only: the source keeps
+  its order. One pure function in wiki-core turns the text and a set of
+  ticks into the new text, changing nothing but the boxes.
+- **WP5.92 A day's page: entries with a time, all-day entries, highlights
+  (#204, the second of three).** As other tools do it (Obsidian's Day
+  Planner, Logseq's journal), the time belongs to the entry, not to a
+  place on the page: the owner first thought of fixed sections for the
+  parts of the day and agreed to this instead. A day's page is an
+  ordinary page from a template, its title the date, with a list: an item
+  that starts with a time (`- 09:00 Standup`, `- 09:00-10:30 Review`) is
+  an entry at that time, an item without one is an entry for the whole
+  day, and a mark at the start of an item highlights it. The page view
+  shows the entries in the order of their times under the parts of the
+  day (the owner's: Dawn 6-9, Morning 9-12, Noon 12-15, Afternoon 15-18,
+  Evening 18-21, Night 21-6), with "Highlights" above them, all read from
+  the list; nothing is moved in the source. A pure function in wiki-core
+  reads a text's entries. To settle with the owner before briefing: the
+  mark that highlights, and what an item with a task box and a time is.
+- **WP5.93 The calendar, a kind of page (#204, the third of three).** A
+  page of the kind "calendar" (a kind of page as presentations are, so
+  one calendar a page; the owner asked what two calendars on one page
+  would mean) shows its days, which are the pages under it. Views as in
+  Outlook, from a library (FullCalendar, if its licence and size hold up
+  when checked): the month, with the highlighted entries only; the working
+  week of five days and the week of seven, with the entries at their
+  hours and the all-day ones above; the day, with all of them. Today is
+  marked, with the line of the present time. The server answers the
+  entries of a range of dates read from the days' pages, so that a month
+  is one request. Read-only at first: a click on an entry or a day opens
+  the day's page, and makes it from the template when there is none;
+  entries are edited in the day's Markdown. Dragging an entry to another
+  time is a later package, since it rewrites a page's text. Notifications
+  for tasks: later, as the issue says.
 - **WP5.84 Plugins, the first package (#186, decision 69; stage 4).** The
   registry of plugins in the application and the two interfaces of the
   first step, an editing agent and diagnostics. The assistant moves behind
