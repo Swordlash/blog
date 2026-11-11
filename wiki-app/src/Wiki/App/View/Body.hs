@@ -314,6 +314,7 @@ islandOptionsWith island ctx spaceOwn =
     , Md.mathDisplay = \k before tex -> island k (Islands.MathDisplay (spaceDefined <> before) tex)
     , Md.mermaid = \k source -> island k (Islands.Mermaid source)
     , Md.tikz = \k source -> island k (Islands.Tikz source)
+    , Md.htmlBlock = \k _ document -> island k (Islands.HtmlFrame document)
     , Md.resolveLink = const Md.Unresolved
     , Md.pageHref = \(PageLink route fragment) -> Router.href ctx.router route <> fragment
     , Md.boxes = ctx.session.boxes

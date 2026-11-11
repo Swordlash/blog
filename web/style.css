@@ -1409,6 +1409,32 @@ select {
   height: auto;
 }
 
+/* An html fence's frame (Wiki.App.Islands' HtmlFrame): as wide as the
+   text, without a border, and as high as its content, which the
+   application measures and sets in the frame's style. A very long block is
+   capped at most of the window's height, and scrolls inside the frame. */
+.wiki-html {
+  display: block;
+  width: 100%;
+  max-height: 80vh;
+  border: 0;
+}
+
+/* The document inside such a frame (Wiki.Core.Markdown.Frame), whose
+   stylesheet this is too: no margin, and no background of its own, so that
+   the page's shows through. The block is in a .page-body, styled as the
+   page's own body; flow-root keeps the margins of its first and last
+   elements inside it, and so inside the height the application
+   measures. */
+.html-frame {
+  margin: 0;
+  background: transparent;
+}
+
+.html-frame > .page-body {
+  display: flow-root;
+}
+
 .page-body blockquote {
   margin: 1rem 0;
   padding: 0 1rem;

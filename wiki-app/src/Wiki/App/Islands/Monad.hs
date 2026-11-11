@@ -12,6 +12,9 @@
 -- holds its source as text, which is what the prerendered page shows until
 -- the program has loaded.
 --
+-- An @html@ fence's frame is an island too ('fitFrame'): nothing draws
+-- into it, but the page sizes it to its content.
+--
 -- A moment in time is an island too ('renderTime'). The reader's browser
 -- writes it in their time zone and language, which a page rendered before
 -- the program runs, on a server in its own time zone, cannot know. The
@@ -56,6 +59,7 @@ $( browserJS
      , ("js_render_mermaid", "wiki_islands_render_mermaid", Safe, [t|Element -> JSText -> IO ()|])
      , ("js_render_tikz", "wiki_islands_render_tikz", Safe, [t|Element -> JSText -> JSText -> JSText -> IO ()|])
      , ("js_highlight", "wiki_islands_highlight", Safe, [t|Element -> JSText -> JSText -> IO ()|])
+     , ("js_fit_frame", "wiki_islands_fit_frame", Safe, [t|Element -> IO ()|])
      ]
  )
 
@@ -129,6 +133,13 @@ class (Monad m) => MonadIslands m where
   default highlightCode :: (MonadTrans t, MonadIslands n, m ~ t n) => Maybe Text -> Text -> Element -> m ()
   highlightCode language code = lift . highlightCode language code
 
+  -- | Keep an @html@ fence's frame as high as its content, from now on:
+  -- as its images load, as its width changes, and when it is given a new
+  -- document. Natively there is no layout to measure, and nothing to do.
+  fitFrame :: Element -> m ()
+  default fitFrame :: (MonadTrans t, MonadIslands n, m ~ t n) => Element -> m ()
+  fitFrame = lift . fitFrame
+
   -- | A moment in time, as the reader's browser writes it
   -- ('Wiki.App.Browser.localTime').
   renderTime :: UTCTime -> Element -> m ()
@@ -158,6 +169,8 @@ instance MonadIslands BrowserDOM where
 
   highlightCode language code element = liftIO $ js_highlight element (toJSText (fromMaybe "" language)) (toJSText code)
 
+  fitFrame element = liftIO $ js_fit_frame element
+
   renderTime at element = liftIO $ localTime at >>= element.textContent_set
 
 -- | What a @wiki-island-drawn@ event says of a diagram or a picture just
@@ -185,6 +198,10 @@ instance MonadIslands MemDOM where
   renderMermaid = asText
   renderTikz source _ = asText source
   highlightCode _ = asText
+  -- The frame's document is its srcdoc attribute, which the render wrote:
+  -- nothing goes inside the element (the serialiser takes an iframe's
+  -- content as raw text).
+  fitFrame _ = pure ()
   renderTime at element = localTime at >>= (`asText` element)
 
 asText :: Text -> Element -> MemDOM ()
