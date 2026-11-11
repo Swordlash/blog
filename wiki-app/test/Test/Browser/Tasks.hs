@@ -35,7 +35,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Id (PageId (..), UserId (..))
-import Wiki.Core.Page (Page (body, updatedAt))
+import Wiki.Core.Page (Page (body, template, updatedAt))
 import Wiki.Core.Page qualified as Core
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space qualified as Core
@@ -351,6 +351,65 @@ spec m = describe "tasks ticked in a page" $ do
     eventuallyWithin 20000 $ length <$> findAll ui ".blog-view .stale-reload" `shouldReturn` 0
     find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
     (find ui ".blog-home .page-body input[data-task='0']" >>= (`getProperty` "checked")) `shouldReturn` "true"
+    serverStops
+
+  it "takes no tick while a move, a delete, a rename or the template switch is out, whatever is clicked" $ runPage $ do
+    serverStarts
+    serveDemo
+    let guide = demoPage "markdown-guide"
+        short = (guide {Core.body = "# Markdown guide\n\n- [ ] a\n- [ ] b\n"}) :: Core.Page
+        asTemplate = (short :: Core.Page) {template = True}
+        pageAt = "api/v1/pages/" <> guide.id.text
+        enabled ui = length <$> findAll ui ".page-body input[data-task]"
+    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt guide.space (slugs ["markdown-guide"]))) 200 short
+    answerWith "PUT" pageAt 200 short
+    answerWith "POST" (pageAt <> "/move") 200 short
+    answerWith "PUT" (pageAt <> "/template") 200 asTemplate
+    answerRaw "DELETE" pageAt 204 ""
+    ui <- startServer m (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
+    eventually $ enabled ui `shouldReturn` 2
+    -- Rename: submitted, its form stays though Cancel is clicked, and no
+    -- box takes a tick until the answer.
+    holdAt "PUT" pageAt
+    clickButton ui ".page-actions button" "Rename"
+    find ui ".inline-form button.primary" >>= click
+    eventually $ enabled ui `shouldReturn` 0
+    clickButton ui ".inline-form button" "Cancel"
+    length <$> findAll ui ".inline-form" `shouldReturn` 1
+    enabled ui `shouldReturn` 0
+    release
+    eventually $ length <$> findAll ui ".inline-form" `shouldReturn` 0
+    eventually $ enabled ui `shouldReturn` 2
+    -- The template switch.
+    holdAt "PUT" (pageAt <> "/template")
+    find ui ".use-as-template" >>= click
+    eventually $ enabled ui `shouldReturn` 0
+    release
+    eventually $ enabled ui `shouldReturn` 2
+    -- Move.
+    holdAt "POST" (pageAt <> "/move")
+    clickButton ui ".page-actions button" "Move"
+    find ui ".inline-form button.primary" >>= click
+    eventually $ enabled ui `shouldReturn` 0
+    clickButton ui ".inline-form button" "Cancel"
+    length <$> findAll ui ".inline-form" `shouldReturn` 1
+    enabled ui `shouldReturn` 0
+    release
+    eventually $ length <$> findAll ui ".inline-form" `shouldReturn` 0
+    eventually $ enabled ui `shouldReturn` 2
+    length <$> findAll ui ".page-ticks-count" `shouldReturn` 0
+    -- Delete: the answer takes the reader to the page above, and nothing
+    -- was staged to lose.
+    holdAt "DELETE" pageAt
+    clickButton ui ".page-actions button" "Delete"
+    find ui ".confirm button.danger" >>= click
+    eventually $ enabled ui `shouldReturn` 0
+    clickButton ui ".confirm button" "Cancel"
+    length <$> findAll ui ".confirm" `shouldReturn` 1
+    enabled ui `shouldReturn` 0
+    release
+    eventuallyWithin 10000 $ (findAll ui ".page-body h1" >>= traverse textContent) `shouldReturn` ["Tour"]
+    length <$> findAll ui ".leave-confirm" `shouldReturn` 0
     serverStops
 
   it "shows a mention the newer version brings, after a conflict" $ runPage $ do

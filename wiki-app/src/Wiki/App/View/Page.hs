@@ -1,3 +1,4 @@
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The page view: a page as a reader sees it. It shows the page's
@@ -110,7 +111,9 @@
 -- "Wiki.App.View.Ticking" lists (a save of this visit, Discard, a Leave,
 -- a reload asked for, the right to edit lost), and only 'stage' changes
 -- it. A form of the page (Rename, Move, Delete) opens only without
--- unsaved ticks, and the boxes are disabled while one is open. Each visit
+-- unsaved ticks, and the boxes are disabled while one is open, and while
+-- any write of the page the view started is out ('writeOut'), whose form
+-- then stays until the answer. Each visit
 -- of an address has a number ('visit'), and an answer to a request of an
 -- earlier visit changes nothing of this one; a fetch's answer is shown
 -- only if it is the latest fetch ('fetches').
@@ -274,6 +277,11 @@ data State = State
   , fetches :: Int
   -- ^ How many fetches of the page the view has started: only the answer
   -- to the latest, on this visit, is shown.
+  , writing :: Bool
+  -- ^ Whether a write of the page that the view started (a rename, a
+  -- move, a delete, the template switch) is out, until its answer on
+  -- this visit. With the ticks' own save ('Staging''s @saving@), what
+  -- 'writeOut' reads.
   , lastBox :: Maybe Int
   -- ^ The task whose box the reader set last, by its index: its box has
   -- the focus again after a render that moved it, drew it anew, or took
@@ -368,6 +376,7 @@ component =
               , visit = 0
               , fetches = 0
               , lastBox = Nothing
+              , writing = False
               }
       , render
       , eval =
@@ -810,7 +819,7 @@ component =
           -- Another page or version: the shell asked before leaving the
           -- ticks ('HasUnsaved'), and the reader chose Leave.
           stage (Ticking.Clear LeftConfirmed)
-          modify (\st -> st {lastBox = Nothing})
+          modify (\st -> st {lastBox = Nothing, writing = False})
           modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
           -- The people mentioned are looked up again: the current user may
@@ -849,7 +858,12 @@ component =
       -- A form of the page (Rename, Delete) opens only without unsaved
       -- ticks, as Move does: each may replace the page or take it
       -- elsewhere, where the shell does not ask about them.
+      --
+      -- While a write is out ('writeOut'), the form stays as it is (Cancel
+      -- does nothing): a form closed then would let ticks be staged that
+      -- the write's answer (a move's, a delete's) would leave behind.
       Open mode -> modify $ \st -> case mode of
+        _ | writeOut st -> st
         Viewing -> st {mode, problem = Nothing}
         _
           | unsaved st -> st {problem = Just ticksFirst}
@@ -863,9 +877,10 @@ component =
         let spaces = targetSpaces input.context page
             here = fromMaybe 0 (head [n | (n, s) <- zip [0 ..] spaces, s.id == page.space])
         modify $ \st ->
-          if unsaved st
-            then st {problem = Just ticksFirst}
-            else st {mode = Moving here input.pages page.parent, problem = Nothing}
+          if
+            | writeOut st -> st
+            | unsaved st -> st {problem = Just ticksFirst}
+            | otherwise -> st {mode = Moving here input.pages page.parent, problem = Nothing}
       ChoseSpace n -> withPage $ \page -> do
         input <- gets (\st -> st.input)
         asked' <- gets (\st -> st.visit)
@@ -881,7 +896,7 @@ component =
              in st {mode = Moving chosen ps (join (atMay (Nothing : map Just (allowedParents page target ps)) n))}
           other -> st {mode = other}
       Submit -> do
-        withPage $ \page -> do
+        withPage $ \page -> whenM (gets (not . writeOut)) $ do
           st@State {input, mode, visit} <- get
           let ctx = input.context
           case mode of
@@ -890,13 +905,14 @@ component =
             -- A template's first line is the heading of the pages made from
             -- it, @# {{title}}@, which stays.
             Renaming title ->
-              savePage page.id page.updatedAt title (if page.template then page.body else retitled title page.body) >>= done visit (const Nothing)
+              startWrite >> savePage page.id page.updatedAt title (if page.template then page.body else retitled title page.body) >>= done visit (const Nothing)
             -- No form opens with ticks, and the boxes are disabled while
             -- one is open ('boxesEnabled'); this is the last check.
             Moving chosen ps parent
               | unsaved st -> modify (\s -> s {problem = Just ticksFirst})
               | otherwise -> for_ (atMay (targetSpaces ctx page) chosen) $ \target ->
-                  movePage page.id target.id parent
+                  startWrite
+                    >> movePage page.id target.id parent
                     >>= done visit (\moved -> Just (Page (spacePathOf ctx.spaces target.id) (maybe [] (fromMaybe [] . pagePathOf target ps) parent <> [moved.slug])))
             _ -> pass
       FromComments out -> case out of
@@ -1026,18 +1042,21 @@ component =
       -- A write that makes the shell reload, so, as a form, only without
       -- unsaved ticks.
       SetTemplate template -> withPage $ \page ->
-        gets unsaved >>= \case
-          True -> modify (\st -> st {problem = Just ticksFirst})
-          False -> do
+        gets (\st -> (writeOut st, unsaved st)) >>= \case
+          (True, _) -> pass
+          (_, True) -> modify (\st -> st {problem = Just ticksFirst})
+          _ -> do
             asked' <- gets (\st -> st.visit)
+            startWrite
             setPageTemplate page.id template >>= done asked' (const Nothing)
-      Delete -> withPage $ \page -> do
+      Delete -> withPage $ \page -> whenM (gets (not . writeOut)) $ do
         input <- gets (\st -> st.input)
         asked' <- gets (\st -> st.visit)
         let spacePath = spacePathOf input.context.spaces input.space.id
             -- The page above it, or the space for a page under the home
             -- page, whose path is one slug.
             parentRoute = pageRoute spacePath (take (length input.path - 1) input.path)
+        startWrite
         deletePage page.id >>= done asked' (const (Just parentRoute))
 
     load :: H.HalogenM State Action Slots ViewOutput m ()
@@ -1231,11 +1250,28 @@ component =
     done which next result =
       gets (\st -> st.visit == which) >>= \case
         False -> when (isRight result) (H.raise (Changed Nothing))
-        True -> case result of
-          Left e -> modify (\st -> st {problem = Just e})
-          Right a -> do
-            modify (\st -> st {mode = Viewing, problem = Nothing})
-            H.raise (Changed (next a))
+        True -> do
+          modify (\st -> st {writing = False})
+          case result of
+            Left e -> modify (\st -> st {problem = Just e})
+            Right a -> do
+              -- No tick can be staged while the write is out
+              -- ('boxesEnabled'), so there are none here; if there were,
+              -- the view would not take the reader elsewhere over them: it
+              -- keeps the page, says what happened, and the shell reloads.
+              held <- gets unsaved
+              case next a of
+                Just _ | held -> do
+                  modify (\st -> st {mode = Viewing, problem = Just (Invalid "The page was moved or deleted while you had ticks not saved. It stays shown here, but the ticks cannot be saved where it was: discard them to go on.")})
+                  H.raise (Changed Nothing)
+                route -> do
+                  modify (\st -> st {mode = Viewing, problem = Nothing})
+                  H.raise (Changed route)
+
+    -- A write of the page begins: until its answer ('done'), the boxes are
+    -- disabled and the form stays ('writeOut').
+    startWrite :: H.HalogenM State Action Slots ViewOutput m ()
+    startWrite = modify (\st -> st {writing = True})
 
 -- | Fetch the page the input names, with the URL of each of its
 -- attachments, or the reason it cannot be shown.
@@ -1470,19 +1506,27 @@ mayEditShown st = maybe False (\p -> mayEditPage st.input.context p.space p.id) 
 
 -- | Whether the page's boxes are enabled now: the reader may edit the
 -- page, the program runs, the page is the page as it is (not a version),
--- no save of ticks is under way, and no form of the page is open (Rename,
--- Move, Delete). Disabled boxes keep the ticks as they are.
+-- no write of the page is out ('writeOut': the ticks' save, a rename, a
+-- move, a delete, the template switch), and no form of the page is open
+-- (Rename, Move, Delete). Disabled boxes keep the ticks as they are.
 boxesEnabled :: State -> Bool
 boxesEnabled st =
   st.running
     && isNothing st.input.version
-    && not st.staging.saving
+    && not (writeOut st)
     && plainView
     && mayEditShown st
   where
     plainView = case st.mode of
       Viewing -> True
       _ -> False
+
+-- | Whether a write of the page that the view started is out: the ticks'
+-- save, a rename, a move, a delete or the template switch. While one is,
+-- the boxes are disabled and the page's forms stay as they are, so that
+-- no tick is staged that the write's answer could leave behind.
+writeOut :: State -> Bool
+writeOut st = st.writing || st.staging.saving
 
 -- | Whether there are ticks not saved.
 unsaved :: State -> Bool
