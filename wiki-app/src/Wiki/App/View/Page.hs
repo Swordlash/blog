@@ -1001,9 +1001,14 @@ component =
         stage (Ticking.Clear ReloadConfirmed)
         H.raise (Changed Nothing)
       DismissTickNote -> stage Ticking.Dismissed
-      SetTemplate template -> withPage $ \page -> do
-        asked' <- gets (\st -> st.visit)
-        setPageTemplate page.id template >>= done asked' (const Nothing)
+      -- A write that makes the shell reload, so, as a form, only without
+      -- unsaved ticks.
+      SetTemplate template -> withPage $ \page ->
+        gets unsaved >>= \case
+          True -> modify (\st -> st {problem = Just ticksFirst})
+          False -> do
+            asked' <- gets (\st -> st.visit)
+            setPageTemplate page.id template >>= done asked' (const Nothing)
       Delete -> withPage $ \page -> do
         input <- gets (\st -> st.input)
         asked' <- gets (\st -> st.visit)
@@ -1020,12 +1025,8 @@ component =
       -- Only the answer to the latest fetch of this visit: another
       -- navigation, or another reload, may have overtaken this one.
       onFetch latest $ do
-        adopt loaded
-        resolvePeople
-        gets (\st -> pageOf st.loaded) >>= traverse_ (H.raise . Showing)
+        takeFetched loaded
         H.raise Loaded
-        watch
-        loadThreads
 
     -- Fetch the page's comments (again).
     loadThreads :: H.HalogenM State Action Slots ViewOutput m ()
@@ -1126,6 +1127,21 @@ component =
           True -> stage (Ticking.Problem ("The page could not be read again: " <> errorMessage e <> " Your ticks are kept."))
       Loading -> modify (\st -> st {loaded})
 
+    -- A page fetched, as every fetch of the view takes it: shown as 'adopt'
+    -- shows it, then what the page shown needs looked up again: the people
+    -- its text and its comments mention, and their avatars
+    -- ('resolvePeople'); the shell told which page is shown ('Showing');
+    -- the live channel watching it ('watch'); its comments
+    -- ('loadThreads'). Both fetches ('load', 'catchUp') go through here,
+    -- so that none of these is forgotten by one of them.
+    takeFetched :: Loaded -> H.HalogenM State Action Slots ViewOutput m ()
+    takeFetched loaded = do
+      adopt loaded
+      resolvePeople
+      gets (\st -> pageOf st.loaded) >>= traverse_ (H.raise . Showing)
+      watch
+      loadThreads
+
     -- The page as it is now, fetched while there are unsaved ticks (after
     -- a save's conflict, or when the reader asks to see the new version),
     -- as 'adopt' shows it.
@@ -1135,8 +1151,7 @@ component =
       now <- gets (\st -> st.input) >>= fetch
       onFetch latest $ do
         modify (\s -> s {changed = False})
-        adopt now
-        gets (\st -> pageOf st.loaded) >>= traverse_ (H.raise . Showing)
+        takeFetched now
 
     -- The staging after an event ("Wiki.App.View.Ticking"'s 'Ticking.step'),
     -- and the browser's question before closing the tab, which it asks

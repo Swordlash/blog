@@ -25,6 +25,11 @@ of an address has a number, and an answer to an earlier visit's request
 changes nothing; a failed reload keeps the page and the ticks. A form of
 the page opens only without ticks, and the boxes are disabled while one is
 open.
+"Use as template" is refused with ticks too. When a reload of the wiki
+or of the space fails while the content has changes not saved (an
+editor's, or ticks), the shell keeps the content and says so above it
+(`stale`), instead of showing the failure in its place. Both fetches of
+the page view take the page through one function (`takeFetched`).
 
 An `html` fence is shown in a frame (WP5.89, #196): the island
 `HtmlFrame` renders an `<iframe class="wiki-html">` whose `sandbox` and

@@ -107,6 +107,10 @@
 -- was followed, or the back button pressed). So staying goes back through
 -- the session history to the editor's entry, by as many entries as lie in
 -- between ('historyEntry' numbers them), as the browser's buttons would.
+-- For the same reason a reload of the wiki or of the space that fails
+-- while the content has unsaved changes does not put its failure in the
+-- content's place, which would unmount it: the content stays, and a line
+-- above it says the reload failed, with a button to try again ('stale').
 module Wiki.App.Shell
   ( Input (..)
   , Query (..)
@@ -421,6 +425,12 @@ data State m = State
   -- when they never opened it. 'Nothing' until the shell has read it,
   -- after its first render, since a page the server prerendered cannot
   -- know it; and always natively, where there is no reader's browser.
+  , stale :: Maybe WikiError
+  -- ^ Why the last reload of the wiki or of the space failed, when it
+  -- failed while what is shown had changes not saved ('unsavedShown'):
+  -- what is shown then stays, since showing the failure in its place
+  -- would unmount it and lose them, and a line above it says so. The
+  -- next reload that succeeds clears it.
   }
 
 -- | Whose changes a route followed away would lose ('leaving'): what the
@@ -468,6 +478,7 @@ data Action
   | Stay
   | RetryWorld
   | RetryHere
+  | RetryStale
   | FromAccount SignInView.Output
   | SessionChanged Session
   | OpenSignIn
@@ -548,6 +559,7 @@ component =
                   , shown = Nothing
                   , backlinks = Nothing
                   , seen = Nothing
+                  , stale = Nothing
                   }
           -- The page's backlinks too, if the backend has them at once, so
           -- that the sidebar's first render is the prerendered one; else
@@ -589,6 +601,12 @@ component =
             </button>
             <main class="wiki-content">
               {{ offlineCopyLine st }}
+              {% for e in maybeToList st.stale %}
+                <div class="error stale-reload" role="alert">
+                  <p>The wiki could not be loaded again: {{ errorMessage e }} What is shown stays, with the changes you have not saved.</p>
+                  <button type="button" onClick={{ const RetryStale }}>Try again</button>
+                </div>
+              {% end %}
               {% for (_, unsaved) in maybeToList st.leaving %}
                 {{ leaveConfirm unsaved }}
               {% end %}
@@ -1371,6 +1389,7 @@ component =
         modify (\st -> st {world = WorldLoading})
         loadEverything
       RetryHere -> loadHere True
+      RetryStale -> reload Nothing
       Online False -> modify (\st -> st {offline = True})
       -- Back online: whatever failed to load because the server could not
       -- be reached is loaded again, as "Try again" would. A view whose own
@@ -1403,12 +1422,7 @@ component =
             modify (\st -> st {entry = now})
             H.liftEffect revealFragment
           else do
-            editing <- or <$> H.queryAll "editor" (Editor.IsDirty identity)
-            ticked <- or <$> H.queryAll "view" (HasUnsaved identity)
-            let unsaved
-                  | editing = Just EditorChanges
-                  | ticked = Just PageTicks
-                  | otherwise = Nothing
+            unsaved <- unsavedShown
             case unsaved of
               Just what -> do
                 shut <- shutMenu
@@ -1642,11 +1656,28 @@ component =
       demo <- gets (\st -> st.demo)
       lift (attempt (fetchWorld demo)) >>= \case
         Right w -> do
-          modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady})
+          modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady, stale = Nothing})
           -- A session loaded now may name a newer entry than the page
           -- shown has marked seen.
           whatsNewSeen
-        Left e -> modify (\st -> st {world = WorldFailed e})
+        Left e -> do
+          -- A reload that fails while what is shown has unsaved changes
+          -- keeps it ('stale').
+          keep <- (&&) <$> gets (\st -> st.world == WorldReady) <*> (isJust <$> unsavedShown)
+          modify (\st -> if keep then st {stale = Just e} else st {world = WorldFailed e})
+
+    -- Whose changes not saved the content shown holds, if any: an
+    -- editor's, or a page view's ticks. Asked before a route away
+    -- ('leaving'), and when a reload fails ('stale').
+    unsavedShown :: H.HalogenM (State m) Action Slots output m (Maybe Unsaved)
+    unsavedShown = do
+      editing <- or <$> H.queryAll "editor" (Editor.IsDirty identity)
+      ticked <- or <$> H.queryAll "view" (HasUnsaved identity)
+      pure $
+        if
+          | editing -> Just EditorChanges
+          | ticked -> Just PageTicks
+          | otherwise -> Nothing
 
     -- Load the space the route is in, unless it is the one loaded already
     -- (or even then, if forced).
@@ -1664,10 +1695,15 @@ component =
               -- meanwhile.
               unless (hereIs path st.here) $ modify (\s -> s {here = LoadingSpace path})
               result <- fetchHere path
-              -- Unless the route has moved to another space meanwhile.
+              -- Unless the route has moved to another space meanwhile. A
+              -- reload of the space shown that fails while it has unsaved
+              -- changes keeps it ('stale').
               now <- gets (\s -> s.route)
+              keep <- case result of
+                SpaceFailed _ _ e | hereIs path st.here -> unsavedShown >>= \u -> pure (e <$ u)
+                _ -> pure Nothing
               when (spaceOfRoute now == Just path) $
-                modify (\s -> s {here = result})
+                modify (\s -> maybe s {here = result} (\e -> s {stale = Just e}) keep)
       -- Loaded again, or loaded for the first time, as for the server's
       -- prerender: the backlinks are part of what settles. Otherwise
       -- the route has moved within what was shown, and is announced

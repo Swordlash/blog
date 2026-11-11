@@ -33,7 +33,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Id (PageId (..))
-import Wiki.Core.Page (Page (body, template, updatedAt))
+import Wiki.Core.Page (Page (body, updatedAt))
 import Wiki.Core.Page qualified as Core
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space qualified as Core
@@ -261,28 +261,72 @@ spec m = describe "tasks ticked in a page" $ do
     find ui ".page-ticks-save" >>= click
     eventually $ bodyOf wiki `shouldReturn` T.replace "- [ ] Buy milk" "- [x] Buy milk" tasksText
 
-  it "keeps the page shown and the ticks when the page cannot be read again, and after" $ runPage $ do
+  it "refuses to make the page a template while there are ticks, and keeps the page and the ticks when the page cannot be read again" $ runPage $ do
     serverStarts
     serveDemo
     let guide = demoPage "markdown-guide"
         guideAt = endpointUrl (\e -> e.spaces.pageAt guide.space (slugs ["markdown-guide"]))
-    answerWith "PUT" ("api/v1/pages/" <> guide.id.text <> "/template") 200 (guide :: Core.Page) {template = True}
+    -- Every save meets a newer version, and the page is read again.
+    answerRaw "PUT" ("api/v1/pages/" <> guide.id.text) 409 "{\"error\":\"Conflict\",\"message\":\"Saved since.\"}"
     ui <- startServer m (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
     readIt ui >>= click
     eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
-    -- "Use as template" reloads the wiki and the page, whose read fails.
-    answerRaw "GET" guideAt 503 "<html>down for maintenance</html>"
+    -- "Use as template" writes and reloads the wiki: not with ticks.
     find ui ".use-as-template" >>= click
+    find ui ".page-view .error" >>= (`shouldHaveText` "Save or discard the ticked tasks first.")
+    find ui ".use-as-template" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "false")
+    -- The page as it is now cannot be read.
+    answerRaw "GET" guideAt 503 "<html>down for maintenance</html>"
+    find ui ".page-ticks-save" >>= click
     eventuallyWithin 20000 $ find ui ".page-ticks-note" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "could not be read again")
     find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
     (readIt ui >>= (`getProperty` "checked")) `shouldReturn` "true"
-    -- The next reload reads it, and the ticks are still there.
-    answerWith "GET" guideAt 200 (guide :: Core.Page) {template = True}
-    find ui ".use-as-template" >>= click
-    eventuallyWithin 20000 $ find ui ".use-as-template" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
+    -- Read again, the same page keeps the ticks too.
+    answerWith "GET" guideAt 200 guide
+    find ui ".page-ticks-save" >>= click
+    eventuallyWithin 20000 $ (find ui ".page-ticks-save" >>= (`getProperty` "disabled")) `shouldReturn` "false"
     find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
     (readIt ui >>= (`getProperty` "checked")) `shouldReturn` "true"
     serverStops
+
+  it "keeps the view and its ticks when a reload of the wiki it did not ask for fails" $ runPage $ do
+    serverStarts
+    serveDemo
+    let guide = demoPage "markdown-guide"
+        guideAt = endpointUrl (\e -> e.spaces.pageAt guide.space (slugs ["markdown-guide"]))
+        saveAt = "api/v1/pages/" <> guide.id.text
+        saved = (guide :: Core.Page) {body = T.replace "- [ ] Read it" "- [x] Read it" guide.body, updatedAt = addUTCTime 60 guide.updatedAt}
+    answerWith "PUT" saveAt 200 saved
+    holdAt "PUT" saveAt
+    ui <- startServer m (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
+    readIt ui >>= click
+    eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    find ui ".page-ticks-save" >>= click
+    -- The reader leaves, comes back and ticks again; the first save then
+    -- lands, and the shell reloads the wiki, whose list of spaces fails.
+    find ui ".breadcrumbs a[href$='#/s/docs/']" >>= click
+    find ui ".leave-confirm button.danger" >>= click
+    eventually $ find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
+    find ui ".wiki-sidebar a[href$='#/s/docs/p/markdown-guide/']" >>= click
+    eventuallyWithin 20000 (find ui ".page-body input[aria-label='Write the page'][data-task]") >>= click
+    eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    answerWith "GET" guideAt 200 saved
+    answerRaw "GET" "api/v1/spaces" 503 "<html>down for maintenance</html>"
+    release
+    eventuallyWithin 20000 $ find ui ".stale-reload" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "What is shown stays")
+    eventuallyWithin 20000 $ find ui ".page-ticks" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "kept on the new version")
+    find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    (find ui ".page-body input[aria-label='Write the page']" >>= (`getProperty` "checked")) `shouldReturn` "false"
+    serverStops
+
+  it "shows a mention the newer version brings, after a conflict" $ runPage $ do
+    (ui, wiki) <- page m "user-admin" tasksText
+    box 0 ui >>= click
+    eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    saveBehind wiki 60 (T.replace "# Tasks" "# Tasks\n\nAsk @editor." tasksText)
+    find ui ".page-ticks-save" >>= click
+    eventually $ find ui ".page-ticks-note" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "kept on the new version")
+    eventually $ find ui ".page-body a.mention" >>= (`shouldHaveText` "@editor")
 
   it "keeps the ticks of a visit against a save of an earlier one that answers late" $ runPage $ do
     serverStarts
