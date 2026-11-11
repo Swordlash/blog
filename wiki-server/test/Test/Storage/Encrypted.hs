@@ -57,6 +57,7 @@ import Wiki.Core.Export qualified as Export
 import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Notification (Kind (..), Notification (..), PageLocation (..), WatchTarget (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (mkSlug, slugText)
@@ -185,8 +186,8 @@ spec backing = describe "encrypted spaces in the storage" $ do
     -- older space key, a version under another page key: refused.
     as p.ada (createSealedPage secret.id (newPage pid Nothing 'b')) >>= (`shouldSatisfy` conflict)
     as p.ada (createSealedPage secret.id (newPage (PageId "my-title") Nothing 'b')) >>= (`shouldSatisfy` invalid)
-    as p.ada (createSealedPage secret.id NewSealedPage {id = otherId, parent = Nothing, pageKey = pageKeyOf {spaceKeyId = KeyId (bytes16 'o')}, content = contentOf 'b'}) >>= (`shouldSatisfy` conflict)
-    as p.ada (createSealedPage secret.id NewSealedPage {id = otherId, parent = Nothing, pageKey = pageKeyOf, content = contentUnder (KeyId (bytes16 'o')) 'b'}) >>= (`shouldSatisfy` invalid)
+    as p.ada (createSealedPage secret.id NewSealedPage {id = otherId, parent = Nothing, pageKey = pageKeyOf {spaceKeyId = KeyId (bytes16 'o')}, content = contentOf 'b', kind = Kind.Document}) >>= (`shouldSatisfy` conflict)
+    as p.ada (createSealedPage secret.id NewSealedPage {id = otherId, parent = Nothing, pageKey = pageKeyOf, content = contentUnder (KeyId (bytes16 'o')) 'b', kind = Kind.Document}) >>= (`shouldSatisfy` invalid)
     -- A save over the version read; one over an older version refused.
     let secondContent = savedOn (contentOf 'a') 'c'
     saved <- ok =<< as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = secondContent})
@@ -452,6 +453,25 @@ spec backing = describe "encrypted spaces in the storage" $ do
           [(x.recipient, x.recipient_key_id) | x <- grants, Map.lookup x.recipient readers /= Just x.recipient_key_id] `shouldBe` []
           keys <- reading st (runSelectReturningList (select (all_ wikiDb.page_keys)))
           [x.key_id | x <- keys, x.space_key_id /= e.keyId.text] `shouldBe` []
+
+  -- Kinds of page (WP5.97 of docs/PLAN.md): a presentation in an encrypted
+  -- space, its kind in the clear beside its place in the tree.
+  it "keeps a page's kind in the clear, made a presentation or changed to one, and refuses a kind it does not know" $ withEncrypted backing $ \st p secret -> do
+    let as :: UserId -> StoredWiki IO a -> IO a
+        as u = runStoredWiki st (AsUser u)
+        pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+        plainId = PageId "7a2d0b3f-9c5e-4d40-8f8b-2e3c4d5e6f70"
+    made <- ok =<< as p.ada (createSealedPage secret.id (newPageOf Kind.Presentation pid Nothing 'a'))
+    made.kind `shouldBe` Kind.Presentation
+    rows <- reading st (runSelectReturningList (select (filter_ (\r -> r.id ==. val_ pid.text) (all_ wikiDb.pages))))
+    [r.kind | r <- rows] `shouldBe` ["presentation"]
+    other <- ok =<< as p.ada (createSealedPage secret.id (newPage plainId Nothing 'b'))
+    other.kind `shouldBe` Kind.Document
+    _ <- ok =<< as p.ada (setPageKind plainId Kind.Presentation)
+    listed <- ok =<< as p.ada (sealedPages secret.id)
+    sortOn fst [(s.id, s.kind) | s <- listed] `shouldBe` sortOn fst [(pid, Kind.Presentation), (plainId, Kind.Presentation)]
+    ((\x -> x.kind) <$> (ok =<< as p.ada (sealedPageAt secret.id [made.slug]))) `shouldReturn` Kind.Presentation
+    as p.ada (createSealedPage secret.id (newPageOf (Kind.OtherKind "calendar") otherId Nothing 'c')) >>= (`shouldSatisfy` invalid)
 
   -- Backlinks (WP5.88 of docs/PLAN.md): the server cannot read what an
   -- encrypted page links to, so its pages have no list and are in none.
@@ -1134,7 +1154,11 @@ letters :: Int -> Char -> Text
 letters n c = toBase64Url (BS.replicate n (fromIntegral (ord c)))
 
 newPage :: PageId -> Maybe PageId -> Char -> NewSealedPage
-newPage pid parent c = NewSealedPage {id = pid, parent, pageKey = pageKeyOf, content = contentOf c}
+newPage = newPageOf Kind.Document
+
+-- | 'newPage' of a kind.
+newPageOf :: Kind.PageKind -> PageId -> Maybe PageId -> Char -> NewSealedPage
+newPageOf kind pid parent c = NewSealedPage {id = pid, parent, pageKey = pageKeyOf, content = contentOf c, kind}
 
 otherId :: PageId
 otherId = PageId "0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70"

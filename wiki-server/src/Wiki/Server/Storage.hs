@@ -3563,6 +3563,7 @@ sealedPageOf p = do
       , updatedBy = w.updatedBy
       , pageKeys
       , attachments = [SealedAttachment {id = a.id, size = fromIntegral a.size, meta} | a <- p.attachments, Just meta <- [Map.lookup a.id metas]]
+      , kind = p.kind
       }
 
 -- | The pages of an encrypted space with their encrypted titles.
@@ -3575,7 +3576,7 @@ sealedPagesTx sid = do
   keys <- db (loadSpaceAllPageKeys sid)
   latest <- db (loadSealedLatest sid)
   pure
-    [ SealedSummary {id = p.id, space = p.space, parent = p.parent, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, pageKey = pk, heading = headingOf content, pageKeys = all'}
+    [ SealedSummary {id = p.id, space = p.space, parent = p.parent, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, pageKey = pk, heading = headingOf content, pageKeys = all', kind = p.kind}
     | p <- sortOn (\x -> (x.createdAt, x.id)) summaries
     , Just all'@(pk : _) <- [Map.lookup p.id keys]
     , Just content <- [Map.lookup p.id latest]
@@ -3591,7 +3592,7 @@ sealedContentsTx sid = do
   keys <- db (loadSpaceAllPageKeys sid)
   latest <- db (loadSealedLatest sid)
   pure
-    [ SealedPage {id = p.id, space = p.space, parent = p.parent, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, pageKey = pk, content, createdBy = Nothing, updatedBy = Nothing, pageKeys = all', attachments = []}
+    [ SealedPage {id = p.id, space = p.space, parent = p.parent, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, pageKey = pk, content, createdBy = Nothing, updatedBy = Nothing, pageKeys = all', attachments = [], kind = p.kind}
     | p <- sortOn (\x -> (x.createdAt, x.id)) summaries
     , Just all'@(pk : _) <- [Map.lookup p.id keys]
     , Just content <- [Map.lookup p.id latest]
@@ -3614,6 +3615,7 @@ sealedPageAtTx sid path = do
 -- text and a random slug, its key, and its first version, encrypted.
 createSealedPageTx :: SpaceId -> NewSealedPage -> Tx SealedPage
 createSealedPageTx sid new = do
+  requireKnownKind new.kind
   (s, c) <- findSpace sid
   -- A page asked for at the top goes under the space's home page, as a
   -- plain page does ('parentOrRoot'); a space with none yet keeps its
@@ -3651,7 +3653,7 @@ createSealedPageTx sid new = do
           , updatedAt = time
           , position = nextPosition (childrenOf nodes parent)
           , template = False
-          , kind = Document
+          , kind = new.kind
           , createdBy = Nothing
           , updatedBy = Nothing
           }

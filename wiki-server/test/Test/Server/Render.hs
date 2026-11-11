@@ -532,7 +532,7 @@ encrypted backing = describe "an encrypted space" $ do
         body = Ciphertext (bytesOf 300 10)
         content = SealedContent {tag = VersionTag (bytesOf 16 11), keyId = KeyId (bytesOf 16 12), chain = Just firstChain, title = Sealed (Nonce (bytesOf 12 13)) title, body = Sealed (Nonce (bytesOf 12 14)) body}
         pageKey = PageKey {keyId = KeyId (bytesOf 16 12), spaceKeyId = spaceKey, wrapped = WrappedKey (Nonce (bytesOf 12 15)) (Ciphertext (bytesOf 48 16))}
-    sealedPage :: SealedPage <- as' methodPost ("api/v1/encrypted/spaces/" <> made.id.text <> "/pages") (encode NewSealedPage {id = PageId "3b0f5c1e-2d4a-4e6b-8c9d-0a1b2c3d4e5f", parent = Nothing, pageKey, content}) >>= jsonAs 201
+    sealedPage :: SealedPage <- as' methodPost ("api/v1/encrypted/spaces/" <> made.id.text <> "/pages") (encode NewSealedPage {id = PageId "3b0f5c1e-2d4a-4e6b-8c9d-0a1b2c3d4e5f", parent = Nothing, pageKey, content, kind = Kind.Document}) >>= jsonAs 201
     (_, html) <- pageAs r [session] r.public ("/s/" <> slugText made.slug <> "/p/" <> slugText sealedPage.slug <> "/")
     filter (`T.isInfixOf` html) [title.text, body.text, pageKey.wrapped.key.text] `shouldBe` []
     appIn html `shouldSatisfy` T.isInfixOf "decrypted in your browser"

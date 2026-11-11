@@ -177,6 +177,16 @@ spec m = do
     stored <- unsafeIOToPageM (fromJSText <$> js_stored)
     filter (`T.isInfixOf` stored) ["Secret plans", "Tuesday", "Wednesday", "a draft"] `shouldBe` []
 
+  it "makes a presentation in an encrypted space, its kind read back in its page and its space's list" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPageOf Kind.Presentation secret.id Nothing "Launch talk" "# Launch talk")
+    made.kind `shouldBe` Kind.Presentation
+    read' <- ok =<< run env (getPage secret.id [made.slug])
+    (read'.title, read'.kind) `shouldBe` ("Launch talk", Kind.Presentation)
+    listed <- ok =<< run env (listPages secret.id)
+    [(p.title, p.kind) | p <- listed] `shouldBe` [("Launch talk", Kind.Presentation)]
+
   it "gives a second member the key through a pending grant, when a member opens the space" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
