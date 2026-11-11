@@ -106,7 +106,7 @@ import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
-import Database.Beam (Beamable, Columnar, Database, DatabaseSettings, Table (..), TableEntity, defaultDbSettings, delete, insert, insertValues, runDelete, runInsert, val_, (==.))
+import Database.Beam (Beamable, Columnar, Database, DatabaseSettings, Table (..), TableEntity, all_, defaultDbSettings, delete, insert, insertValues, runDelete, runInsert, runSelectReturningList, runUpdate, select, update, val_, (<-.), (==.))
 import Network.HTTP.Client (CookieJar, Manager, Request (..), RequestBody (..), Response, createCookieJar, defaultManagerSettings, httpLbs, managerResponseTimeout, newManager, parseRequest, responseBody, responseCookieJar, responseHeaders, responseStatus, responseTimeoutMicro, responseVersion)
 import Network.HTTP.Types (hLocation, hSetCookie, statusCode, urlEncode)
 import Network.Socket qualified as N
@@ -136,7 +136,9 @@ import Wiki.Server.Storage (Place (..), withDatabase)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Backup (Restore (..), backupInto, restore)
 import Wiki.Server.Storage.Layout (PgPrograms (..))
+import Wiki.Server.Storage.Migrate (schemaVersion)
 import Wiki.Server.Storage.Migrate.Code.Step0013 (step0013)
+import Wiki.Server.Storage.Migrate.Code.Step0015 (Renamed (..), renamedLogins, step0015)
 import Wiki.Server.Storage.Migrate.CodeStep (CodeStep (..))
 import Wiki.Server.Storage.Rows (deleteSettingsLike, storeSetting)
 import Wiki.Server.WaysIn (printable)
@@ -510,7 +512,7 @@ consoleEnvironment environment
 -- writes a space and its pages on the old program, which the checks after
 -- it then read before the migration as they read them after.
 checks :: [Check]
-checks = [linksCheck, pagesCheck, accountsCheck, homesCheck, rootsCheck, waysInCheck]
+checks = [linksCheck, pagesCheck, accountsCheck, homesCheck, rootsCheck, waysInCheck, loginsCheck]
 
 -- | A check that holds nothing and makes nothing before the old program
 -- serves the copy.
@@ -909,8 +911,8 @@ accountsCheck =
         who <- ExceptT (providerSignIn manager server)
         pure (canary, who)
     , after = \_ (canary, was) manager server -> runExceptT $ do
-        moved <- ExceptT (appSignIn manager server canary <&> first ("the password's first sign-in: " <>))
-        again <- ExceptT (appSignIn manager server canary <&> first ("the password's second sign-in: " <>))
+        moved <- ExceptT (appSignIn manager server canary.login canary.password <&> first ("the password's first sign-in: " <>))
+        again <- ExceptT (appSignIn manager server canary.login canary.password <&> first ("the password's second sign-in: " <>))
         when (any oldSignIn again) $
           throwError ("the password's second sign-in went the old way, so the first did not move the account to OPAQUE (the first sent " <> T.intercalate ", " (map shown moved) <> ")")
         now <- ExceptT (providerSignIn manager server <&> first ("the provider's sign-in: " <>))
@@ -977,9 +979,27 @@ instance Table CopyProvider where
     deriving anyclass (Beamable)
   primaryKey r = CopyProviderKey r.name
 
+-- | 'CopyUser' is a row of @users@ as the logins check reads and writes it
+-- in the copy, before the migration: the user's id and login, which the
+-- table has had since the first schema file. It is declared here for the
+-- reason 'CopyProvider' is.
+data CopyUser f = CopyUser
+  { id :: Columnar f Text
+  , login :: Columnar f Text
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table CopyUser where
+  newtype PrimaryKey CopyUser f = CopyUserKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = CopyUserKey r.id
+
 -- | The tables of the copy the checks write, at the old program's schema.
-newtype CopyDb f = CopyDb
+data CopyDb f = CopyDb
   { sign_in_providers :: f (TableEntity CopyProvider)
+  , users :: f (TableEntity CopyUser)
   }
   deriving stock (Generic)
   deriving anyclass (Database be)
@@ -1029,20 +1049,20 @@ cookieOf name r =
     , not (T.null (T.drop 1 rest))
     ]
 
--- | Sign in with the canary's password as the application does, through a
--- browser of its own (its own cookies). The requests it made, by method
--- and address, or why it did not sign in as the canary.
-appSignIn :: Manager -> Server -> Canary -> IO (Either Text [(ByteString, Text)])
-appSignIn manager server canary = do
+-- | Sign in with a login and its password as the application does,
+-- through a browser of its own (its own cookies). The requests it made, by
+-- method and address, or why it did not sign in under that login.
+appSignIn :: Manager -> Server -> Text -> Text -> IO (Either Text [(ByteString, Text)])
+appSignIn manager server login password = do
   jar <- newIORef (createCookieJar [])
   sent <- newIORef []
   env <- newHttpEnv (httpTransport manager server.public jar sent)
-  result <- runHttpWiki env (signIn canary.login (Password canary.password))
+  result <- runHttpWiki env (signIn login (Password password))
   requests <- reverse <$> readIORef sent
   pure $ case result of
     Left e -> Left ("not signed in (" <> show e <> ") after " <> T.intercalate ", " [decodeUtf8 m <> " " <> p | (m, p) <- requests])
     Right session
-      | ((\u -> u.login.text) <$> session.user) == Just canary.login -> Right requests
+      | ((\u -> u.login.text) <$> session.user) == Just login -> Right requests
       | otherwise -> Left ("signed in as " <> maybe "nobody" (\u -> u.login.text) session.user)
 
 -- | The application's requests sent over HTTP to a server, with a cookie
@@ -1172,3 +1192,57 @@ compareWaysIn was now =
     , Just after <- [Map.lookup login now]
     , after /= "yes"
     ]
+
+--------------------------------------------------------------------------------
+-- The logins check
+
+-- | The logins check, step 15 of the schema's
+-- ("Wiki.Server.Storage.Migrate.Code.Step0015", WP5.87 of docs/PLAN.md):
+-- an account whose login breaks the rule of a login (here one beyond
+-- ASCII, @łucja-…@) signs in after the upgrade with the same password,
+-- under the login the step gave it.
+--
+-- The old program's @users add@ has refused such a login since the rule
+-- (2026-11-06). So the seed makes the account with an ASCII login and a
+-- password through that command, then writes the login @łucja-…@ into
+-- the account's row in the copy, through a row type of its own
+-- ('CopyUser'). It reads every user's id and login there, and works out
+-- the login the step will give with the step's own rule
+-- ('renamedLogins'). After the migration the account must sign in with
+-- its password under that login, as the application signs in. A copy at
+-- step 15 already (an old program that has the step) has nothing to
+-- rehearse: the seed makes nothing, and the check passes.
+loginsCheck :: Check
+loginsCheck =
+  Check
+    { name = "logins"
+    , holding = ($ ())
+    , seed = \() -> seedLogins
+    , before = \() seeded _ _ -> pure (Right seeded)
+    , after = \() seeded manager server -> case seeded of
+        Nothing -> pure (Right ())
+        Just (login, password) ->
+          appSignIn manager server login password <&> bimap (\why -> "the renamed login " <> login <> " did not sign in with its password: " <> why) (const ())
+    }
+
+-- | Make the account whose login breaks the rule in the copy, unless the
+-- copy is at step 15 already: the login the step will give it, and its
+-- password.
+seedLogins :: Seeding -> IO (Either Text (Maybe (Text, Text)))
+seedLogins seeding = runExceptT $ do
+  version <- liftIO (withDatabase seeding.copy schemaVersion)
+  if version >= step0015.version
+    then pure Nothing
+    else do
+      tag <- liftIO (decodeUtf8 . convertToBase @ByteString Base16 <$> (getRandomBytes 8 :: IO ByteString))
+      let made = "rehearsal-login-" <> tag
+          broken = "łucja-" <> tag
+          password = "rehearsal-password-" <> tag
+      _ <- ExceptT (seeding.console ["users", "add", made, "--display-name", "Rehearsal login"] (password <> "\n"))
+      users <- liftIO $ withDatabase seeding.copy $ \c -> runDb c $ do
+        runUpdate (update copyDb.users (\u -> u.login <-. val_ broken) (\u -> u.login ==. val_ made))
+        runSelectReturningList (select (all_ copyDb.users))
+      user <- maybe (throwError ("the account " <> made <> " that users add made is not in the copy")) pure (find (\u -> u.login == broken) users)
+      case find (\r -> r.user == user.id) (renamedLogins [(u.id, u.login) | u <- users]) of
+        Nothing -> throwError ("the step would not rename the login " <> broken)
+        Just r -> pure (Just (r.now, password))
