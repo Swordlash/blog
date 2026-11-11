@@ -1314,7 +1314,24 @@ confirms it against reality and the plan is amended if it does not hold.
     errors, the features that go behind it, one a package and none
     changing what it does: the emoji picker, the islands (Mermaid, TikZ,
     the `html` frame), presentations, table views (#190); the calendar of
-    #204 is the first plugin written as one from the start.
+    #204 is the first plugin written as one from the start. **The shape
+    of the interface (the owner, 2026-11-11; thinking only, the epic is
+    built last; the whole is the session's second comment on #186).** A
+    contribution is what a plugin gives the wiki, a capability what it
+    may ask of the host and a permission in its manifest, a surface a
+    rectangle it draws itself: a Halogen component for a built-in plugin,
+    a frame for an external one. Buttons, the assistants' floating ones
+    included, entries and marks are data the host draws. The same names
+    are Haskell calls and `postMessage` messages; a plugin gets a record
+    of capabilities, not the application's classes. Contributions:
+    `diagnostics`, `agent`, `command`, `completion`, `block`, `pageKind`,
+    `pageAction`, `sidebar`, `options`. A built-in plugin may have a
+    server half under `/api/v1/plugins/<id>/`; an external one gets a
+    generic store of JSON documents by user or by page. A kind of page is
+    an explicit property chosen when the page is made; presentations
+    become one with #191, before the plugins. An external plugin's block
+    is in a frame of its own. The API is frozen when the first external
+    plugin ships, not before.
 70. **A permanent link is a page by its id, pinned to a version (WP5.81,
     #194, #235; the owner, 2026-11-10).** The owner's meaning of the issue:
     a link to the page as it was when the link was made ("link +
@@ -1463,10 +1480,12 @@ done and closed: WP5.86, #236; the owner, 2026-11-11: Slack's names that
 GitHub's list does not have are not needed); #189 (backlinks, done: decision 71, #239); #196 (WP5.89: an `html` block in a frame without scripts, `latex`
 as `$$`, `{.norender}`), then #200 (WP5.90: an interactive SVG in a frame
 that runs scripts and shares no origin, the frame the plugins will run
-in); #204's TODO lists (WP5.91; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3). Then the three large ones: #186 (decision 69,
-WP5.84 first), with #190 (table views) after it, since the issue asks for
-it as a plugin; #187; #191. Which of #204 and #213 count as smaller is
-the session's reading, not the owner's word.
+in); #204's TODO lists (WP5.91; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3). Then the three large ones, in the owner's order of
+2026-11-11: #187 (autocompletion); #191 (presentations, which bring the
+notion of a kind of page); and last #186 (plugins: decision 69, WP5.84
+first), with #190 (table views) and #204's calendar after it as plugins.
+Which of #204 and #213 count as smaller is the session's reading, not
+the owner's word.
 
 Done beside the stages: #203 (SQLite to PostgreSQL, WP5.80; decisions 66
 and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
