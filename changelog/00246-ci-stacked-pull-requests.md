@@ -1,5 +1,5 @@
 ---
-pr: 0
+pr: 246
 title: CI for pull requests based on another pull request
 ---
 
