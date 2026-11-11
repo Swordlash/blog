@@ -1678,9 +1678,17 @@ component =
       modify (\s -> s {here = Following pid Nothing})
       result <- lift (pageLocation pid)
       st <- get
-      -- Unless the route has moved on meanwhile.
+      -- The redirect runs on the component's loop ('H.liftEffect'), as the
+      -- other redirects that keep the entry's number do. The router's
+      -- 'Arrived' is then handled inside the redirect, while
+      -- 'replacingEntry' still holds the entry's number. A bare 'liftIO'
+      -- runs it on a worker thread instead, beside the loop, which could
+      -- handle that 'Arrived' at the wrong moment and give the entry a new
+      -- number: the history's numbers then skip one, and Stay in the editor
+      -- goes to an entry that does not exist. Nothing is done if the route
+      -- has moved on meanwhile.
       when (st.route == PermanentLink pid version) $ case result of
-        Right l -> redirectKeepingFragment st.router (locationRoute l version)
+        Right l -> H.liftEffect (redirectKeepingFragment st.router (locationRoute l version))
         Left e -> modify (\s -> s {here = Following pid (Just e)})
 
     -- Set the document's title for what is shown, and say whether all of

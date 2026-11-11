@@ -43,9 +43,10 @@ import Wiki.Core.User (Login (..), User (..))
 -- Whether a key reached the browser is read by a listener of its own:
 -- test/jsbits/test-keys.js. The colour the style sheet gives an element:
 -- test/jsbits/test-style.js. Where an element is in the window:
--- test/jsbits/test-layout.js.
+-- test/jsbits/test-layout.js. The address the test page is at:
+-- test/jsbits/test-location.js.
 $( browserJS
-     ["jsbits/test-files.js", "jsbits/test-keys.js", "jsbits/test-style.js", "jsbits/test-layout.js"]
+     ["jsbits/test-files.js", "jsbits/test-keys.js", "jsbits/test-style.js", "jsbits/test-layout.js", "jsbits/test-location.js"]
      [ ("js_drop_filePromise", "wiki_test_drop_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
      , ("js_pastePromise", "wiki_test_paste", Safe, [t|JSText -> JSText -> JSText -> JSText -> JSText -> IO (Promise Bool)|])
      , ("js_choose_filePromise", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
@@ -54,6 +55,7 @@ $( browserJS
      , ("js_computed_colour", "wiki_test_computed_colour", Safe, [t|JSText -> IO JSText|])
      , ("js_computed_style", "wiki_test_computed_style", Safe, [t|JSText -> JSText -> IO JSText|])
      , ("js_rect", "wiki_test_rect", Safe, [t|JSText -> IO JSText|])
+     , ("js_location_hash", "wiki_test_location_hash", Safe, [t|IO JSText|])
      ]
  )
 
@@ -270,6 +272,10 @@ spec m = do
     clickButton ui ".leave-confirm button" "Stay"
     length <$> findAll ui ".leave-confirm" `shouldReturn` 0
     markdown ui `shouldReturn` "# Hello, world\n\nDraft"
+    -- Staying goes back to the editor's entry of the history, which the
+    -- browser does after Stay returns: the next link is followed from
+    -- there, not from the entry of the link not followed.
+    eventually $ unsafeIOToPageM (fromJSText <$> js_location_hash) `shouldReturn` "#/s/blog/p/hello-world/edit/"
     -- Again, and leaving goes there; the work is lost.
     find ui ".wiki-sidebar .page-tree a[href$='#/s/blog/p/notes-on-haskell/']" >>= click
     find ui ".leave-confirm button.danger" >>= click

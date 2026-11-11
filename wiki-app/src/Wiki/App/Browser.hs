@@ -443,13 +443,17 @@ replacingEntry replacement
       entry <- historyEntry
       liftIO (writeIORef replacedEntry (Just entry))
       replacement
+      -- The number is written into the entry before 'replacedEntry' is
+      -- cleared. The other order leaves a moment when the entry has no
+      -- number and 'replacedEntry' none either, and a 'historyEntry' then
+      -- (the shell's, from another thread) gives the entry a new number.
       liftIO $ do
         replaced <- readIORef replacedEntry
-        writeIORef replacedEntry Nothing
         for_ replaced $ \number -> do
           w <- Window.window
           kept <- readEntryState <$> w.history.state
           w.history.replaceState (writeEntryState kept {number = Just number}) "" Nothing
+        writeIORef replacedEntry Nothing
   | otherwise = replacement
 
 -- | Go this many entries forward in the session history (back, if
