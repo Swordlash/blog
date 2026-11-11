@@ -316,6 +316,21 @@ one that lives on the web (`"SourceUrl"`) is fetched at its own URL.
 attachment's name, so that a browser saving it names the file; a name that is
 not the attachment's is 404.
 
+An attachment stored as an SVG (`image/svg+xml`, its parameters left off,
+in any case) has an interactive form, the same address with `?interactive`
+(`Wiki.Api.Links.attachmentFrameUrl`), which a page's frame loads for
+`![…](attachment:x.svg){.interactive}` (`MonadWiki.attachmentFrameUrl`;
+the in-memory backend has none). It answers the same bytes, permission
+check, `ETag` and `Cache-Control`, with `Content-Disposition: inline` and
+`Content-Security-Policy: sandbox allow-scripts; default-src 'none';
+script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:;
+frame-ancestors 'self'` (`Wiki.Api.ContentPolicy.interactiveSvgPolicy`): the
+SVG's own scripts and styles run with an opaque origin, wherever the address
+is opened, and nothing loads or connects. Any other attachment asked for
+with `?interactive` gets its plain answer. The plain address of an SVG is
+unchanged: a download, under a policy that runs no script. The two forms
+are two addresses, so a cache never confuses them.
+
 ### Drafts
 
 | Method | Path | Body | Response | Errors | `MonadWiki` |

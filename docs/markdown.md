@@ -104,6 +104,14 @@ A video on the web is embedded the same way, by its extension: `![Talk](https://
 
 Width and height in pixels can follow an image or a video in braces: `![Logo](attachment:logo.png){width=120}`.
 
+An SVG attachment is an image, in which nothing runs. With the class `interactive` it is shown in a frame that runs its scripts, for an SVG that needs them, such as a flame graph that zooms on a click and searches:
+
+```
+![Where the time goes](attachment:flame.svg){.interactive}
+```
+
+The scripts run cut off from the wiki. The frame has an origin of its own and the server sends the file with a policy that lets the SVG's own scripts and styles run and nothing else: they cannot read the reader's cookies or the wiki's storage, reach the page around the frame, make a request to the wiki or anywhere else, load an image from an address, navigate the page, open a tab or show a dialog. The file opened by itself in a tab is held the same way. Only an attachment the wiki stored as an SVG (`image/svg+xml`) is framed; an SVG at an address on the web, another type of file, and an SVG without the class are shown as before. The frame is as wide as the text and 500 pixels high, or what a height in pixels says, `{.interactive height=700}` (at most 4000, read as an `html` fence's); the reader can drag its corner, since the page cannot measure what is inside. *Open in a new tab*, under the frame, shows the file alone. A feed, an export and the demo, which has no server to send that policy, show the image.
+
 The editor writes these references for you: a file dropped onto the editor or pasted into it (a screenshot, an image copied in a browser, a file copied in a file manager), or chosen with *Attach files*, is attached to the page and its reference put in where the cursor is, embedded with `!` if it is an image, a video or audio and a link otherwise, its name in angle brackets if it has spaces. A new page takes files once it has been saved.
 
 ## Code

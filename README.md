@@ -2107,7 +2107,13 @@ to the demo, keeping `data/`.
 - **What a page may load and run.** Every page carries a Content Security
   Policy (`Wiki.Api.ContentPolicy`): scripts from the wiki only, no text
   evaluated as code, connections to the wiki and to Anthropic's and OpenAI's
-  APIs only, no forms posted elsewhere, no frames of the wiki on other sites.
+  APIs only, no forms posted elsewhere, no frames of the wiki on other sites,
+  and frames of the wiki's own addresses only. An `html` fence's frame runs
+  no script; an interactive SVG's frame runs the SVG's own scripts in a
+  sandbox without the wiki's origin, and the server sends that SVG with a
+  policy that loads and connects nothing (`interactiveSvgPolicy`), so the
+  scripts reach no cookie, no storage, no page and no network, in the frame
+  or opened alone in a tab.
   The demo carries it in its pages; the server sends it as a header too, and
   turns off the camera, the microphone and the location. So a script slipped
   into a page, past the allowlist of its HTML, has nowhere to send an
