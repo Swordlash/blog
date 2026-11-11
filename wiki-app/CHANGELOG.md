@@ -28,7 +28,9 @@ open.
 "Use as template" is refused with ticks too. When a reload of the wiki
 or of the space fails while the content has changes not saved (an
 editor's, or ticks), the shell keeps the content and says so above it
-(`stale`), instead of showing the failure in its place. Both fetches of
+(`stale`), instead of showing the failure in its place; the blog view,
+the other parent of a page view, does the same for its home page
+(`staleNotice` is the line both show). Both fetches of
 the page view take the page through one function (`takeFetched`).
 
 An `html` fence is shown in a frame (WP5.89, #196): the island

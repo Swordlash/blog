@@ -601,12 +601,7 @@ component =
             </button>
             <main class="wiki-content">
               {{ offlineCopyLine st }}
-              {% for e in maybeToList st.stale %}
-                <div class="error stale-reload" role="alert">
-                  <p>The wiki could not be loaded again: {{ errorMessage e }} What is shown stays, with the changes you have not saved.</p>
-                  <button type="button" onClick={{ const RetryStale }}>Try again</button>
-                </div>
-              {% end %}
+              {% for e in maybeToList st.stale %}{{ staleNotice e RetryStale }}{% end %}
               {% for (_, unsaved) in maybeToList st.leaving %}
                 {{ leaveConfirm unsaved }}
               {% end %}

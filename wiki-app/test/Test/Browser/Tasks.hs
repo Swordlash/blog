@@ -24,15 +24,17 @@ import Test.Browser.Http (Asked (..), answerRaw, answerWith, asked, holdAt, rele
 import Test.Browser.Mount (clickButton, slugs, startChangedWith)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
-import Wiki.Api (SpacesApi (..), WikiApi (..))
+import Wiki.Api (AccountApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Backend (MonadWiki (postDetails))
 import Wiki.App.Backend.Http.Client (endpointUrl)
+import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..), insertPage, savePageIn)
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
-import Wiki.Core.Id (PageId (..))
+import Wiki.Core.Id (PageId (..), UserId (..))
 import Wiki.Core.Page (Page (body, updatedAt))
 import Wiki.Core.Page qualified as Core
 import Wiki.Core.Slug (Slug)
@@ -317,6 +319,38 @@ spec m = describe "tasks ticked in a page" $ do
     eventuallyWithin 20000 $ find ui ".page-ticks" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "kept on the new version")
     find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
     (find ui ".page-body input[aria-label='Write the page']" >>= (`getProperty` "checked")) `shouldReturn` "false"
+    serverStops
+
+  it "keeps a blog's home page and its ticks when the blog's reload fails, and after it succeeds" $ runPage $ do
+    serverStarts
+    serveDemo
+    let blog = fromMaybe (panic "no blog") (head [x | x <- Map.elems (demoState demoNow).spaces, x.name == "Blog"])
+        home = fromMaybe (panic "no blog home") (head [p | p <- Map.elems (demoState demoNow).pages, Just p.id == Core.rootPage blog])
+        detailsAt = endpointUrl (\e -> e.spaces.postDetails blog.id)
+    details <- unsafeIOToPageM $ do
+      wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
+      either (panic . show) identity <$> runMemWiki wiki (postDetails blog.id)
+    -- The blog's home page has tasks, and is shown above its posts.
+    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt blog.id [])) 200 home {Core.body = "# Blog\n\n- [ ] Write the first post\n- [ ] Tell the team\n"}
+    -- Turning a personal space on, in the account's menu, reloads the wiki.
+    answerWith "GET" (endpointUrl (\e -> e.account.personalSpace)) 200 (Nothing :: Maybe Core.Space)
+    answerWith "PUT" (endpointUrl (\e -> e.account.setPersonalSpace (panic "the body is not part of the address"))) 200 blog
+    ui <- startServer m (Space (slugs ["blog"]))
+    eventuallyWithin 20000 (find ui ".blog-home .page-body input[data-task='0']") >>= click
+    eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    -- The blog's reload fails.
+    answerRaw "GET" detailsAt 503 "<html>down for maintenance</html>"
+    find ui ".account-toggle" >>= click
+    eventually (find ui ".account-personal .personal-space-enable" >>= click)
+    eventuallyWithin 20000 $ find ui ".blog-view .stale-reload" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "What is shown stays")
+    find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    (find ui ".blog-home .page-body input[data-task='0']" >>= (`getProperty` "checked")) `shouldReturn` "true"
+    -- Tried again, the reload succeeds, and the ticks are still there.
+    answerWith "GET" detailsAt 200 details
+    find ui ".blog-view .stale-reload button" >>= click
+    eventuallyWithin 20000 $ length <$> findAll ui ".blog-view .stale-reload" `shouldReturn` 0
+    find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    (find ui ".blog-home .page-body input[data-task='0']" >>= (`getProperty` "checked")) `shouldReturn` "true"
     serverStops
 
   it "shows a mention the newer version brings, after a conflict" $ runPage $ do

@@ -33,6 +33,7 @@ module Wiki.App.View.Common
     -- * HTML
   , errorView
   , failureView
+  , staleNotice
   , errorMessage
   , pageTree
   , spaceIcon
@@ -241,6 +242,20 @@ failureView e again = case e of
       </div>
     |]
   _ -> errorView e
+
+-- | The line above content kept on screen after its reload failed,
+-- because it holds changes not saved (an editor's text, a page's ticks):
+-- what failed, that the content stays, and a button to try again. A view
+-- that mounts the page view or the editor shows it rather than replace
+-- the content with 'failureView', which would unmount it and lose them.
+staleNotice :: WikiError -> i -> HH.HTML w i
+staleNotice e again =
+  [hh|
+    <div class="error stale-reload" role="alert">
+      <p>{{ "The wiki could not be loaded again: " <> errorMessage e <> " What is shown stays, with the changes you have not saved." :: Text }}</p>
+      <button type="button" class="retry" onClick={{ const again }}>Try again</button>
+    </div>
+  |]
 
 errorMessage :: WikiError -> Text
 errorMessage = \case
