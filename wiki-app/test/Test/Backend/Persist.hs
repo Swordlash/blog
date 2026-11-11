@@ -519,6 +519,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
   Comments.spec (type (MemWiki IO)) keptFixture
   Notifications.spec (type (MemWiki IO)) keptFixture
   Stars.spec (type (MemWiki IO)) keptFixture
+  Backlinks.spec (type (MemWiki IO)) keptFixture
   where
     unreadable = \case
       Unreadable _ -> True

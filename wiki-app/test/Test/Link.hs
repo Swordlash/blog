@@ -67,6 +67,9 @@ naming = describe "linkName" $ do
     linkName "../on-call#rota?version=x" `shouldBe` Just "on-call"
     linkName "handbook/x/.." `shouldBe` Just "handbook"
     linkName "a/./b" `shouldBe` Just "b"
+    -- A slug that is a word of the routes, as a page's own address
+    -- writes it ("Link to a page").
+    linkName "/s/docs/p/~edit/" `shouldBe` Just "edit"
 
   it "is the id a permanent address names" $ do
     linkName "/l/4f1c/" `shouldBe` Just "4f1c"

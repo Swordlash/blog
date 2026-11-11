@@ -40,5 +40,6 @@ title: See which pages link to a page
   other page's: the server cannot read what they link to.
 - The list is updated when the page is opened again, not while you read
   it.
-- After the upgrade, the server reads every page's links once when it
-  starts, which on a large wiki takes a few seconds.
+- The upgrade reads every page's links once, while it migrates the
+  database; on a wiki of thousands of pages that takes a while longer
+  than an upgrade used to.

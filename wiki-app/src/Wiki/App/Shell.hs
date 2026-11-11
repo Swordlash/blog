@@ -1645,8 +1645,11 @@ component =
               now <- gets (\s -> s.route)
               when (spaceOfRoute now == Just path) $
                 modify (\s -> s {here = result})
-      loadBacklinks
-      announce
+      -- Loaded again, or loaded for the first time, as for the server's
+      -- prerender: the backlinks are part of what settles. Otherwise
+      -- the route has moved within what was shown, and is announced
+      -- without waiting for them.
+      if again then loadBacklinks >> announce else announce >> loadBacklinks
 
     -- Load the backlinks of the page the route shows ('backlinksOf'), or
     -- forget those of another. Unless the route has moved to another page
