@@ -1140,6 +1140,22 @@ confirms it against reality and the plan is amended if it does not hold.
     with #201 (WP5.78), since #195 as built rewrote no page. `knownVersion` (the last step of either kind) is
     the program's schema version for the open check and restore's.
 
+    **A step tells what it did (WP5.87, #242).** `CodeStep.run` returns the
+    lines the step has to tell, which `wiki-server migrate` prints and
+    `serve` logs as warnings; a step returns them and does not print, since
+    its transaction may still roll back. Step 15 makes every login keep
+    the rule of a login: one that breaks it (made before 2026-11-06, when
+    a login came to be ASCII) becomes `user-` and the first eight ASCII
+    letters or digits of the user's id, with an entry in the audit log
+    (`user.rename`, address `migration`); the step applies a copy of the
+    rule frozen inside it. `wiki-server check` refuses a login that breaks
+    the rule, every way a login enters goes through `parseLogin` (the
+    provider's first sign-in did not), and the import of a whole wiki
+    refuses an archive holding such a login. A renamed user signs in with
+    the same password: nothing but the failed sign-ins' limit is keyed by
+    the login's text. The owner, 2026-11-10: there are probably none, so
+    the step is a safety net and was decided as if there were none.
+
 65. **One marker pair for the wiki's own blocks (WP5.77, #224; the owner,
     2026-11-10, reducing #195).** A block of the wiki's own is
     `[[!name]]{attributes}(Title)` on a line of its own, its blocks, then
@@ -1497,24 +1513,6 @@ which the wiki pins since #227.
   the session's cookie reaches a sandboxed frame's first load of a
   private space's attachment, on which the design depends. This is the
   frame external plugins will run in (decision 69).
-- **WP5.87 Every login is ASCII (the owner, 2026-11-10; after WP5.85,
-  whose files it changes, and after WP5.88, which took step 14; this one
-  takes step 15).** A new login has had to be ASCII since
-  2026-11-06 (`parseLogin`), and a login made before that was kept. The
-  owner: there are probably none, and if there are, migrate them and
-  enforce the rule; and, asked how, to decide as if there were none. So
-  the step is a safety net and is kept small: a login that breaks the rule
-  becomes `user-` and the first eight characters of the user's id (with a
-  suffix if that is taken), with no transliteration and no new dependency;
-  the step says whom it renamed and to what, in its output and in the
-  audit log, and that is how the person learns of it, through the
-  administrator. The user's personal space keeps its slug, as a space
-  does when it is renamed, so no address changes. `wiki-server check` then
-  refuses a login that breaks the rule, and the sentence "a login made
-  before the rule is kept" goes from the code. A renamed user signs in
-  with the same password under the new login: the OPAQUE record is bound
-  to the user's id, not to the login, and a hash from before OPAQUE knows
-  no login.
 - **WP5.91 TODO lists: tasks ticked in the page, saved together (#204,
   the first of three; the owner, 2026-11-11).** A task (`- [ ]`, `- [x]`,
   the syntax the wiki has; the owner chose it over a new one) shows a box
@@ -1922,6 +1920,19 @@ needs. Each was true when its package merged; check before relying on one.
   deployed, and a failpoint set by mistake only makes a move fail and
   switch back. The README's paragraph on native CI's "three independent
   hosted jobs" is from before the `deploy` group.
+- **Logins (WP5.87, #242).** An `@login` written in a page before a
+  rename names nobody afterwards; pages are not rewritten. The person is
+  told nothing by the wiki: the administrator passes the new login on,
+  from the migration's line or the audit log, and the old login answers
+  "wrong login or password". There is no command that renames a login, so
+  one that `check` refuses later has no remedy but a step or SQL. A
+  renamed user's authenticator label and passkey name keep the old login,
+  and their personal space keeps its slug, so "Find another" finds it by
+  name only. A console command that happens to migrate drops the step's
+  lines; the audit log keeps them. Neither the storage nor `check`
+  refuses two logins that differ only by case. Two tests go back in time
+  by deleting `wiki_schema` rows, which holds while later steps make no
+  table.
 - **Backlinks (WP5.88, #239).** A save of a page that has links reads its
   space's pages once (about 55 ms for 5,000 pages in an unoptimised
   build), creating a page there costs 0.12 to 0.27 s, and the fill at an
