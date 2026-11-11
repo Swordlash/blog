@@ -60,7 +60,8 @@
 -- form, which downloads the file, whose label ("Download flame.svg") the
 -- stylesheet draws from its @download@ attribute, as a code block's copy
 -- button's, so that the page's text gains no words.
--- Otherwise it is the image, as without the class.
+-- Otherwise it is the image, as without the class; so is an interactive
+-- embed in a link's text, where a frame and its link cannot go.
 --
 -- __Layout.__ Headings carry their @id@, and end with an empty link to
 -- it, @\<a class=\"heading-anchor\">@, which the stylesheet shows as a @#@
@@ -633,7 +634,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
         renderLink attrs dest' title xs
       Image written dest title xs -> do
         attrs <- ownAttrs written
-        renderEmbed attrs dest title (plainText xs)
+        renderEmbed inLink attrs dest title (plainText xs)
       Math InlineMath tex -> formula tex <&> \(k, ms) -> [PNode (opts.mathInline k ms tex)]
       Math DisplayMath tex -> formula tex <&> \(k, ms) -> [PNode (opts.mathDisplay k ms tex)]
       FootnoteRef n _ -> do
@@ -669,13 +670,18 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
           | otherwise -> asText
         Unresolved -> [PNode (HH.span [classesProp ["link-unresolved"], HP.title dest] inner)]
 
-    renderEmbed :: Attributes -> Text -> Text -> Text -> R [Piece w i]
-    renderEmbed attrs dest title caption = case opts.resolveLink dest of
+    -- An embed in a link's text ('inLink') is never a frame: the frame's
+    -- download link would be an anchor inside the link, which a browser
+    -- parsing the prerendered page moves out of it, and a click in a frame
+    -- never reaches the link around it.
+    renderEmbed :: Bool -> Attributes -> Text -> Text -> Text -> R [Piece w i]
+    renderEmbed inLink attrs dest title caption = case opts.resolveLink dest of
       External url
         | safeSrc url -> pure [PNode (media (mediaKindOfPath url) url Nothing)]
         | otherwise -> pure [PText caption]
       Attachment ref
-        | interactiveClass `elem` classes attrs
+        | not inLink
+        , interactiveClass `elem` classes attrs
         , Just frame <- ref.frameUrl
         , safeSrc frame
         , Just draw <- opts.svgFrame -> do

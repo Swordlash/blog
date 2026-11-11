@@ -79,5 +79,10 @@ spec = describe "Markdown.Render, an interactive SVG" $ do
     own `shouldSatisfy` T.isPrefixOf "<p><span class=\"svg-frame interactive\">"
     own `shouldNotSatisfy` T.isInfixOf "wide"
     markdownWith framing "{.interactive}\n![f](attachment:flame.svg)\n" `shouldReturn` "<p><img alt=\"f\" src=\"/files/flame.svg\"></p>"
+  it "shows the image in a link's text, Markdown's or raw HTML's: no frame, and no anchor inside the link" $ do
+    "[![flame](attachment:flame.svg){.interactive}](https://example.com)"
+      `shows'` "<p><a href=\"https://example.com\" rel=\"noopener\"><img alt=\"flame\" class=\"interactive\" src=\"/files/flame.svg\"></a></p>"
+    "<a href=\"https://example.com\">![flame](attachment:flame.svg){.interactive}</a>"
+      `shows'` "<p><a href=\"https://example.com\" rel=\"noopener\"><img alt=\"flame\" class=\"interactive\" src=\"/files/flame.svg\"></a></p>"
   it "finds an interactive SVG among the page's links as any embed" $
     fmap linkDestinations (parseMarkdown "![flame](attachment:flame.svg){.interactive}") `shouldBe` Right ["attachment:flame.svg"]
