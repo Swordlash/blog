@@ -78,6 +78,10 @@ spec = describe "Markdown.Render, an html fence" $ do
                   )
     it "keeps the text of a link to a place in the page, which the frame cannot reach" $
       "<a href=\"#top\" class=\"x\">top</a>" `holding` "<a class=\"x\">top</a>"
+    it "keeps a link to a page whose address is a fragment, as a router that keeps its routes there writes it" $ do
+      let hashRouted = framed {pageHref = ("#/" <>)}
+      markup <- markdownWith hashRouted "```html\n<a href=\"guide\">guide</a>\n```\n"
+      srcdocOf markup `shouldReturn` frameDocument "<a href=\"#/guide\" target=\"_blank\" rel=\"noopener noreferrer\">guide</a>"
 
     describe "whatever the block holds, nothing of it lands outside the srcdoc" $ do
       let hostile =

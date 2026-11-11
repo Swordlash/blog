@@ -1020,10 +1020,14 @@ frameContent opts = Html.renderHtml . map resolve . Html.parseFrameHtml
   where
     resolve :: Html.Node Void -> Html.Node Void
     resolve = \case
-      Html.Element name attrs children -> Html.Element name (inFrame name (resolvedAttributes opts attrs)) (map resolve children)
+      Html.Element name attrs children -> Html.Element name (inFrame name attrs) (map resolve children)
       Html.TextNode t -> Html.TextNode t
-    inFrame name attrs
+    -- A link to a place in the page is known by its address as written:
+    -- a resolved address may start with @#@ too, where the application's
+    -- router keeps its routes in the fragment.
+    inFrame name written
       | name == "a" =
-          let kept = [(k, v) | (k, v) <- attrs, k `notElem` ["rel", "download"], not (k == "href" && "#" `T.isPrefixOf` v)]
+          let inPage = maybe False ("#" `T.isPrefixOf`) (attribute "href" written)
+              kept = [(k, v) | (k, v) <- resolvedAttributes opts written, k `notElem` ["rel", "download"], not (k == "href" && inPage)]
            in kept <> (if any ((== "href") . fst) kept then [("target", "_blank"), ("rel", "noopener noreferrer")] else [])
-      | otherwise = attrs
+      | otherwise = resolvedAttributes opts written
