@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+A page's backlinks (WP5.88, #189): `linkDestinations` gives the
+destination of every link the renderer makes of some blocks, in document
+order: Markdown and wiki links, embeds, and the `a` elements of raw HTML
+that the allowlist keeps, but no link inside a link's text, no embed's
+caption and nothing in code. `Wiki.Core.Backlink` is the answer every
+backend gives, a page's id, title and `PageLocation`, in `backlinkOrder`.
+`pagesAtWith` is `pagesAt` with the pages looked up by id and by parent
+and slug.
+
 `Wiki.Core.Markdown.Emoji` searches the names of emoji for the editor
 (WP5.86, #188): `emojiMatches` gives the emoji whose name is the letters,
 then those whose name starts with them, then those with a later word that

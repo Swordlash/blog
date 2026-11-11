@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+A page's backlinks (WP5.88, #189) are read from a new table, `page_links`
+(step 14 of the schema): each link on a page that may lead to a page, with
+the page it leads to now. `insertPage` and `updatePageText`, the only
+writers of a page's text, write its links; a change to the tree marks the
+links it may lead elsewhere, and every write transaction follows them
+again before it commits. The program fills the table when it opens a
+database that another version of how links are read filled, or none did
+(the setting `links-version`). `wiki-server check` reports a link on a
+missing page, to a missing page, or left pending; `copy-database` copies
+the table. The rehearsal's first check, `links`, makes a space with a
+page that links to another on the old program, through `POST spaces` and
+`POST spaces/<id>/pages` of the administration API, stable from now on,
+and checks that the other page lists it after the upgrade.
+
 A page's permanent address, `/l/<page id>/` with an optional `?version=`
 (WP5.81, #194), is answered with a 302 to the page's own address, or its
 version's, for a session that may view the page,

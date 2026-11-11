@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+A page's backlinks (WP5.88, #189): `MonadWiki.pageBacklinks` lists the
+pages that link to a page, those the user may view, and the space's
+sidebar shows them under "Linked from" below its pages, when there are
+any. `Wiki.App.Backlinks` says what counts: the destinations
+`linkDestinations` finds, followed by `resolvePageLink` and read as the
+shell reads a route; the demo follows every page's links at each read.
+`resolvePageLinkWith` is the resolver with the space's pages in maps, and
+`Wiki.App.Route.linkName` what the server marks a stored link by. The HTTP
+backend caches the list as page content, and the preload carries it as
+`backlinks`.
+
 The editor completes emoji (WP5.86, #188). A colon that starts a word, or
 `-:` at the start of a line, opens a list of emoji in CodeMirror's one
 completion, beside the mentions' source; the source asks the component
