@@ -619,6 +619,13 @@ data MarkerRole
     -- block after it takes (a list is put in a 'Div' with them). Pandoc's
     -- reader would read it as text, so the export leaves it out.
     SetsAttributes
+  | -- | A fence starts here that took the attributes of the line of
+    -- attributes alone before it ('SetsAttributes'): these. Pandoc's
+    -- reader reads a fence's attributes only after its fence, where the
+    -- export puts them. Only the parser knows which block a line of
+    -- attributes went to (a quotation that starts with a fence takes them,
+    -- not the fence), so the export asks it rather than read the text.
+    TakesAttributes Attributes
   deriving stock (Eq, Ord, Show)
 
 -- | Every box's marker in a page's source, in the order of the source;
@@ -1075,8 +1082,22 @@ instance CM.HasAttributes Inlines where
         other -> other
 
 instance CM.HasAttributes Blocks where
-  addAttributes new (Blocks xs ms at) = Blocks (fmap add <$> xs) ms at
+  addAttributes new (Blocks xs ms at) = Blocks (fmap add <$> xs) (ms <> taken) at
     where
+      -- Blocks the parser has placed ('startOf') take the attributes of a
+      -- line before them; a fence's own, after its info word, come before
+      -- it is placed. A fence that takes those of a line says so, at its
+      -- start ('TakesAttributes').
+      taken = case (at, toList xs) of
+        (Just (line, column), [(_, b)]) | not (null new), fence b -> Markers [] [MarkerLine line column (TakesAttributes new)] []
+        _ -> mempty
+      fence = \case
+        CodeBlock {} -> True
+        HtmlBlock {} -> True
+        Mermaid _ -> True
+        Tikz _ -> True
+        MathBlock _ -> True
+        _ -> False
       add = \case
         Heading l attrs xs' -> Heading l (attrs <> new) xs'
         -- A heading spoiler's attributes are its heading's
