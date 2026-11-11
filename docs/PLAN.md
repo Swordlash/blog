@@ -1388,6 +1388,44 @@ confirms it against reality and the plan is amended if it does not hold.
     storage; a change to how links are read bumps the version. The front
     page is neither a source nor a target, and an encrypted space's pages
     have no list and are in none.
+72. **An `html` fence is rendered in a frame that runs no script; derived
+    data is made again by a version stamp (WP5.89, #196, #238; the owner,
+    2026-11-11).** A fenced block `html` is shown with the author's own
+    CSS (a `style` attribute, `<style>` elements) in an `<iframe>` whose
+    document is the block, so no style of it reaches the wiki around it;
+    the owner chose the frame over a filter of CSS in the page. The
+    block's HTML goes through the allowlist of decision 13, widened by
+    styles only, and the frame's sandbox never has `allow-scripts`. It has
+    the wiki's origin (`allow-same-origin`): Chromium, tried before the
+    design, cannot measure the content's height or load a private space's
+    attachment without it, and it is safe only because nothing in the
+    frame runs. `Wiki.Core.Markdown.Frame` holds the two sandboxes, this
+    one and the one kept for a frame that runs scripts (#200, then the
+    plugins: scripts, never the wiki's origin), and a test that no
+    sandbox has both. A `srcdoc` frame loads under the page's policy with
+    no `frame-src`, so the policy is unchanged. The frame's document is
+    the wiki's stylesheet in a cascade layer, then the block: the wiki's
+    classes look as in the page, in the page's colours or the slide's,
+    and any rule of the author's wins. The height: `{height=N}` on the
+    fence sets it; a block with anything placed `fixed` is shown at the
+    cap, 80% of the window's height; otherwise an estimate taken with the
+    frame at its cap (so `vh` inside means the frame at its largest), then
+    a check that grows the frame while its document has more to scroll
+    to; after any fit the document does not overflow the frame or the
+    frame is at its cap. A fence `latex` is display mathematics, as `$$`
+    is (the owner); `{.norender}` on a fence that would be rendered shows
+    it as a listing. A page that had an `html` or `latex` listing shows it
+    rendered (the owner: no migration). Raw HTML, in the page and in the
+    frame, is read as a browser reads it: the content of `style`,
+    `script`, `textarea` and the other raw-text elements is cut out by
+    the browser's rule before tagsoup, in linear time, with elements
+    nested 512 deep at most. **Derived data and its version.** What is
+    made from a page's text and stored is made again by the program when
+    a version stamped in the settings is not its own, at `migrate` and at
+    opening the storage, and not by a code step: the links (decision 71,
+    `links-version`) and now the search text (`search-version`, beside
+    `Wiki.Core.Search.bodyText`). A change to how either is read bumps
+    its version.
 
 ## Repository layout
 
@@ -1477,8 +1515,7 @@ and presentations (#191) are started. In this order: #194 (persistent
 links, done: decision 70, #235); #205's last part (done: WP5.85, #237,
 decision 58); #188 (emojis: the
 done and closed: WP5.86, #236; the owner, 2026-11-11: Slack's names that
-GitHub's list does not have are not needed); #189 (backlinks, done: decision 71, #239); #196 (WP5.89: an `html` block in a frame without scripts, `latex`
-as `$$`, `{.norender}`), then #200 (WP5.90: an interactive SVG in a frame
+GitHub's list does not have are not needed); #189 (backlinks, done: decision 71, #239); #196 (done: decision 72, #238), then #200 (WP5.90: an interactive SVG in a frame
 that runs scripts and shares no origin, the frame the plugins will run
 in); #204's TODO lists (WP5.91; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3). Then the three large ones, in the owner's order of
 2026-11-11: #187 (autocompletion); #191 (presentations, which bring the
@@ -1492,34 +1529,6 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
-- **WP5.89 An `html` block in a frame, `latex` as display mathematics,
-  `{.norender}` (#196; the owner, 2026-11-11).** Raw HTML in a page goes
-  through the allowlist of decision 13 into the page itself, with no
-  style of the author's. A fenced block `html` is now rendered, with the
-  author's own CSS (a `style` attribute and `<style>` elements), in a
-  frame of its own, so that no style of it can restyle or imitate the
-  wiki around it (the owner chose the frame over a filter of CSS in the
-  page). The frame runs no script: its sandbox never has `allow-scripts`,
-  and the block's HTML still goes through the allowlist (widened by
-  `style` and `<style>` only) before it is written into the frame, so a
-  script is not there to run either. The invariant, kept by two named
-  constants and a test: no frame the wiki renders has `allow-scripts` and
-  `allow-same-origin` together. This frame is not the one plugins will
-  run in; that is #200's, which runs scripts and shares no origin. The
-  wiki's own styles (the colours, the boxes) work inside the frame, with
-  the page's theme. A link in the block opens in a new tab; `attachment:`
-  and the wiki's paths are resolved as in the page. A link in an `html`
-  block is not a backlink. A fenced block `latex` is display mathematics,
-  as `$$` and `math` are (the owner: "```latex should work as $$ does");
-  `tex`, `xml` and `svg` stay listings. `{.norender}` on a block that is
-  rendered (`html`, `latex`, `math`, `mermaid`, `tikz`) shows it as a
-  listing of its language instead. A page that has an `html` or `latex`
-  listing already shows it rendered from now on (the owner: no
-  migration; the changelog says so). The feed and whatever renders with
-  the default options write the block's source as text. What only a
-  browser can answer (whether the frame loads under the page's policy,
-  how its height is measured) is tried in Chromium first, and the pull
-  request says the answers are Chromium's.
 - **WP5.90 An interactive SVG (#200; the owner, 2026-11-11: only when
   asked for; after WP5.89).** An SVG attachment is shown as an image, in
   which no script runs. `![flame](attachment:flame.svg){.interactive}`
@@ -1952,6 +1961,32 @@ needs. Each was true when its package merged; check before relying on one.
   deployed, and a failpoint set by mistake only makes a move fail and
   switch back. The README's paragraph on native CI's "three independent
   hosted jobs" is from before the `deploy` group.
+- **The `html` frame (WP5.89, #238).** Each frame is a document that
+  parses the stylesheet and holds a `ResizeObserver`; nothing loads frames
+  lazily. Typing in the preview makes a new frame at each keystroke, as it
+  does for a diagram. A link to a place in the page loses its address in
+  the frame, and an attachment's link opens the file in a new tab, since
+  the sandbox blocks downloads. A link in the block is not a backlink.
+  Painting outside a box (an outline, a shadow) does not count for the
+  height. The fit follows the content's size, the window's, and the
+  `load`, `toggle` and animation-end events of the frame, not an
+  animation that never ends. Not tested: adopting a prerendered frame
+  that has `{height=N}`, in the browser. The editor's "Math macros" panel
+  knows the page's macros in a `math` fence only, not a `latex` one. The
+  demo's attachments are `data:` addresses in the prerender and `blob:`
+  ones in the application, so such a frame reloads on adoption, in the
+  demo only.
+- **The upgrade reads every page twice when both versions change
+  (#238).** The links' fill and the search text's each parse every page:
+  about 50 ms a page of 15 KB in an unoptimised build, so minutes on
+  thousands of large pages, with the service stopped while the deploy
+  migrates. One pass for both, when both stamps are stale, is a small
+  change left for when it hurts.
+- **A page's text has no size limit on the server.** A save's body is not
+  capped; an encrypted page's ciphertext is (8 MiB), and an import is
+  (512 MiB). So megabytes of text can reach the parser on the server (the
+  prerender, the search text, the links, the upgrade). The owner was
+  asked on 2026-11-11 whether to open an issue for a limit.
 - **Logins (WP5.87, #242).** An `@login` written in a page before a
   rename names nobody afterwards; pages are not rewritten. The person is
   told nothing by the wiki: the administrator passes the new login on,
