@@ -131,16 +131,76 @@ spec = describe "Markdown.Render" $ do
     it "writes where a numbered list starts, unless at 1" $ do
       "1. a" `shows'` "<ol><li>a</li></ol>"
       "3. a" `shows'` "<ol start=\"3\"><li>a</li></ol>"
-    it "writes a task list with disabled checkboxes" $
-      "- [ ] todo\n- [x] done"
+    it "writes a task list with disabled checkboxes, labelled with their items' text, a done task's item marked" $
+      "- [ ] todo\n- [x] *done*"
         `shows'` ( "<ul class=\"task-list\">"
-                     <> "<li class=\"task-list-item\"><input disabled type=\"checkbox\"> todo</li>"
-                     <> "<li class=\"task-list-item\"><input checked disabled type=\"checkbox\"> done</li>"
+                     <> "<li class=\"task-list-item\"><input aria-label=\"todo\" disabled type=\"checkbox\"> <span class=\"task-text\">todo</span></li>"
+                     <> "<li class=\"task-list-item task-done\"><input aria-label=\"done\" checked disabled type=\"checkbox\"> <span class=\"task-text\"><em>done</em></span></li>"
                      <> "</ul>"
                  )
     it "puts a loose task's checkbox in its paragraph" $
       "- [x] done\n\n  more"
-        `shows'` "<ul class=\"task-list\"><li class=\"task-list-item\"><p><input checked disabled type=\"checkbox\"> done</p><p>more</p></li></ul>"
+        `shows'` "<ul class=\"task-list\"><li class=\"task-list-item task-done\"><p><input aria-label=\"done\" checked disabled type=\"checkbox\"> <span class=\"task-text\">done</span></p><p>more</p></li></ul>"
+    it "marks only the done tasks' items, not the tasks under a done task" $
+      "- [x] a\n  - [ ] b"
+        `shows'` ( "<ul class=\"task-list\"><li class=\"task-list-item task-done\"><input aria-label=\"a\" checked disabled type=\"checkbox\"> <span class=\"task-text\">a</span>"
+                     <> "<ul class=\"task-list\"><li class=\"task-list-item\"><input aria-label=\"b\" disabled type=\"checkbox\"> <span class=\"task-text\">b</span></li></ul></li></ul>"
+                 )
+    it "enables the checkboxes when told what a change does, each with its task's index" $
+      showsWith
+        defaultOptions {taskBoxes = Just (\_ _ -> panic "no change is made")}
+        "- [ ] a\n  - [x] b\n- [ ] c"
+        ( "<ul class=\"task-list\"><li class=\"task-list-item\"><input aria-label=\"a\" data-task=\"0\" type=\"checkbox\"> <span class=\"task-text\">a</span>"
+            <> "<ul class=\"task-list\"><li class=\"task-list-item task-done\"><input aria-label=\"b\" checked data-task=\"1\" type=\"checkbox\"> <span class=\"task-text\">b</span></li></ul></li>"
+            <> "<li class=\"task-list-item\"><input aria-label=\"c\" data-task=\"2\" type=\"checkbox\"> <span class=\"task-text\">c</span></li></ul>"
+        )
+    it "labels a task without text as a task" $
+      "- [ ] " `shows'` "<ul class=\"task-list\"><li class=\"task-list-item\"><input aria-label=\"Task\" disabled type=\"checkbox\"> </li></ul>"
+    it "shows a sorted list's done tasks last, the others first, each part in its order, each nested list sorted by itself" $
+      showsWith
+        defaultOptions {taskBoxes = Just (\_ _ -> panic "no change is made")}
+        "{.sorted}\n- [x] a\n- [ ] b\n  - [x] c\n  - [ ] d\n- [x] e\n- [ ] f"
+        ( "<div class=\"sorted\"><ul class=\"task-list\">"
+            <> "<li class=\"task-list-item\"><input aria-label=\"b\" data-task=\"1\" type=\"checkbox\"> <span class=\"task-text\">b</span>"
+            <> "<ul class=\"task-list\"><li class=\"task-list-item\"><input aria-label=\"d\" data-task=\"3\" type=\"checkbox\"> <span class=\"task-text\">d</span></li>"
+            <> "<li class=\"task-list-item task-done\"><input aria-label=\"c\" checked data-task=\"2\" type=\"checkbox\"> <span class=\"task-text\">c</span></li></ul></li>"
+            <> "<li class=\"task-list-item\"><input aria-label=\"f\" data-task=\"5\" type=\"checkbox\"> <span class=\"task-text\">f</span></li>"
+            <> "<li class=\"task-list-item task-done\"><input aria-label=\"a\" checked data-task=\"0\" type=\"checkbox\"> <span class=\"task-text\">a</span></li>"
+            <> "<li class=\"task-list-item task-done\"><input aria-label=\"e\" checked data-task=\"4\" type=\"checkbox\"> <span class=\"task-text\">e</span></li>"
+            <> "</ul></div>"
+        )
+    it "ends a sorted list at an item without a box, which the parser reads as another list" $ do
+      -- commonmark-extensions reads the tasks and the other items as lists
+      -- of their own, so {.sorted} reaches the tasks before the item; a
+      -- div of the class sorted reaches every list in it.
+      "{.sorted}\n- [x] a\n- [ ] b\n- note\n- [x] c\n- [ ] d"
+        `shows'` ( "<div class=\"sorted\"><ul class=\"task-list\"><li class=\"task-list-item\"><input aria-label=\"b\" disabled type=\"checkbox\"> <span class=\"task-text\">b</span></li>"
+                     <> "<li class=\"task-list-item task-done\"><input aria-label=\"a\" checked disabled type=\"checkbox\"> <span class=\"task-text\">a</span></li></ul></div>"
+                     <> "<ul><li>note</li></ul>"
+                     <> "<ul class=\"task-list\"><li class=\"task-list-item task-done\"><input aria-label=\"c\" checked disabled type=\"checkbox\"> <span class=\"task-text\">c</span></li>"
+                     <> "<li class=\"task-list-item\"><input aria-label=\"d\" disabled type=\"checkbox\"> <span class=\"task-text\">d</span></li></ul>"
+                 )
+      "[[!div]]{.sorted}\n- [x] a\n- note\n- [x] c\n- [ ] d\n[[/div]]"
+        `shows'` ( "<div class=\"sorted\"><ul class=\"task-list\"><li class=\"task-list-item task-done\"><input aria-label=\"a\" checked disabled type=\"checkbox\"> <span class=\"task-text\">a</span></li></ul>"
+                     <> "<ul><li>note</li></ul>"
+                     <> "<ul class=\"task-list\"><li class=\"task-list-item\"><input aria-label=\"d\" disabled type=\"checkbox\"> <span class=\"task-text\">d</span></li>"
+                     <> "<li class=\"task-list-item task-done\"><input aria-label=\"c\" checked disabled type=\"checkbox\"> <span class=\"task-text\">c</span></li></ul></div>"
+                 )
+    it "sorts the lists in a div of the class sorted, and no other list" $ do
+      "[[!div]]{.sorted}\n- [x] a\n- [ ] b\n[[/div]]\n\n- [x] c\n- [ ] d"
+        `shows'` ( "<div class=\"sorted\"><ul class=\"task-list\"><li class=\"task-list-item\"><input aria-label=\"b\" disabled type=\"checkbox\"> <span class=\"task-text\">b</span></li>"
+                     <> "<li class=\"task-list-item task-done\"><input aria-label=\"a\" checked disabled type=\"checkbox\"> <span class=\"task-text\">a</span></li></ul></div>"
+                     <> "<ul class=\"task-list\"><li class=\"task-list-item task-done\"><input aria-label=\"c\" checked disabled type=\"checkbox\"> <span class=\"task-text\">c</span></li>"
+                     <> "<li class=\"task-list-item\"><input aria-label=\"d\" disabled type=\"checkbox\"> <span class=\"task-text\">d</span></li></ul>"
+                 )
+    it "numbers a footnote's tasks after the page's, as the tasks of the tree are" $
+      showsWith
+        defaultOptions {taskBoxes = Just (\_ _ -> panic "no change is made")}
+        "See[^1].\n\n[^1]: Note.\n\n    - [ ] n\n\n- [ ] p"
+        ( "<p>See<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" title=\"Note. n\">1</a></sup>.</p>"
+            <> "<ul class=\"task-list\"><li class=\"task-list-item\"><input aria-label=\"p\" data-task=\"0\" type=\"checkbox\"> <span class=\"task-text\">p</span></li></ul>"
+            <> "<section class=\"footnotes\"><ol><li id=\"fn-1\"><p>Note.</p><ul class=\"task-list\"><li class=\"task-list-item\"><input aria-label=\"n\" data-task=\"1\" type=\"checkbox\"> <span class=\"task-text\">n</span></li></ul><a class=\"footnote-back\" href=\"#fnref-1\">↩</a></li></ol></section>"
+        )
     it "shows a bulleted item's leading emoji in the bullet's place, beside ordinary items" $ do
       "- :tada: Launch\n- plain"
         `shows'` ( "<ul>"
@@ -154,7 +214,7 @@ spec = describe "Markdown.Render" $ do
     it "keeps the bullet or the number of an item whose emoji is not its first, of a task, of a numbered list, and of an escaped name" $ do
       "- a :tada:" `shows'` "<ul><li>a <span class=\"emoji\" title=\":tada:\">🎉</span></li></ul>"
       "- [ ] :tada: todo"
-        `shows'` "<ul class=\"task-list\"><li class=\"task-list-item\"><input disabled type=\"checkbox\"> <span class=\"emoji\" title=\":tada:\">🎉</span> todo</li></ul>"
+        `shows'` "<ul class=\"task-list\"><li class=\"task-list-item\"><input aria-label=\"🎉 todo\" disabled type=\"checkbox\"> <span class=\"task-text\"><span class=\"emoji\" title=\":tada:\">🎉</span> todo</span></li></ul>"
       "1. :tada: first" `shows'` "<ol><li><span class=\"emoji\" title=\":tada:\">🎉</span> first</li></ol>"
       "- \\:tada: text" `shows'` "<ul><li>:tada: text</li></ul>"
 

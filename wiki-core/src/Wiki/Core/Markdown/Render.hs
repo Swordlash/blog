@@ -52,8 +52,7 @@
 -- __Layout.__ Headings carry their @id@, and end with an empty link to
 -- it, @\<a class=\"heading-anchor\">@, which the stylesheet shows as a @#@
 -- on hover. @[[!toc]]@ is the document's table of contents
--- ("Wiki.Core.Markdown.Toc"), a @\<nav class=\"toc\">@. Task list items start with a
--- disabled checkbox. Footnote references are @\<sup class=\"footnote-ref\">@
+-- ("Wiki.Core.Markdown.Toc"), a @\<nav class=\"toc\">@. Footnote references are @\<sup class=\"footnote-ref\">@
 -- links to @#fn-N@, titled with the note's text, which the browser shows
 -- as a tooltip when the pointer rests on the number ('noteText'). The notes
 -- are a @\<section class=\"footnotes\">@ at the end, each ending with a
@@ -131,6 +130,21 @@
 -- __Mentions.__ @\@login@ is a link, @\<a class=\"mention\">@, to wherever
 -- 'resolveMention' says the user is, titled with their name; a login it
 -- does not know, and a mention in a link's text, are the text as written.
+--
+-- __Tasks.__ A task's item, @- [ ] text@, is a
+-- @\<li class=\"task-list-item\">@ that starts with a checkbox labelled
+-- with the item's text ('taskLabel'), and its list has the class
+-- @task-list@. The checkbox is disabled, unless 'taskBoxes' says what a
+-- change of it does: then it is enabled and carries the task's index
+-- ("Wiki.Core.Markdown.Tasks") in @data-task@. The item's own text, its
+-- first paragraph's, is in a @\<span class=\"task-text\">@, and a done
+-- task's item has the class @task-done@ too, which the stylesheet strikes
+-- through: its text and its other paragraphs, not the lists in it. A list
+-- in a 'Div' of the class @sorted@ (@{.sorted}@ on the line before it),
+-- and every list inside it, shows its done tasks after its other items,
+-- each part in the order of the source. The items are rendered in the
+-- order of the source and only shown in the other, so a task's index,
+-- the islands' keys and the footnotes' numbers are those of the source.
 module Wiki.Core.Markdown.Render
   ( Options (..)
   , MentionTarget (..)
@@ -154,6 +168,7 @@ import Data.Map.Strict qualified as M
 import Data.Row (Empty, HasType)
 import Data.Text qualified as T
 import Halogen.HTML qualified as HH
+import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Protolude
 import Wiki.Core.Markdown.Ast
@@ -161,6 +176,7 @@ import Wiki.Core.Markdown.Box (BoxCounter, BoxIcon (..), BoxKind (..), Numbering
 import Wiki.Core.Markdown.Frame (FrameScheme (..), frameDocument)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
+import Wiki.Core.Markdown.Tasks (taskLabel)
 import Wiki.Core.Markdown.Toc (contentsNav, tableOfContents)
 import Wiki.Core.Math (Macros (..), definesMacros, onlyDefinitions)
 
@@ -226,6 +242,11 @@ data Options page w i = Options
   -- ^ How the document's boxes are numbered: its space's way, and the
   -- page's number. None by default: a page's view sets it, and nothing
   -- else that renders Markdown (a comment, the front page) numbers boxes.
+  , taskBoxes :: Maybe (Int -> Bool -> i)
+  -- ^ What a change of a task's checkbox does, given the task's index
+  -- ("Wiki.Core.Markdown.Tasks") and whether it is now ticked. 'Nothing'
+  -- by default, and the checkboxes are disabled: only the page view, for
+  -- a reader who may edit the page, ticks tasks.
   }
 
 -- | The user a mention names, as its link shows them.
@@ -276,6 +297,7 @@ defaultOptions =
     , copyButtons = False
     , boxes = []
     , numbering = noNumbers
+    , taskBoxes = Nothing
     }
 
 -- | What a destination is when nothing is known about the wiki: a URL, used
@@ -327,7 +349,7 @@ renderSections opts = renderSectionsWithIds opts . map ("",)
 -- Raw HTML is left as written, and @[[!toc]]@ lists the ids without their
 -- prefixes: neither is in a changelog's entry.
 renderSectionsWithIds :: forall page w i. Options page w i -> [(Text, [Block])] -> [[HH.HTML w i]]
-renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Counts M.empty M.empty [] M.empty (startCounting opts.numbering) "")
+renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Counts M.empty M.empty [] M.empty (startCounting opts.numbering) "" 0 False)
   where
     sections = map snd prefixed
 
@@ -384,11 +406,19 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
       MathBlock tex
         | onlyDefinitions tex -> [] <$ formula tex
         | otherwise -> formula tex <&> \(k, ms) -> [opts.mathDisplay k ms tex]
-      List kind items -> single . listOf kind (any isTask items) <$> traverse (renderItem kind) items
+      List kind items -> do
+        rendered <- traverse (renderItem kind) items
+        sorting <- gets (.sorting)
+        let shown = if sorting then filter (not . snd) rendered <> filter snd rendered else rendered
+        pure [listOf kind (any isTask items) (map fst shown)]
       Table aligns header rows -> single <$> renderTable aligns header rows
       Div written bs -> do
         attrs <- ownAttrs written
-        single . HH.div (idAndClasses attrs []) <$> renderBlocks' bs
+        before <- gets (.sorting)
+        when (sortedClass `elem` classes written) $ modify (\c -> c {sorting = True})
+        inner <- renderBlocks' bs
+        modify (\c -> c {sorting = before})
+        pure [HH.div (idAndClasses attrs []) inner]
       Alert kind box bs -> do
         number <- if box.numbered then state (\c -> second (\b -> c {boxCounter = b}) (countBox kind c.boxCounter)) else pure Nothing
         let defined = definedKind opts.boxes kind
@@ -440,8 +470,13 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
     -- bullet, and the emoji the class @emoji-bullet@, which moves it to
     -- where the bullet was. The emoji stays in the item's text, so the
     -- text a search, a comment's quote or a slide's steps read is the same.
-    renderItem :: ListKind -> ListItem -> R (HH.HTML w i)
-    renderItem kind (ListItem task bs) = case task of
+    -- A task's item is as the module's Haddock says. With the item, whether
+    -- it is a done task, which a sorted list shows last.
+    renderItem :: ListKind -> ListItem -> R (HH.HTML w i, Bool)
+    renderItem kind item@(ListItem task _) = (,fromMaybe False task) <$> renderItem' kind item
+
+    renderItem' :: ListKind -> ListItem -> R (HH.HTML w i)
+    renderItem' kind (ListItem task bs) = case task of
       Nothing | Just (keyword, emoji) <- emojiBullet kind bs -> do
         let bullet = [PNode (emojiSpan ["emoji", "emoji-bullet"] keyword emoji)]
         inner <- case bs of
@@ -451,12 +486,19 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
         pure (HH.li [classesProp ["emoji-item"]] inner)
       Nothing -> HH.li_ <$> renderBlocks' bs
       Just done -> do
-        let checkbox = [PNode (HH.input [HP.type_ I.InputCheckbox, HP.checked done, HP.disabled True]), PText " "]
+        -- Counted before the tasks in it, as the tree orders them.
+        index <- state (\c -> (c.tasks, c {tasks = c.tasks + 1}))
+        let label = nonEmptyOr "Task" (taskLabel bs)
+            enabled = case opts.taskBoxes of
+              Nothing -> [HP.disabled True]
+              Just onTick -> [HP.attr (HH.AttrName "data-task") (show index), HE.onChecked (onTick index)]
+            checkbox = fromPieces [PNode (HH.input ([HP.type_ I.InputCheckbox, HP.checked done, HP.attr (HH.AttrName "aria-label") label] <> enabled)), PText " "]
+            own xs = (\inner -> checkbox <> [HH.span [classesProp ["task-text"]] inner]) <$> renderInlines xs
         inner <- case bs of
-          Para xs : rest -> (:) . HH.p_ <$> withPieces checkbox xs [] <*> renderBlocks' rest
-          Plain xs : rest -> (<>) <$> withPieces checkbox xs [] <*> renderBlocks' rest
-          _ -> (fromPieces checkbox <>) <$> renderBlocks' bs
-        pure (HH.li [classesProp ["task-list-item"]] inner)
+          Para xs : rest -> (:) . HH.p_ <$> own xs <*> renderBlocks' rest
+          Plain xs : rest -> (<>) <$> own xs <*> renderBlocks' rest
+          _ -> (checkbox <>) <$> renderBlocks' bs
+        pure (HH.li [classesProp (["task-list-item"] <> ["task-done" | done])] inner)
 
     renderTable :: [Alignment] -> [[Inline]] -> [[[Inline]]] -> R (HH.HTML w i)
     renderTable aligns header rows = do
@@ -645,6 +687,11 @@ data Counts = Counts
   , idPrefix :: Text
   -- ^ What the section being rendered puts before its ids
   -- ('renderSectionsWithIds').
+  , tasks :: Int
+  -- ^ How many tasks came before: the next task's index.
+  , sorting :: Bool
+  -- ^ Whether the lists being rendered are in a 'Div' of the class
+  -- @sorted@, and show their done tasks last.
   }
 
 type R = State Counts
@@ -731,6 +778,10 @@ headingAnchor attrs =
 
 isTask :: ListItem -> Bool
 isTask (ListItem task _) = isJust task
+
+-- | The class of a 'Div' whose lists show their done tasks last.
+sortedClass :: Text
+sortedClass = "sorted"
 
 -- | The emoji an item of a list shows as its bullet: its first inline, when
 -- the list is bulleted and the item's text starts with an emoji. A task's
