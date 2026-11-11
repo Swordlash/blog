@@ -172,6 +172,35 @@ anonymous backing = describe "for someone not signed in" $ do
     carried <- preloadIn html
     map (fmap (map (\b -> b.title))) (Map.elems carried.backlinks) `shouldSatisfy` any (either (const False) ("Tour" `elem`))
 
+  it "renders an html fence as its frame, the block in its srcdoc and nothing of it outside" $ withDemoRunning backing identity $ \r -> do
+    docs <- ok200 (getUrl r (r.public <> "/" <> links.spaces.atPath (slugs "docs"))) :: IO S.Space
+    let hostile =
+          T.intercalate
+            "\n"
+            [ "<p title='\"><script>alert(1)</script>'>&quot; &lt;/iframe&gt; \"><script>alert(2)</script></p>"
+            , "<style>&lt;/style&gt;&lt;script&gt;alert(3)&lt;/script&gt;</style>"
+            , "<style>p::after { content: \"</style><script>alert(4)</script>\" }</style>"
+            , "</iframe><script>alert(5)</script>"
+            ]
+    _ <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) Api.NewPage {parent = Nothing, title = "Framed", body = "Before.\n\n```html\n" <> hostile <> "\n```\n\nAfter.\n"} >>= (jsonAs 201 :: Reply -> IO P.Page)
+    (status, html) <- page r r.public "/s/docs/p/framed/"
+    status `shouldBe` 200
+    let (ahead, rest) = T.breakOn "<iframe " (appIn html)
+        (frame, behind) = T.breakOn "</iframe>" rest
+    frame `shouldSatisfy` T.isPrefixOf "<iframe class=\"wiki-html\" sandbox=\"allow-same-origin allow-popups allow-popups-to-escape-sandbox\" srcdoc=\"&lt;!DOCTYPE html&gt;"
+    frame `shouldSatisfy` T.isSuffixOf "\" title=\"HTML block\">"
+    -- One tag, whose quotes are its four attributes' own: the block is
+    -- inside the srcdoc, escaped, and ends nowhere else.
+    T.count "<" frame `shouldBe` 1
+    T.count "\"" frame `shouldBe` 8
+    frame `shouldSatisfy` T.isInfixOf "&amp;lt;/iframe&amp;gt;"
+    frame `shouldSatisfy` T.isInfixOf "&lt;style&gt;&lt;\\/style&gt;&lt;script&gt;alert(3)&lt;\\/script&gt;&lt;/style&gt;"
+    -- Before and after it, the page's own paragraphs, and nothing of the
+    -- block.
+    ahead `shouldSatisfy` T.isInfixOf "<p>Before.</p>"
+    behind `shouldSatisfy` T.isPrefixOf "</iframe><p>After.</p>"
+    for_ ["alert", "<style", "<script"] $ \gone -> (ahead <> T.drop 9 behind) `shouldNotSatisfy` T.isInfixOf gone
+
   it "renders a private space as not there, with a 404, and nothing of it" $ withDemoRunning backing identity $ \r -> do
     for_ ["/s/team/", "/s/team/pages/", "/s/team/projects/", "/s/team/p/team-handbook/", "/s/team/p/team-handbook/source/", "/s/team/p/team-handbook/history/", "/s/team/p/team-handbook/slides/", "/s/team/p/nowhere/"] $ \path -> do
       (status, html) <- page r r.public path
