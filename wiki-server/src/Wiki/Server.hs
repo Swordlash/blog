@@ -62,7 +62,7 @@ import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, render
 import Wiki.Server.SecondFactor (newPendingSignIns)
 import Wiki.Server.Session (CookieSettings (..))
 import Wiki.Server.Static (openStaticSite)
-import Wiki.Server.Storage (Config (..), DataDirInUse (..), Database (..), Place (..), readServerSettings, withStorage)
+import Wiki.Server.Storage (Config (..), DataDirInUse (..), Database (..), Place (..), readServerSettings, storageMigrated, withStorage)
 import Wiki.Server.Storage.Layout (PgDatabase (..), withoutPassword)
 import Wiki.Server.Storage.Migrate (OldSchema, SchemaTooNew)
 import Wiki.Server.Tls (loadTls)
@@ -204,6 +204,11 @@ withServerUsing given raw sendMail action = do
           -- speak TLS.
           listeners = (options.listen, (public, tls)) : [(a, (admin, Nothing)) | Just a <- [options.adminListen]]
       logWith logger Info [("event", "starting"), ("version", serverVersion), ("data", toS options.dataDir), ("database", databaseName place.database), ("static", maybe "none" toS options.staticDir), ("base", options.basePath)]
+      -- What the migration as the storage opened has to tell, such as a
+      -- login it renamed: a deploy that does not run wiki-server migrate
+      -- first (the Docker image) sees it here.
+      for_ (storageMigrated storage) $ \line ->
+        logWith logger Warning [("event", "migration"), ("note", line)]
       -- The administration's settings as the server starts with them
       -- (secrets left out); a change is seen by the next request, unlogged.
       configured <- readServerSettings storage

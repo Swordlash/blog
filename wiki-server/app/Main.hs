@@ -162,7 +162,7 @@ main = do
             exitWith (ExitFailure 1)
       Migrate place ->
         runMigrate place >>= \case
-          MigratedTo line -> putText line
+          MigratedTo lines' -> traverse_ putText lines'
           MigrateFailed why -> do
             putErrText ("wiki-server: " <> why)
             exitWith (ExitFailure 1)

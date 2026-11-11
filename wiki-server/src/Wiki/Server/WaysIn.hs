@@ -2,14 +2,18 @@
 -- wiki's accounts sign in (WP5.85 of docs/PLAN.md, issue #205). It has two
 -- halves, both pure.
 --
--- The first is a rule: an account's stored password must be one this
+-- The first is two rules. An account's stored password must be one this
 -- program can use ('brokenCredentials'). An OPAQUE record without its
 -- stretch, or a stretch without its record, a record or a stretch that
 -- does not decode, and a hash from before OPAQUE that the verifier does
--- not read sign nobody in, and nothing tells the account's owner why. The
--- check refuses them, as it refuses a space with a second root, so that
--- the deploy rolls back an upgrade that leaves one, and a copy of the
--- database refuses it.
+-- not read sign nobody in, and nothing tells the account's owner why. And
+-- an account's login must follow the rules of a new login
+-- ('brokenLogins', WP5.87): step 15 of the schema renamed every login
+-- that did not, so one that does not now entered the database by a way
+-- that skipped 'Wiki.Core.User.parseLogin', or by hand. The check refuses
+-- both, as it refuses a space with a second root, so that the deploy
+-- rolls back an upgrade that leaves one, and a copy of the database
+-- refuses it.
 --
 -- The second is a summary for a check that passes ('waysIn',
 -- 'waysInLines'): how many enabled accounts sign in with a password, how
@@ -24,6 +28,7 @@ module Wiki.Server.WaysIn
     -- * The rule
   , credentialProblem
   , brokenCredentials
+  , brokenLogins
 
     -- * The summary
   , WayIn (..)
@@ -43,7 +48,7 @@ import Data.Text qualified as T
 import Protolude
 import Text.Printf (printf)
 import Wiki.Core.Id (UserId (..))
-import Wiki.Core.User (Login (..))
+import Wiki.Core.User (Login (..), loginProblem)
 import Wiki.Server.Opaque (decodeStored)
 import Wiki.Server.Password (hashReadable)
 import Wiki.Server.Storage.Rows (HalfRecord (..), PasswordColumns (..), StoredPassword (..), readPasswordColumns)
@@ -89,6 +94,17 @@ brokenCredentials accounts =
   [ "The account " <> printable a.login.text <> " (" <> printable a.id.text <> ") has " <> why <> "."
   | a <- accounts
   , Just why <- [credentialProblem a.password]
+  ]
+
+-- | A line for each account whose login breaks the rules of a new login
+-- ('Wiki.Core.User.loginProblem', the rules this program reads logins
+-- with), naming the account by login and id: what the check reports
+-- beside the other rules' lines.
+brokenLogins :: [AccountWays] -> [Text]
+brokenLogins accounts =
+  [ "The account " <> printable a.login.text <> " (" <> printable a.id.text <> ") has a login the rules of a login refuse: " <> why
+  | a <- accounts
+  , Just why <- [loginProblem a.login]
   ]
 
 --------------------------------------------------------------------------------
@@ -197,8 +213,9 @@ listedNoWayIn = 20
 -- | A login, an id or a provider's name as a line of output shows it: a
 -- control character, a line break above all, written as @\\uXXXX@, so
 -- that text from the database cannot split a line of the output in two.
--- Logins have held no control character since the rule of
--- 'Wiki.Core.User.parseLogin', and providers' names are letters, digits
--- and dashes; this is for a row written before those rules, or by hand.
+-- Logins hold no control character ('Wiki.Core.User.parseLogin', and
+-- 'brokenLogins' refuses one that does), and providers' names are
+-- letters, digits and dashes; this is for a row written by hand, which
+-- the check names before it refuses it.
 printable :: Text -> Text
 printable = T.concatMap (\c -> if isControl c then T.pack (printf "\\u%04x" (ord c)) else T.singleton c)

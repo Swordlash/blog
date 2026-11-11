@@ -42,7 +42,7 @@ import Wiki.Server.Storage.Migrate.CodeStep (CodeStep (..))
 -- | The step: give every space with no home page, but the two kinds, the
 -- default one.
 step0012 :: CodeStep
-step0012 = CodeStep {version = 12, name = "every space has a home page", run = giveHomePages}
+step0012 = CodeStep {version = 12, name = "every space has a home page", run = \c -> [] <$ giveHomePages c}
 
 --------------------------------------------------------------------------------
 -- The tables, as they are at version 11

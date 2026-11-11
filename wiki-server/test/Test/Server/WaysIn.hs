@@ -8,7 +8,7 @@ module Test.Server.WaysIn (unitSpec, spec) where
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
-import Database.Beam (insert, insertValues, runInsert)
+import Database.Beam (insert, insertValues, runInsert, runUpdate, update, val_, (<-.), (==.))
 import Protolude
 import Test.Database (Backing, placeOptionsOf, withConnectionTo)
 import Test.Hspec
@@ -157,15 +157,17 @@ spec backing = describe "wiki-server check, the accounts" $ do
         other -> expectationFailure ("expected the check to refuse the account, got " <> show other)
   it "prints a login and a name beyond ASCII as UTF-8 in the C locale, in check, a refusal and users list" $ withPlaceIn backing $ \at -> do
     _ <- migrateDatabase at
-    -- A login from before logins were ASCII, with no password; a name
-    -- beyond ASCII with one; and a login beyond ASCII whose record lacks
-    -- its stretch.
-    withConnectionTo at $ \c -> runDb c (users [("u-lucja", "łucja", False, noColumns), ("u-zofia", "Zażółć", False, columns (Just decodableRecord) (Just goodStretch) Nothing)])
+    -- A login with no password; a name beyond ASCII with one; and, written
+    -- by hand, a login beyond ASCII (which logins have not been since step
+    -- 15 of the schema) whose record lacks its stretch.
+    withConnectionTo at $ \c -> runDb c $ do
+      users [("u-lucja", "lucja", False, noColumns), ("u-zofia", "zofia", False, columns (Just decodableRecord) (Just goodStretch) Nothing)]
+      runUpdate (update wikiDb.users (\u -> u.display_name <-. val_ "Zażółć") (\u -> u.id ==. val_ "u-zofia"))
     program <- wikiServerProgram
     environment <- cLocale
     (checked, out, _) <- runBytes environment program ("check" : placeArgsOf at)
     checked `shouldBe` ExitSuccess
-    out `shouldSatisfy` BS.isInfixOf (encodeUtf8 "\n    łucja: no password set\n")
+    out `shouldSatisfy` BS.isInfixOf (encodeUtf8 "\n    lucja: no password set\n")
     (listed, table, _) <- runBytes environment program (["users", "list"] <> placeArgsOf at)
     listed `shouldBe` ExitSuccess
     table `shouldSatisfy` BS.isInfixOf (encodeUtf8 "Zażółć  ")
@@ -173,6 +175,7 @@ spec backing = describe "wiki-server check, the accounts" $ do
     (refused, _, err) <- runBytes environment program ("check" : placeArgsOf at)
     refused `shouldBe` ExitFailure 5
     err `shouldSatisfy` BS.isInfixOf (encodeUtf8 "The account jerzy-żółw (u-jerzy) has an OPAQUE record without its stretch")
+    err `shouldSatisfy` BS.isInfixOf (encodeUtf8 "The account jerzy-żółw (u-jerzy) has a login the rules of a login refuse: A login has only ASCII letters, digits and punctuation.")
   it "passes a wiki with one account of each kind, and says how each signs in" $ withPlaceIn backing $ \at -> do
     _ <- migrateDatabase at
     withConnectionTo at $ \c -> runDb c $ do

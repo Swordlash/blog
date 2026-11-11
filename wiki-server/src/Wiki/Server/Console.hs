@@ -447,9 +447,10 @@ runBackup options keep =
 -- tells a database of an earlier wiki-server (exit code 3, as for a
 -- backup) apart from a migration that failed (1).
 data MigrateOutcome
-  = -- | The database is at this program's schema: the line says from which
-    -- version.
-    MigratedTo Text
+  = -- | The database is at this program's schema: the first line says
+    -- from which version, and a line follows for each thing a step has to
+    -- tell (a login step 15 renamed).
+    MigratedTo [Text]
   | -- | It could not be migrated, for this reason; it is unchanged, since
     -- the steps run in one transaction.
     MigrateFailed Text
@@ -464,8 +465,8 @@ runMigrate options =
   where
     outcome = \case
       Right (Right m)
-        | m.from == m.to -> MigratedTo ("The database is at version " <> show m.to <> " of the schema already.")
-        | otherwise -> MigratedTo ("Migrated the database from version " <> show m.from <> " to " <> show m.to <> " of the schema.")
+        | m.from == m.to -> MigratedTo ["The database is at version " <> show m.to <> " of the schema already."]
+        | otherwise -> MigratedTo (("Migrated the database from version " <> show m.from <> " to " <> show m.to <> " of the schema.") : m.said)
       Right (Left why) -> MigrateFailed why
       Left e
         | Just old <- fromException @OldSchema e -> MigrateOfEarlierServer (toS (displayException old))

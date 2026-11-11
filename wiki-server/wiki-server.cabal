@@ -138,6 +138,7 @@ library
         Wiki.Server.Storage.Migrate.Code
         Wiki.Server.Storage.Migrate.Code.Step0012
         Wiki.Server.Storage.Migrate.Code.Step0013
+        Wiki.Server.Storage.Migrate.Code.Step0015
         Wiki.Server.Storage.Migrate.CodeStep
         Wiki.Server.Storage.Rows
         Wiki.Server.Storage.Schema

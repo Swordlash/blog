@@ -19,16 +19,20 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Storage.Fixture (withEmptyPlaceIn)
 import Wiki.App.Backend (MonadWiki (..), WikiError (..))
-import Wiki.Core.Id (PageId (..), SpaceId (..))
+import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
+import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Search (SearchHit (..), searchQuery)
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..), isHomeBody)
+import Wiki.Core.User (Login (..), parseLogin)
 import Wiki.Core.Version (VersionInfo (..), latestVersions)
-import Wiki.Server.Storage (CheckProblem (..), StoredWiki, Who (..), checkDatabase, defaultConfig, runStoredWiki, withStorage)
+import Wiki.Server.Storage (CheckProblem (..), Migrated (..), StoredWiki, Who (..), checkDatabase, defaultConfig, migrateDatabase, runStoredWiki, withStorage)
+import Wiki.Server.Storage.Audit (loadAuditLog)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Migrate
 import Wiki.Server.Storage.Migrate.Code.Step0012 (homeBody, homeSearchText)
+import Wiki.Server.Storage.Migrate.Code.Step0015 (Renamed (..), loginKept, renamedLogins)
 import Wiki.Server.Storage.Schema (SchemaDb (..), WikiSchema (..), schemaDb)
 
 -- | The @settings@ table as the tests' steps pin it, at the version of the
@@ -202,14 +206,14 @@ noteStep n =
   CodeStep
     { version = n
     , name = "note that it ran"
-    , run = \c -> runDb c (runInsert (insert pinnedDb.settings (insertValues [PinnedSetting {key = "code-step", value = "ran"}])))
+    , run = \c -> [] <$ runDb c (runInsert (insert pinnedDb.settings (insertValues [PinnedSetting {key = "code-step", value = "ran"}])))
     }
 
 -- | A step in code that rewrites every setting's value from an old syntax
 -- to a new one, @[[x]]@ to @{{x}}@, with a rewriter of its own, as a step
 -- that rewrites pages carries its own.
 rewriteStep :: Int -> CodeStep
-rewriteStep n = CodeStep {version = n, name = "rewrite the old markers", run = rewriteSettings}
+rewriteStep n = CodeStep {version = n, name = "rewrite the old markers", run = \c -> [] <$ rewriteSettings c}
 
 -- | 'rewriteStep', failing once it has rewritten every row.
 failingStep :: Int -> CodeStep
@@ -234,7 +238,7 @@ versionsOf c = sort . map (\v -> fromIntegral v.version) <$> runDb c (runSelectR
 unitSpec :: Spec
 unitSpec = describe "the schema's steps, in SQL and in code" $ do
   let file n = Migration {version = n, name = "000" <> show n <> "-file.sqlite.sql", statements = ""}
-      code n = CodeStep {version = n, name = "code " <> show n, run = \_ -> pass}
+      code n = CodeStep {version = n, name = "code " <> show n, run = \_ -> pure []}
   it "are the program's own numbered 1, 2, 3 and so on, the same on both databases" $ do
     misnumbered (stepsFor "sqlite") `shouldBe` Nothing
     misnumbered (stepsFor "postgres") `shouldBe` Nothing
@@ -250,6 +254,40 @@ unitSpec = describe "the schema's steps, in SQL and in code" $ do
     misnumbered (arrange [file 1, file 2] [code 4]) `shouldBe` Just "no step is numbered 3"
   it "name a number below 1" $
     misnumbered (arrange [file 1] [code 0]) `shouldBe` Just "a step is numbered 0, below 1"
+  step0015UnitSpec
+
+-- | Step 15's rule and its new logins, which touch no database.
+step0015UnitSpec :: Spec
+step0015UnitSpec = describe "step 15's rule of a login" $ do
+  it "is today's rule of a stored login: it keeps what parseLogin keeps as it is, and nothing else" $ do
+    -- When parseLogin changes, this fails: the step keeps its rule of
+    -- 2026-11-06, and the test is changed to say how the two now differ.
+    let corpus =
+          ["ada", "Ada", "rita@example.org", "_a_", "a", "0", "user-1a2b3c4d", "a!~", T.replicate 64 "a", T.replicate 65 "a", "", " ", " ada", "ada ", "ada lovelace", "ada\tb", "ada\nb", "a\DELb", "a\x85" <> "b", "a\xa0" <> "b", "łucja", "zoë", "иван", "日本", "___", "...", "~x", "x~", "~", "a\x2028" <> "b"]
+            <> [T.singleton c <> "a" | c <- ['\0' .. '\x7f']]
+    [t | t <- corpus, loginKept t /= (parseLogin t == Right (Login t))] `shouldBe` []
+  it "gives user- and the first eight ASCII letters and digits of the id, in the order of the ids" $
+    renamedLogins [("1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "łucja"), ("0f0f0f0f-0000-4000-8000-000000000000", "zoë"), ("u", "ada")]
+      `shouldBe` [ Renamed {user = "0f0f0f0f-0000-4000-8000-000000000000", was = "zoë", now = "user-0f0f0f0f"}
+                 , Renamed {user = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", was = "łucja", now = "user-1a2b3c4d"}
+                 ]
+  it "never gives two users one login, nor one a kept login has in another case, nor one the rule refuses" $ do
+    -- Thousands of users whose ids share their first eight letters and
+    -- digits, in both cases, beside kept logins that take some of the new
+    -- ones, and ids with no ASCII letter or digit.
+    let broken = [("deadbeef-" <> show n, "ł" <> show n) | n <- [1 .. 3000 :: Int]] <> [("DEADBEEF-" <> show n, "ż" <> show n) | n <- [1 .. 50 :: Int]] <> [(T.replicate n "-", "ę" <> show n) | n <- [1 .. 20]]
+        kept = [("k" <> show n, l) | (n, l) <- zip [1 :: Int ..] ["USER-DEADBEEF", "user-deadbeef-3", "User-1", "ada"]]
+        renamed = renamedLogins (kept <> broken)
+        logins = map snd kept <> map (\r -> r.now) renamed
+    length renamed `shouldBe` length broken
+    all (\r -> loginKept r.now && isRight (parseLogin r.now)) renamed `shouldBe` True
+    length (ordNub (map T.toLower logins)) `shouldBe` length logins
+    -- Ids sort by their characters: DEADBEEF-1, DEADBEEF-10, DEADBEEF-11.
+    take 3 [r.now | r <- renamed, "DEADBEEF" `T.isPrefixOf` r.user] `shouldBe` ["user-DEADBEEF-2", "user-DEADBEEF-4", "user-DEADBEEF-5"]
+    [r.now | r <- renamed, T.all (== '-') r.user] `shouldBe` ["user-2", "user-3", "user-4"] <> ["user-" <> show n | n <- [5 .. 21 :: Int]]
+  it "renames the same users the same way, whatever order they are read in" $ do
+    let users = [("b", "ł"), ("a", "ż"), ("c", "ok"), ("A", "ę")]
+    renamedLogins (reverse users) `shouldBe` renamedLogins users
 
 spec :: Backing -> Spec
 spec backing = describe "the schema's steps in code" $ do
@@ -300,6 +338,7 @@ spec backing = describe "the schema's steps in code" $ do
 
   step0012Spec backing
   step0013Spec backing
+  step0015Spec backing
 
   it "are refused when misnumbered, before the database is touched" $
     withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
@@ -533,3 +572,122 @@ step0012Spec backing = describe "step 12, every space has a home page" $ do
       migrate c `shouldReturn` [1 .. known]
       runDb c (runSelectReturningList (select (all_ oldDb.pages))) `shouldReturn` []
       migrate c `shouldReturn` []
+
+-- | A row of @users@ as the tests write it at version 14, before step 15:
+-- the columns with no default.
+data OldUser f = OldUser
+  { id :: Columnar f Text
+  , login :: Columnar f Text
+  , display_name :: Columnar f Text
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table OldUser where
+  newtype PrimaryKey OldUser f = OldUserKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = OldUserKey r.id
+
+newtype UsersDb f = UsersDb
+  { users :: f (TableEntity OldUser)
+  }
+  deriving stock (Generic)
+  deriving anyclass (Database be)
+
+usersDb :: DatabaseSettings be UsersDb
+usersDb = defaultDbSettings
+
+-- | A database at version 14, as step 15 finds it, with these users, each
+-- an id and a login.
+writeVersion14 :: (Backend be) => Connection be -> [(Text, Text)] -> IO ()
+writeVersion14 c users = do
+  void (applySteps (upTo 14 (stepsFor (schemaSuffix c))) c)
+  begin True c
+  runDb c (runInsert (insert usersDb.users (insertValues [OldUser {id = i, login = l, display_name = "Name of " <> i} | (i, l) <- users])))
+  commitTransaction c
+
+-- | Every user's login, by id.
+loginsOf :: (Backend be) => Connection be -> IO [(Text, Text)]
+loginsOf c = sort . map (\u -> (u.id, u.login)) <$> runDb c (runSelectReturningList (select (all_ usersDb.users)))
+
+-- | Step 15 ("Wiki.Server.Storage.Migrate.Code.Step0015"): every login
+-- breaking the rule of a login gets @user-@ and eight of its id, written
+-- on rows of version 14 in an empty database.
+step0015Spec :: Backing -> SpecWith ()
+step0015Spec backing = describe "step 15, every login is ASCII" $ do
+  it "changes nothing, says nothing and writes no entry where every login follows the rule" $
+    withEmptyPlaceIn backing $ \at -> do
+      let users = [("u1", "ada"), ("u2", "Bob"), ("u3", "rita@example.org")]
+      withConnectionTo at $ \c -> writeVersion14 c users
+      migrated <- migrateDatabase at
+      (migrated.from, migrated.said) `shouldBe` (14, [])
+      withConnectionTo at $ \c -> do
+        loginsOf c `shouldReturn` users
+        runDb c loadAuditLog `shouldReturn` []
+
+  it "renames a login beyond ASCII to user- and eight of its id, says so, and writes it in the audit log; the check then passes" $
+    withEmptyPlaceIn backing $ \at -> do
+      let lucja = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+      withConnectionTo at $ \c -> writeVersion14 c [(lucja, "łucja"), ("u2", "ada")]
+      migrated <- migrateDatabase at
+      migrated.said
+        `shouldBe` ["Renamed the login \"łucja\" of the user 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d to \"user-1a2b3c4d\": a login has only ASCII letters, digits and punctuation now. The user signs in with the same password under the new login."]
+      withConnectionTo at $ \c -> do
+        loginsOf c `shouldReturn` [(lucja, "user-1a2b3c4d"), ("u2", "ada")]
+        entries <- runDb c loadAuditLog
+        [(e.actor, e.action, e.subject, e.detail, e.address) | e <- entries]
+          `shouldBe` [(Actor {id = UserId "~administrator", login = Login "administrator"}, "user.rename", Subject {kind = "user", id = Just lucja, name = "user-1a2b3c4d"}, Map.fromList [("was", "łucja")], "migration")]
+      checkDatabase at >>= (`shouldSatisfy` isRight)
+
+  it "gives the next free login to two users whose new logins collide, to one whose id has no ASCII letter or digit, and past a login taken in another case" $
+    withEmptyPlaceIn backing $ \at -> do
+      withConnectionTo at $ \c -> do
+        writeVersion14
+          c
+          [ ("deadbeef-0000-4000-8000-000000000000", "łucja")
+          , ("deadbeef-1111-4000-8000-000000000000", "zoë")
+          , ("ąę-ł", "żaneta")
+          , ("k1", "USER-DEADBEEF")
+          , ("k2", "User-1")
+          , ("x1", "~tilde")
+          , ("x2", "___")
+          , ("x3", T.replicate 65 "a")
+          ]
+        applySteps (upTo 15 (stepsFor (schemaSuffix c))) c `shouldReturn` [15]
+        loginsOf c
+          `shouldReturn` sort
+            [ ("deadbeef-0000-4000-8000-000000000000", "user-deadbeef-2")
+            , ("deadbeef-1111-4000-8000-000000000000", "user-deadbeef-3")
+            , ("ąę-ł", "user-2")
+            , ("k1", "USER-DEADBEEF")
+            , ("k2", "User-1")
+            , ("x1", "user-x1")
+            , ("x2", "user-x2")
+            , ("x3", "user-x3")
+            ]
+        runDb c (length <$> loadAuditLog) `shouldReturn` 6
+        void (applySteps (stepsFor (schemaSuffix c)) c)
+      checkDatabase at >>= (`shouldSatisfy` isRight)
+
+  it "is undone with the rest of the migration when a later step fails" $
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
+      writeVersion14 c [("u1", "łucja")]
+      result <- try @IOException (applySteps (upTo 15 (stepsFor (schemaSuffix c)) <> arrange [] [failingStep 16]) c)
+      result `shouldSatisfy` isLeft
+      schemaVersion c `shouldReturn` 14
+      loginsOf c `shouldReturn` [("u1", "łucja")]
+      runDb c loadAuditLog `shouldReturn` []
+
+  it "leaves a login written by hand afterwards to the check, which refuses it, naming the account" $
+    withEmptyPlaceIn backing $ \at -> do
+      withConnectionTo at $ \c -> do
+        writeVersion14 c [("u1", "ada")]
+        void (applySteps (stepsFor (schemaSuffix c)) c)
+      checkDatabase at >>= (`shouldSatisfy` isRight)
+      withConnectionTo at $ \c -> do
+        begin True c
+        runDb c (runUpdate (update usersDb.users (\u -> u.login <-. val_ "łucja") (\u -> u.id ==. val_ "u1")))
+        commitTransaction c
+      checkDatabase at
+        `shouldReturn` Left (BrokenRecords ["The account łucja (u1) has a login the rules of a login refuse: A login has only ASCII letters, digits and punctuation."])

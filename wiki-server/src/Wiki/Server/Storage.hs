@@ -107,6 +107,7 @@ module Wiki.Server.Storage
   , readConnections
   , storageDataDir
   , storagePlace
+  , storageMigrated
   , storageCapabilities
   , traceStatements
   , databaseBytes
@@ -245,7 +246,7 @@ import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentB
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (KeyGrant), PageKey (..), SealedContent (..), VersionTag (..), encapsulatedBytes, headingOf, keyIdBytes, maxBodyCiphertext, maxTitleCiphertext, nonceBytes, sealedKeyBytes)
 import Wiki.Core.Encrypted qualified as CE
-import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, rootedArchive, threadsAmong, withoutHomeDocument)
+import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, checkLogins, rootedArchive, threadsAmong, withoutHomeDocument)
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (ZipSource (..), ZipTooLarge (..), writeZipFile)
 import Wiki.Core.HomePage qualified as Home
@@ -296,13 +297,13 @@ import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, storeBlob, storeBlobFi
 import Wiki.Server.Storage.Check (TableRead (..), readEveryTable)
 import Wiki.Server.Storage.Comments qualified as Comments
 import Wiki.Server.Storage.Layout (Database (..), PgDatabase (..), PgPrograms, attachmentsDir, backupsDir, defaultDatabase, defaultPgPrograms, postgresAt, temporaryDir)
-import Wiki.Server.Storage.Migrate (databaseVersion, knownVersion, migrate, schemaVersion)
+import Wiki.Server.Storage.Migrate (databaseVersion, knownVersion, migrateSaying, schemaVersion)
 import Wiki.Server.Storage.Notifications qualified as Notifications
 import Wiki.Server.Storage.Rows
 import Wiki.Server.Storage.Sealed (currentPublicKeys, deleteSpaceGrants, grantsOfKey, insertGrant, insertPageKey, insertSealedVersion, loadPageKey, loadSealedLatest, loadSealedVersion, loadSpacePageKeys, setSpaceKey, spaceKind)
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
 import Wiki.Server.Storage.Stars qualified as Stars
-import Wiki.Server.WaysIn (AccountWays (..), WaysIn, brokenCredentials, waysIn)
+import Wiki.Server.WaysIn (AccountWays (..), WaysIn, brokenCredentials, brokenLogins, waysIn)
 import Wiki.Server.WebAuthn (fromBase64Url)
 #ifdef WIKI_POSTGRES
 import Wiki.Server.Storage.Postgres (holdDatabaseShared, openPostgres)
@@ -340,6 +341,11 @@ data Storage = Storage
   -- ^ The data directory's lock. A storage opened with 'openStorage',
   -- which may delete files in the directory, holds it. A storage opened
   -- beside a running server ('withStorageAside') does not.
+  , migrated :: [Text]
+  -- ^ The lines the migration as the storage opened has to tell
+  -- ('Wiki.Server.Storage.Migrate.migrateSaying'): a login step 15
+  -- renamed. None when no step was pending, and for most steps. The
+  -- server writes them to its log.
   , release :: IO ()
   -- ^ Release the database's lock: on PostgreSQL, every storage holds it
   -- shared while it is open, so that a restore, which takes it alone,
@@ -467,9 +473,9 @@ openWith collect config place = do
         SqliteFile file -> Engine <$> pools (openSqlite ReadWrite file) (openSqlite ReadOnly file)
         PostgresAt pg -> openPostgresEngine pg
       flip onException (closeEngine engine) $ do
-        (settings, serverKept, newestGeneration) <- case engine of
+        (settings, serverKept, newestGeneration, migrated) <- case engine of
           Engine p -> withResource p.writer $ \c -> do
-            _ <- migrate c
+            (_, said) <- migrateSaying c
             -- The links are filled, if this version did not fill them,
             -- in the same transaction ("Wiki.Server.Storage.Rows",
             -- "Links").
@@ -484,10 +490,10 @@ openWith collect config place = do
             -- writes the in-memory copy. So is the generation of the
             -- permission context, so that the first read does not take it
             -- for a change.
-            (,,) <$> (newIORef . Just =<< runDb c loadSettings) <*> (newIORef . Just =<< runDb c loadServerSettings) <*> (newIORef =<< runDb c permissionsGeneration)
+            (,,,said) <$> (newIORef . Just =<< runDb c loadSettings) <*> (newIORef . Just =<< runDb c loadServerSettings) <*> (newIORef =<< runDb c permissionsGeneration)
         tracer <- newIORef Nothing
         permissions <- newIORef Nothing
-        pure Storage {engine, place, config, settings, serverKept, tracer, permissions, newestGeneration, lock, release}
+        pure Storage {engine, place, config, settings, serverKept, tracer, permissions, newestGeneration, lock, release, migrated}
 
 -- | The pools of a database's connections: one writer, and the readers.
 -- A connection unused for ten minutes is closed.
@@ -563,6 +569,9 @@ withDatabase place act = do
 data Migrated = Migrated
   { from :: Int
   , to :: Int
+  , said :: [Text]
+  -- ^ The lines the steps applied have to tell
+  -- ('Wiki.Server.Storage.Migrate.CodeStep'): a login step 15 renamed.
   }
   deriving stock (Eq, Show)
 
@@ -580,9 +589,9 @@ data Migrated = Migrated
 migrateDatabase :: Place -> IO Migrated
 migrateDatabase place = withDatabase place $ \c -> do
   before <- databaseVersion c
-  applied <- migrate c
+  (applied, said) <- migrateSaying c
   withTransaction True c (runDb c (void ensureLinks >> resolvePendingLinks))
-  pure Migrated {from = before, to = fromMaybe before (lastMay applied)}
+  pure Migrated {from = before, to = fromMaybe before (lastMay applied), said}
 
 -- | 'CheckProblem' is why @wiki-server check@ failed.
 data CheckProblem
@@ -598,7 +607,9 @@ data CheckProblem
     -- for each. A space whose pages have a second root, a page with no
     -- parent beside the space's home page (WP5.78 of docs/PLAN.md), is one;
     -- an account whose stored password no sign-in can use (WP5.85,
-    -- 'Wiki.Server.WaysIn.brokenCredentials') is another.
+    -- 'Wiki.Server.WaysIn.brokenCredentials') is another, and an account
+    -- whose login breaks the rules of a login (WP5.87,
+    -- 'Wiki.Server.WaysIn.brokenLogins') a third.
     BrokenRecords [Text]
   deriving stock (Eq, Show)
 
@@ -675,7 +686,7 @@ checkConnection c = do
             | (u, login, disabled, password) <- columns
             ]
       links <- loadLinkEnds
-      pure (rootProblems spaces pages <> linkProblems pages links <> brokenCredentials accounts, waysIn (providerNames kept) accounts)
+      pure (rootProblems spaces pages <> linkProblems pages links <> brokenCredentials accounts <> brokenLogins accounts, waysIn (providerNames kept) accounts)
     -- Each space with a home page has that page as the only one with no
     -- parent.
     rootProblems spaces pages =
@@ -819,6 +830,11 @@ storageDataDir st = st.place.dataDir
 -- | Where a storage was opened.
 storagePlace :: Storage -> Place
 storagePlace st = st.place
+
+-- | What the migration as the storage opened has to tell, a line each: a
+-- login step 15 of the schema renamed. None when no step was pending.
+storageMigrated :: Storage -> [Text]
+storageMigrated st = st.migrated
 
 -- | What the storage's database can do, as the API says it
 -- ("Wiki.Api.Info").
@@ -4211,7 +4227,9 @@ instance (MonadIO m) => MonadStars (StoredWiki m) where
 -- attachments' bytes stored under their hashes (so the blobs' ids are
 -- hashes from then on). A comment's author is the archive's user with
 -- the author's login, or the administrator for the administrator's login;
--- anyone else is kept by their name ('Wiki.Core.Comment.formerAuthor'). A storage that already
+-- anyone else is kept by their name ('Wiki.Core.Comment.formerAuthor'). An
+-- archive with a login the wiki refuses is refused
+-- ('Wiki.Core.Export.checkLogins'). A storage that already
 -- holds a wiki is refused and left unchanged: bringing one wiki into
 -- another is a merge, which is the job of the import (WP2.8 of
 -- docs/PLAN.md).
@@ -4227,11 +4245,12 @@ importArchive st incoming = fmap void (writingEitherThen st transaction (cacheSe
       vacant <- wikiIsEmpty
       let unkept = [x | p <- incoming.pages, x <- p.attachments, SourceBlob b <- [x.source], Map.notMember b a.blobs]
           iconless = [sp | sp <- incoming.spaces, Just (IconImage b _) <- [sp.icon], Map.notMember b a.blobs]
-      case (vacant, unkept, iconless) of
-        (False, _, _) -> pure (Left "The server has a wiki already: an archive is imported into an empty one only.")
-        (_, x : _, _) -> pure (Left ("The archive has no bytes for the attachment " <> show x.id.text <> "."))
-        (_, _, sp : _) -> pure (Left ("The archive has no bytes for the icon of the space " <> show sp.id.text <> "."))
-        (True, [], []) -> do
+      case (vacant, unkept, iconless, checkLogins a.users) of
+        (False, _, _, _) -> pure (Left "The server has a wiki already: an archive is imported into an empty one only.")
+        (_, x : _, _, _) -> pure (Left ("The archive has no bytes for the attachment " <> show x.id.text <> "."))
+        (_, _, sp : _, _) -> pure (Left ("The archive has no bytes for the icon of the space " <> show sp.id.text <> "."))
+        (_, _, _, Left why) -> pure (Left why)
+        (True, [], [], Right ()) -> do
           insertUsers a.users
           traverse_ insertGroup a.groups
           insertMembers [(g, u) | (g, members) <- Map.toList a.membership, u <- Set.toList members]

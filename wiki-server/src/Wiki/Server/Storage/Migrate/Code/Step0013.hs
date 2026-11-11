@@ -51,7 +51,7 @@ import Wiki.Server.Storage.Migrate.CodeStep (CodeStep (..))
 
 -- | The step: make each space's home page the root of its pages.
 step0013 :: CodeStep
-step0013 = CodeStep {version = 13, name = "the home page is the root of a space's pages", run = rootPages}
+step0013 = CodeStep {version = 13, name = "the home page is the root of a space's pages", run = \c -> [] <$ rootPages c}
 
 --------------------------------------------------------------------------------
 -- The tables, as they are at version 12
