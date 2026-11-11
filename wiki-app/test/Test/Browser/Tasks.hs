@@ -8,8 +8,9 @@
 -- not edit, and a version of the page, have disabled boxes; leaving with
 -- unsaved ticks asks, as leaving the editor does; a save after the page
 -- was saved elsewhere does not overwrite it; a sorted list moves a done
--- task down and ticks the box the source has; and the boxes are reached
--- with Tab and ticked with Space.
+-- task down and ticks the box the source has; a prerendered page is
+-- adopted with its boxes as the prerender drew them; and the boxes are
+-- reached with Tab and ticked with Space.
 module Test.Browser.Tasks (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -21,7 +22,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Http (Asked (..), answerRaw, answerWith, asked, holdAt, release, serveDemo, serverStarts, serverStops, startServer)
-import Test.Browser.Mount (clickButton, slugs, startChangedWith)
+import Test.Browser.Mount (adopt, clickButton, slugs, start, startChangedWith)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AccountApi (..), SpacesApi (..), WikiApi (..))
@@ -40,12 +41,17 @@ import Wiki.Core.Page qualified as Core
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space qualified as Core
 
--- Which element has the focus (test/jsbits/test-focus.js), and how the
--- style sheet draws an element (test/jsbits/test-style.js).
+-- Which element has the focus (test/jsbits/test-focus.js), how the style
+-- sheet draws an element (test/jsbits/test-style.js), the shell's HTML as
+-- a prerender writes it (test/jsbits/test-markup.js), and the changes of
+-- the task boxes' disabled attribute (test/jsbits/test-disabled.js).
 $( browserJS
-     ["jsbits/test-focus.js", "jsbits/test-style.js"]
+     ["jsbits/test-focus.js", "jsbits/test-style.js", "jsbits/test-markup.js", "jsbits/test-disabled.js"]
      [ ("js_focused_matches", "wiki_test_focused_matches", Safe, [t|JSText -> IO Bool|])
      , ("js_computed_style", "wiki_test_computed_style", Safe, [t|JSText -> JSText -> IO JSText|])
+     , ("js_markup", "wiki_test_markup", Safe, [t|IO JSText|])
+     , ("js_watch_disabled", "wiki_test_watch_disabled", Safe, [t|IO ()|])
+     , ("js_disabled_changes", "wiki_test_disabled_changes", Safe, [t|IO JSText|])
      ]
  )
 
@@ -484,6 +490,28 @@ spec m = describe "tasks ticked in a page" $ do
     find ui ".page-ticks-discard" >>= click
     eventually $ length <$> findAll ui ".page-ticks-count" `shouldReturn` 0
     focusedIs ".page-body input[data-task='1']" `shouldReturn` True
+
+  -- The page as the server sends it, adopted by a program that starts on
+  -- it: the boxes the prerender drew enabled stay enabled, from the
+  -- program's first render on. The watch sees each change of a box's
+  -- disabled attribute, also one undone before 'adopt' returns.
+  it "adopts a prerendered page with its boxes as the prerender drew them" $ runPage $ do
+    let guide = Page (slugs ["docs"]) (slugs ["markdown-guide"])
+        boxes = ".page-body .task-list-item input[type='checkbox']"
+    ahead <- start m (Just "user-admin") guide
+    _ <- eventuallyWithin 20000 (find ahead ".page-body input[aria-label='Read it'][data-task]")
+    settle
+    html <- fromJSText <$> unsafeIOToPageM js_markup
+    unmount ahead
+    holder <- htmlContainer html
+    drawn <- findAllIn holder boxes >>= traverse (`getAttribute` "disabled")
+    length drawn `shouldSatisfy` (> 0)
+    drawn `shouldSatisfy` all isNothing
+    unsafeIOToPageM js_watch_disabled
+    ui <- adopt m holder (Just "user-admin") guide
+    settle
+    fromJSText <$> unsafeIOToPageM js_disabled_changes `shouldReturn` ""
+    findAll ui boxes >>= traverse (`getAttribute` "disabled") >>= (`shouldBe` drawn)
 
   it "reaches the boxes with Tab and ticks them with Space" $ runPage $ do
     (ui, _) <- page m "user-admin" tasksText

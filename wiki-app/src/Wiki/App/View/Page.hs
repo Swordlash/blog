@@ -266,10 +266,6 @@ data State = State
   , staging :: Staging
   -- ^ The ticks not saved yet, with the page they were made on
   -- ("Wiki.App.View.Ticking"). Changed only by 'stage'.
-  , running :: Bool
-  -- ^ Whether the program has started ('Initialize'). The boxes are
-  -- enabled only then, so that the first render is the page the prerender
-  -- wrote, whoever reads it.
   , visit :: Int
   -- ^ Which visit of an address the view is on: one more each time it
   -- shows another page or version. An answer to a write asked for on an
@@ -372,7 +368,6 @@ component =
               , copiedWait = Nothing
               , copiedText
               , staging = maybe Ticking.unstaged (\p -> Ticking.step (Ticking.Offered p) Ticking.unstaged) (pageOf loaded)
-              , running = False
               , visit = 0
               , fetches = 0
               , lastBox = Nothing
@@ -777,7 +772,6 @@ component =
       -- or it is loaded now. From now on its comments' events are
       -- received, and the comments are loaded if they were not with it.
       Initialize -> do
-        modify (\st -> st {running = True})
         subscribeFeed
         gets (\st -> st.loaded) >>= \case
           Loading -> load >> H.liftEffect revealFragment
@@ -1505,14 +1499,21 @@ mayEditShown :: State -> Bool
 mayEditShown st = maybe False (\p -> mayEditPage st.input.context p.space p.id) (pageOf st.loaded)
 
 -- | Whether the page's boxes are enabled now: the reader may edit the
--- page, the program runs, the page is the page as it is (not a version),
--- no write of the page is out ('writeOut': the ticks' save, a rename, a
--- move, a delete, the template switch), and no form of the page is open
--- (Rename, Move, Delete). Disabled boxes keep the ticks as they are.
+-- page, the page is the page as it is (not a version), no write of the
+-- page is out ('writeOut': the ticks' save, a rename, a move, a delete,
+-- the template switch), and no form of the page is open (Rename, Move,
+-- Delete). Disabled boxes keep the ticks as they are.
+--
+-- It reads nothing that 'Initialize' sets. The prerender writes the page
+-- after its 'Initialize' has run, and the program adopts that page with a
+-- first render made before its own 'Initialize'. Both draw the same boxes
+-- for the same reader, so adopting the page changes none of them. A box
+-- clicked before the program has started stages nothing: the browser
+-- ticks it, and the program's first render sets it back as the page has
+-- it.
 boxesEnabled :: State -> Bool
 boxesEnabled st =
-  st.running
-    && isNothing st.input.version
+  isNothing st.input.version
     && not (writeOut st)
     && plainView
     && mayEditShown st
