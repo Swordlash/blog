@@ -1,5 +1,9 @@
 # Changelog
 
+This file stops here: it was frozen on 2026-11-11 and is no longer added
+to. Later changes are in the repository's `changelog/` directory, one entry
+per pull request.
+
 ## Unreleased
 
 The export reads a fence's language as the page's parser does, the first

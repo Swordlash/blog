@@ -1,5 +1,9 @@
 # Changelog
 
+This file stops here: it was frozen on 2026-11-11 and is no longer added
+to. Later changes are in the repository's `changelog/` directory, one entry
+per pull request.
+
 ## Unreleased
 
 An `html` fence is shown in a frame (WP5.89, #196): the island
