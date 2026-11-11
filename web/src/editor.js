@@ -442,7 +442,8 @@ const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser
 // follow each change of the text until the next ones come: text typed at
 // the end of a first line stays before its fold, and text typed inside a
 // spoiler's lines stays inside its range, so that its marker stays while
-// the author types there.
+// the author types there. A line break put at the end of a first line
+// drops its range until then: the marker would be on the new line.
 const offerFolds = StateEffect.define();
 
 const offered = StateField.define({
@@ -451,6 +452,7 @@ const offered = StateField.define({
     for (const effect of tr.effects) if (effect.is(offerFolds)) return effect.value;
     if (!tr.docChanged) return ranges;
     return ranges
+      .filter((range) => !breaksAt(tr.changes, range.from))
       .map((range) => ({ from: tr.changes.mapPos(range.from, 1), to: tr.changes.mapPos(range.to, -1) }))
       .filter((range) => range.to > range.from);
   },
@@ -519,15 +521,27 @@ const foldMarker = (open) => {
   return marker;
 };
 
+// Whether a change of the text puts a line break at `at`, a fold's start
+// (the end of its first line): the fold would then start on the new line,
+// not on the line it was made on.
+const breaksAt = (changes, at) => {
+  let broken = false;
+  changes.iterChanges((changedFrom, changedTo, _from, _to, inserted) => {
+    if (changedFrom === at && changedTo === at && inserted.lines > 1) broken = true;
+  });
+  return broken;
+};
+
 // Whether a change of the text touches a fold's range {from, to}: its
-// hidden part, or its end. Text typed or deleted at the end of the first
-// line, before the mark, is in sight, and does not touch it.
+// hidden part, its end, or a line break put at its start. Other text typed
+// or deleted at the end of the first line, before the mark, is in sight,
+// and does not touch it.
 const touches = (changes, from, to) => {
   let touched = false;
   changes.iterChangedRanges((changedFrom, changedTo) => {
     if (changedFrom <= to && changedTo > from) touched = true;
   });
-  return touched;
+  return touched || breaksAt(changes, from);
 };
 
 // A change of the text that touches a fold opens it, so that no hidden text

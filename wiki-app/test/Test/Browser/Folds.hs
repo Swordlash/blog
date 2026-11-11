@@ -4,9 +4,10 @@
 -- keys, with no input event and the text saved as it is, each fold told
 -- by a @wiki-folds@ event; folds that follow the text typed above, below
 -- and at the end of their first line, still on the same lines of text; a
--- fold opened by an edit at its end, or inside it; and the component's own
--- interface, which folds and unfolds ranges of lines and reports the
--- folds.
+-- fold opened by an edit at its end, inside it, or by a line break at its
+-- start; the component's own interface, which folds and unfolds ranges of
+-- lines and reports the folds; and folding that makes no draft and leaves
+-- nothing for Cancel to ask about.
 module Test.Browser.Folds (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -24,8 +25,10 @@ import Wiki.App.Backend.Mem.State (MemState)
 import Wiki.App.Editor.Browser (foldLines, foldedLines, unfoldLines)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.App.View.Editor (draftDelay)
+import Wiki.Core.Draft (Draft)
 import Wiki.Core.Markdown.Folds (Fold (..), FoldKind (..), folds)
-import Wiki.Core.Page (Page (body))
+import Wiki.Core.Page (Page (body, id))
 import Wiki.Core.Space (Space (id))
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
@@ -78,12 +81,13 @@ spec m = do
     setMarkdown ui page
     host <- editorHost ui
     _ <- offered ui 2
-    -- Folded by the keys, on the heading's line.
+    watchEditor ui
+    -- Folded by the keys, on the heading's line, and told.
     selectText ui (lineStart page 13) (lineStart page 13)
     press "Control+Shift+BracketLeft"
     eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(13, 19)]
+    foldsTold ui `shouldReturn` [[(13, 19)]]
     text <- editorText ui
-    watchEditor ui
     -- At the end of the heading, before the mark: in sight, and folded still.
     selectText ui (lineEnd page 13) (lineEnd page 13)
     typeText text " now"
@@ -96,9 +100,9 @@ spec m = do
     typeText text "\nTyped."
     markdown ui `shouldReturn` (renamed <> "\nTyped.")
     unsafeIOToPageM (foldedLines host) `shouldReturn` [(13, 19)]
-    -- Typed below or before the mark, the fold kept its lines: nothing to
-    -- tell.
-    foldsTold ui `shouldReturn` []
+    -- Typed below or before the mark, the fold kept its lines: nothing new
+    -- to tell.
+    foldsTold ui `shouldReturn` [[(13, 19)]]
     -- Above it: the fold moves down with its lines, which are the same
     -- text, and the move is told.
     selectText ui (lineEnd page 3) (lineEnd page 3)
@@ -107,15 +111,17 @@ spec m = do
     markdown ui `shouldReturn` typed
     unsafeIOToPageM (foldedLines host) `shouldReturn` [(14, 20)]
     linesOf typed 14 20 `shouldBe` linesOf renamed 13 19
-    foldsTold ui `shouldReturn` [[(14, 20)]]
+    foldsTold ui `shouldReturn` [[(13, 19)], [(14, 20)]]
     editorText ui >>= textContent >>= (`shouldSatisfy` (not . T.isInfixOf "Hidden answer."))
     -- And the keys unfold it, on its line.
     selectText ui (lineStart typed 14) (lineStart typed 14)
     press "Control+Shift+BracketRight"
     eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` []
+    foldsTold ui `shouldReturn` [[(13, 19)], [(14, 20)], []]
     markdown ui `shouldReturn` typed
+    inputsSeen ui `shouldReturn` T.length " now\nTyped.\nAbove."
 
-  it "opens a fold that an edit changes, at its end or inside it, and Backspace after its mark deletes one character, in sight" $ runPage $ do
+  it "opens a fold that an edit changes, at its end, inside it or with a line break at its start, and Backspace after its mark deletes one character, in sight" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     setMarkdown ui page
     host <- editorHost ui
@@ -137,6 +143,16 @@ spec m = do
     unsafeIOToPageM (foldedLines host) `shouldReturn` [(5, 11)]
     press "Backspace"
     markdown ui `shouldReturn` T.replace "[[/spoiler]]{answer}\n" "[[/spoiler]]{answer\n" page
+    unsafeIOToPageM (foldedLines host) `shouldReturn` []
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` page
+    -- Enter at the end of the first line, before the mark, would start the
+    -- fold on the new line: the fold opens.
+    unsafeIOToPageM (foldLines host [(13, 19)])
+    selectText ui (lineEnd page 13) (lineEnd page 13)
+    unsafeIOToPageM (foldedLines host) `shouldReturn` [(13, 19)]
+    press "Enter"
+    markdown ui `shouldReturn` T.replace "Question\n" "Question\n\n" page
     unsafeIOToPageM (foldedLines host) `shouldReturn` []
     press "Control+z"
     eventually $ markdown ui `shouldReturn` page
@@ -175,6 +191,28 @@ spec m = do
     -- What the component folds it knows: no event, and no input.
     foldsTold ui `shouldReturn` []
     inputsSeen ui `shouldReturn` 0
+  it "makes no change of the page by folding: no draft, and Cancel leaves without asking" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-editor") helloEditor
+    host <- editorHost ui
+    original <- markdown ui
+    watchEditor ui
+    -- The section "## Why a wiki" of the page as it is, folded from the
+    -- component and unfolded by its mark.
+    let section = head [(f.from, f.to) | f <- folds original, lineAt original f.from == "## Why a wiki"]
+    section `shouldSatisfy` isJust
+    unsafeIOToPageM (foldLines host (maybeToList section))
+    unsafeIOToPageM (foldedLines host) `shouldReturn` maybeToList section
+    find ui ".editor-cm .cm-wiki-folded" >>= click
+    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` []
+    foldsTold ui `shouldReturn` [[]]
+    inputsSeen ui `shouldReturn` 0
+    -- Longer than the wait before a draft is saved: none is.
+    unsafeIOToPageM (threadDelay (draftDelay + 500_000))
+    hello <- readPage wiki ["blog"] ["hello-world"]
+    draftOf wiki hello `shouldReturn` Nothing
+    find ui ".editor-cancel" >>= click
+    find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Hello, world")
+    length <$> findAll ui ".editor-cancel-confirm" `shouldReturn` 0
   where
     helloEditor = EditPage (slugs ["blog"]) (slugs ["hello-world"])
 
@@ -239,3 +277,7 @@ readPage wiki space path =
   unsafeIOToPageM . runMemWiki wiki $ do
     s <- either (panic . show) identity <$> getSpace (slugs space)
     either (panic . show) identity <$> getPage s.id (slugs path)
+
+-- | The author's draft of a page, if there is one.
+draftOf :: IORef MemState -> Page -> PageM s (Maybe Draft)
+draftOf wiki p = unsafeIOToPageM (runMemWiki wiki (either (panic . show) identity <$> getDraft p.id))

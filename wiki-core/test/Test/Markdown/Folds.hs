@@ -52,11 +52,15 @@ spec = describe "Wiki.Core.Markdown.Folds" $ do
   it "ends a section at the end of the block spoiler or div it is in" $ do
     let source = "[[!spoiler]]{s}(S)\n## [[!spoiler]] Q\n\nAnswer.\n\n[[/spoiler]]{s}\n\nOutside."
     ranges source `shouldBe` [(1, 6, BlockSpoiler), (2, 4, HeadingSpoiler 2)]
-    ranges "[[!div]]{.box}\n### Inside\n\nText.\n[[/div]]\n\nOutside.\n" `shouldBe` [(2, 4, Section 3)]
+    ranges "[[!div]]{.box}\n### [[!spoiler]] Inside\n\nText.\n[[/div]]\n\nOutside.\n" `shouldBe` [(2, 4, HeadingSpoiler 3)]
+
+  it "takes a heading inside a block spoiler or a div for no section of the page" $ do
+    ranges "[[!div]]{.box}\n## Inside\n\nText.\n[[/div]]\n\nOutside.\n" `shouldBe` []
+    ranges "# T\n\n[[!spoiler]]{s}(S)\n## Inside\n\nText.\n[[/spoiler]]{s}\n" `shouldBe` [(1, 7, Section 1), (3, 7, BlockSpoiler)]
 
   it "ends a section at a block spoiler that wraps a section of the same level" $
     ranges "## A\n\nText.\n\n[[!spoiler]]{b}(B)\n## B\n\nMore.\n[[/spoiler]]{b}\n"
-      `shouldBe` [(1, 3, Section 2), (5, 9, BlockSpoiler), (6, 8, Section 2)]
+      `shouldBe` [(1, 3, Section 2), (5, 9, BlockSpoiler)]
 
   it "takes no heading in a fence or a quotation, and reads a setext heading" $ do
     ranges "## A\n\n```\n# not a heading\n```\n\n> ## Quoted\n> Text.\n\nEnd." `shouldBe` [(1, 10, Section 2)]

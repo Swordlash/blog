@@ -12,7 +12,8 @@
 -- * a heading spoiler's section, @## [[!spoiler]] Question@, from the
 --   heading's line to the section's last line;
 -- * any other heading's section, from the heading's line to the section's
---   last line.
+--   last line: a section of the page, so not one of a heading inside a
+--   block spoiler or a @div@, which is no section of the page.
 --
 -- A section ends just before the next heading of the same or a higher
 -- level, or at the end of the page or of the block spoiler or @div@ the
@@ -94,7 +95,7 @@ folds source = foldsParsed source (either (const ([], [])) identity (A.parseWith
 foldsParsed :: Text -> ([(Maybe Int, A.Block)], [A.MarkerLine]) -> [Fold]
 foldsParsed source (located, markers)
   | T.any (== '\r') source = []
-  | otherwise = sortOn (\f -> (f.from, Down f.to)) (blockSpoilers <> inRegion 0 (length sourceLines) located)
+  | otherwise = sortOn (\f -> (f.from, Down f.to)) (blockSpoilers <> inRegion True 0 (length sourceLines) located)
   where
     sourceLines = Seq.fromList (T.splitOn "\n" source)
     lineAt n = fromMaybe "" (Seq.lookup (n - 1) sourceLines)
@@ -113,39 +114,43 @@ foldsParsed source (located, markers)
     -- The headings' folds among the lines after line @offset@, up to line
     -- @end@: lines read as a page of their own, which they are when they
     -- are the whole text, the inside of a block of the wiki's own (between
-    -- its markers, without a prefix), or a heading spoiler's section.
-    region :: Int -> Int -> [Fold]
-    region offset end
+    -- its markers, without a prefix), or a heading spoiler's section. In
+    -- a region of the page (the whole text, or a heading spoiler's section
+    -- in one), a heading's section is a section of the page; in the inside
+    -- of a block, only a heading spoiler folds.
+    region :: Bool -> Int -> Int -> [Fold]
+    region page offset end
       | end <= offset = []
       | otherwise = case A.parseWithLines (T.intercalate "\n" (map lineAt [offset + 1 .. end])) of
           Left _ -> []
-          Right inside -> inRegion offset end inside
+          Right inside -> inRegion page offset end inside
 
     -- The folds of a region's blocks, as its parse placed them.
-    inRegion :: Int -> Int -> [(Maybe Int, A.Block)] -> [Fold]
-    inRegion offset end blocks =
+    inRegion :: Bool -> Int -> Int -> [(Maybe Int, A.Block)] -> [Fold]
+    inRegion page offset end blocks =
       let placed = [(offset + l, b) | (Just l, b) <- blocks]
-       in concat [inBlock end placed (l, b) | (l, b) <- placed]
+       in concat [inBlock page end placed (l, b) | (l, b) <- placed]
 
     -- The folds a block of a region starts, and those inside it.
-    inBlock :: Int -> [(Int, A.Block)] -> (Int, A.Block) -> [Fold]
-    inBlock end placed (l, b) = case b of
-      A.Heading level _ _ ->
-        let next = [l' | (l', b') <- placed, l' > l, maybe False (<= level) (A.leadingHeading b')]
-         in section l (sectionEnd l next) (Section level)
+    inBlock :: Bool -> Int -> [(Int, A.Block)] -> (Int, A.Block) -> [Fold]
+    inBlock page end placed (l, b) = case b of
+      A.Heading level _ _
+        | page ->
+            let next = [l' | (l', b') <- placed, l' > l, maybe False (<= level) (A.leadingHeading b')]
+             in section l (sectionEnd l next) (Section level)
       A.Spoiler h (A.Heading level _ _ : _)
         | h.kind == A.OnHeading ->
             -- The parser has put the whole section in the spoiler, so the
             -- next block of the region ends it.
             let last' = sectionEnd l [l' | (l', _) <- placed, l' > l]
-             in section l last' (HeadingSpoiler level) <> region l last'
+             in section l last' (HeadingSpoiler level) <> region page l last'
       A.Spoiler _ _ -> inside
       A.Div _ _ -> inside
       _ -> []
       where
         sectionEnd start next = lastNonBlank start (maybe end (subtract 1) (head next))
         inside = case Map.lookup l ends of
-          Just e | e > l + 1 -> region l (e - 1)
+          Just e | e > l + 1 -> region False l (e - 1)
           _ -> []
 
     section start last' kind = [Fold {from = start, to = last', kind} | last' > start]
