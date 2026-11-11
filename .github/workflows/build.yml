@@ -608,8 +608,8 @@ jobs:
       run: sh toolchain/test-ci-already-tested.sh
 
     # The native jobs' apt install, against a fake apt-get whose downloads
-    # fail: from the archive cache, or a failure naming the package. A
-    # second.
+    # fail: from the archive cache, or a failure naming the package. Takes
+    # about two seconds, without root or the network.
     - name: Test ci-native-deps.sh
       if: matrix.group == 'deploy'
       run: sh toolchain/test-ci-native-deps.sh
