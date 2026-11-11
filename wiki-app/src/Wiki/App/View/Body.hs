@@ -207,7 +207,7 @@ rendered
   => Place
   -> Text
   -> Either Md.ParseError [H.ComponentHTML action slots m]
-rendered place = Md.renderMarkdown (options place)
+rendered = renderedTicking Nothing
 
 -- | 'rendered', with the page's task boxes enabled when @onTick@ is given:
 -- a change of a box gives it the task's index and whether the box is now

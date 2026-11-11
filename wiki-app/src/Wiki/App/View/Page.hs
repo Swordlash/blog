@@ -806,6 +806,14 @@ component =
         modify (\st -> st {input})
         when gainedFeed subscribeFeed
         let elsewhere = old.space.id /= input.space.id || old.path /= input.path || old.version /= input.version
+        -- A reader whose rights changed so that they may no longer edit
+        -- the page cannot save their ticks: they are dropped, and the bar
+        -- says so. (Signing out reloads the page, which drops them the
+        -- same way: 'adopt'.)
+        barred <- gets (\st -> not elsewhere && not (Map.null st.ticks) && not st.savingTicks && not (mayTick st))
+        when barred $ do
+          modify (\st -> st {ticks = mempty, shown = maybe "" (\p -> p.body) (pageOf st.loaded), tickNote = Just (Dropped ("You may no longer edit this page, so " <> ticksWere (Map.size st.ticks) <> " dropped."))})
+          syncGuard
         when elsewhere $ do
           unwatchAll
           -- Ticks belong to the page and the version they were made on:
@@ -851,11 +859,17 @@ component =
       Typed t -> modify $ \st -> case st.mode of
         Renaming _ -> st {mode = Renaming t}
         other -> st {mode = other}
+      -- A move takes the page to another address, where the shell does not
+      -- ask about the ticks: they are saved or discarded first.
       StartMove -> withPage $ \page -> do
         input <- gets (\st -> st.input)
+        unsaved <- gets (\st -> not (Map.null st.ticks))
         let spaces = targetSpaces input.context page
             here = fromMaybe 0 (head [n | (n, s) <- zip [0 ..] spaces, s.id == page.space])
-        modify (\st -> st {mode = Moving here input.pages page.parent, problem = Nothing})
+        modify $ \st ->
+          if unsaved
+            then st {problem = Just (Invalid "Save or discard the ticked tasks before you move the page.")}
+            else st {mode = Moving here input.pages page.parent, problem = Nothing}
       ChoseSpace n -> withPage $ \page -> do
         ctx <- gets (\st -> st.input.context)
         for_ (atMay (targetSpaces ctx page) n) $ \s ->
@@ -940,7 +954,12 @@ component =
         modify (\st -> st {panelOpen = True, focused = Just tid})
         reveal ("#" <> CommentsView.threadElementId tid)
       -- The shell reloads what it shows, including the page and its tree.
-      ShowChanged -> H.raise (Changed Nothing)
+      -- With unsaved ticks, the page as it is now is shown here, with
+      -- the ticks on it, or not shown, as after a save's conflict.
+      ShowChanged ->
+        gets (\st -> Map.null st.ticks) >>= \case
+          True -> H.raise (Changed Nothing)
+          False -> catchUp
       ChooseWidth width -> H.raise (ChoseWidth width)
       -- A box changed: the rules for the tasks under a task decide the
       -- ticks, and the page shows its text with them.
@@ -973,14 +992,8 @@ component =
             -- ticks on it if it has the same tasks; otherwise nothing is
             -- saved, and the bar says so.
             Left (Conflict _) -> do
-              now <- gets (\s -> s.input) >>= fetch
-              modify (\s -> s {savingTicks = False, changed = False})
-              case now of
-                Ready fresh _ _ _
-                  | isJust (rebaseTicks st.tasks (tasksIn fresh.body) st.ticks) -> adopt now
-                  | otherwise -> modify (\s -> s {tickNote = Just TasksChanged})
-                Failed e -> modify (\s -> s {tickNote = Just (TickProblem ("The ticks could not be saved: " <> errorMessage e))})
-                Loading -> pass
+              modify (\s -> s {savingTicks = False})
+              catchUp
             Left e -> modify (\s -> s {savingTicks = False, tickNote = Just (TickProblem ("The ticks could not be saved: " <> errorMessage e))})
       DiscardTicks -> withPage $ \page -> do
         modify (\st -> st {ticks = mempty, shown = page.body, tickNote = Nothing})
@@ -1109,18 +1122,34 @@ component =
             Right shown -> st {loaded, tasks, ticks, shown, tickNote = told <|> st.tickNote}
             Left _ -> dropping "The page's text could not take your ticks, so they were dropped."
           dropping why = st {loaded, tasks, ticks = mempty, shown = freshBody, tickNote = Just (Dropped why)}
-          count = Map.size st.ticks
-          ticksWere = if count == 1 then "your tick was" else "your " <> show count <> " ticks were" :: Text
+          were = ticksWere (Map.size st.ticks)
       put $ case (pageOf st.loaded, fresh) of
         (Just old, Just new)
           | Map.null st.ticks -> st {loaded, tasks, shown = new.body}
-          | not (mayTick st {loaded}) -> dropping ("You may no longer edit this page, so " <> ticksWere <> " dropped.")
-          | old.id /= new.id -> dropping ("This is another page, so " <> ticksWere <> " dropped.")
+          | not (mayTick st {loaded}) -> dropping ("You may no longer edit this page, so " <> were <> " dropped.")
+          | old.id /= new.id -> dropping ("This is another page, so " <> were <> " dropped.")
           | old.body == new.body -> keep st.ticks Nothing
           | Just moved <- rebaseTicks st.tasks tasks st.ticks -> keep moved (Just KeptOnNewer)
-          | otherwise -> dropping ("The page was saved since you ticked its tasks, and its tasks are not the same now, so " <> ticksWere <> " dropped.")
+          | otherwise -> dropping ("The page was saved since you ticked its tasks, and its tasks are not the same now, so " <> were <> " dropped.")
         _ -> st {loaded, tasks, ticks = mempty, shown = freshBody}
       unless (Map.null st.ticks) syncGuard
+
+    -- The page as it is now, fetched while there are unsaved ticks (after
+    -- a save's conflict, or when the reader asks to see the new version):
+    -- shown with the ticks on it when it has the same tasks; otherwise the
+    -- page shown and its ticks stay, nothing is saved, and the bar offers
+    -- to reload the page and lose them.
+    catchUp :: H.HalogenM State Action Slots ViewOutput m ()
+    catchUp = do
+      st <- get
+      now <- fetch st.input
+      modify (\s -> s {changed = False})
+      case now of
+        Ready fresh _ _ _
+          | isJust (rebaseTicks st.tasks (tasksIn fresh.body) st.ticks) -> adopt now >> H.raise (Showing fresh)
+          | otherwise -> modify (\s -> s {tickNote = Just TasksChanged})
+        Failed e -> modify (\s -> s {tickNote = Just (TickProblem ("The page as it is now could not be read: " <> errorMessage e))})
+        Loading -> pass
 
     -- The ticks set, and the page's text with them; or, if they cannot be
     -- written, the ticks as they were, and why.
@@ -1391,6 +1420,11 @@ mayTick st =
     && isNothing st.input.version
     && not st.savingTicks
     && maybe False (\p -> mayEditPage st.input.context p.space p.id) (pageOf st.loaded)
+
+-- | How many ticks there were, as a sentence that drops them says it:
+-- "your tick was" or "your 3 ticks were".
+ticksWere :: Int -> Text
+ticksWere count = if count == 1 then "your tick was" else "your " <> show count <> " ticks were"
 
 -- | The tasks of a page's text, none if it cannot be parsed.
 tasksIn :: Text -> [Task]

@@ -111,6 +111,8 @@ spec = describe "Markdown.Tasks" $ do
         `shouldBe` "See[^1].\n\n[^1]: A note.\n\n    - [x] in the note\n\n- [ ] after\n"
     it "keeps the line endings, the indentation and a tab after the bullet" $
       ticked [(0, True), (1, True)] "-\t[ ] a\r\n    *   [ ] b\r\n" `shouldBe` "-\t[x] a\r\n    *   [x] b\r\n"
+    it "finds the box of a task nested with a tab" $
+      ticked [(1, True)] "- [ ] a\n\t- [ ] b\n" `shouldBe` "- [ ] a\n\t- [x] b\n"
     it "finds a box in a quotation after a tab" $
       ticked [(0, True)] ">\t- [ ] a\n" `shouldBe` ">\t- [x] a\n"
     it "leaves a box already in the state named as written, a capital X too" $

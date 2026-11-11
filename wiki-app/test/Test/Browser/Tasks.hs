@@ -46,6 +46,8 @@ spec m = describe "tasks ticked in a page" $ do
   it "strikes a ticked task through at once, counts it, and saves one version that differs only in the box" $ runPage $ do
     (ui, wiki) <- page m "user-admin" tasksText
     before <- versionsOf wiki
+    -- With no ticks the bar takes no room.
+    computedStyle ".page-ticks" "display" `shouldReturn` "none"
     box 0 ui >>= click
     eventually $ find ui ".page-body li.task-done .task-text" >>= (`shouldHaveText` "Buy milk")
     computedStyle ".page-body li.task-done > .task-text" "text-decoration-line" `shouldReturn` "line-through"
@@ -106,6 +108,21 @@ spec m = describe "tasks ticked in a page" $ do
     find ui ".leave-confirm button.danger" >>= click
     eventually $ length <$> findAll ui ".page-view .page-body input[data-task]" `shouldReturn` 0
     bodyOf wiki `shouldReturn` tasksText
+
+  it "drops the ticks, and says so, when the reader becomes someone who may not edit, and moves the page only without ticks" $ runPage $ do
+    (ui, _) <- page m "user-admin" tasksText
+    box 0 ui >>= click
+    eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    clickButton ui ".page-actions button" "Move"
+    find ui ".page-view .error" >>= (`shouldHaveText` "Save or discard the ticked tasks before you move the page.")
+    length <$> findAll ui ".inline-form" `shouldReturn` 0
+    find ui ".user-switcher-toggle" >>= click
+    find ui ".user-menu button[data-login=reader]" >>= click
+    eventually $ find ui ".page-ticks-note" >>= (`shouldHaveText` "You may no longer edit this page, so your tick was dropped.")
+    length <$> findAll ui ".page-body input[data-task]" `shouldReturn` 0
+    length <$> findAll ui ".page-ticks-count" `shouldReturn` 0
+    find ui ".page-ticks-dismiss" >>= click
+    eventually $ computedStyle ".page-ticks" "display" `shouldReturn` "none"
 
   it "does not overwrite a page saved elsewhere: keeps the ticks on it when its tasks are the same, and offers a reload when not" $ runPage $ do
     (ui, wiki) <- page m "user-admin" tasksText
