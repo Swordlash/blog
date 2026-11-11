@@ -442,6 +442,24 @@ markerEdits doc markers = Map.fromList [(m.lineAt, (m.columnAt, e)) | m <- marke
       -- would show as text.
       SetsAttributes -> Just DropAttributes
 
+-- | Whether a line opens a fence, after the bars of the quotations it is
+-- in: three backticks or three tildes.
+opensFence :: Text -> Bool
+opensFence line = any (`T.isPrefixOf` T.dropWhile (\c -> c == ' ' || c == '\t' || c == '>') line) ["```", "~~~"]
+
+-- | A fence's opening line with more attributes, written as pandoc reads
+-- a fence's attributes: one pair of braces after the fence, with the
+-- language as the first class (@```{.mermaid .norender}@). The fence's own
+-- attributes come first, then the others, in their order.
+withFenceAttributes :: [Text] -> Text -> Text
+withFenceAttributes added line =
+  let (prefix, rest) = T.span (\c -> c == ' ' || c == '\t' || c == '>') line
+      (fence, info) = T.span (\c -> Just c == fmap fst (T.uncons rest)) rest
+      (word, braces) = T.breakOn "{" (T.strip info)
+      lang = T.strip word
+      inside t = T.unwords [T.strip (T.dropWhile (== '{') g) | g <- T.splitOn "}" t, not (T.null (T.strip (T.dropWhile (== '{') g)))]
+   in prefix <> fence <> "{" <> T.unwords (filter (not . T.null) (["." <> lang | not (T.null lang)] <> [inside braces] <> map inside added)) <> "}"
+
 -- | A text with every line ended by @\\n@: CommonMark ends a line at
 -- @\\r\\n@, at @\\r@ and at @\\n@ alike, so the lines of the result are
 -- those the wiki's parser counts ('BoxMarker').
@@ -586,7 +604,26 @@ withBoxes source markers edits bars = case family of
                             Just j | markerAt (T.drop i text) == Just (Opening SpoilerName) -> [before <> T.drop j text]
                             _ -> [text]
                           _ -> around [before <> placeholder]
-                (Nothing, Nothing) -> [text]
+                (Nothing, Nothing)
+                  | Just attrs <- Map.lookup n carried -> [withFenceAttributes attrs text]
+                  | otherwise -> [text]
+        -- The attributes of the lines of attributes alone that a fence
+        -- follows, by the fence's line: the page gives them to the fence
+        -- (@{.norender}@ on the line before an @html@ fence), and pandoc
+        -- reads a fence's attributes only after its fence, where they go.
+        dropped k = case Map.lookup k edits of
+          Just (_, DropAttributes) -> True
+          _ -> False
+        carried =
+          Map.fromListWith
+            (flip (<>))
+            [ (fence, [T.strip (T.drop i text)])
+            | (n, (column, DropAttributes)) <- Map.toList edits
+            , Just text <- [atMay lines' (n - 1)]
+            , Just i <- [indexAt text column]
+            , Just fence <- [head (dropWhile dropped [n + 1 .. length lines'])]
+            , maybe False opensFence (atMay lines' (fence - 1))
+            ]
      in ( T.intercalate "\n" (concat (zipWith rewrite [1 ..] lines'))
         , Map.fromList [(placeholder, (m, original)) | (placeholder, m, _, original) <- Map.elems placed]
         , Map.fromList [(placeholder, (line, e)) | (line, placeholder) <- Map.toList linePlaceholders, Just (_, e) <- [Map.lookup line edits]]
