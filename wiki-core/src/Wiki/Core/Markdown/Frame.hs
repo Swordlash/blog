@@ -46,6 +46,7 @@
 module Wiki.Core.Markdown.Frame
   ( -- * The frame
     frameDocument
+  , FrameScheme (..)
   , frameStylesheet
 
     -- * Its sandbox
@@ -82,6 +83,26 @@ sandboxes = [frameSandbox, scriptSandbox]
 frameStylesheet :: Text
 frameStylesheet = "style.css"
 
+-- | 'FrameScheme' is the colours an @html@ fence's frame is drawn in: those
+-- of the page around it. A page has the system's colour scheme, light or
+-- dark as the reader's system prefers, and the frame follows it as the page
+-- does, at once when the preference changes (the wiki has no switch of its
+-- own). A slide has its deck's theme's colours whatever the system prefers
+-- ("Wiki.Core.Slides"), and a frame on it has them too, or its text would
+-- be the system's colour on the slide's background. It is decided when the
+-- page is rendered, so that the prerender and the program write the same
+-- document.
+data FrameScheme
+  = -- | The system's colour scheme, as a page has it.
+    SystemScheme
+  | -- | The light colours, whatever the system prefers: a slide of a light
+    -- theme.
+    LightScheme
+  | -- | The dark colours, whatever the system prefers: a slide of the dark
+    -- theme.
+    DarkScheme
+  deriving stock (Eq, Show)
+
 -- | The document an @html@ fence's frame holds, for its @srcdoc@
 -- attribute: the wiki's stylesheet in a cascade layer of its own, then the
 -- block's HTML, as the allowlist kept it and written out again
@@ -89,12 +110,22 @@ frameStylesheet = "style.css"
 -- class="page-body">@ in a @\<body class="html-frame">@. The stylesheet
 -- styles the wrapper as it styles the page's body, and the body as a
 -- frame's (no margin, no background of its own: the page's shows through).
--- The author's styles are in the block, after the stylesheet, and outside
--- any layer, so they win over the wiki's.
-frameDocument :: Text -> Text
-frameDocument content =
+-- The body's class also names the colours it is drawn in, when they are
+-- not the system's ('FrameScheme'): @html-frame-light@ or
+-- @html-frame-dark@, which the stylesheet gives a slide's palettes. The
+-- author's styles are in the block, after the stylesheet, and outside any
+-- layer, so they win over the wiki's.
+frameDocument :: FrameScheme -> Text -> Text
+frameDocument scheme content =
   "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>@import url(\""
     <> frameStylesheet
-    <> "\") layer(wiki);</style></head><body class=\"html-frame\"><div class=\"page-body\">"
+    <> "\") layer(wiki);</style></head><body class=\""
+    <> bodyClass
+    <> "\"><div class=\"page-body\">"
     <> content
     <> "</div></body></html>"
+  where
+    bodyClass = case scheme of
+      SystemScheme -> "html-frame"
+      LightScheme -> "html-frame html-frame-light"
+      DarkScheme -> "html-frame html-frame-dark"

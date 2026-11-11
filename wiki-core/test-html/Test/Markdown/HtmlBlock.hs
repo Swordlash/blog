@@ -17,7 +17,7 @@ import Test.Hspec
 import Test.Markdown.Html
 import Text.HTML.TagSoup (Tag (..), parseTags)
 import Wiki.Core.Markdown
-import Wiki.Core.Markdown.Frame (frameDocument, frameSandbox)
+import Wiki.Core.Markdown.Frame (FrameScheme (..), frameDocument, frameSandbox)
 
 shows' :: Text -> Text -> Expectation
 shows' source expected = markdown source `shouldReturn` expected
@@ -47,7 +47,7 @@ srcdocOf markup = case parseTags markup of
 -- | The document the frame of an html fence holding this HTML shows, with
 -- this content.
 holding :: Text -> Text -> Expectation
-holding html content = (srcdocOf =<< inFrame html) `shouldReturn` frameDocument content
+holding html content = (srcdocOf =<< inFrame html) `shouldReturn` frameDocument SystemScheme content
 
 spec :: Spec
 spec = describe "Markdown.Render, an html fence" $ do
@@ -59,7 +59,7 @@ spec = describe "Markdown.Render, an html fence" $ do
     it "writes the frame's document into its srcdoc, escaped, and nothing else" $
       inFrame "<p class=\"c-red\">Hi</p>"
         `shouldReturn` ( "<iframe sandbox=\"allow-same-origin allow-popups allow-popups-to-escape-sandbox\" srcdoc=\""
-                           <> escaped (frameDocument "<p class=\"c-red\">Hi</p>")
+                           <> escaped (frameDocument SystemScheme "<p class=\"c-red\">Hi</p>")
                            <> "\"></iframe>"
                        )
     it "keeps the author's styles, attributes and style elements" $
@@ -81,7 +81,7 @@ spec = describe "Markdown.Render, an html fence" $ do
     it "keeps a link to a page whose address is a fragment, as a router that keeps its routes there writes it" $ do
       let hashRouted = framed {pageHref = ("#/" <>)}
       markup <- markdownWith hashRouted "```html\n<a href=\"guide\">guide</a>\n```\n"
-      srcdocOf markup `shouldReturn` frameDocument "<a href=\"#/guide\" target=\"_blank\" rel=\"noopener noreferrer\">guide</a>"
+      srcdocOf markup `shouldReturn` frameDocument SystemScheme "<a href=\"#/guide\" target=\"_blank\" rel=\"noopener noreferrer\">guide</a>"
 
     describe "whatever the block holds, nothing of it lands outside the srcdoc" $ do
       let hostile =

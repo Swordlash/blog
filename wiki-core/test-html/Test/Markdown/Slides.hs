@@ -33,6 +33,21 @@ spec = describe "Slides.renderDeck" $ do
                      , ("<p><i>x1</i> and <i>x2</i></p>", "<i>code1</i>")
                      ]
 
+  it "draws an html fence's frame on a slide in its theme's colours, and in its notes in the page's" $ do
+    -- The document the frame would show, as its text.
+    let opts = defaultOptions {htmlBlock = \_ _ document -> HH.text document}
+        fence = "```html\n<p>x</p>\n```"
+        deck theme = "[[!slides]]{theme=" <> theme <> "}\n\n" <> fence <> "\n\n[[!notes]]\n" <> fence <> "\n[[/notes]]"
+        schemes theme = for (rendered opts (deck theme)) $ \s -> do
+          body <- renderHtml s.body
+          notes <- renderHtml s.notes
+          pure (bodyClass body, bodyClass notes)
+        -- Written as text, its < escaped.
+        bodyClass t = T.takeWhile (/= '"') (snd (T.breakOnEnd "&lt;body class=\"" t))
+    schemes "dark" `shouldReturn` [("html-frame html-frame-dark", "html-frame")]
+    schemes "light" `shouldReturn` [("html-frame html-frame-light", "html-frame")]
+    schemes "beamer" `shouldReturn` [("html-frame html-frame-light", "html-frame")]
+
   it "sets a formula with the macros defined on the slides before it" $ do
     let opts = defaultOptions {mathInline = \_ (Macros ms) tex -> HH.text (tex <> ":" <> show (length ms))}
         slides = rendered opts "$\\newcommand{\\R}{\\mathbb{R}}$\n\n---\n\n$\\R$"

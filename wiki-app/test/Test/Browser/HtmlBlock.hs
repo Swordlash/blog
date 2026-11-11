@@ -28,7 +28,7 @@ import Wiki.App.Islands (Island (..), MonadIslands)
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
-import Wiki.Core.Markdown.Frame (frameDocument)
+import Wiki.Core.Markdown.Frame (FrameScheme (..), frameDocument)
 import Wiki.Core.Markdown.Html (allowedElements)
 import Wiki.Core.Space qualified as Core
 
@@ -112,8 +112,33 @@ spec m = describe "an html fence" $ do
         (high, _, _) <- heights (".page-body iframe.wiki-html:nth-of-type(" <> show n <> ")")
         (n, abs (high - expected) <= 2) `shouldBe` (n, True)
 
+  describe "on a slide, drawn in the slide's colours, whatever the system's" $ do
+    let slides = PageSlides (slugs ["team", "projects"]) (slugs ["html-blocks"]) 1 1
+        onSlide = ".slide-frame.current .slide iframe.wiki-html"
+        deck theme extra = "[[!slides]]{theme=" <> theme <> "}\n\n## A slide\n\n```html\n" <> extra <> "<p id=\"text\">Readable</p>\n```\n"
+    it "is light text on a dark slide under the system's light scheme" $ runPage $ do
+      ui <- pageAt m (deck "dark" "") slides
+      _ <- find ui onSlide
+      slideText <- computedStyle ".slide-frame.current .slide" "color"
+      slideText `shouldBe` "rgb(230, 237, 243)"
+      eventually $ frameStyleIn onSlide "#text" "color" `shouldReturn` slideText
+    it "is dark text on a light slide whatever the root's palette, as under the system's dark scheme" $ runPage $ do
+      -- The runner's system is light; the dark scheme gives the root the
+      -- dark palette, which the block's own rule does here.
+      ui <- pageAt m (deck "light" "<style>:root { --text: rgb(230, 237, 243) }</style>\n") slides
+      _ <- find ui onSlide
+      slideText <- computedStyle ".slide-frame.current .slide" "color"
+      slideText `shouldBe` "rgb(31, 35, 40)"
+      eventually $ frameStyleIn onSlide "#text" "color" `shouldReturn` slideText
+    it "is the page's colours on a page" $ runPage $ do
+      ui <- page m "```html\n<p id=\"text\">Readable</p>\n```\n"
+      _ <- find ui ".page-body iframe.wiki-html"
+      pageText <- computedStyle ".page-body" "color"
+      eventually $ frameStyle "#text" "color" `shouldReturn` pageText
+      frameCount "body.html-frame-light, body.html-frame-dark" `shouldReturn` 0
+
   it "runs no script even written straight into the frame's document: the sandbox forbids it" $ runPage $ do
-    ui <- mount m (Islands.component @(Const Void) @Void) (HtmlFrame (frameDocument "<p>shown</p><script>parent.wikiFrameScriptRan = 'script'</script><img src=\"nowhere.png\" onerror=\"parent.wikiFrameScriptRan = 'handler'\">"))
+    ui <- mount m (Islands.component @(Const Void) @Void) (HtmlFrame (frameDocument SystemScheme "<p>shown</p><script>parent.wikiFrameScriptRan = 'script'</script><img src=\"nowhere.png\" onerror=\"parent.wikiFrameScriptRan = 'handler'\">"))
     _ <- find ui "iframe.wiki-html"
     eventually $ frameCountIn "iframe.wiki-html" "script" `shouldReturn` 1
     -- The image's error has come and gone by the time the frame loaded.
@@ -294,7 +319,16 @@ page
   ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => Text
   -> PageM s (Mounted s Shell.Query Void m)
-page m body = startChanged m withPage (Just "user-admin") (Page (slugs ["team", "projects"]) (slugs ["html-blocks"]))
+page m body = pageAt m body (Page (slugs ["team", "projects"]) (slugs ["html-blocks"]))
+
+-- | 'page', at a route of its own: the page as slides, say.
+pageAt
+  :: forall m
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  => Text
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+pageAt m body = startChanged m withPage (Just "user-admin")
   where
     withPage st = case head (filter (\s -> s.name == "Projects") (Map.elems st.spaces)) of
       Just (s :: Core.Space) -> fst (insertPage s.id Nothing "HTML blocks" body demoNow st)

@@ -158,7 +158,7 @@ import Halogen.HTML.Properties qualified as HP
 import Protolude
 import Wiki.Core.Markdown.Ast
 import Wiki.Core.Markdown.Box (BoxCounter, BoxIcon (..), BoxKind (..), Numbering, alertKindName, boxCaption, boxStyle, countBox, countSection, definedKind, noNumbers, startCounting)
-import Wiki.Core.Markdown.Frame (frameDocument)
+import Wiki.Core.Markdown.Frame (FrameScheme (..), frameDocument)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
 import Wiki.Core.Markdown.Toc (contentsNav, tableOfContents)
@@ -195,6 +195,9 @@ data Options page w i = Options
   -- ^ An @html@ fence: its source, as written, and the document its frame
   -- shows ('Wiki.Core.Markdown.Frame.frameDocument'), for the frame's
   -- @srcdoc@.
+  , frameScheme :: FrameScheme
+  -- ^ The colours an @html@ fence's frame is drawn in: the system's on a
+  -- page, by default, and a slide's theme's on a slide ("Wiki.Core.Slides").
   , resolveLink :: Text -> LinkTarget page
   -- ^ What a link's or an embed's destination, as written, points at.
   , pageHref :: page -> Text
@@ -263,6 +266,7 @@ defaultOptions =
     , mermaid = \_ src -> HH.pre [HP.class_ (HH.ClassName "mermaid")] [HH.text src]
     , tikz = \_ src -> HH.pre [HP.class_ (HH.ClassName "tikz")] [HH.text src]
     , htmlBlock = \_ src _ -> HH.pre_ [HH.code [HP.class_ (HH.ClassName "language-html")] [HH.text src]]
+    , frameScheme = SystemScheme
     , resolveLink = defaultResolveLink
     , pageHref = identity
     , resolveMention = const Nothing
@@ -373,7 +377,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
            in [if opts.copyButtons then HH.div [classesProp ["code-block"]] [listing, copyButton] else listing]
       Mermaid src -> island src <&> \k -> [opts.mermaid k src]
       Tikz src -> island src <&> \k -> [opts.tikz k src]
-      HtmlBlock src -> island src <&> \k -> [opts.htmlBlock k src (frameDocument (frameContent opts src))]
+      HtmlBlock src -> island src <&> \k -> [opts.htmlBlock k src (frameDocument opts.frameScheme (frameContent opts src))]
       -- A block of nothing but definitions (a page's macros, WP5.41) shows
       -- nothing; its macros hold for the formulas after it all the same.
       MathBlock tex
