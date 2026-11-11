@@ -1,5 +1,6 @@
--- | The frame an html fence is shown in ("Wiki.Core.Markdown.Frame"): its
--- sandboxes, and the document it holds.
+-- | The frames the wiki writes ("Wiki.Core.Markdown.Frame"): an html
+-- fence's and an interactive SVG's, their sandboxes, the document an html
+-- fence's holds, and which attachments have an interactive form.
 module Test.Markdown.Frame (spec) where
 
 import Data.Text qualified as T
@@ -17,11 +18,20 @@ spec = describe "Markdown.Frame" $ do
       sandboxes `shouldMatchList` [frameSandbox, scriptSandbox]
     it "run no script in an html fence's frame, which keeps its origin and opens links in ordinary tabs" $
       T.words frameSandbox `shouldMatchList` ["allow-same-origin", "allow-popups", "allow-popups-to-escape-sandbox"]
-    it "keep the frame that runs scripts off the wiki's origin" $
-      T.words scriptSandbox `shouldNotContain` ["allow-same-origin"]
-    it "allow no form, navigation of the page or download in either" $
+    it "let the frame that runs scripts do nothing else: no origin of the wiki's, no popup" $
+      T.words scriptSandbox `shouldBe` ["allow-scripts"]
+    it "allow no form, navigation of the page, dialog or download in either" $
       for_ sandboxes $ \sandbox ->
         T.words sandbox `shouldSatisfy` all (`notElem` ["allow-forms", "allow-top-navigation", "allow-top-navigation-by-user-activation", "allow-downloads", "allow-modals"])
+
+  describe "an interactive SVG" $ do
+    it "is an attachment stored as an SVG, in any case of letters, with parameters or none" $ do
+      framesInteractively "image/svg+xml" `shouldBe` True
+      framesInteractively "Image/SVG+XML" `shouldBe` True
+      framesInteractively "image/svg+xml; charset=utf-8" `shouldBe` True
+    it "is no attachment of another type, an SVG's name notwithstanding" $
+      for_ ["image/png", "text/html", "application/xml", "image/svg", "image/svg+xml-compressed", "image/svg+xml; name=\"é\"", "application/octet-stream", ""] $ \t ->
+        (t, framesInteractively t) `shouldBe` (t, False)
 
   describe "the frame's document" $ do
     it "imports the wiki's stylesheet into a layer, then holds the block in the page's wrapper" $

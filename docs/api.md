@@ -316,6 +316,26 @@ one that lives on the web (`"SourceUrl"`) is fetched at its own URL.
 attachment's name, so that a browser saving it names the file; a name that is
 not the attachment's is 404.
 
+An attachment stored as an SVG (`image/svg+xml`, its parameters left off,
+in any case) has an interactive form, the same address with `?interactive`
+(`Wiki.Api.Links.attachmentFrameUrl`), which a page's frame loads for
+`![…](attachment:x.svg){.interactive}` (`MonadWiki.attachmentFrameUrl`: the
+HTTP backend gives it in a secure context only, the in-memory backend
+never). Asked by a frame's load, `Sec-Fetch-Dest: iframe`, it answers the
+same bytes, permission check and `Cache-Control`, with
+`Content-Disposition: inline`, `Content-Security-Policy: sandbox
+allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src
+'unsafe-inline'; img-src data:; frame-ancestors 'self'; webrtc 'block'`
+(`Wiki.Api.ContentPolicy.interactiveSvgPolicy`) and an `ETag` of its own,
+the bytes' tag with `-interactive`: the SVG's own scripts and styles run
+with an opaque origin and nothing loads or connects. Anything else asking
+with `?interactive` (a tab's navigation, an `<img>`, a fetch, a request
+without `Sec-Fetch-Dest`), and any attachment that is not an SVG, gets the
+plain answer: for an SVG a download, under a policy that runs no script.
+Every answer to an address with `?interactive` carries
+`Vary: Sec-Fetch-Dest`, so a browser's cache never gives one the
+other's.
+
 ### Drafts
 
 | Method | Path | Body | Response | Errors | `MonadWiki` |

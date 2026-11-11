@@ -62,7 +62,6 @@ import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID)
 import Data.Coerce (coerce)
 import Data.List (zip3)
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -94,8 +93,6 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
-import Wiki.Core.Attachment (Attachment (..))
-import Wiki.Core.Id (AttachmentId)
 import Wiki.Core.Markdown (parseMarkdown)
 import Wiki.Core.Page (Page (attachments, body, title), PageSummary)
 import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), RenderedSlide (..), Slide (..), SlideTitle (..), deckOf, showingStep, themeName)
@@ -122,7 +119,7 @@ data Loaded
   | Failed WikiError
   | -- | The page, the URL of each of its attachments, the page as slides,
     -- and the people it mentions ("Wiki.App.View.Body").
-    Ready Page (Map AttachmentId Text) Deck (Map Text Author)
+    Ready Page Body.Addresses Deck (Map Text Author)
 
 data State = State
   { input :: Input
@@ -208,8 +205,8 @@ component =
     render st = case st.loaded of
       Loading -> [hh|<p class="loading">Loading…</p>|]
       Failed e -> failureView e Retry
-      Ready page urls deck people ->
-        let place = Body.Place {context = st.input.context, space = st.input.space, pages = st.input.pages, path = st.input.path, attachments = page.attachments, urls, people}
+      Ready page addresses deck people ->
+        let place = Body.Place {context = st.input.context, space = st.input.space, pages = st.input.pages, path = st.input.path, attachments = page.attachments, urls = addresses.urls, frames = addresses.frames, people}
             count = length deck.slides
             -- The slide shown at its step; every other slide whole. The
             -- copies for printing come after the slides in the document
@@ -521,9 +518,9 @@ fetch input =
   getPage input.space.id input.path >>= \case
     Left e -> pure (Failed e)
     Right page -> do
-      urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
+      addresses <- Body.attachmentAddresses page.attachments
       people <- Body.askPeople (Body.unasked Body.noPeople [page.body])
-      pure (Ready page urls (either unreadable deckOf (parseMarkdown page.body)) people)
+      pure (Ready page addresses (either unreadable deckOf (parseMarkdown page.body)) people)
   where
     unreadable _ = deckOf []
 

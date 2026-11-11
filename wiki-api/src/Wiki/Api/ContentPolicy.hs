@@ -34,6 +34,19 @@
 --   path the wiki is served under), and @'none'@ would refuse it.
 -- * @frame-ancestors 'none'@ is in the header only: a browser ignores it in
 --   a meta element, and says so in the console.
+-- * @frame-src 'self'@: an interactive SVG is shown in a frame that loads
+--   the attachment's interactive form from the wiki ("Wiki.Core.Markdown.Frame").
+--   It lets the wiki's own addresses into a frame, and no other site's. A
+--   wiki page cannot be framed for it, since every page answers
+--   @frame-ancestors 'none'@; an attachment's plain form answers with a
+--   @sandbox@ that runs no script; and an @html@ fence's @srcdoc@ frame,
+--   which inherits this policy, holds no frame (its allowlist drops
+--   @iframe@), and a frame nested in it would inherit its sandbox, which
+--   runs no script. A narrower source, the attachments' path alone, would
+--   need the wiki's origin written into the policy for each request,
+--   since @'self'@ takes no path; Chromium was tried with it and honours
+--   it, but a proxy that does not pass the wiki's host on would then break
+--   every frame.
 --
 -- @'unsafe-inline'@ is given to styles only, because KaTeX, Mermaid and
 -- CodeMirror set styles from their scripts. @'wasm-unsafe-eval'@ is what
@@ -51,6 +64,7 @@ module Wiki.Api.ContentPolicy
     basePolicy
   , pagePolicy
   , headerPolicy
+  , interactiveSvgPolicy
 
     -- * The assistant's hosts
   , providerHosts
@@ -71,6 +85,7 @@ import Data.Char (isAsciiLower)
 import Data.Text qualified as T
 import Protolude
 import Wiki.Api.ContentPolicy.Embed (embedPolicy)
+import Wiki.Core.Markdown.Frame (scriptSandbox)
 
 -- | The policy as @web\/index.html@ carries it: the demo's policy, with
 -- no assistant host beyond the providers'.
@@ -113,6 +128,39 @@ pagePolicy hosts = renderPolicy (withSources "connect-src" hosts (directives bas
 -- buttons under its own.
 headerPolicy :: [Text] -> Text
 headerPolicy hosts = renderPolicy (directives (pagePolicy hosts) <> [("frame-ancestors", ["'none'"])])
+
+-- | The policy the server sends with an SVG attachment's interactive form,
+-- the address an interactive SVG's frame loads ("Wiki.Core.Markdown.Frame"):
+-- the SVG's own inline scripts and styles run, and nothing else. The
+-- server sends it only to a frame's load ("Wiki.Server.Api"); a tab gets
+-- the plain answer.
+interactiveSvgPolicy :: Text
+interactiveSvgPolicy =
+  renderPolicy
+    [ -- The frame's own sandbox ('scriptSandbox', scripts and nothing more),
+      -- so that the document has an opaque origin even where no frame gives
+      -- it one, should the server's rule that only a frame gets this answer
+      -- ever be got round: no cookie, no storage, no way into the page.
+      ("sandbox", T.words scriptSandbox)
+    , -- Nothing loads or connects but what follows: no fetch,
+      -- XMLHttpRequest, WebSocket or beacon (there is no connect-src), no
+      -- frame, no font, no object.
+      ("default-src", ["'none'"])
+    , -- The SVG's own script elements and event handlers (a flame graph's
+      -- onclick), and no script from an address.
+      ("script-src", ["'unsafe-inline'"])
+    , -- The SVG's own style elements and attributes.
+      ("style-src", ["'unsafe-inline'"])
+    , -- Images written into the SVG itself, and none from an address,
+      -- which could carry what the script read out of the frame.
+      ("img-src", ["data:"])
+    , -- Only the wiki's own pages may show it in a frame.
+      ("frame-ancestors", ["'self'"])
+    , -- No WebRTC connection, whose STUN packets no fetch directive
+      -- covers. Chromium does not know this directive yet and ignores it,
+      -- as tried (see "Wiki.Core.Markdown.Frame"); it holds where known.
+      ("webrtc", ["'block'"])
+    ]
 
 -- | The providers' API addresses: Anthropic's and OpenAI's, which the
 -- page's @connect-src@ allows in every wiki. They are the sources of the

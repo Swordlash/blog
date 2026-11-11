@@ -220,6 +220,7 @@ import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedPage, PendingMember
 import Wiki.Api.Encrypted qualified as E
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
+import Wiki.Api.Links (interactiveForm)
 import Wiki.Api.Notifications (FeedAddress (..), NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark, feedAddressOf, maxPeopleFound, searchable)
 import Wiki.Api.Opaque (NewAccountRecord (..), PasswordRecord (..), Stretch)
 import Wiki.Api.Security (ResetToken (..), resetLifetime)
@@ -253,6 +254,7 @@ import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (mentionsWhole)
 import Wiki.Core.Markdown.Box (numberingName)
+import Wiki.Core.Markdown.Frame (framesInteractively)
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder, savedAs)
@@ -1495,6 +1497,13 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
     SourceBlob _ -> do
       address <- StoredWiki (asks (\env -> env.storage.config.attachmentAddress))
       answer "" (maybe "" (const (address a)) <$> db (loadAttachment a.id))
+
+  -- The interactive form of an SVG the server stores: its address with
+  -- ?interactive, as the HTTP backend writes it, so that the page the
+  -- server prerenders and the page the program renders have the same frame.
+  attachmentFrameUrl a = case a.source of
+    SourceBlob _ | framesInteractively a.mediaType.text -> (\url -> if T.null url then Nothing else Just (interactiveForm url)) <$> attachmentUrl a
+    _ -> pure Nothing
   searchPages = answer [] . searchPagesTx
   getDraft = run Reads . getDraftTx
   saveDraft pid base title = run Writes . saveDraftTx pid base title

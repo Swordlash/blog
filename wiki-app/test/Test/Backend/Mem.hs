@@ -128,6 +128,17 @@ spec = do
       st' <- readIORef ref
       Map.size st'.objectUrls `shouldBe` 0
 
+    it "gives an uploaded SVG no interactive form: the demo has no server to send its policy" $ do
+      ref <- newMemWiki (demoState demoNow)
+      let docs = either (panic . show) identity (parsePath "docs")
+          tour = either (panic . show) identity (parsePath "tour")
+      svg <- runMemWiki ref $ do
+        switchUser (Just (UserId "user-admin"))
+        space <- either (panic . show) identity <$> getSpace docs
+        page <- either (panic . show) identity <$> getPage space.id tour
+        either (panic . show) identity <$> uploadAttachment page.id "flame.svg" "image/svg+xml" "<svg/>"
+      runMemWiki ref (attachmentFrameUrl svg) `shouldReturn` Nothing
+
     it "gives an attachment on the web its own URL" $ do
       ref <- newMemWiki (demoState demoNow)
       let guidePath = either (panic . show) identity (parsePath "markdown-guide")

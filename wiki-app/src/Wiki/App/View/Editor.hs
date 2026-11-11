@@ -352,7 +352,7 @@ import Wiki.Core.Assistant.Prompt (Span)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Diff (Diff (..), diffText)
 import Wiki.Core.Draft qualified as D
-import Wiki.Core.Id (AttachmentId, PageId, UserId)
+import Wiki.Core.Id (PageId, UserId)
 import Wiki.Core.Markdown (attachmentReference)
 import Wiki.Core.Markdown.Box (BoxKind (label, name), alertKindName, builtInKinds, kindTitle)
 import Wiki.Core.Markdown.Edit
@@ -427,7 +427,7 @@ data Work = Work
   , shownBody :: Text
   -- ^ What the preview shows: the work as it was when the typing stopped.
   , attachments :: [Attachment]
-  , urls :: Map AttachmentId Text
+  , addresses :: Body.Addresses
   }
 
 data Loaded = Loading | Failed WikiError | Ready Work
@@ -466,7 +466,7 @@ data Presence
 data Clash = Clash
   { theirs :: Page
   -- ^ The page as now saved.
-  , theirUrls :: Map AttachmentId Text
+  , theirAddresses :: Body.Addresses
   , by :: Maybe Author
   -- ^ Who saved it, as its history names them.
   , after :: After
@@ -1539,7 +1539,7 @@ component =
             <ul>
               {% for a in work.attachments %}
                 <li>
-                  <a href={{ Map.findWithDefault "" a.id work.urls }} download={{ a.name.text }}>{{ a.name.text }}</a>
+                  <a href={{ Map.findWithDefault "" a.id work.addresses.urls }} download={{ a.name.text }}>{{ a.name.text }}</a>
                   <span class="attachment-meta">{{ a.mediaType.text }}, {{ fileSize a.size }}</span>
                   <button type="button" class="attachment-insert" onClick={{ const (Insert a) }}>Insert</button>
                 </li>
@@ -1786,7 +1786,7 @@ component =
             withPage (void . discardDraft)
             modify $ \st ->
               st
-                { loaded = Ready (workOf c.theirs c.theirUrls)
+                { loaded = Ready (workOf c.theirs c.theirAddresses)
                 , loads = st.loads + 1
                 , conflict = Nothing
                 , changedSince = Nothing
@@ -2107,7 +2107,7 @@ component =
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
-      loaded <- either Failed (\(page, urls) -> Ready (workOf page urls)) <$> fetchPage input
+      loaded <- either Failed (\(page, addresses) -> Ready (workOf page addresses)) <$> fetchPage input
       modify (\st -> st {loaded, loads = st.loads + 1, conflict = Nothing, changedSince = Nothing})
       syncGuard
       takeOver
@@ -2331,13 +2331,13 @@ component =
       input <- gets (\st -> st.input)
       fetchPage input >>= \case
         Left _ -> modify (\st -> st {problem = Just (Conflict why)})
-        Right (theirs, theirUrls) -> do
+        Right (theirs, theirAddresses) -> do
           by <- either (const Nothing) (\v -> v.author) <$> getVersion theirs.id theirs.updatedAt
           gets (\st -> st.loaded) >>= \case
             Ready w ->
               modify $ \st ->
                 st
-                  { conflict = Just Clash {theirs, theirUrls, by, after, way = Choosing w.title (diffText w.body theirs.body)}
+                  { conflict = Just Clash {theirs, theirAddresses, by, after, way = Choosing w.title (diffText w.body theirs.body)}
                   , changedSince = Nothing
                   }
             _ -> pass
@@ -2378,12 +2378,17 @@ component =
             Left e -> modify (\st -> st {problem = Just e})
             Right a -> do
               url <- attachmentUrl a
+              frame <- attachmentFrameUrl a
               -- An upload under a name the page already has replaces that
               -- attachment.
               modifyWork $ \w ->
                 w
                   { attachments = filter (\b -> b.name /= a.name) w.attachments <> [a]
-                  , urls = Map.insert a.id url w.urls
+                  , addresses =
+                      Body.Addresses
+                        { urls = Map.insert a.id url w.addresses.urls
+                        , frames = maybe identity (Map.insert a.id) frame w.addresses.frames
+                        }
                   }
               gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . announceUpload)
               insert (attachmentReference a.name.text a.mediaType.text)
@@ -2422,8 +2427,8 @@ fetchWork :: (MonadWiki n) => Input -> n Fetched
 fetchWork input =
   fetchPage input >>= \case
     Left e -> pure (Fetched (Failed e) Nothing False)
-    Right (page, urls) -> do
-      let work = workOf page urls
+    Right (page, addresses) -> do
+      let work = workOf page addresses
       -- A draft that cannot be read (because the author may not edit the
       -- page, say) counts as none: the editor says why it cannot edit, if
       -- it cannot.
@@ -2435,14 +2440,14 @@ fetchWork input =
               pure (Fetched (Ready work) (Just (Offered draft draft.savedAt page.updatedAt)) True)
         _ -> pure (Fetched (Ready work) Nothing False)
 
--- | The page the input names, with the URL of each of its attachments.
-fetchPage :: (MonadWiki n) => Input -> n (Either WikiError (Page, Map AttachmentId Text))
+-- | The page the input names, with the addresses of its attachments.
+fetchPage :: (MonadWiki n) => Input -> n (Either WikiError (Page, Body.Addresses))
 fetchPage input =
   getPage input.space.id input.path >>= \case
     Left e -> pure (Left e)
     Right page -> do
-      urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
-      pure (Right (page, urls))
+      addresses <- Body.attachmentAddresses page.attachments
+      pure (Right (page, addresses))
 
 -- | The page as it is saved, as work to edit.
 --
@@ -2450,8 +2455,8 @@ fetchPage input =
 -- without one gets it here, and its title is the line's from then on. What
 -- counts as saved is that text and title, so that opening a page and
 -- closing it again leaves nothing unsaved.
-workOf :: Page -> Map AttachmentId Text -> Work
-workOf page urls =
+workOf :: Page -> Body.Addresses -> Work
+workOf page addresses =
   Work
     { page
     , title
@@ -2463,7 +2468,7 @@ workOf page urls =
     , shownTitle = title
     , shownBody = body
     , attachments = page.attachments
-    , urls
+    , addresses
     }
   where
     -- A template keeps its text as it is: its first line is the heading
@@ -2497,7 +2502,7 @@ rebase c w =
     , savedTitle = c.theirs.title
     , savedBody = c.theirs.body
     , attachments = c.theirs.attachments
-    , urls = c.theirUrls
+    , addresses = c.theirAddresses
     }
 
 -- | The id of the user reading, which the live channel's editor names are
@@ -2543,7 +2548,8 @@ placeOf input work =
     , Body.pages = input.pages
     , Body.path = input.path
     , Body.attachments = work.attachments
-    , Body.urls = work.urls
+    , Body.urls = work.addresses.urls
+    , Body.frames = work.addresses.frames
     , -- The preview looks up the people the work mentions itself.
       Body.people = mempty
     }

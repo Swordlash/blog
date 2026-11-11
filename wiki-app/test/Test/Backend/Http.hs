@@ -50,9 +50,10 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..), vaultFormat, withSealed)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Backlink (Backlink (..))
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
+import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Notification (PageLocation (..))
 import Wiki.Core.Page (Page (..), summaryOf)
 import Wiki.Core.Path (parsePath, pathOf)
@@ -330,6 +331,15 @@ requests = describe "its requests" $ do
       url <- runHttpWiki env (attachmentUrl a)
       url `shouldSatisfy` (\u -> "api/v1/attachments/" `T.isPrefixOf` u || "https://" `T.isPrefixOf` u)
     readIORef asked `shouldReturn` []
+
+  it "gives a stored SVG's interactive address only where its frame can reach the server: a secure context, online, no kept copy" $ do
+    let svg = Attachment {id = AttachmentId "a1", name = FileName "flame.svg", mediaType = MimeType "image/svg+xml", size = 1, source = SourceBlob (BlobId "b1")}
+        png = Attachment {id = AttachmentId "a2", name = FileName "flame.png", mediaType = MimeType "image/png", size = 1, source = SourceBlob (BlobId "b2")}
+    let reach secure online keptCopy = FrameReach {secure, online, keptCopy}
+    frameUrlIn (reach True True False) svg `shouldBe` Just "api/v1/attachments/a1/flame.svg?interactive"
+    for_ [(s, o, k) | s <- [False, True], o <- [False, True], k <- [False, True], (s, o, k) /= (True, True, False)] $ \(s, o, k) ->
+      ((s, o, k), frameUrlIn (reach s o k) svg) `shouldBe` ((s, o, k), Nothing)
+    frameUrlIn (reach True True False) png `shouldBe` Nothing
 
 answers :: Spec
 answers = describe "its answers" $ do

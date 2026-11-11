@@ -42,6 +42,17 @@ spec = describe "Wiki.Api.ContentPolicy" $ do
     directive "frame-ancestors" (headerPolicy []) `shouldBe` Just ["'none'"]
     connectSources (headerPolicy ["https://openrouter.ai"]) `shouldContain` ["https://openrouter.ai"]
 
+  it "lets the wiki's own addresses into a frame, for an interactive SVG, and no other site's" $
+    directive "frame-src" basePolicy `shouldBe` Just ["'self'"]
+
+  describe "an interactive SVG's policy" $ do
+    it "runs the SVG's own scripts and styles in a sandbox of their own, loads nothing, and is framed by the wiki alone" $
+      interactiveSvgPolicy `shouldBe` "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'self'; webrtc 'block'"
+    it "never gives the document the wiki's origin, a way out of its frame, or a connection" $ do
+      directive "sandbox" interactiveSvgPolicy `shouldBe` Just ["allow-scripts"]
+      directive "connect-src" interactiveSvgPolicy `shouldBe` Nothing
+      [name | (name, sources) <- directives interactiveSvgPolicy, "'self'" `elem` sources] `shouldBe` ["frame-ancestors"]
+
   it "reads the policy back from its text" $
     renderPolicy (directives (headerPolicy ["https://a.example"])) `shouldBe` headerPolicy ["https://a.example"]
 

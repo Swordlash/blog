@@ -5,6 +5,7 @@ import Test.Hspec (hspec, parallel)
 import Test.Markdown.Document qualified as Document
 import Test.Markdown.Highlight qualified as Highlight
 import Test.Markdown.HtmlBlock qualified as HtmlBlock
+import Test.Markdown.InteractiveSvg qualified as InteractiveSvg
 import Test.Markdown.RawHtml qualified as RawHtml
 import Test.Markdown.Render qualified as Render
 import Test.Markdown.Slides qualified as Slides
@@ -14,6 +15,7 @@ main = hspec . parallel $ do
   Render.spec
   RawHtml.spec
   HtmlBlock.spec
+  InteractiveSvg.spec
   Document.spec
   Slides.spec
   Highlight.spec

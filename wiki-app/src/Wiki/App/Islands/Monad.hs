@@ -13,7 +13,8 @@
 -- the program has loaded.
 --
 -- An @html@ fence's frame is an island too ('fitFrame'): nothing draws
--- into it, but the page sizes it to its content.
+-- into it, but the page sizes it to its content. So is an interactive
+-- SVG's frame ('loadFrame'), whose address the island sets.
 --
 -- A moment in time is an island too ('renderTime'). The reader's browser
 -- writes it in their time zone and language, which a page rendered before
@@ -43,7 +44,8 @@ import Wiki.Core.Markdown.Tikz (TikzDocument (..))
 import Wiki.Core.Math (Macros (..))
 
 #if !defined(wasm32_HOST_ARCH) && !defined(javascript_HOST_ARCH)
-import Halogen.VDom.DOM.Monad (MemDOM, elementToNode, setTextContent)
+import Halogen.VDom.DOM.Monad (MemDOM, elementToNode, setAttribute, setTextContent)
+import Web.HTML.Common (AttrName (..))
 #endif
 
 -- One binding list for every backend: embedded in the wasm JSFFI module
@@ -144,6 +146,17 @@ class (Monad m) => MonadIslands m where
   default fitFrame :: (MonadTrans t, MonadIslands n, m ~ t n) => Element -> m ()
   fitFrame = lift . fitFrame
 
+  -- | Load an address into a frame, an interactive SVG's
+  -- ("Wiki.Core.Markdown.Frame"), unless the frame's @src@ attribute is
+  -- that address already. A browser loads a frame's document again
+  -- whenever its @src@ is set, even to the same address, so the address
+  -- is not a property Halogen writes: the program adopting a prerendered
+  -- page would load every frame twice. Natively the attribute is written
+  -- into the in-memory document, so that the prerendered page has it.
+  loadFrame :: Text -> Element -> m ()
+  default loadFrame :: (MonadTrans t, MonadIslands n, m ~ t n) => Text -> Element -> m ()
+  loadFrame url = lift . loadFrame url
+
   -- | A moment in time, as the reader's browser writes it
   -- ('Wiki.App.Browser.localTime').
   renderTime :: UTCTime -> Element -> m ()
@@ -174,6 +187,10 @@ instance MonadIslands BrowserDOM where
   highlightCode language code element = liftIO $ js_highlight element (toJSText (fromMaybe "" language)) (toJSText code)
 
   fitFrame element = liftIO $ js_fit_frame element
+
+  loadFrame url element = liftIO $ do
+    current <- element.getAttribute "src"
+    when (current /= Just url) (element.setAttribute "src" url)
 
   renderTime at element = liftIO $ localTime at >>= element.textContent_set
 
@@ -206,6 +223,9 @@ instance MonadIslands MemDOM where
   -- nothing goes inside the element (the serialiser takes an iframe's
   -- content as raw text).
   fitFrame _ = pure ()
+  -- The address goes into the prerendered page as the frame's src, which
+  -- the browser then finds there and leaves alone.
+  loadFrame url = setAttribute Nothing (AttrName "src") url
   renderTime at element = localTime at >>= (`asText` element)
 
 asText :: Text -> Element -> MemDOM ()

@@ -49,6 +49,20 @@
 -- link. A URL of an unknown type is an image, as in plain Markdown. An
 -- embedded page is a link to it.
 --
+-- An SVG attachment with the class @interactive@
+-- (@![flame](attachment:flame.svg){.interactive}@) is shown in a frame
+-- that runs its scripts, cut off from the wiki ("Wiki.Core.Markdown.Frame"
+-- says how), when the attachment has an interactive form
+-- ('Wiki.Core.Markdown.Link.frameUrl') and the caller draws frames
+-- ('svgFrame'): a @\<span class=\"svg-frame\">@ that holds the frame,
+-- an island, and after it an empty
+-- @\<a class=\"svg-frame-download\" download>@ to the attachment's plain
+-- form, which downloads the file, whose label ("Download flame.svg") the
+-- stylesheet draws from its @download@ attribute, as a code block's copy
+-- button's, so that the page's text gains no words.
+-- Otherwise it is the image, as without the class; so is an interactive
+-- embed in a link's text, where a frame and its link cannot go.
+--
 -- __Layout.__ Headings carry their @id@, and end with an empty link to
 -- it, @\<a class=\"heading-anchor\">@, which the stylesheet shows as a @#@
 -- on hover. @[[!toc]]@ is the document's table of contents
@@ -182,7 +196,7 @@ import Halogen.HTML.Properties qualified as HP
 import Protolude
 import Wiki.Core.Markdown.Ast
 import Wiki.Core.Markdown.Box (BoxCounter, BoxIcon (..), BoxKind (..), Numbering, alertKindName, boxCaption, boxStyle, countBox, countSection, definedKind, noNumbers, startCounting)
-import Wiki.Core.Markdown.Frame (FrameScheme (..), frameDocument)
+import Wiki.Core.Markdown.Frame (FrameScheme (..), SvgFrame (..), frameDocument, interactiveClass, svgFrameHeight)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
 import Wiki.Core.Markdown.Tasks (taskLabel)
@@ -221,6 +235,12 @@ data Options page w i = Options
   -- its frame, if it gives one ('frameHeight'; otherwise the frame is as
   -- high as its content), and the document its frame shows
   -- ('Wiki.Core.Markdown.Frame.frameDocument'), for the frame's @srcdoc@.
+  , svgFrame :: Maybe (IslandKey -> SvgFrame -> HH.HTML w i)
+  -- ^ How an interactive SVG's frame is drawn
+  -- ("Wiki.Core.Markdown.Frame"), as an island: the application's page
+  -- draws it. 'Nothing' by default: the embed is then an image, as a feed
+  -- or an export shows it, since neither has the wiki's server behind it
+  -- to answer the frame.
   , frameScheme :: FrameScheme
   -- ^ The colours an @html@ fence's frame is drawn in: the system's on a
   -- page, by default, and a slide's theme's on a slide ("Wiki.Core.Slides").
@@ -301,6 +321,7 @@ defaultOptions =
     , mermaid = \_ src -> HH.pre [HP.class_ (HH.ClassName "mermaid")] [HH.text src]
     , tikz = \_ src -> HH.pre [HP.class_ (HH.ClassName "tikz")] [HH.text src]
     , htmlBlock = \_ src _ _ -> HH.pre_ [HH.code [HP.class_ (HH.ClassName "language-html")] [HH.text src]]
+    , svgFrame = Nothing
     , frameScheme = SystemScheme
     , resolveLink = defaultResolveLink
     , pageHref = identity
@@ -613,7 +634,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
         renderLink attrs dest' title xs
       Image written dest title xs -> do
         attrs <- ownAttrs written
-        pure (renderEmbed attrs dest title (plainText xs))
+        renderEmbed inLink attrs dest title (plainText xs)
       Math InlineMath tex -> formula tex <&> \(k, ms) -> [PNode (opts.mathInline k ms tex)]
       Math DisplayMath tex -> formula tex <&> \(k, ms) -> [PNode (opts.mathDisplay k ms tex)]
       FootnoteRef n _ -> do
@@ -649,16 +670,36 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
           | otherwise -> asText
         Unresolved -> [PNode (HH.span [classesProp ["link-unresolved"], HP.title dest] inner)]
 
-    renderEmbed :: Attributes -> Text -> Text -> Text -> [Piece w i]
-    renderEmbed attrs dest title caption = case opts.resolveLink dest of
+    -- An embed in a link's text ('inLink') is never a frame: the frame's
+    -- download link would be an anchor inside the link, which a browser
+    -- parsing the prerendered page moves out of it, and a click in a frame
+    -- never reaches the link around it.
+    renderEmbed :: Bool -> Attributes -> Text -> Text -> Text -> R [Piece w i]
+    renderEmbed inLink attrs dest title caption = case opts.resolveLink dest of
       External url
-        | safeSrc url -> [PNode (media (mediaKindOfPath url) url Nothing)]
-        | otherwise -> [PText caption]
+        | safeSrc url -> pure [PNode (media (mediaKindOfPath url) url Nothing)]
+        | otherwise -> pure [PText caption]
       Attachment ref
-        | safeSrc ref.url -> [PNode (media (maybe (mediaKindOfPath ref.name) mediaKindOfType ref.mediaType) ref.url (Just ref.name))]
-        | otherwise -> [PText caption]
-      Page page -> [PNode (HH.a [HP.href (opts.pageHref page)] [HH.text (nonEmptyOr dest caption)])]
-      Unresolved -> [PNode (HH.span [classesProp ["embed-unresolved"], HP.title dest] [HH.text (nonEmptyOr dest caption)])]
+        | not inLink
+        , interactiveClass `elem` classes attrs
+        , Just frame <- ref.frameUrl
+        , safeSrc frame
+        , Just draw <- opts.svgFrame -> do
+            k <- island frame
+            let shown = SvgFrame {url = frame, title = nonEmptyOr ref.name caption, height = fromMaybe svgFrameHeight (frameHeight attrs)}
+            pure
+              [ PNode
+                  ( HH.span
+                      (idAndClasses attrs ["svg-frame"])
+                      [ draw k shown
+                      , HH.a [HP.href ref.url, HP.download ref.name, classesProp ["svg-frame-download"], HP.attr (HH.AttrName "aria-label") ("Download " <> ref.name)] []
+                      ]
+                  )
+              ]
+        | safeSrc ref.url -> pure [PNode (media (maybe (mediaKindOfPath ref.name) mediaKindOfType ref.mediaType) ref.url (Just ref.name))]
+        | otherwise -> pure [PText caption]
+      Page page -> pure [PNode (HH.a [HP.href (opts.pageHref page)] [HH.text (nonEmptyOr dest caption)])]
+      Unresolved -> pure [PNode (HH.span [classesProp ["embed-unresolved"], HP.title dest] [HH.text (nonEmptyOr dest caption)])]
       where
         common :: (HasType "title" Text r, HasType "id" Text r, HasType "class" Text r) => [HP.IProp r i]
         common = titleProp title <> idAndClasses attrs [] <> sizes

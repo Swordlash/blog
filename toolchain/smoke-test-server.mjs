@@ -71,6 +71,19 @@
 //    service workers blocked, so that what it holds back or counts
 //    (app.wasm, the API's requests) passes through Playwright's routes,
 //    which a worker's requests and its cache's answers do not.
+// 9. Interactive SVGs (WP5.90): SVG attachments of a private space's page,
+//    embedded with {.interactive}, in frames the server prerenders and the
+//    program adopts without loading any again, and which the program makes
+//    itself in the editor's preview and the page after it, loading each
+//    once; a click in a flame graph's shape runs its script; a hostile SVG
+//    finds no cookie, no storage, no way into the page, no fetch to the
+//    wiki or another site, no tab and no dialog (its WebRTC connection is
+//    recorded); the same address opened in a tab is a download, whether
+//    its frame loaded first or not; another site cannot frame it; one that
+//    navigates its frame to the wiki's API arrives there signed out; the
+//    frames load with the service worker on too; and offline, over plain
+//    HTTP to a host that is not the loopback one, and in a link's text, the
+//    page shows the image instead.
 //
 // On PostgreSQL (toolchain/smoke-test.sh runs it so when one is at hand),
 // the server and the console find their database in WIKI_DATABASE_URL, which
@@ -83,6 +96,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
+import { createSocket } from "node:dgram";
 import { createServer } from "node:http";
 import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -273,12 +287,20 @@ async function newPage({ anonymous = false } = {}) {
   const context = await browser.newContext({ acceptDownloads: true, serviceWorkers: "block" });
   if (!anonymous) await context.addCookies([{ name: "wiki_session", value: sessionToken, url: origin }]);
   const page = await context.newPage();
-  page.on("pageerror", (error) => failures.push(`page error at ${page.url()}: ${error.message}`));
+  page.on("pageerror", (error) => {
+    // Playwright blocks service workers by reading navigator.serviceWorker
+    // in every frame, which throws in a frame sandboxed without the
+    // wiki's origin (an interactive SVG's): its own error, not the wiki's.
+    if (/^Failed to read the 'serviceWorker' property from 'Navigator': .*sandboxed/.test(error.message)) return;
+    failures.push(`page error at ${page.url()}: ${error.message}`);
+  });
   page.on("console", (message) => {
     // An address that is not there is served with a 404 (the walk loads
     // some on purpose); a conflict is a 409; a closed wiki's page, to a
     // visitor, a 401.
-    if (message.type() === "error" && !/\b(401|404|409)\b/.test(message.text())) {
+    // An interactive SVG's frame logs what its sandbox and its policy
+    // refuse, and the hostile one of part 9 tries everything.
+    if (message.type() === "error" && !/\b(401|404|409)\b/.test(message.text()) && !message.location().url.includes("?interactive")) {
       failures.push(`console error at ${page.url()}: ${message.text()}`);
     }
   });
@@ -446,6 +468,319 @@ const pageAt = async (spacePath, slug) => {
   assert.equal(found.status, 200, `no page at ${spacePath}/${slug}`);
   return found.body;
 };
+
+// An SVG that tries every way out of its frame and writes what happened
+// into its own text, which the test reads through Playwright's frame API,
+// since the SVG cannot tell the page. The other site is the address of a
+// server that counts what reaches it, and the port of a UDP socket that
+// counts the STUN packets a WebRTC connection sends there.
+const hostileSvg = (elsewhere, stunPort) => `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="200" onload="tryAll()">
+<script><![CDATA[
+var told = {};
+function tell(k, v) { told[k] = String(v); document.getElementById("report").textContent = JSON.stringify(told); }
+function attempt(k, f) { try { tell(k, f()); } catch (e) { tell(k, "threw " + e.name); } }
+function settle(k, p) { return p.then(function (r) { tell(k, "answered " + (r && r.status)); }, function (e) { tell(k, "failed " + e.name); }); }
+function tryAll() {
+  tell("script", "ran");
+  attempt("origin", function () { return window.origin; });
+  attempt("cookie", function () { return JSON.stringify(document.cookie); });
+  attempt("localStorage", function () { return localStorage.length; });
+  var framed = window.top !== window;
+  tell("framed", framed);
+  if (framed) {
+    attempt("parent", function () { return parent.document.title; });
+    attempt("top", function () { top.location.href = "${elsewhere}/top"; return "navigated"; });
+  }
+  attempt("open", function () { return window.open("${elsewhere}/popup"); });
+  attempt("alert", function () { alert("from the SVG"); return "returned"; });
+  attempt("form", function () {
+    var f = document.createElementNS("http://www.w3.org/1999/xhtml", "form");
+    f.action = "${elsewhere}/form"; document.documentElement.appendChild(f); f.submit(); return "submitted";
+  });
+  attempt("beacon", function () { return navigator.sendBeacon("${elsewhere}/beacon", "x"); });
+  attempt("webrtc", function () {
+    var pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:127.0.0.1:${stunPort}" }] });
+    pc.createDataChannel("out");
+    pc.createOffer().then(function (o) { return pc.setLocalDescription(o); });
+    return "constructed";
+  });
+  var img = document.createElementNS("http://www.w3.org/2000/svg", "image");
+  img.setAttribute("href", "${elsewhere}/image"); document.documentElement.appendChild(img);
+  var waits = [
+    settle("fetchWiki", fetch("/api/v1/session")),
+    settle("fetchElsewhere", fetch("${elsewhere}/fetch")),
+    new Promise(function (done) {
+      try {
+        var x = new XMLHttpRequest(); x.open("GET", "${elsewhere}/xhr");
+        x.onload = function () { tell("xhr", "answered " + x.status); done(); };
+        x.onerror = function () { tell("xhr", "failed"); done(); };
+        x.send();
+      } catch (e) { tell("xhr", "threw " + e.name); done(); }
+    }),
+    new Promise(function (done) {
+      try {
+        var w = new WebSocket("${elsewhere.replace("http:", "ws:")}/socket");
+        w.onopen = function () { tell("socket", "opened"); done(); };
+        w.onerror = function () { tell("socket", "failed"); done(); };
+      } catch (e) { tell("socket", "threw " + e.name); done(); }
+    })
+  ];
+  Promise.all(waits).then(function () { tell("done", true); });
+}
+]]></script>
+<text id="report" x="4" y="16" font-size="10">not run</text>
+</svg>`;
+
+// A flame graph's shape, as flamegraph.pl and inferno write one: frames
+// that zoom on a click, through the SVG's own script and handlers.
+const flameSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="120" onload="init()">
+<script><![CDATA[
+function init() { document.getElementById("status").textContent = "ready"; }
+function zoom(g) { g.querySelector("rect").setAttribute("width", "600"); document.getElementById("status").textContent = "zoomed " + g.id; }
+]]></script>
+<text id="status" x="4" y="16">not run</text>
+<g id="main" onclick="zoom(this)"><rect x="0" y="80" width="400" height="20" fill="orange"/><text x="4" y="94">main</text></g>
+<g id="child" onclick="zoom(this)"><rect x="0" y="58" width="150" height="20" fill="tomato"/><text x="4" y="72">child</text></g>
+</svg>`;
+
+// An SVG that navigates its own frame to the wiki's API, which then answers
+// without the session's cookie, as it answers any other site.
+const wanderSvg = `<svg xmlns="http://www.w3.org/2000/svg" onload="setTimeout(function () { location.href = '/api/v1/session'; }, 50)"><text y="16">leaving</text></svg>`;
+
+// 9. Interactive SVGs (WP5.90): the attachments of a private space's page,
+// embedded with {.interactive}, each in a frame that runs its scripts and
+// can reach nothing of the wiki's, prerendered by the server and adopted
+// without loading any frame again.
+async function interactiveSvgs() {
+  const reached = [];
+  // Another site: what reaches it is counted, but for its page that frames
+  // the wiki's SVG, below.
+  let framingPage = "";
+  const elsewhere = createServer((request, response) => {
+    if (request.url === "/framing") return response.writeHead(200, { "Content-Type": "text/html" }).end(framingPage);
+    reached.push(request.url);
+    response.writeHead(200, { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" }).end("elsewhere");
+  });
+  const elsewhereOrigin = `http://localhost:${await listenOn(elsewhere, "localhost")}`;
+  const stunPackets = [];
+  const stun = createSocket("udp4");
+  stun.on("message", (message) => stunPackets.push(message.length));
+  const stunPort = await new Promise((ready) => stun.bind(0, "127.0.0.1", () => ready(stun.address().port)));
+  try {
+    const space = await api("spaces", { method: "POST", body: JSON.stringify({ parent: null, name: "Flames" }) });
+    assert.equal(space.status, 201, "the space of the SVGs");
+    const body = [
+      "![Where the time goes](attachment:flame.svg){.interactive}",
+      "![hostile](attachment:hostile.svg){.interactive height=160}",
+      "![wander](attachment:wander.svg){.interactive height=120}",
+      "![still](attachment:flame.svg)",
+      "[![linked](attachment:flame.svg){.interactive}](https://example.com/)",
+    ].join("\n\n");
+    const made = await api(`spaces/${encodeURIComponent(space.body.id)}/pages`, { method: "POST", body: JSON.stringify({ parent: null, title: "Profiles", body }) });
+    assert.equal(made.status, 201, "the page of the SVGs");
+    const upload = async (name, mediaType, text) => {
+      const form = new FormData();
+      form.append("file", new Blob([text], { type: mediaType }), name);
+      const response = await fetch(url(`/api/v1/pages/${encodeURIComponent(made.body.id)}/attachments`), { method: "POST", headers: { "X-Wiki-Request": "1", Cookie: sessionCookie }, body: form });
+      assert.equal(response.status, 201, `uploading ${name}`);
+      return response.json();
+    };
+    const flame = await upload("flame.svg", "image/svg+xml", flameSvg);
+    const hostile = await upload("hostile.svg", "image/svg+xml", hostileSvg(elsewhereOrigin, stunPort));
+    await upload("wander.svg", "image/svg+xml", wanderSvg);
+    const framed = (a) => `/api/v1/attachments/${encodeURIComponent(a.id)}/${encodeURIComponent(a.name)}?interactive`;
+
+    // To a visitor, no form of a private space's SVG.
+    assert.equal((await fetch(url(framed(hostile)))).status, 404, "an interactive SVG of a private space, to a visitor");
+
+    const page = await newPage();
+    const loads = new Map();
+    page.on("request", (request) => {
+      if (request.url().includes("?interactive")) loads.set(request.url(), (loads.get(request.url()) ?? 0) + 1);
+    });
+    const popups = [];
+    page.on("popup", (popup) => popups.push(popup.url()));
+    const dialogs = [];
+    page.on("dialog", (dialog) => dialogs.push(dialog.message()));
+    const path = "/s/flames/p/profiles/";
+    const loaded = await loadAdopted(page, path);
+    assert.equal(loaded.status, 200, "the page of the SVGs");
+    assert.deepEqual(loaded.repairs, [], "adopting the page of the SVGs repaired it");
+    const frames = page.locator("#app .page-body .svg-frame iframe.wiki-svg");
+    assert.equal(await frames.count(), 3, "the interactive SVGs' frames");
+    for (const [i, src] of (await frames.evaluateAll((all) => all.map((f) => [f.getAttribute("sandbox"), f.getAttribute("src")]))).entries()) {
+      assert.equal(src[0], "allow-scripts", `frame ${i}'s sandbox`);
+      assert.ok(src[1].endsWith("?interactive"), `frame ${i}'s address: ${src[1]}`);
+    }
+    assert.equal(await page.locator("#app .page-body img[alt=still]").getAttribute("src"), framed(flame).replace(/^\//, "").replace("?interactive", ""), "an SVG without the class: the image");
+    // In a link's text, the image, which the page adopted unchanged.
+    assert.equal(await page.locator("#app .page-body a[href='https://example.com/'] > img[alt=linked]").count(), 1, "an interactive SVG in a link: the image");
+    await eventually(async () => assert.ok(page.frames().some((f) => f.url().includes("hostile.svg"))), "the hostile SVG's frame");
+
+    // A click in the flame graph changes it: its script ran.
+    const flameFrame = page.frames().find((f) => f.url().includes("flame.svg"));
+    await eventually(async () => assert.equal(await flameFrame.locator("#status").textContent(), "ready"), "the flame graph's script");
+    await flameFrame.locator("#child rect").click();
+    await eventually(async () => assert.equal(await flameFrame.locator("#status").textContent(), "zoomed child"), "a click in the flame graph");
+
+    // What the hostile SVG found it could do, in the frame.
+    const reportOf = async (frame) =>
+      eventually(async () => {
+        const told = JSON.parse(await frame.locator("#report").textContent());
+        assert.equal(told.done, "true", "not done yet");
+        return told;
+      }, "the hostile SVG's report");
+    const inFrame = await reportOf(page.frames().find((f) => f.url().includes("hostile.svg")));
+    assert.equal(inFrame.script, "ran", "the SVG's script");
+    assert.equal(inFrame.framed, "true");
+    assert.equal(inFrame.origin, "null", "the frame's origin");
+    assert.equal(inFrame.cookie, "threw SecurityError", "the wiki's cookies, from the frame");
+    assert.equal(inFrame.localStorage, "threw SecurityError", "the wiki's storage, from the frame");
+    assert.equal(inFrame.parent, "threw SecurityError", "the page, from the frame");
+    assert.equal(inFrame.top, "threw SecurityError", "navigating the page, from the frame");
+    assert.equal(inFrame.open, "null", "a tab, from the frame");
+    assert.match(inFrame.fetchWiki, /^failed/, "the wiki's API, from the frame");
+    assert.match(inFrame.fetchElsewhere, /^failed/, "another site, from the frame");
+    assert.match(inFrame.xhr, /^(failed|threw)/, "another site by XMLHttpRequest, from the frame");
+    assert.match(inFrame.socket, /^(failed|threw)/, "a WebSocket, from the frame");
+    // WebRTC is not stopped, by the sandbox or by the policy's webrtc
+    // 'block', which Chromium does not know: what the frame sent the STUN
+    // server it named is recorded, not refused (Wiki.Core.Markdown.Frame).
+    await page.waitForTimeout(1000);
+    console.log(`note: the hostile SVG's WebRTC connection: ${inFrame.webrtc}, and ${stunPackets.length} STUN packets reached the host it named`);
+    assert.equal(here(page), path, "the page navigated");
+    assert.deepEqual(popups, [], "a popup opened");
+    assert.deepEqual(dialogs, [], "a dialog shown");
+
+    // The SVG that navigates its frame to the wiki's API finds itself
+    // signed out there: the cookie is not sent from the frame.
+    const wanderer = await eventually(async () => {
+      const f = page.frames().find((frame) => frame.url().endsWith("/api/v1/session"));
+      assert.ok(f, "the frame has not navigated yet");
+      return f;
+    }, "the wandering SVG's frame");
+    const sessionThere = JSON.parse(await eventually(async () => wanderer.evaluate(() => document.body.innerText), "the session's answer in the frame"));
+    assert.equal(sessionThere.user ?? null, null, `the session as the frame's navigation found it: ${JSON.stringify(sessionThere)}`);
+
+    // Adopting the page loaded no frame twice, and a render after it (the
+    // page laid out at full width, and back) loads none again.
+    await page.locator("#app .page-width-option-full").click();
+    await page.locator("#app .page-width-option-compact").click();
+    await page.waitForTimeout(300);
+    assert.deepEqual([...loads.values()], [1, 1, 1], `the frames' loads: ${JSON.stringify([...loads])}`);
+
+    // The frames made by the program rather than the server, which the
+    // island gives their address: in the editor's preview, then in the
+    // page reached from the editor. Each shown once is loaded once.
+    const flameIn = (frames) => frames.frameLocator("iframe.wiki-svg[title='Where the time goes']").locator("#status");
+    await page.locator("#app .page-actions a[href$='/profiles/edit/']").click();
+    await page.locator(editorText).waitFor({ timeout });
+    await page.locator("#app .editor-show-preview").click();
+    await eventually(async () => assert.equal(await flameIn(page.locator("#app .editor-preview")).textContent(), "ready"), "the flame graph's script in the editor's preview");
+    await eventually(async () => assert.deepEqual([...loads.values()], [2, 2, 2]), "the frames loaded once each in the editor's preview");
+    // Back to the Markdown, which the preview's entry of the history
+    // replaced, and out of the editor to the page.
+    await page.goBack();
+    await page.locator(editorText).waitFor({ timeout });
+    await page.locator("#app .editor-cancel").click();
+    await page.locator("#app .page-view .page-body .svg-frame").first().waitFor({ timeout });
+    await eventually(async () => assert.equal(await flameIn(page.locator("#app .page-view")).textContent(), "ready"), "the flame graph's script in the page reached from the editor");
+    await page.waitForTimeout(300);
+    assert.deepEqual([...loads.values()], [3, 3, 3], `the frames' loads after the editor and the page: ${JSON.stringify([...loads])}`);
+
+    // The same address opened by itself in a tab of the signed-in browser,
+    // just after its frames loaded: the plain answer, a download, in which
+    // nothing runs, though the browser's cache holds the frame's.
+    const opened = async (context, address) => {
+      const tab = await context.newPage();
+      const [download] = await Promise.all([tab.waitForEvent("download", { timeout }), tab.goto(url(address)).catch(() => null)]);
+      const name = download.suggestedFilename();
+      await tab.close();
+      return name;
+    };
+    assert.equal(await opened(page.context(), framed(hostile)), "hostile.svg", "the interactive address in a tab after its frame");
+    await page.context().close();
+
+    // The other order, in a browser of its own: the tab first, a download,
+    // and then the page, whose frame runs the SVG all the same.
+    const tabFirst = await newPage();
+    assert.equal(await opened(tabFirst.context(), framed(flame)), "flame.svg", "the interactive address in a tab before its frame");
+    await tabFirst.goto(url(path));
+    await eventually(async () => assert.equal(await flameIn(tabFirst.locator("#app .page-view")).textContent(), "ready"), "the flame graph's frame after the tab");
+    await tabFirst.context().close();
+
+    // With the service worker on, as a reader's browser has it, the frame
+    // of a private space's SVG loads and runs, with the session's cookie.
+    const workerContext = await browser.newContext();
+    await workerContext.addCookies([{ name: "wiki_session", value: sessionToken, url: origin }]);
+    const workerPage = await workerContext.newPage();
+    workerPage.on("pageerror", (error) => failures.push(`page error at ${workerPage.url()}: ${error.message}`));
+    await workerPage.goto(url(path));
+    await eventually(async () => assert.ok(await workerPage.evaluate(() => navigator.serviceWorker.controller !== null), "no worker"), "the service worker taking the page over");
+    await workerPage.goto(url(path));
+    await eventually(async () => assert.equal(await flameIn(workerPage.locator("#app .page-view")).textContent(), "ready"), "the flame graph under the service worker");
+    // The server out of reach while the browser still has a network (a VPN
+    // gone down): the worker serves the page it kept, which shows the image
+    // where the frame was, since the worker cannot serve the frame.
+    const unreachable = (route) => route.abort("connectionrefused");
+    await workerContext.route(`${origin}/**`, unreachable);
+    await workerPage.reload();
+    assert.equal(await workerPage.evaluate(() => navigator.onLine), true, "the browser's network, the server out of reach");
+    await workerPage.locator("head meta[name=wiki-offline-copy]").waitFor({ state: "attached", timeout });
+    await eventually(async () => assert.ok(await programStarted(workerPage), "no listener yet"), "the program starting on the kept copy");
+    await workerPage.locator("#app .page-body img[alt='Where the time goes']").waitFor({ timeout });
+    assert.equal(await workerPage.locator("#app .page-body iframe.wiki-svg").count(), 0, "a frame on the kept copy, the server out of reach");
+    await workerContext.unroute(`${origin}/**`, unreachable);
+    // Offline, the same.
+    await workerContext.setOffline(true);
+    await workerPage.reload();
+    await eventually(async () => assert.ok(await programStarted(workerPage), "no listener yet"), "the program starting offline");
+    await workerPage.locator("#app .page-body img[alt='Where the time goes']").waitFor({ timeout });
+    assert.equal(await workerPage.locator("#app .page-body iframe.wiki-svg").count(), 0, "a frame offline");
+    await workerContext.close();
+
+    // Another site's page that frames the SVG, made public for it: its
+    // frame load asks as a frame, and the answer's frame-ancestors 'self'
+    // refuses to be shown there.
+    const madePublic = await api(`spaces/${encodeURIComponent(space.body.id)}/public`, { method: "PUT", body: JSON.stringify({ public: true }) });
+    assert.equal(madePublic.status, 200, "the space of the SVGs made public");
+    framingPage = `<iframe sandbox="allow-scripts" src="${url(framed(flame))}"></iframe>`;
+    const outsider = await browser.newPage();
+    await outsider.goto(`${elsewhereOrigin}/framing`);
+    await outsider.waitForTimeout(1000);
+    const shownElsewhere = outsider.frames().filter((f) => f !== outsider.mainFrame());
+    assert.equal(shownElsewhere.length, 1, "another site's frame");
+    // Refused by the browser, which shows its error page in its place.
+    assert.ok(shownElsewhere[0].url().startsWith("chrome-error:"), `another site's frame of the SVG: ${shownElsewhere[0].url()}`);
+    assert.notEqual(await shownElsewhere[0].evaluate(() => document.getElementById("status")?.textContent ?? null).catch(() => null), "ready", "the SVG ran in another site's frame");
+    await outsider.close();
+
+    // Over plain HTTP to a host that is not the loopback one, the page is no
+    // secure context and the browser names no frame's load to the server:
+    // the program shows the image in the frame's place (a repair of the
+    // page the server prerendered with the frame).
+    const insecure = await chromium.launch({ args: [`--host-resolver-rules=MAP wiki.example.test ${new URL(origin).hostname}`] });
+    try {
+      const reader = await insecure.newPage();
+      reader.on("pageerror", (error) => failures.push(`page error at ${reader.url()}: ${error.message}`));
+      await reader.goto(`http://wiki.example.test:${new URL(origin).port}${path}`);
+      assert.equal(await reader.evaluate(() => window.isSecureContext), false, "a page over plain HTTP to another host");
+      await eventually(async () => assert.ok(await programStarted(reader), "no listener yet"), "the program starting over plain HTTP");
+      await reader.locator("#app .page-body img[alt='Where the time goes']").waitFor({ timeout });
+      assert.equal(await reader.locator("#app .page-body iframe.wiki-svg").count(), 0, "a frame over plain HTTP");
+    } finally {
+      await insecure.close();
+    }
+
+    // No frame reached the other site: no request, no image, no beacon,
+    // no form, no popup, no navigation.
+    assert.deepEqual(reached, [], "what reached another site");
+    console.log("ok: interactive SVGs of a private space run their scripts in frames the server prerenders and the program adopts without loading them again, and the island loads once each in the editor's preview and the page; they reach no cookie, no storage, no page, no fetch, no tab and no dialog; the same address in a tab is a download, before or after its frame; another site cannot frame it; the frame loads with the service worker on too; offline, with the server out of reach, over plain HTTP to another host and in a link's text the page shows the image");
+  } finally {
+    elsewhere.close();
+    stun.close();
+  }
+}
 
 async function migrateTheDemo() {
   const page = await newPage();
@@ -1284,6 +1619,10 @@ try {
   // ---- 4. The demo's pages brought into the server ---------------------------
 
   await migrateTheDemo();
+
+  // ---- 9. Interactive SVGs ----------------------------------------------------
+
+  await interactiveSvgs();
 
   // ---- 5. What the server says of itself -------------------------------------
 
