@@ -86,6 +86,17 @@ run() {
   # shellcheck disable=SC2086 # $mode is one word or none.
   env FAKE_DIR="$dir" "$@" sh "$script" "$work/old" "$work/new" $mode >"$dir/out" 2>&1
 }
+# The same, started in the background as `run_behind DIR ... &`: the exec
+# makes the background job the script itself, not a subshell that waits for
+# it, so that $! is the script's pid, and a signal sent to $! reaches it.
+run_behind() {
+  dir=$1
+  shift
+  mkdir -p "$dir"
+  rm -f "$dir/asked" "$dir/took" "$dir/new.args" "$dir/pid"
+  # shellcheck disable=SC2086 # $mode is one word or none.
+  exec env FAKE_DIR="$dir" "$@" sh "$script" "$work/old" "$work/new" $mode >"$dir/out" 2>&1
+}
 asked_zero() { [ "$(cat "$1/asked")" = '127.0.0.1:0 127.0.0.1:0' ]; }
 
 if run "$work/one" && [ -f "$work/one/new.args" ] && asked_zero "$work/one"; then
@@ -96,9 +107,9 @@ else
 fi
 
 # Two runs side by side.
-run "$work/a" &
+run_behind "$work/a" &
 a=$!
-run "$work/b" &
+run_behind "$work/b" &
 b=$!
 if wait "$a" && wait "$b" && [ -f "$work/a/new.args" ] && [ -f "$work/b/new.args" ] \
   && [ "$(cat "$work/a/took" "$work/b/took" | tr ' ' '\n' | sort -u | wc -l)" -eq 4 ]; then
@@ -139,8 +150,9 @@ fi
 
 # A server that never logs its address is not driven. The script gives up
 # only after a minute, so the case looks for three seconds, then stops the
-# script and the fake.
-run "$work/silent" FAKE_SILENT=1 &
+# script with SIGTERM: the script, not a subshell around it, ends, and its
+# own cleanup stops the fake.
+run_behind "$work/silent" FAKE_SILENT=1 &
 silent=$!
 sleep 3
 if [ -f "$work/silent/asked" ] && [ ! -f "$work/silent/new.args" ] && kill -0 "$silent" 2>/dev/null; then
@@ -150,8 +162,19 @@ else
   cat "$work/silent/out" >&2
 fi
 kill "$silent" 2>/dev/null || true
-[ ! -s "$work/silent/pid" ] || kill "$(cat "$work/silent/pid")" 2>/dev/null || true
 wait "$silent" 2>/dev/null || true
+fake=$(cat "$work/silent/pid" 2>/dev/null || true)
+tries=0
+while [ -n "$fake" ] && kill -0 "$fake" 2>/dev/null && [ "$tries" -lt 50 ]; do
+  tries=$((tries + 1))
+  sleep 0.1
+done
+if ! kill -0 "$silent" 2>/dev/null && [ -n "$fake" ] && ! kill -0 "$fake" 2>/dev/null; then
+  pass 'the script stopped with SIGTERM ends, and stops the old server it started'
+else
+  fail 'the script stopped with SIGTERM: it, or the old server, still runs'
+  [ -z "$fake" ] || kill "$fake" 2>/dev/null || true
+fi
 
 # The move from SQLite to PostgreSQL (--move): the old server, on SQLite,
 # starts on port 0 the same way, and NEW is asked to move the copy into a

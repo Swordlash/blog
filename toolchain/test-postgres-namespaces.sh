@@ -27,7 +27,7 @@ cd "$(dirname "$0")/../wiki-server"
 work=$(mktemp -d)
 killed=''
 cleanup() {
-  [ -z "$killed" ] || kill -9 "$killed" 2>/dev/null || true
+  [ -z "$killed" ] || kill -9 "-$killed" 2>/dev/null || true
   for db in $(listing | grep -vxF -f "$work/before" || true); do
     sql "DROP DATABASE IF EXISTS $db WITH (FORCE)" >/dev/null 2>&1 || true
   done
@@ -44,9 +44,25 @@ fail() {
 sql() { "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" -tA -c "$1"; }
 # The databases in the tests' namespace (and of the shape before it).
 listing() { sql "SELECT datname FROM pg_database WHERE datname LIKE 'wiki\_test\_%' ORDER BY 1"; }
-# One run of the two groups, its output in $work/<name>.log.
+# One run of the two groups, its output in $work/<name>.log. It is started
+# in the background as `run NAME &`: the exec makes the background job the
+# test program itself, not a subshell that waits for it, so that $! is the
+# program's pid; and setsid puts the program in a process group of its own,
+# whose id is that pid, so that `kill -9 -$!` reaches the program and every
+# process it started (the pg_dump and psql it runs, through docker exec).
+# A background job of a non-interactive shell leads no process group, so
+# setsid makes the new session in place, without a fork.
 run() {
-  WIKI_TEST_GROUP=postgres "$server_test" --match "/on PostgreSQL/backup/" --match "/on PostgreSQL/the schema's versions/" >"$work/$1.log" 2>&1
+  WIKI_TEST_GROUP=postgres exec setsid "$server_test" --match "/on PostgreSQL/backup/" --match "/on PostgreSQL/the schema's versions/" >"$work/$1.log" 2>&1
+}
+# Whether any process of the process group is left.
+# (dash's kill takes no "--": a process group is "-PGID" right after the
+# signal.)
+group_alive() { kill -0 "-$1" 2>/dev/null; }
+# The sessions PostgreSQL has on the databases listed in the file.
+sessions_on() {
+  names=$(sed "s/.*/'&'/" "$1" | paste -sd, -)
+  sql "SELECT count(*) FROM pg_stat_activity WHERE datname IN ($names)"
 }
 
 listing >"$work/before"
@@ -90,12 +106,27 @@ until listing | grep -vxF -f "$work/known" | grep -q .; do
   if [ "$tries" -gt 600 ]; then break; fi
   sleep 0.1
 done
-kill -9 "$killed" 2>/dev/null || true
+kill -9 "-$killed"
 wait "$killed" 2>/dev/null || true
+# Dead: no process of the run is left, and, once the commands it ran in the
+# container (which docker exec does not stop with its client) have ended,
+# PostgreSQL has no session on its databases.
+dead=''
+if ! kill -0 "$killed" 2>/dev/null && ! group_alive "$killed"; then
+  listing | grep -vxF -f "$work/known" >"$work/left" || true
+  tries=0
+  while [ -s "$work/left" ] && [ "$(sessions_on "$work/left")" != 0 ] && [ "$tries" -lt 300 ]; do
+    tries=$((tries + 1))
+    sleep 0.1
+  done
+  [ ! -s "$work/left" ] || [ "$(sessions_on "$work/left")" != 0 ] || dead=1
+fi
+killed_pid=$killed
 killed=''
-listing | grep -vxF -f "$work/known" >"$work/left" || true
-if [ -s "$work/left" ] && run next; then
-  pass "a run killed part-way leaves $(wc -l <"$work/left") databases, and the next run passes all the same"
+if [ -z "$dead" ]; then
+  fail "the killed run is not dead (pid $killed_pid, or a session on its databases)"
+elif [ -s "$work/left" ] && (run next) && [ -z "$(listing | grep -vxF -f "$work/known" | grep -vxF -f "$work/left")" ]; then
+  pass "a run killed part-way, its processes gone and its databases unused, leaves $(wc -l <"$work/left") databases, and the next run passes all the same and leaves none of its own"
 else
   fail 'a run after a killed one'
   cat "$work/left" >&2

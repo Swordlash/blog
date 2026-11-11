@@ -70,7 +70,10 @@ wait_for() {
 }
 # Run the script for the suffix, held after it has looked until the file
 # $work/pause is removed, in the background; its output goes to
-# $work/<out>.out.
+# $work/<out>.out. The background job is the one simple command, so the
+# shell starts the script in it directly and $! is the script's own pid
+# (dash and bash alike), the process that holds the lock; held and behind
+# are called, not put in the background themselves.
 held() {
   rm -f "$work/pause.paused"
   : >"$work/pause"
@@ -262,11 +265,20 @@ fi
 
 # A start killed while it holds the lock leaves nothing that blocks the
 # next: the kernel releases the lock with the process.
+# The process killed is the one that holds the lock: the lock is taken
+# while it waits, free at once when it is gone.
+lock_file=${XDG_RUNTIME_DIR:-/tmp}/ci-postgres.$prefix-killed.lock
 held start killed killed
 killed=$!
 wait_for "$work/pause.paused"
+if flock --nonblock "$lock_file" true; then taken_before=''; else taken_before=1; fi
 kill -9 "$killed"
 wait "$killed" 2>/dev/null || true
+if [ -n "$taken_before" ] && ! kill -0 "$killed" 2>/dev/null && flock --nonblock "$lock_file" true; then
+  pass 'the start killed is the process that held the lock: it is gone, and the lock free at once'
+else
+  fail 'the killed start: not the lock'"'"'s holder, or the lock still taken'
+fi
 if timeout 120 env WIKI_CI_POSTGRES_NAME="$prefix-killed" sh "$script" start "$work/bin-after-kill" >"$work/after-kill.out" 2>"$work/after-kill.err" \
   && [ "$(query after-kill 'SELECT 1')" = 1 ]; then
   pass 'a start killed while it holds the lock does not block the next one'
