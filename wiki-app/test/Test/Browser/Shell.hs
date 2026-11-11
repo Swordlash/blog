@@ -7,7 +7,7 @@
 module Test.Browser.Shell (spec) where
 
 import Control.Monad.UUID (MonadUUID)
-import Data.IORef (readIORef)
+import Data.IORef (IORef, readIORef)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -21,8 +21,8 @@ import Test.Browser.Mount (clickButton, slugs, start, startChanged, startOn, sta
 import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
-import Wiki.App.Backend (MonadWiki (..))
-import Wiki.App.Backend.Mem (runMemWiki)
+import Wiki.App.Backend (MonadWiki (..), WikiError)
+import Wiki.App.Backend.Mem (MemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
@@ -30,6 +30,7 @@ import Wiki.App.Route (Route (..))
 import Wiki.App.Route qualified as R
 import Wiki.Core.Id (PageId (..))
 import Wiki.Core.Page (Page (body, id, space, title, updatedAt))
+import Wiki.Core.Space (Space (id))
 
 -- The address the test page is at (test/jsbits/test-location.js).
 $( browserJS
@@ -38,6 +39,11 @@ $( browserJS
      , ("js_history_go", "wiki_test_history_go", Safe, [t|Int -> IO ()|])
      ]
  )
+
+-- | A program of the demo's backend, run on the wiki a test started, as
+-- whoever is signed in there: its answer, which must be one.
+onWiki :: IORef MemState -> MemWiki IO (Either WikiError a) -> PageM s a
+onWiki wiki program = unsafeIOToPageM (either (panic . show) identity <$> runMemWiki wiki program)
 
 -- | The id of the demo's page with this title.
 demoPage :: Text -> PageId
@@ -286,6 +292,30 @@ spec m = do
     -- A version the page does not have is not found, as a page is.
     missing <- startOn m wiki (PermanentLink page.id (Just (addUTCTime 1 page.updatedAt)))
     find missing ".wiki-content .error-not-found" >>= (`shouldSatisfy'` "nothing here")
+
+  -- A page's backlinks (WP5.88 of docs/PLAN.md), under "Linked from" in
+  -- the space's sidebar.
+  it "lists the pages that link to the page shown in the sidebar, each leading to its page, and not one saved without its link" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-admin") Home
+    unmount ui
+    docs <- onWiki wiki (getSpace (slugs ["docs"]))
+    blog <- onWiki wiki (getSpace (slugs ["blog"]))
+    _ <- onWiki wiki (createPage docs.id Nothing "Glossary" "# Glossary")
+    hello <- onWiki wiki (getPage blog.id (slugs ["hello-world"]))
+    linked <- onWiki wiki (savePage hello.id hello.updatedAt hello.title "# Hello, world\n\nSee the [[/docs/glossary|glossary]].")
+    glossary <- startOn m wiki (Page (slugs ["docs"]) (slugs ["glossary"]))
+    eventually $ (traverse textContent =<< findAll glossary ".wiki-sidebar .sidebar-backlinks a") `shouldReturn` ["Hello, world"]
+    find glossary ".wiki-sidebar .sidebar-backlinks a[href$='#/s/blog/p/hello-world/']" >>= click
+    find glossary ".page-body h1" >>= (`shouldHaveText` "Hello, world")
+    eventually $ location `shouldReturn` "#/s/blog/p/hello-world/"
+    unmount glossary
+    -- Saved without the link, the post is no longer listed, and the
+    -- glossary shows no section at all.
+    _ <- onWiki wiki (savePage hello.id linked.updatedAt hello.title "# Hello, world\n\nNo link now.")
+    again <- startOn m wiki (Page (slugs ["docs"]) (slugs ["glossary"]))
+    find again ".page-body h1" >>= (`shouldHaveText` "Glossary")
+    length <$> findAll again ".wiki-sidebar .sidebar-backlinks" `shouldReturn` 0
+    textContent (root again) >>= (`shouldSatisfy` (not . T.isInfixOf "Linked from"))
   where
     shouldSatisfy' element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)
     location = unsafeIOToPageM (fromJSText <$> js_location_hash)

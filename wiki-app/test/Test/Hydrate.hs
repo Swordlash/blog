@@ -357,11 +357,12 @@ apiOver providers seed = do
           (endpointUrl (\e -> e.pages.version p.id (VersionTime at)),) . answerOf <$> getVersion p.id at
         threads <- fromRight [] <$> listThreads p.id
         watch <- watching (WatchPage p.id)
+        linking <- pageBacklinks p.id
         let logins = Body.unasked Body.noPeople (p.body : [c.body | t <- threads, c <- t.comments])
         named <- Body.askPeople logins
         pure
           ( [(endpointUrl (\e -> e.spaces.pageAt s.id (pagePath p.id)), answerOf page), (endpointUrl (\e -> e.pages.draft p.id), answerOf draft), (endpointUrl (\e -> e.pages.versions p.id Nothing Nothing), answerOf versions)]
-              <> [(endpointUrl (\e -> e.notifications.pageWatch p.id), answerOf watch)]
+              <> [(endpointUrl (\e -> e.notifications.pageWatch p.id), answerOf watch), (endpointUrl (\e -> e.pages.backlinks p.id), answerOf linking)]
               <> [(endpointUrl (\e -> e.notifications.people logins), answerOf (Right named :: Either WikiError (Map Text Author))) | not (null logins)]
               <> each
           )

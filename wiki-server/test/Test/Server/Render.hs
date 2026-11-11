@@ -37,6 +37,7 @@ import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), draftAnswer)
 import Wiki.App.Backend.Http.Client (sessionInfo)
 import Wiki.App.Backend.Http.Preload
 import Wiki.App.Route (Against (..), Route (..))
+import Wiki.Core.Backlink (Backlink (..))
 import Wiki.Core.Encrypted (Encapsulated (..), PageKey (..), SealedContent (..), VersionTag (..))
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
@@ -160,6 +161,16 @@ anonymous backing = describe "for someone not signed in" $ do
     searchStatus `shouldBe` 200
     appIn search `shouldSatisfy` T.isInfixOf "class=\"search-hit\""
     appIn search `shouldNotSatisfy` T.isInfixOf "Searching…"
+
+  it "renders a page with the pages that link to it in its sidebar, and carries them for the program" $ withDemoRunning backing identity $ \r -> do
+    (status, html) <- page r r.public "/s/docs/p/markdown-guide/diagrams/"
+    status `shouldBe` 200
+    let listed = fst (T.breakOn "</ul>" (snd (T.breakOn "<ul class=\"sidebar-backlinks\">" (appIn html))))
+    appIn html `shouldSatisfy` T.isInfixOf "<h2>Linked from</h2><ul class=\"sidebar-backlinks\">"
+    -- The tour, Docs' home page, links to the diagrams.
+    listed `shouldSatisfy` T.isInfixOf "<a href=\"/s/docs/\">Tour</a>"
+    carried <- preloadIn html
+    map (fmap (map (\b -> b.title))) (Map.elems carried.backlinks) `shouldSatisfy` any (either (const False) ("Tour" `elem`))
 
   it "renders a private space as not there, with a 404, and nothing of it" $ withDemoRunning backing identity $ \r -> do
     for_ ["/s/team/", "/s/team/pages/", "/s/team/projects/", "/s/team/p/team-handbook/", "/s/team/p/team-handbook/source/", "/s/team/p/team-handbook/history/", "/s/team/p/team-handbook/slides/", "/s/team/p/nowhere/"] $ \path -> do
