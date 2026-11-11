@@ -53,3 +53,5 @@ title: HTML with its own styles, latex fences and norender
   `xml` and `svg` listings are unchanged.
 - A feed shows an `html` block's source as a listing, and the PDF and Word
   exports show its HTML as they show HTML in a page, without its styles.
+- The upgrade reads every page once more, to bring search up to date: an
+  `html` block is found by the words it shows, not by its tags and CSS.
