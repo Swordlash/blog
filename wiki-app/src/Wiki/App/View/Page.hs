@@ -216,7 +216,7 @@ data Loaded
     -- written as slides, and what its "Contents" panel lists, if it shows
     -- one ("Wiki.Core.Markdown.Toc"): worked out once, when it is loaded,
     -- rather than at each render.
-    Ready Page (Map AttachmentId Text) Bool (Maybe [Md.Entry])
+    Ready Page Body.Addresses Bool (Maybe [Md.Entry])
 
 data Mode
   = Viewing
@@ -392,7 +392,7 @@ component =
     render st@State {input, loaded, mode, problem} = case loaded of
       Loading -> [hh|<p class="loading">Loading…</p>|]
       Failed e -> failureView e Retry
-      Ready page urls deck contents ->
+      Ready page addresses deck contents ->
         [hh|
           <div class="page-view {{ widthClass input.context.pageWidth }}">
             {{ parts }}
@@ -420,9 +420,9 @@ component =
                 <> toList (postInfo input page)
                 <> [textAndPanel st place rendered text page contents]
                 <> [ticksBar st]
-                <> attachments page urls
+                <> attachments page addresses.urls
                 <> [commentsOf st place text page CommentsView.Below | commentsHere input]
-          place = placeOf input page urls st.people.found
+          place = placeOf input page addresses st.people.found
           -- Rendered once: the article shows it with its quotes
           -- highlighted, and its text is where the quotes are looked for.
           rendered = Body.renderedTicking (Tick <$ guard (boxesEnabled st)) (\i -> Map.findWithDefault 0 i st.staging.drawn) place st.staging.shown
@@ -1285,9 +1285,9 @@ fetch input =
   getPage input.space.id input.path >>= fmap join . traverse asked >>= \case
     Left e -> pure (Failed e)
     Right page -> do
-      urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
+      addresses <- Body.attachmentAddresses page.attachments
       let parsed = Md.parseMarkdown page.body
-      pure (Ready page urls (either (const False) isDeck parsed) (either (const Nothing) Md.contentsPanel parsed))
+      pure (Ready page addresses (either (const False) isDeck parsed) (either (const Nothing) Md.contentsPanel parsed))
   where
     -- The version asked for, if any, in the page's place: its title, its
     -- text, its time and who saved it. A version the page does not have is
@@ -1471,9 +1471,9 @@ takesPage shown given = case shown of
 
 -- | The place the page's links, and its comments' links, are resolved
 -- from: where the page is.
-placeOf :: Input -> Page -> Map AttachmentId Text -> Map Text Author -> Body.Place
-placeOf input page urls people =
-  Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls, people}
+placeOf :: Input -> Page -> Body.Addresses -> Map Text Author -> Body.Place
+placeOf input page addresses people =
+  Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls = addresses.urls, frames = addresses.frames, people}
 
 -- | The Markdown the view shows: the page's, and its comments'.
 bodiesOf :: Loaded -> Threads -> [Text]

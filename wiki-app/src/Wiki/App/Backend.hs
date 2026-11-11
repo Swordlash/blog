@@ -729,6 +729,17 @@ class (Monad m) => MonadWiki m where
   default attachmentUrl :: (MonadTrans t, m ~ t n, MonadWiki n) => Attachment -> m Text
   attachmentUrl = lift . attachmentUrl
 
+  -- | The URL an interactive SVG's frame loads the attachment from: its
+  -- interactive form, which the wiki's server answers with the headers
+  -- that let the SVG's scripts run cut off from the wiki
+  -- ("Wiki.Core.Markdown.Frame"). Only the server has one, and only for an
+  -- attachment it stores as an SVG ("Wiki.Api.Links.attachmentFrameUrl").
+  -- The demo has no server to send those headers, and gives 'Nothing': an
+  -- SVG embedded as interactive is an image there.
+  attachmentFrameUrl :: Attachment -> m (Maybe Text)
+  default attachmentFrameUrl :: (MonadTrans t, m ~ t n, MonadWiki n) => Attachment -> m (Maybe Text)
+  attachmentFrameUrl = lift . attachmentFrameUrl
+
   -- * Exports
 
   -- | A page, or a space's pages, as a document in one of the formats the

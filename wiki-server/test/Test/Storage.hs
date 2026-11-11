@@ -330,6 +330,11 @@ attachmentsOnDisk backing = describe "attachments" $ do
       runStoredWiki st Anonymous (attachmentFile a.id) >>= (`shouldBe` Left NotFound) . fmap (const ())
       runStoredWiki st rita (attachmentFile (AttachmentId "no-such-attachment")) >>= (`shouldBe` Left NotFound) . fmap (const ())
       runStoredWiki st rita (attachmentUrl a) `shouldReturn` ("/api/v1/attachments/" <> a.id.text)
+      -- Only an SVG has an interactive form, its address with ?interactive,
+      -- which the prerendered page frames.
+      runStoredWiki st rita (attachmentFrameUrl a) `shouldReturn` Nothing
+      svg <- asAdmin st (uploadAttachment wiki.id "flame.svg" "image/svg+xml" "<svg/>") >>= ok
+      runStoredWiki st rita (attachmentFrameUrl svg) `shouldReturn` Just ("/api/v1/attachments/" <> svg.id.text <> "?interactive")
       -- One on the web is there, not here.
       guide <- pageIn st "docs" "markdown-guide"
       earth <- maybe (panic "no earth.jpg") pure (findAttachment "earth.jpg" guide.attachments)

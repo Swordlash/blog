@@ -1420,6 +1420,39 @@ select {
   border: 0;
 }
 
+/* An interactive SVG (Wiki.Core.Markdown.Frame; Wiki.App.Islands'
+   SvgFrame): a frame as wide as the text, at the height its height
+   attribute gives, which the reader can drag taller or shorter by its
+   corner, since the page cannot measure a document of another origin.
+   Under it, on the right, a link to open the same address in a new tab,
+   whose label is drawn here so that the page's text gains no words, as a
+   code block's copy button's. */
+.svg-frame {
+  display: block;
+  margin: 0.5rem 0;
+}
+
+.wiki-svg {
+  display: block;
+  width: 100%;
+  min-height: 4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  resize: vertical;
+  overflow: hidden;
+}
+
+.svg-frame-open {
+  display: block;
+  width: fit-content;
+  margin-left: auto;
+  font-size: 0.8rem;
+}
+
+.svg-frame-open::before {
+  content: "Open in a new tab";
+}
+
 /* The document inside such a frame (Wiki.Core.Markdown.Frame), whose
    stylesheet this is too: no margin, and no background of its own, so that
    the page's shows through. The block is in a .page-body, styled as the

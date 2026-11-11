@@ -26,7 +26,6 @@ where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict, withObject, (.!=), (.:?))
-import Data.Map.Strict qualified as Map
 import Data.Row (type (.==))
 import Data.Text qualified as T
 import Halogen qualified as H
@@ -42,7 +41,7 @@ import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.App.View.Preview qualified as Preview
 import Wiki.Core.Attachment (Attachment (..))
-import Wiki.Core.Id (AttachmentId, SpaceId (..))
+import Wiki.Core.Id (SpaceId (..))
 import Wiki.Core.Page (Page (..), PageSummary)
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Space (id))
@@ -78,7 +77,7 @@ data State = State
   , attachments :: [Attachment]
   -- ^ The page's attachments, and their addresses: what its links to them
   -- are resolved with. Fetched again each time the editor uploads a file.
-  , urls :: Map AttachmentId Text
+  , addresses :: Body.Addresses
   , page :: Int
   -- ^ How many pages this window has shown: an answer to a read made for
   -- an earlier one is dropped.
@@ -107,15 +106,15 @@ instance FromJSON Heard where
 
 -- | The page as saved: what the window shows until the editor speaks, and
 -- the attachments its links resolve to, with their addresses.
-data Fetched = Fetched Shown [Attachment] (Map AttachmentId Text)
+data Fetched = Fetched Shown [Attachment] Body.Addresses
 
 fetchSaved :: (MonadWiki m) => Input -> m Fetched
 fetchSaved input =
   getPage input.space.id input.path >>= \case
-    Left e -> pure (Fetched (Failed e) [] mempty)
+    Left e -> pure (Fetched (Failed e) [] Body.noAddresses)
     Right page -> do
-      urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
-      pure (Fetched (Shows Saved page.title page.body) page.attachments urls)
+      addresses <- Body.attachmentAddresses page.attachments
+      pure (Fetched (Shows Saved page.title page.body) page.attachments addresses)
 
 data Action = Initialize | Finalize | Receive Input | Listened Text
 
@@ -135,8 +134,8 @@ component =
           article <- H.newRefLabel "live-preview"
           found <- atOnce (fetchSaved input)
           pure $ case found of
-            Just (Fetched shown attachments urls) -> State {input, shown, feed = Nothing, article, attachments, urls, page = 0, refreshes = 0, fetched = True}
-            Nothing -> State {input, shown = Loading, feed = Nothing, article, attachments = [], urls = mempty, page = 0, refreshes = 0, fetched = False}
+            Just (Fetched shown attachments addresses) -> State {input, shown, feed = Nothing, article, attachments, addresses, page = 0, refreshes = 0, fetched = True}
+            Nothing -> State {input, shown = Loading, feed = Nothing, article, attachments = [], addresses = Body.noAddresses, page = 0, refreshes = 0, fetched = False}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.receive = Just . Receive, H.initialize = Just Initialize, H.finalize = Just Finalize}
       }
@@ -178,11 +177,11 @@ component =
         fetched <- gets (\st -> st.fetched)
         unless fetched $ do
           shownPage <- gets (\st -> st.page)
-          Fetched saved attachments urls <- lift (fetchSaved input)
+          Fetched saved attachments addresses <- lift (fetchSaved input)
           modifyFor shownPage $ \st ->
             st
               { attachments
-              , urls
+              , addresses
               , fetched = True
               , shown = case (st.shown, saved) of
                   -- The editor spoke while the page was loading: its text,
@@ -200,7 +199,7 @@ component =
         -- and its own editor to listen for.
         when (liveKey old.space.id old.path /= liveKey input.space.id input.path) $ do
           stopListening
-          modify (\st -> st {shown = Loading, attachments = [], urls = mempty, page = st.page + 1, fetched = False})
+          modify (\st -> st {shown = Loading, attachments = [], addresses = Body.noAddresses, page = st.page + 1, fetched = False})
           handleAction Initialize
       Listened raw -> case eitherDecodeStrict @Heard (encodeUtf8 raw) of
         Left _ -> pass
@@ -217,8 +216,8 @@ component =
               modify (\st -> st {refreshes = st.refreshes + 1})
               State {input, page = shownPage, refreshes = refresh} <- get
               lift (fetchSaved input) >>= \case
-                Fetched (Shows {}) attachments urls ->
-                  modifyFor shownPage (\st -> if st.refreshes == refresh then st {attachments, urls} else st)
+                Fetched (Shows {}) attachments addresses ->
+                  modifyFor shownPage (\st -> if st.refreshes == refresh then st {attachments, addresses} else st)
                 -- Not fetched: the attachments as they were.
                 _ -> pass
           | otherwise -> do
@@ -257,6 +256,7 @@ component =
         , Body.pages = st.input.pages
         , Body.path = st.input.path
         , Body.attachments = st.attachments
-        , Body.urls = st.urls
+        , Body.urls = st.addresses.urls
+        , Body.frames = st.addresses.frames
         , Body.people = mempty
         }

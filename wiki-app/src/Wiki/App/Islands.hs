@@ -34,6 +34,12 @@
 -- in the page, its height follows the height of its content
 -- ('fitFrame'), unless its fence gives it a height.
 --
+-- An interactive SVG is an island too ('SvgFrame'): a frame that runs the
+-- SVG's scripts, cut off from the wiki ("Wiki.Core.Markdown.Frame"). Its
+-- sandbox, title and height are attributes Halogen writes; its address is
+-- not, but set by the island ('loadFrame') only when the frame does not
+-- hold it already, since setting a frame's address loads it again.
+--
 -- A moment in time ('LocalTime') is an island as well, although no
 -- library draws it. The reader's browser writes it in the reader's time
 -- zone, which the server that prerendered the page does not know. So it is
@@ -62,7 +68,8 @@ import Protolude hiding (State)
 import Web.DOM.Internal.Types (Element)
 import Web.Event.Event (EventType (..))
 import Wiki.App.Islands.Monad (MathMode (..), MonadIslands (..), drawnProblem)
-import Wiki.Core.Markdown.Frame (frameSandbox)
+import Wiki.Core.Markdown.Frame (frameSandbox, scriptSandbox)
+import Wiki.Core.Markdown.Frame qualified as Frame
 import Wiki.Core.Markdown.Render (lineNumbers, scrollingCode)
 import Wiki.Core.Markdown.Tikz (tikzDocument)
 import Wiki.Core.Math (Macros (..))
@@ -88,6 +95,8 @@ data Island
     -- fits the frame to its content), and the document it shows, as
     -- 'Wiki.Core.Markdown.Frame.frameDocument' makes it.
     HtmlFrame (Maybe Int) Text
+  | -- | An interactive SVG's frame: its address, title and height.
+    SvgFrame Frame.SvgFrame
   | -- | A moment in time, written as the reader's browser writes one.
     LocalTime UTCTime
   deriving stock (Eq, Show)
@@ -180,6 +189,19 @@ islands toOutput =
             ]
               <> concat [[HP.attr (HH.AttrName "style") ("height: " <> show h <> "px"), HP.attr (HH.AttrName "data-height") (show h)] | Just h <- [height]]
           )
+      -- The sandbox is written as the element is made, before the island
+      -- gives the frame its address ('loadFrame'): a frame reads its
+      -- sandbox when it loads a document. The frame loads when it nears
+      -- the window, so a long page of them does not load each at once.
+      SvgFrame frame ->
+        HH.iframe
+          [ HP.ref ref
+          , HP.class_ (HH.ClassName "wiki-svg")
+          , HP.title frame.title
+          , HP.attr (HH.AttrName "sandbox") scriptSandbox
+          , HP.attr (HH.AttrName "height") (show frame.height)
+          , HP.attr (HH.AttrName "loading") "lazy"
+          ]
       LocalTime at -> [hh|<time ref={{ ref }} class="wiki-time" datetime={{ iso at }}></time>|]
 
     -- The event islands.js sends a diagram's or a picture's element when
@@ -220,6 +242,7 @@ islands toOutput =
       -- of a formula that did, whose problem then goes.
       CodeBlock language _ _ code -> H.liftEffect (highlightCode language code element) >> report Nothing
       HtmlFrame _ _ -> H.liftEffect (fitFrame element) >> report Nothing
+      SvgFrame frame -> H.liftEffect (loadFrame frame.url element) >> report Nothing
       LocalTime at -> H.liftEffect (renderTime at element) >> report Nothing
 
     -- Tell the parent of a failure, and of a success after one.

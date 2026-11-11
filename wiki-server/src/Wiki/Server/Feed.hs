@@ -397,7 +397,9 @@ postHtml base boxes spaces space pages p = case Md.parseMarkdown p.body of
         }
     resolve destination = case Md.classifyDestination destination of
       Md.ToAttachment name -> case findAttachment name p.attachments of
-        Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = absolute (attachmentUrl a), mediaType = Just a.mediaType.text}
+        -- A feed reader has no sandbox to show a frame in: an interactive SVG
+        -- is the image there.
+        Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = absolute (attachmentUrl a), mediaType = Just a.mediaType.text, frameUrl = Nothing}
         Nothing -> Md.Unresolved
       Md.ToUrl url -> Md.External url
       Md.ToAnchor fragment -> Md.External (addressOf base (Duplex.print route (pageRoute spacePath postPath)) <> "#" <> fragment)

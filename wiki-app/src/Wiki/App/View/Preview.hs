@@ -118,4 +118,5 @@ same a b =
     && a.place.path == b.place.path
     && a.place.attachments == b.place.attachments
     && a.place.urls == b.place.urls
+    && a.place.frames == b.place.frames
     && a.place.people == b.place.people

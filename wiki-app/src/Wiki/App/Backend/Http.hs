@@ -553,6 +553,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- The server serves an attachment's bytes at an API address, which the
   -- program can build without a request.
   attachmentUrl = pure . Links.attachmentUrl
+  attachmentFrameUrl = pure . Links.attachmentFrameUrl
 
   -- The document's address answers with its bytes, or with the API's
   -- refusal, which 'send' reads as any other ("Wiki.App.Backend.Http.Client").

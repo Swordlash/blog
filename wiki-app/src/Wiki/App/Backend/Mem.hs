@@ -266,6 +266,12 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
     SourceUrl url -> pure url.text
     SourceBlob blob -> blobUrl a.mediaType blob
 
+  -- No server answers the demo's attachments, so no headers let an SVG's
+  -- scripts run safely: an SVG embedded as interactive is an image here.
+  -- A frame of the object URL would be refused anyway, as the page's
+  -- frame-src does not allow blob: addresses.
+  attachmentFrameUrl _ = pure Nothing
+
   -- The demo has no pandoc, offers no formats, and makes no document.
   fetchExport _ _ = pure (Left (Invalid "The demo makes no documents: exporting needs the server, which makes them with pandoc."))
 

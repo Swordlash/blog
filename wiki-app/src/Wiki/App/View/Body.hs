@@ -36,6 +36,9 @@
 -- about who its users are, and a mention is plain text.
 module Wiki.App.View.Body
   ( Place (..)
+  , Addresses (..)
+  , noAddresses
+  , attachmentAddresses
   , People (..)
   , noPeople
   , unasked
@@ -104,10 +107,35 @@ data Place = Place
   , attachments :: [Attachment]
   , urls :: Map AttachmentId Text
   -- ^ The URL of each attachment ('Wiki.App.Backend.attachmentUrl').
+  , frames :: Map AttachmentId Text
+  -- ^ The URL of the interactive form of each attachment that has one
+  -- ('Wiki.App.Backend.attachmentFrameUrl'): an SVG the server stores.
   , people :: Map Text Author
   -- ^ The users the mentioned logins belong to, for logins that belong to
   -- users.
   }
+
+-- | 'Addresses' are where a page's attachments are fetched from, as the
+-- backend gives them ('attachmentAddresses'): the URL of each, and the URL
+-- of the interactive form of each that has one. A view keeps them with
+-- the page it shows, and puts them into its 'Place'.
+data Addresses = Addresses
+  { urls :: Map AttachmentId Text
+  , frames :: Map AttachmentId Text
+  }
+  deriving stock (Eq, Show)
+
+-- | No attachments' addresses, before any are fetched.
+noAddresses :: Addresses
+noAddresses = Addresses {urls = mempty, frames = mempty}
+
+-- | The addresses of these attachments, asked of the backend
+-- ('Wiki.App.Backend.attachmentUrl', 'Wiki.App.Backend.attachmentFrameUrl').
+attachmentAddresses :: (MonadWiki m) => [Attachment] -> m Addresses
+attachmentAddresses attachments = do
+  urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) attachments
+  frames <- Map.fromList . catMaybes <$> traverse (\a -> fmap (a.id,) <$> attachmentFrameUrl a) attachments
+  pure Addresses {urls, frames}
 
 -- | What a view knows about the people its Markdown mentions: the users
 -- found, and every login looked up, found or not.
@@ -332,6 +360,7 @@ islandOptionsWith island ctx spaceOwn =
     , Md.mermaid = \k source -> island k (Islands.Mermaid source)
     , Md.tikz = \k source -> island k (Islands.Tikz source)
     , Md.htmlBlock = \k _ height document -> island k (Islands.HtmlFrame height document)
+    , Md.svgFrame = Just (\k frame -> island k (Islands.SvgFrame frame))
     , Md.resolveLink = const Md.Unresolved
     , Md.pageHref = \(PageLink route fragment) -> Router.href ctx.router route <> fragment
     , Md.boxes = ctx.session.boxes
@@ -361,7 +390,7 @@ spoilerScope place =
 resolve :: Place -> Text -> Md.LinkTarget PageLink
 resolve place destination = case Md.classifyDestination destination of
   Md.ToAttachment name -> case findAttachment name place.attachments of
-    Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = Map.findWithDefault "" a.id place.urls, mediaType = Just a.mediaType.text}
+    Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = Map.findWithDefault "" a.id place.urls, mediaType = Just a.mediaType.text, frameUrl = Map.lookup a.id place.frames}
     Nothing -> Md.Unresolved
   Md.ToUrl url -> Md.External url
   Md.ToAnchor fragment -> Md.External ("#" <> fragment)
