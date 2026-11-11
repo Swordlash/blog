@@ -8,7 +8,7 @@ import Data.Text qualified as T
 import Protolude
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
-import Test.QuickCheck (Gen, elements, forAll, frequency, listOf, oneof)
+import Test.QuickCheck (Gen, elements, forAll, frequency, listOf, oneof, suchThat, (===))
 import Wiki.Core.Markdown.Html
 import Wiki.Core.Markdown.Link (urlScheme)
 
@@ -67,7 +67,8 @@ spec = describe "Markdown.Html" $ do
     for_ ["font", "center", "button", "label", "form", "marquee", "section", "article", "nav", "canvas", "blink", "custom-element"] $ \name ->
       it ("drops " <> toS name <> " and keeps its content") $
         ("a<" <> name <> " class=\"c\">b <em>c</em></" <> name <> ">d") `reads'` [txt "ab ", el "em" [txt "c"], txt "d"]
-    for_ (filter (/= "embed") droppedElements) $ \name ->
+    -- A plaintext has no end: it holds the rest of the HTML (below).
+    for_ (filter (`notElem` ["embed", "plaintext"]) droppedElements) $ \name ->
       it ("drops " <> toS name <> " with its content") $
         ("a<" <> name <> "><em>x</em>y</" <> name <> ">b") `reads'` [txt "ab"]
     it "drops what a dropped element holds when it is never closed" $
@@ -224,6 +225,13 @@ spec = describe "Markdown.Html" $ do
         `reads'` [el "b" [el "table" [el "tbody" [el "tr" [el "td" [txt "xy"]]]], txt "z"]]
     it "closes the elements opened inside one that ends" $
       "<div><b>x</div>y" `reads'` [el "div" [el "b" [txt "x"]], txt "y"]
+    it "nests elements 512 deep at most, as Chromium does, putting a deeper one beside the deepest" $ do
+      let depth = \case
+            Element _ _ children -> 1 + foldr (max . depth) 0 children
+            _ -> 0 :: Int
+          tree = parseHtml (T.replicate 600 "<div>" <> "x")
+      map depth tree `shouldBe` [512]
+      T.count "x" (htmlText tree) `shouldBe` 1
     it "drops the newline that starts a pre" $ do
       "<pre>\ncode\n</pre>" `reads'` [el "pre" [txt "code\n"]]
       "<pre>\n\ncode</pre>" `reads'` [el "pre" [txt "\ncode"]]
@@ -246,9 +254,109 @@ spec = describe "Markdown.Html" $ do
     it "drops the Markdown inside a dropped element" $
       parseFragments Phrasing [Markup "<script>", Markdown (1 :: Int), Markup "</script>", Markdown 2] `shouldBe` [Content 2]
 
-  describe "htmlText"
-    $ it "is the text a reader sees, blocks on lines of their own"
-    $ htmlText (parseHtml "<div>a <b>b</b></div><p>c<br>d</p><script>e</script>") `shouldBe` "\na b\n\nc\nd\n"
+  describe "htmlText" $ do
+    it "is the text a reader sees, blocks on lines of their own" $
+      htmlText (parseHtml "<div>a <b>b</b></div><p>c<br>d</p><script>e</script>") `shouldBe` "\na b\n\nc\nd\n"
+    it "leaves a frame's CSS out" $
+      htmlText (parseFrameHtml "<style>p { color: red }</style><p style=\"x\">a</p>") `shouldBe` "\na\n"
+
+  describe "in a frame (an html fence)" $ do
+    let frame raw expected = parseFrameHtml raw `shouldBe` expected
+    it "keeps a style attribute on every element, as written" $ do
+      frame "<p style=\"color: red; --x: 'a'\">x</p>" [Element "p" [("style", "color: red; --x: 'a'")] [txt "x"]]
+      frame "<span class=\"c-red\" STYLE=\"font-weight: bold\">x</span>" [Element "span" [("class", "c-red"), ("style", "font-weight: bold")] [txt "x"]]
+    it "keeps a style element with its CSS as written, tags and all" $ do
+      frame "<style>a > b { color: red }</style>" [el "style" [txt "a > b { color: red }"]]
+      frame "<style>p::before { content: \"<b>x</b>\" }</style><p>y</p>" [el "style" [txt "p::before { content: \"<b>x</b>\" }"], el "p" [txt "y"]]
+      frame "<STYLE media=\"print\">p {}</STYLE >" [el "style" [txt "p {}"]]
+    it "ends a style element that is never closed where the HTML ends" $
+      frame "<p>a</p><style>p { color: red }" [el "p" [txt "a"], el "style" [txt "p { color: red }"]]
+    it "still drops scripts, handlers, frames, forms, meta, base, link and javascript: URLs" $ do
+      frame "<script>alert(1)</script><img src=x onerror=alert(1)><a href=\"javascript:alert(1)\" onclick=\"x()\">a</a>" [Element "img" [("src", "x")] [], el "a" [txt "a"]]
+      frame "<iframe srcdoc=\"&lt;script&gt;x()&lt;/script&gt;\"></iframe><object data=x></object><embed src=x><svg onload=x()></svg>ok" [txt "ok"]
+      frame "<meta http-equiv=\"refresh\" content=\"0;url=https://evil.example\"><base href=\"https://evil.example/\"><link rel=\"stylesheet\" href=\"https://evil.example/x.css\">ok" [txt "ok"]
+      frame "<form action=\"https://evil.example\"><input name=q><button>go</button></form>" [txt "go"]
+    it "lets nothing in a style element out of it" $ do
+      -- The element ends at its end tag, as a browser ends it; what comes
+      -- after is HTML, and goes through the allowlist.
+      frame "<style>p { content: \"</style><script>alert(1)</script>\" }</style>" [el "style" [txt "p { content: \""], txt "\" }"]
+      -- A character reference is CSS's text, as written: the browser
+      -- decodes none in a style element.
+      frame "<style>&lt;/style&gt;&lt;script&gt;alert(1)&lt;/script&gt;</style>" [el "style" [txt "&lt;/style&gt;&lt;script&gt;alert(1)&lt;/script&gt;"]]
+    it "keeps CSS that holds HTML as it is written, and reads what follows the style element as HTML" $ do
+      frame "<style>a::after { content: \"<a href='x'>\" }</style><p>after</p>" [el "style" [txt "a::after { content: \"<a href='x'>\" }"], el "p" [txt "after"]]
+      frame
+        "<style>.x { background: url(\"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'><rect/></svg>\") }</style><p>after</p>"
+        [el "style" [txt ".x { background: url(\"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'><rect/></svg>\") }"], el "p" [txt "after"]]
+      frame "<style>p::after { content: \"<script>alert(1)</script>\" }</style><p>after</p>" [el "style" [txt "p::after { content: \"<script>alert(1)</script>\" }"], el "p" [txt "after"]]
+      frame "<style>/* <!-- */ p {} /* --> */</style><b>after</b>" [el "style" [txt "/* <!-- */ p {} /* --> */"], el "b" [txt "after"]]
+    it "ends a style element at its end tag as the browser reads one" $ do
+      -- Its name in any case, then white space, / or >.
+      frame "<style>a{}</STYLE >b" [el "style" [txt "a{}"], txt "b"]
+      frame "<style>a{}</style\n>b" [el "style" [txt "a{}"], txt "b"]
+      frame "<style>a{}</style/>b" [el "style" [txt "a{}"], txt "b"]
+      -- Anything else after the name is no end tag.
+      frame "<style>a{}</styleX>b</style>c" [el "style" [txt "a{}</styleX>b"], txt "c"]
+      -- An end tag that never comes: the CSS runs to the end of the HTML.
+      frame "<style>a{}</style" [el "style" [txt "a{}</style"]]
+      frame "<style/>a{}</style>b" [el "style" [txt "a{}"], txt "b"]
+    prop "keeps any CSS without </style byte for byte, and writes it back so" $
+      forAll css $ \written ->
+        let tree = parseFrameHtml ("<style>" <> written <> "</style>")
+         in (tree, renderHtml tree) === ([el "style" [txt written | not (T.null written)]], "<style>" <> written <> "</style>")
+    prop "swallows nothing after a style element: what follows reads as it does alone" $
+      forAll ((,) <$> css <*> markup) $ \(written, following) ->
+        parseFrameHtml ("<style>" <> written <> "</style><b>|</b>" <> following)
+          === (el "style" [txt written | not (T.null written)] : parseFrameHtml ("<b>|</b>" <> following))
+    it "keeps raw HTML in a page as it was: no style" $
+      parseHtml "<style>p {}</style><p style=\"color: red\">x</p>" `shouldBe` [el "p" [txt "x"]]
+    prop "keeps only allowed elements and attributes, styles too, and URLs it allows" $
+      forAll markup $
+        \raw -> conformsInFrame (parseFrameHtml raw)
+
+  describe "elements read as text, as the browser reads them" $ do
+    let frame raw expected = parseFrameHtml raw `shouldBe` expected
+    it "drops each with its content up to its own end tag, and reads what follows" $ do
+      frame "<textarea><p>in</p></textarea><p>after</p>" [el "p" [txt "after"]]
+      frame "<title><b>in</title><p>after</p>" [el "p" [txt "after"]]
+      frame "<xmp><img src=x onerror=alert(1)></xmp ><p>after</p>" [el "p" [txt "after"]]
+      frame "<script>if (a</script>b) {}</script x><p>after</p>" [txt "b) {}", el "p" [txt "after"]]
+      frame "<noscript><p>in</p></noscript><p>after</p>" [el "p" [txt "after"]]
+      frame "<iframe><p>in</p></iframe><p>after</p>" [el "p" [txt "after"]]
+      frame "<noembed><p>in</p></noembed><noframes><p>in</p></noframes><p>after</p>" [el "p" [txt "after"]]
+      -- A textarea's content is text: a tag in it ends nothing.
+      frame "<textarea></style></textarea><p>after</p>" [el "p" [txt "after"]]
+    it "drops plaintext and everything after it" $
+      frame "<p>before</p><plaintext></plaintext><p>after</p>" [el "p" [txt "before"]]
+    it "reads no element as text inside svg and math, which are dropped whole" $ do
+      frame "<svg><style><p>in</p></style></svg><p>after</p>" [el "p" [txt "after"]]
+      frame "<math><style></math><p>after</p>" [el "p" [txt "after"]]
+    it "reads a comment or CDATA as no tag" $ do
+      frame "<!-- <style> --><p>after</p>" [el "p" [txt "after"]]
+      frame "<!-- <script> -->x<p>after</p>" [txt "x", el "p" [txt "after"]]
+    it "does the same for HTML in a page" $ do
+      parseHtml "<style>a::after { content: \"<style>\" }</style><p>after</p>" `shouldBe` [el "p" [txt "after"]]
+      parseHtml "<textarea><p>in</p></textarea><p>after</p>" `shouldBe` [el "p" [txt "after"]]
+
+  describe "written out again (renderHtml)" $ do
+    it "escapes text and attribute values" $
+      renderHtml [Element "p" [("title", "\"><script>alert(1)</script>")] [txt "\"><script>alert(1)</script> </iframe> &quot; '"]]
+        `shouldBe` "<p title=\"&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;\">&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt; &lt;/iframe&gt; &amp;quot; &#39;</p>"
+    it "writes void elements without an end tag, and an empty value as the name alone" $
+      renderHtml [el "p" [txt "a", el "br" [], Element "img" [("src", "x.png"), ("alt", "")] []]] `shouldBe` "<p>a<br><img src=\"x.png\" alt></p>"
+    it "writes a style element's CSS as it is, but each </style, in any case, written <\\/style" $ do
+      renderHtml [el "style" [txt "a > b { content: \"&</b>\" }"]] `shouldBe` "<style>a > b { content: \"&</b>\" }</style>"
+      renderHtml [el "style" [txt "</style><script>alert(1)</script></STYLE >"]] `shouldBe` "<style><\\/style><script>alert(1)</script><\\/STYLE ></style>"
+      renderHtml [el "style" [txt "a{}</style"]] `shouldBe` "<style>a{}<\\/style</style>"
+    it "keeps the newline a pre starts with" $
+      renderHtml [el "pre" [txt "\nx"]] `shouldBe` "<pre>\n\nx</pre>"
+    prop "writes what reads back as the same tree" $
+      forAll markup $ \raw ->
+        let tree = parseHtml raw in parseHtml (renderHtml tree) == tree
+    prop "writes no style element whose CSS ends it early: each </style is a style element's end" $
+      forAll styleMarkup $ \raw ->
+        let tree = parseFrameHtml raw
+         in T.count "</style" (T.toLower (renderHtml tree)) == length (filter (== "style") (elementNames tree))
 
   describe "whatever it is given" $ do
     prop "keeps only allowed elements and attributes, and URLs it allows" $
@@ -257,6 +365,38 @@ spec = describe "Markdown.Html" $ do
     prop "keeps only phrasing elements among text" $
       forAll (listOf (oneof [Markup <$> markup, pure (Markdown ())])) $ \fragments ->
         all (`elem` phrasingElements) (elementNames (parseFragments Phrasing fragments))
+
+-- | 'conforms', for a frame's HTML: a style element too, with its CSS,
+-- and a style attribute on any element.
+conformsInFrame :: [Node a] -> Bool
+conformsInFrame = all $ \case
+  Element "style" attrs children -> null attrs && all isText children
+  Element name attrs children ->
+    name `elem` allowedElements
+      && all (\(k, v) -> (k == "style" || k `elem` allowedAttributes name) && urlOk k v) attrs
+      && conformsInFrame children
+  TextNode t -> not (T.null t)
+  Content _ -> True
+  where
+    isText = \case
+      TextNode _ -> True
+      _ -> False
+    urlOk k v
+      | k == "href" = maybe True (`elem` ["http", "https", "mailto", "attachment"]) (urlScheme v)
+      | k `elem` ["src", "poster"] = maybe True (`elem` ["http", "https", "attachment"]) (urlScheme v)
+      | otherwise = True
+
+-- | Markup with style elements in it, closed or not, holding what could
+-- end them: end tags in any case, character references, other tags.
+styleMarkup :: Gen Text
+styleMarkup = T.concat <$> listOf (oneof [markup, elements ["<style>", "<STYLE type=x>", "</style>", "</STYLE >", "&lt;/style&gt;", "</style", "<\\/style>", "a > b {}", "<script>x()</script>", "\"</style>\""]])
+
+-- | CSS that holds no @</style@, in any case: rules, strings and comments
+-- with HTML-looking text, quotes and character references in them.
+css :: Gen Text
+css =
+  (T.concat <$> listOf (elements ["a > b", " { ", "}", "color: red;", "content: \"<a href='x'>\";", "url(\"data:image/svg+xml,<svg><rect/></svg>\")", "/* <!-- */", "-->", "&amp;", "&lt;", "</b>", "</styl", "e", "<script>alert(1)</script>", "\n", "\t", "'", "\"", "<", "/", ">", "\\"]))
+    `suchThat` (not . T.isInfixOf "</style" . T.toLower)
 
 tableParts :: [Text]
 tableParts = ["caption", "thead", "tbody", "tfoot", "tr", "th", "td"]

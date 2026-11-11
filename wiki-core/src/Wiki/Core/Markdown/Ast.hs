@@ -7,9 +7,9 @@
 -- the author wrote and nothing about how it is shown. A link keeps its
 -- destination as written, to be resolved when it is rendered. An embed
 -- (@![caption](…)@) does not yet know whether it is an image, a video or a
--- download. A code block in a @mermaid@, @tikz@ or @math@ fence is already
--- distinguished from other code, because what it is does not depend on
--- the wiki.
+-- download. A code block in a @mermaid@, @tikz@, @math@, @latex@ or @html@
+-- fence is already distinguished from other code, because what it is does
+-- not depend on the wiki.
 --
 -- 'parseMarkdown' reads CommonMark with these extensions:
 --
@@ -31,8 +31,10 @@
 --   @## [[!spoiler]]{name} Question@, which hide the heading's section
 --   ('spoilerHeadingSpec', 'withHeadingSections');
 -- * a fence's @rows=N@ attribute, the number of lines its code shows
---   before it scrolls ('codeRows'), and its class @numbered@, a number
---   before each line ('codeNumbered');
+--   before it scrolls ('codeRows'), its class @numbered@, a number
+--   before each line ('codeNumbered'), and its class @norender@, which
+--   keeps a fence the wiki would render (@html@, @latex@, @math@,
+--   @mermaid@, @tikz@) a listing of its language ('codeBlockWith');
 -- * boxes, @> [!KIND]@: GitHub's alerts (@> [!NOTE]@ and its four
 --   others), and any other kind (@> [!EXERCISE]@), with an optional title
 --   after the marker (@> [!TIP] Before you start@), and a star for a box
@@ -46,7 +48,9 @@
 --   box's kind and its number or its title (@box-tip-3@,
 --   @box-tip-before-you-start@; 'withHeadingIds');
 -- * math, @$…$@ and @\\(…\\)@ inline, @$$…$$@ and @\\[…\\]@ display
---   ("Wiki.Core.Markdown.TexMath"), and a @math@ fence;
+--   ("Wiki.Core.Markdown.TexMath"), and a @math@ or @latex@ fence;
+-- * an @html@ fence, HTML the page shows in a frame of its own
+--   ('HtmlBlock');
 -- * attributes in braces after a heading, a fence's info string, a link,
 --   an image or inline code (@# Intro {#start}@, @![](a.png){width=300}@);
 -- * wiki links, @[[page]]@ and @[[page|label]]@, read as ordinary links to
@@ -103,6 +107,10 @@ module Wiki.Core.Markdown.Ast
   , plainText
   , codeRows
   , codeNumbered
+  , frameHeight
+  , norenderClass
+  , languageOfClasses
+  , listingLanguage
   , spoilerProblemText
   , validSpoilerName
   , formulasOf
@@ -169,9 +177,16 @@ data Block
   | -- | A @tikz@ fence: the picture's TeX, as written (read by
     -- "Wiki.Core.Markdown.Tikz").
     Tikz Text
-  | -- | Display math: a @math@ fence, or @$$…$$@ or @\\[…\\]@ in a
-    -- paragraph. The TeX source, as written between the delimiters.
+  | -- | Display math: a @math@ or @latex@ fence, or @$$…$$@ or @\\[…\\]@
+    -- in a paragraph. The TeX source, as written between the delimiters.
     MathBlock Text
+  | -- | An @html@ fence: its attributes (a height, 'frameHeight') and its
+    -- HTML as written, which the page shows in a frame of its own, with
+    -- the author's styles, through the allowlist of
+    -- "Wiki.Core.Markdown.Html" widened by @style@
+    -- ("Wiki.Core.Markdown.Frame"). Unlike 'RawHtmlBlock', which is
+    -- HTML in the page itself.
+    HtmlBlock Attributes Text
   | List ListKind [ListItem]
   | -- | A pipe table: each column's alignment, the header's cells (none
     -- when the table has no header), and the rows' cells.
@@ -373,6 +388,24 @@ codeRows attrs = do
   n <- readMaybe (T.unpack written)
   guard (n > 0)
   pure n
+
+-- | The height an @html@ fence's frame is given, in pixels, from its
+-- fence's attribute @height=N@ (@```html {height=300}@, or @height=300px@):
+-- a whole number above 0, held to at most 4000. Anything else (0, a
+-- fraction, another unit), and no @height@, gives none, and the frame is
+-- as high as its content. The page caps a frame at 80% of the window's
+-- height either way.
+frameHeight :: Attributes -> Maybe Int
+frameHeight attrs = do
+  written <- attribute "height" attrs
+  let digits = fromMaybe written (T.stripSuffix "px" written)
+      significant = T.dropWhile (== '0') digits
+  guard (not (T.null significant) && T.all isDigit digits)
+  -- More than four digits is more than 4000, and is not read.
+  n <- if T.length significant > 4 then Just maxFrameHeight else readMaybe (T.unpack significant)
+  pure (min maxFrameHeight n)
+  where
+    maxFrameHeight = 4000
 
 -- | Whether a code block shows a number before each line: its fence has
 -- the class @numbered@ (@```haskell {.numbered}@, or
@@ -1015,7 +1048,16 @@ instance CM.HasAttributes Blocks where
         Spoiler h (Heading l attrs xs' : rest) | h.kind == OnHeading -> Spoiler h (Heading l (attrs <> new) xs' : rest)
         CodeBlock attrs lang t -> codeBlockWith (attrs <> new) lang t
         Div attrs xs' -> Div (attrs <> new) xs'
-        other -> other
+        -- An html fence keeps its attributes (its height), unless they
+        -- make it a listing.
+        HtmlBlock attrs t | norenderClass `notElem` classes new -> HtmlBlock (attrs <> new) t
+        -- A fence the parser has rendered already, with @norender@ in the
+        -- braces after its info word (@```mermaid {.norender}@).
+        other
+          | norenderClass `elem` classes new
+          , Just (lang, t) <- listingOf other ->
+              CodeBlock new (Just lang) t
+          | otherwise -> other
 
 instance CM.ToPlainText Inlines where
   toPlainText = plainText . inlines
@@ -1710,17 +1752,69 @@ listKind = \case
   CM.BulletList _ -> BulletList
   CM.OrderedList start _ _ -> OrderedList start
 
--- | A code block, or a Mermaid diagram, a TikZ picture or display math
--- when its language says so. The language is the first word of the info
--- string; a fence written with attributes alone (@```{.mermaid}@) gives it
--- as its first class other than @numbered@ ('codeNumbered'), which says
--- how the block is shown and is no language.
+-- | A code block, or a block the wiki renders when its language says so
+-- ('renderedBlock'). The language is the first word of the info string; a
+-- fence written with attributes alone (@```{.mermaid}@) gives it as its
+-- first class other than @numbered@ ('codeNumbered') and @norender@, which
+-- say how the block is shown and are no language. With the class
+-- @norender@ the block stays a listing of its language
+-- ('listingLanguage').
 codeBlockWith :: Attributes -> Maybe Text -> Text -> Block
-codeBlockWith attrs info code = case info <|> head (filter (/= numberedClass) (classes attrs)) of
-  Just "mermaid" -> Mermaid code
-  Just "tikz" -> Tikz code
-  Just "math" -> MathBlock code
-  lang -> CodeBlock attrs lang code
+codeBlockWith attrs info code
+  | norenderClass `elem` classes attrs = CodeBlock attrs (listingLanguage <$> lang) code
+  | otherwise = fromMaybe (CodeBlock attrs lang code) (lang >>= \l -> renderedBlock attrs l code)
+  where
+    lang = info <|> languageOfClasses (classes attrs)
+
+-- | The language a fence written with classes alone gives
+-- (@```{.numbered .mermaid}@): its first class other than @numbered@ and
+-- @norender@. The export reads fences with pandoc's reader, which gives
+-- the info word as the first class, and finds the language with this, so
+-- that it agrees with 'codeBlockWith'.
+languageOfClasses :: [Text] -> Maybe Text
+languageOfClasses = head . filter (`notElem` [numberedClass, norenderClass])
+
+-- | The block a fence of this language and these attributes is rendered
+-- as, if the wiki renders
+-- it: a Mermaid diagram (@mermaid@), a TikZ picture (@tikz@), display
+-- math (@math@, and @latex@, which the owner asked to work as @$$@ does)
+-- or HTML in a frame (@html@). Any other language is a listing; so are
+-- @tex@, @xml@ and @svg@.
+renderedBlock :: Attributes -> Text -> Text -> Maybe Block
+renderedBlock attrs lang code = case lang of
+  "mermaid" -> Just (Mermaid code)
+  "tikz" -> Just (Tikz code)
+  "math" -> Just (MathBlock code)
+  "latex" -> Just (MathBlock code)
+  "html" -> Just (HtmlBlock attrs code)
+  _ -> Nothing
+
+-- | A rendered block as the listing @norender@ makes of it, when the
+-- class comes after its fence (@```mermaid {.norender}@) and the parser
+-- has already made the block: its language and its source. Display math
+-- is a @latex@ listing ('listingLanguage').
+listingOf :: Block -> Maybe (Text, Text)
+listingOf = \case
+  Mermaid code -> Just ("mermaid", code)
+  Tikz code -> Just ("tikz", code)
+  MathBlock code -> Just ("latex", code)
+  HtmlBlock _ code -> Just ("html", code)
+  _ -> Nothing
+
+-- | The language a listing made with @norender@ is highlighted as: its
+-- own, except that a @math@ fence's TeX is highlighted as @latex@, a
+-- language the highlighter knows. So a @math@ fence and a @latex@ fence
+-- give the same listing however the class is written.
+listingLanguage :: Text -> Text
+listingLanguage = \case
+  "math" -> "latex"
+  lang -> lang
+
+-- | The class that keeps a fence the wiki would render a listing of its
+-- language ('codeBlockWith'). The page shows no class of a listing, so it
+-- does not show this one either.
+norenderClass :: Text
+norenderClass = "norender"
 
 -- | A paragraph's inlines as blocks: the paragraph itself, or, when it
 -- contains display math, the paragraphs around each formula and the

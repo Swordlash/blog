@@ -179,6 +179,51 @@ spec = describe "Markdown.Ast" $ do
         `parses` [Tikz "\\begin{tikzpicture}\n\\draw (0,0) circle (1);\n\\end{tikzpicture}\n"]
     it "reads a math fence as display math" $
       "```math\nx^2\n```" `parses` [MathBlock "x^2\n"]
+    it "reads a latex fence as display math, as a math fence" $ do
+      "```latex\n\\frac{1}{2}\n```" `parses` [MathBlock "\\frac{1}{2}\n"]
+      "```{.latex}\nx\n```" `parses` [MathBlock "x\n"]
+    it "reads an html fence as an html block, with its info word or its class" $ do
+      "```html\n<p style=\"color: red\">hi</p>\n```" `parses` [HtmlBlock [] "<p style=\"color: red\">hi</p>\n"]
+      "```{.html}\n<p>hi</p>\n```" `parses` [HtmlBlock [("class", "html")] "<p>hi</p>\n"]
+      "```{.numbered .html}\n<p>hi</p>\n```" `parses` [HtmlBlock [("class", "numbered"), ("class", "html")] "<p>hi</p>\n"]
+    it "keeps an html fence's attributes, its height among them" $ do
+      "```html {height=300}\n<p>hi</p>\n```" `parses` [HtmlBlock [("height", "300")] "<p>hi</p>\n"]
+      "```html {.norender height=300}\n<p>hi</p>\n```" `parses` [CodeBlock [("class", "norender"), ("height", "300")] (Just "html") "<p>hi</p>\n"]
+    it "reads a frame's height in pixels, with px or without, at most 4000, and ignores anything else" $ do
+      frameHeight [("height", "300")] `shouldBe` Just 300
+      frameHeight [("height", "300px")] `shouldBe` Just 300
+      frameHeight [("height", "0300")] `shouldBe` Just 300
+      frameHeight [("class", "html"), ("height", "1")] `shouldBe` Just 1
+      frameHeight [("height", "4000")] `shouldBe` Just 4000
+      for_ ["4001", "99999", "123456789012345678901234567890px"] $ \written ->
+        (written, frameHeight [("height", written)]) `shouldBe` (written, Just 4000)
+      for_ ["", "px", "0", "000", "-5", "+5", "3e2", "300.5", "300em", "30%", "abc", " 300", "300 px"] $ \written ->
+        (written, frameHeight [("height", written)]) `shouldBe` (written, Nothing)
+      frameHeight [] `shouldBe` Nothing
+    it "keeps tex, xml and svg fences listings" $ do
+      "```tex\nx\n```" `parses` [CodeBlock [] (Just "tex") "x\n"]
+      "```xml\n<a/>\n```" `parses` [CodeBlock [] (Just "xml") "<a/>\n"]
+      "```svg\n<svg/>\n```" `parses` [CodeBlock [] (Just "svg") "<svg/>\n"]
+
+  describe "norender" $ do
+    it "keeps a fence that would be rendered a listing of its language, the class after the info word" $ do
+      "```html {.norender}\n<b>x</b>\n```" `parses` [CodeBlock [("class", "norender")] (Just "html") "<b>x</b>\n"]
+      "```mermaid {.norender}\ngraph TD\n```" `parses` [CodeBlock [("class", "norender")] (Just "mermaid") "graph TD\n"]
+      "```tikz {.norender}\n\\draw;\n```" `parses` [CodeBlock [("class", "norender")] (Just "tikz") "\\draw;\n"]
+      "```latex {.norender}\nx\n```" `parses` [CodeBlock [("class", "norender")] (Just "latex") "x\n"]
+    it "does the same with the language among the classes, in either order" $ do
+      "```{.html .norender}\n<b>x</b>\n```" `parses` [CodeBlock [("class", "html"), ("class", "norender")] (Just "html") "<b>x</b>\n"]
+      "```{.norender .mermaid}\ngraph TD\n```" `parses` [CodeBlock [("class", "norender"), ("class", "mermaid")] (Just "mermaid") "graph TD\n"]
+    it "makes a math fence a latex listing, as a latex fence, however it is written" $ do
+      "```math {.norender}\nx\n```" `parses` [CodeBlock [("class", "norender")] (Just "latex") "x\n"]
+      "```{.math .norender}\nx\n```" `parses` [CodeBlock [("class", "math"), ("class", "norender")] (Just "latex") "x\n"]
+    it "keeps the fence's other attributes" $
+      "```html {.norender .numbered rows=2}\n<b>x</b>\n```"
+        `parses` [CodeBlock [("class", "norender"), ("class", "numbered"), ("rows", "2")] (Just "html") "<b>x</b>\n"]
+    it "changes nothing on a listing" $
+      "```haskell {.norender}\nx\n```" `parses` [CodeBlock [("class", "norender")] (Just "haskell") "x\n"]
+    it "is no language" $
+      "```{.norender}\nx\n```" `parses` [CodeBlock [("class", "norender")] Nothing "x\n"]
 
   describe "math" $ do
     it "reads inline math" $

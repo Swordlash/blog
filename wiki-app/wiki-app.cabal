@@ -405,6 +405,7 @@ test-suite wiki-app-browser-test
       Test.Browser.HomePage
       Test.Browser.Encrypted
       Test.Browser.Hpke
+      Test.Browser.HtmlBlock
       Test.Browser.Http
       Test.Browser.Hydrate
       Test.Browser.Import

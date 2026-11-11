@@ -54,6 +54,7 @@ import Test.Storage.Migrate qualified as Migrate
 import Test.Storage.Permissions qualified as Permissions
 import Test.Storage.Removal qualified as Removal
 import Test.Storage.Scale qualified as Scale
+import Test.Storage.SearchText qualified as SearchText
 import Test.Storage.Transactions qualified as Transactions
 
 main :: IO ()
@@ -97,6 +98,7 @@ main = secureMain $ do
           Removal.spec b
           Keys.spec b
           Links.spec b
+          SearchText.spec b
           Encrypted.spec b
           Options.spec b
           Api.spec b

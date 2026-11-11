@@ -201,6 +201,41 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     query (\case P.Strong xs -> [xs]; _ -> []) bs `shouldBe` [[P.Str "this"]]
     images bs `shouldBe` ["attachments/a1/tree.png"]
 
+  it "reads a latex fence as display math, an html fence as raw HTML without its styles, and norender as a listing" $ do
+    bs <-
+      blocksOf ToOther place $
+        T.unlines
+          [ "```latex"
+          , "a+b"
+          , "```"
+          , ""
+          , "```html"
+          , "<style>p { color: red }</style>"
+          , "<p style=\"margin: 0\" onclick=\"steal()\">Framed <b>bold</b></p>"
+          , "<script>alert(1)</script>"
+          , "```"
+          , ""
+          , "```mermaid {.norender}"
+          , "graph TD"
+          , "```"
+          , ""
+          , "```{.math .norender .numbered}"
+          , "x"
+          , "```"
+          , ""
+          , "```python {.html}"
+          , "print(1)"
+          , "```"
+          ]
+    maths bs `shouldBe` [(P.DisplayMath, "a+b")]
+    query (\case P.Strong xs -> [xs]; _ -> []) bs `shouldBe` [[P.Str "bold"]]
+    raw bs `shouldBe` []
+    for_ ["steal", "alert", "color: red", "margin"] $ \gone -> show bs `shouldNotSatisfy` T.isInfixOf gone
+    -- A listing of its language, as the page shows it, and a fence
+    -- whose language is python is python's, whatever its classes.
+    query (\case P.CodeBlock (_, cls, _) code -> [(cls, code)]; _ -> []) bs
+      `shouldBe` [(["mermaid"], "graph TD"), (["latex", "numberLines"], "x"), (["python", "html"], "print(1)")]
+
   it "makes GitHub's alerts boxes, and leaves the deck's options out" $ do
     bs <- blocksOf ToOther place "> [!WARNING]\n> Careful.\n\n[[!slides]]{theme=dark}\n"
     [cls | P.Div (_, cls, _) _ <- bs] `shouldBe` [["warning", "alert"]]
@@ -765,6 +800,19 @@ overHttp backing = describe "over HTTP" $ do
     T.count ". . ." document `shouldBe` 2
     html <- decodeUtf8 <$> export Html
     T.count ". . ." html `shouldBe` 3
+
+  it "exports an html fence through the allowlist, without its styles, and a latex fence as an equation" $ withDemoRunning backing identity $ \r -> do
+    pid <- newPage r "Framed" "```html\n<style>p { color: tomato }</style>\n<p style=\"margin: 0\" onclick=\"steal()\">A <b>framed</b> card.</p>\n<script>alert(1)</script>\n```\n\n```latex\n\\frac{a}{b}\n```\n"
+    let export format = getUrl r (r.admin <> "/admin/" <> links.pages.export pid format) >>= (`exported` format)
+    html <- decodeUtf8 <$> export Html
+    html `shouldSatisfy` T.isInfixOf "A <strong>framed</strong> card."
+    for_ ["tomato", "steal", "alert", "<iframe"] $ \gone -> html `shouldNotSatisfy` T.isInfixOf gone
+    html `shouldSatisfy` T.isInfixOf "\\frac{a}{b}"
+    document <- (`entryText` "word/document.xml") =<< zipped =<< export Docx
+    document `shouldSatisfy` T.isInfixOf "framed"
+    -- An equation of Word's, not the TeX as text.
+    document `shouldSatisfy` T.isInfixOf "<m:f>"
+    for_ ["tomato", "steal", "alert"] $ \gone -> document `shouldNotSatisfy` T.isInfixOf gone
 
   it "writes no comment of the page into an HTML, EPUB or DOCX file" $ withDemoRunning backing identity $ \r -> do
     pid <- newPage r "Commented" commented

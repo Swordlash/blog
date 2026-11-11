@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+An `html` fence, `latex` as display mathematics, and `{.norender}`
+(WP5.89, #196). A fence whose language is `html` is a new block,
+`HtmlBlock`, with the fence's attributes, of which `frameHeight` reads a
+height in pixels (`{height=300}` or `300px`, held to at most 4000), and one whose language is `latex` a `MathBlock`, as `math`
+is; the class `norender` keeps any of `html`, `latex`, `math`, `mermaid`
+and `tikz` a `CodeBlock` of its language (`math` as `latex`), read before
+the dispatch and in the attributes after the fence. `languageOfClasses`,
+`listingLanguage` and `norenderClass` let the export agree.
+`Wiki.Core.Markdown.Html` reads HTML through two allowlists, `PageHtml`
+(as before) and `FrameHtml`, which adds a `style` attribute on every
+element and `<style>` elements (`parseFrameHtml`), and `renderHtml`
+writes a kept tree out again with tagsoup's renderer, a style's CSS as
+written but for `</style`, written `<\/style`. HTML is cut into tokens by
+`htmlTokens`, which reads the content of `style`, `script`, `textarea`,
+`title` and the other elements the HTML parser reads as text as one text
+token, up to the end tag the browser would end it at, outside `svg` and
+`math`: a style keeps its CSS byte for byte, and an element dropped with
+its content ends where the browser ends it. `htmlText` leaves CSS out. The renderer's
+`Options` have `htmlBlock`, given the block's source, its height if the
+fence gives one, and its frame's document (`Wiki.Core.Markdown.Frame.frameDocument`: the wiki's stylesheet
+in a cascade layer, then the block in a `.page-body`), with its links
+resolved as raw HTML's are and opening in a new tab; by default the
+source is an HTML listing. `Wiki.Core.Markdown.Frame` holds the frame's
+sandbox, `frameSandbox`, beside `scriptSandbox`, reserved for the
+interactive SVG of #200 and the plugins of #186, and `sandboxes`, none
+of which has both `allow-scripts` and `allow-same-origin`. The editor's command `HtmlBlock` writes the fence.
+
 Every login is ASCII (WP5.87): `loginProblem` says why a stored login
 breaks the rules of `parseLogin`, or that it is not exactly what
 `parseLogin` makes of it (white space around it); the sentence that a

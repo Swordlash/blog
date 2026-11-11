@@ -93,6 +93,14 @@ spec = describe "Markdown.Link" $ do
       destinations "<div>\n<a href=\"/block\">link</a>\n<img src=\"pic\">\n</div>" `shouldBe` ["/block"]
     it "finds nothing in code, in a fence, in a formula or in a diagram" $
       destinations "`[a](code)`\n\n```\n[b](fence)\n```\n\n$[c](math)$\n\n```mermaid\nclick A \"x\"\n```" `shouldBe` []
+    it "finds nothing in an html fence, in a latex fence or in a listing made with norender" $ do
+      destinations "[a](outside)\n\n```html\n<a href=\"framed\">in the frame</a>\n```" `shouldBe` ["outside"]
+      destinations "```latex\n\\href{x}{y}\n```\n\n```html {.norender}\n<a href=\"listed\">x</a>\n```\n\n```{.mermaid .norender}\nclick A \"x\"\n```" `shouldBe` []
+    it "reads raw HTML after an element the browser reads as text as the browser does" $ do
+      -- A style holding a start tag in a string, which once seemed to open
+      -- another and to swallow the link after it.
+      destinations "<style>a::after { content: \"<style>\" }</style>\n<p><a href=\"after-style\">x</a></p>" `shouldBe` ["after-style"]
+      destinations "<textarea><a href=\"in-textarea\">x</a></textarea>\n<p><a href=\"after-textarea\">x</a></p>" `shouldBe` ["after-textarea"]
     it "takes no link inside a link's text, but the link around it" $
       destinations "[<a href=\"inner\">x</a>](outer)" `shouldBe` ["outer"]
     it "takes no link from an embed's caption" $

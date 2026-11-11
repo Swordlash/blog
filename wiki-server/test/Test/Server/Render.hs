@@ -172,6 +172,53 @@ anonymous backing = describe "for someone not signed in" $ do
     carried <- preloadIn html
     map (fmap (map (\b -> b.title))) (Map.elems carried.backlinks) `shouldSatisfy` any (either (const False) ("Tour" `elem`))
 
+  it "renders an html fence as its frame, the block in its srcdoc and nothing of it outside" $ withDemoRunning backing identity $ \r -> do
+    docs <- ok200 (getUrl r (r.public <> "/" <> links.spaces.atPath (slugs "docs"))) :: IO S.Space
+    let hostile =
+          T.intercalate
+            "\n"
+            [ "<p title='\"><script>alert(1)</script>'>&quot; &lt;/iframe&gt; \"><script>alert(2)</script></p>"
+            , "<style>&lt;/style&gt;&lt;script&gt;alert(3)&lt;/script&gt;</style>"
+            , "<style>p::after { content: \"</style><script>alert(4)</script>\" }</style>"
+            , "</iframe><script>alert(5)</script>"
+            ]
+    _ <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) Api.NewPage {parent = Nothing, title = "Framed", body = "Before.\n\n```html\n" <> hostile <> "\n```\n\nAfter.\n"} >>= (jsonAs 201 :: Reply -> IO P.Page)
+    (status, html) <- page r r.public "/s/docs/p/framed/"
+    status `shouldBe` 200
+    let (ahead, rest) = T.breakOn "<iframe " (appIn html)
+        (frame, behind) = T.breakOn "</iframe>" rest
+    frame `shouldSatisfy` T.isPrefixOf "<iframe class=\"wiki-html\" sandbox=\"allow-same-origin allow-popups allow-popups-to-escape-sandbox\" srcdoc=\"&lt;!DOCTYPE html&gt;"
+    frame `shouldSatisfy` T.isSuffixOf "\" title=\"HTML block\">"
+    -- One tag, whose quotes are its four attributes' own: the block is
+    -- inside the srcdoc, escaped, and ends nowhere else.
+    T.count "<" frame `shouldBe` 1
+    T.count "\"" frame `shouldBe` 8
+    frame `shouldSatisfy` T.isInfixOf "&amp;lt;/iframe&amp;gt;"
+    -- A style's CSS as written, character references and all, escaped
+    -- once more as the attribute's value.
+    frame `shouldSatisfy` T.isInfixOf "&lt;style&gt;&amp;lt;/style&amp;gt;&amp;lt;script&amp;gt;alert(3)&amp;lt;/script&amp;gt;&lt;/style&gt;"
+    -- Before and after it, the page's own paragraphs, and nothing of the
+    -- block.
+    ahead `shouldSatisfy` T.isInfixOf "<p>Before.</p>"
+    behind `shouldSatisfy` T.isPrefixOf "</iframe><p>After.</p>"
+    for_ ["alert", "<style", "<script"] $ \gone -> (ahead <> T.drop 9 behind) `shouldNotSatisfy` T.isInfixOf gone
+
+  it "renders an html fence's height as its frame's, which the program leaves as it is" $ withDemoRunning backing identity $ \r -> do
+    docs <- ok200 (getUrl r (r.public <> "/" <> links.spaces.atPath (slugs "docs"))) :: IO S.Space
+    let fences = "```html {height=300}\n<p>Sized.</p>\n```\n\n```html {height=tall}\n<p>Fitted.</p>\n```\n"
+    _ <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) Api.NewPage {parent = Nothing, title = "Sized", body = fences} >>= (jsonAs 201 :: Reply -> IO P.Page)
+    (status, html) <- page r r.public "/s/docs/p/sized/"
+    status `shouldBe` 200
+    case map (fst . T.breakOn ">") (drop 1 (T.splitOn "<iframe " (appIn html))) of
+      [sized, fitted] -> do
+        sized `shouldSatisfy` T.isInfixOf " data-height=\"300\" "
+        sized `shouldSatisfy` T.isInfixOf " style=\"height: 300px\" "
+        sized `shouldSatisfy` T.isInfixOf "Sized."
+        -- A height that is not one is ignored: the frame is fitted.
+        for_ ["data-height", "style="] $ \gone -> fitted `shouldNotSatisfy` T.isInfixOf gone
+        fitted `shouldSatisfy` T.isInfixOf "Fitted."
+      frames -> expectationFailure ("not two frames: " <> show frames)
+
   it "renders a private space as not there, with a 404, and nothing of it" $ withDemoRunning backing identity $ \r -> do
     for_ ["/s/team/", "/s/team/pages/", "/s/team/projects/", "/s/team/p/team-handbook/", "/s/team/p/team-handbook/source/", "/s/team/p/team-handbook/history/", "/s/team/p/team-handbook/slides/", "/s/team/p/nowhere/"] $ \path -> do
       (status, html) <- page r r.public path

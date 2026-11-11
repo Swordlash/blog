@@ -100,6 +100,13 @@ spec = describe "Wiki.Core.Search" $ do
       search "details" html `shouldBe` []
       search "secret" html `shouldBe` []
 
+    it "searches the text an html fence's frame shows, not its tags, its CSS or what it drops" $ do
+      let framed = [page "docs" "Framed" "```html\n<style>.card { color: tomato }</style>\n<div class=\"card\" style=\"padding: 1em\">A <b>shiny</b> card</div>\n<script>secret()</script>\n```" ["framed"]]
+      titles (search "shiny card" framed) `shouldBe` ["Framed"]
+      search "tomato" framed `shouldBe` []
+      search "padding" framed `shouldBe` []
+      search "secret" framed `shouldBe` []
+
     it "ranks a match in the title above one in the text" $ do
       titles (search "diagrams" pages) `shouldBe` ["Diagrams", "Mermaid tails"]
 

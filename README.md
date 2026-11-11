@@ -379,7 +379,9 @@ Each page lists the pages that link to it under **Linked from**, in the
 sidebar below the space's pages: a link counts as the page shows it and a
 click follows it (a path, a wiki link, a permanent link, an embed of a page,
 a link in a page's HTML), each page once and never a page's link to itself,
-and only the pages the reader may read are listed. An encrypted space's
+and only the pages the reader may read are listed. A link in an `html`
+block is not counted: it is in the block's frame, which opens it in a new
+tab, not on the page. An encrypted space's
 pages have no list and are in none, since the server cannot read them.
 Text selected in a page gets **Copy link** beside **Comment**: its address
 ends in the browser's own text fragment (`#:~:text=…`), and Chrome, Edge,
@@ -1903,8 +1905,8 @@ to the demo, keeping `data/`.
   `rclone copy <remote>/attachments ./attachments` first.)
 - **Migrating and checking by hand.** The server migrates its database to its
   own version of the schema when it starts. `wiki-server migrate --data DIR`
-  (or `bin/wiki migrate …`) does only that, and says from which version, with
-  a line for each thing a step has to tell. Step 15 renames each login made
+  (or `bin/wiki migrate …`) does that without serving, and says from which
+  version, with a line for each thing a step has to tell. Step 15 renames each login made
   before the rule of a login (2026-11-06: only ASCII letters, digits and
   punctuation, at least one letter or digit, not `~` first, at most 64
   characters) that breaks it, to `user-` and the first eight letters and
@@ -1918,6 +1920,13 @@ to the demo, keeping `data/`.
   Migrated the database from version 14 to 15 of the schema.
   Renamed the login "łucja" of the user 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d to "user-1a2b3c4d", since a login is now ASCII letters, digits and punctuation, with a letter or digit, at most 64 characters and not ~ first. The user signs in with the same password under the new login.
   ```
+
+  `migrate` also brings up to date what the wiki derives from each page's
+  text, when this version reads it otherwise than the version that wrote it: the
+  table of links the backlinks come from, and the text a search reads (each
+  page is read once more; no page's text, version or date changes). The
+  server does the same when it opens a database `migrate` did not bring up
+  to date.
 
   `wiki-server check --data DIR` reads every row of every table, and the wiki's
   records built from them, as the program does, changes nothing, and lists the

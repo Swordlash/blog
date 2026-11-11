@@ -105,6 +105,10 @@ forms = describe "what counts as a link" $ do
         none =
           [ ("a link in code", "`[it](target)`")
           , ("a link in a fence", "```\n[it](target)\n```")
+          , -- Its links are in its frame, not on the page (WP5.89).
+            ("a link in an html fence", "```html\n<a href=\"target\">it</a>\n```")
+          , ("a link in a latex fence", "```latex\n\\href{target}{it}\n```")
+          , ("a link in a listing made with norender", "```html {.norender}\n<a href=\"target\">it</a>\n```")
           , ("a fragment on the same page", "See [it](#target).")
           , ("an external URL", "See [it](https://example.com/docs/target).")
           , ("an attachment", "See [it](attachment:target).")

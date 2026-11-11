@@ -23,7 +23,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Rows (PageNode (..), deleteSettingsLike, linksVersionSetting, loadAllPages, loadServerSettings, loadSpaces, nodeOf, settingValue)
+import Wiki.Server.Storage.Rows (PageNode (..), deleteSettingsLike, linksVersion, linksVersionSetting, loadAllPages, loadServerSettings, loadSpaces, nodeOf, settingValue)
 import Wiki.Server.Storage.Schema (PageLinks (..), WikiDb (..), nodeColumns, wikiDb)
 
 spec :: Backing -> Spec
@@ -52,7 +52,7 @@ spec backing = describe "the table of links" $ do
         commitTransaction c
       withStorageAside at $ \reopened -> do
         linkRows reopened `shouldReturn` written
-        reading reopened (settingValue linksVersionSetting) `shouldReturn` Just "1"
+        reading reopened (settingValue linksVersionSetting) `shouldReturn` Just (show linksVersion)
         disagreements reopened `shouldReturn` []
 
   it "is filled again when another version of how links are read filled it" $

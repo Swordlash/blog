@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+An `html` fence is shown in a frame (WP5.89, #196): the island
+`HtmlFrame` renders an `<iframe class="wiki-html">` whose `sandbox` and
+`srcdoc` are attributes, so the prerendered page carries it, and
+`MonadIslands.fitFrame` keeps it as high as its content with a
+ResizeObserver on the frame's document (`jsbits/islands.js`; natively it
+does nothing), at its cap when anything in it is placed fixed. A height
+the fence gives is the frame's `style` and `data-height`, in the
+prerendered page too, and the fitter leaves that frame alone. A comment's quote skips the frame (`comments.js`). The
+guide's Markdown guide shows the block, a `latex` fence and `{.norender}`,
+the help dialog gains the section "HTML with its own styles", and the
+editor's toolbar an "HTML block" button.
+
 A page's backlinks (WP5.88, #189): `MonadWiki.pageBacklinks` lists the
 pages that link to a page, those the user may view, and the space's
 sidebar shows them under "Linked from" below its pages, when there are

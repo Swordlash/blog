@@ -73,6 +73,11 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
       let source = "# Title\n\n```mermaid\ngraph LR\n  a -->\n```\n\nText.\n\n```tikz\n\\draw (0,0);\n```\n"
       places source `shouldBe` [(("\\draw (0,0);", 0), (10, 12, Picture)), (("graph LR\n  a -->", 0), (3, 6, Diagram))]
 
+    it "places a latex fence as a math fence, at its lines, and leaves an html fence and a listing made with norender out" $ do
+      let source = "```latex\n\\frac{1}{\n```\n\n```html\n<script>alert(1)</script>\n<p onclick=\"x()\">p</p>\n```\n\n```mermaid {.norender}\ngraph\n```\n"
+      places source `shouldBe` [(("\\frac{1}{", 0), (1, 3, Formula))]
+      parserProblems source `shouldBe` []
+
     it "places a formula on its line of a paragraph, and display math in a paragraph" $ do
       let source = "Intro line,\nthen $x^$ here\nand $$y +$$ after."
       places source `shouldBe` [(("x^", 0), (2, 2, Formula)), (("y +", 0), (3, 3, Formula))]

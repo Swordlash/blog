@@ -1409,6 +1409,42 @@ select {
   height: auto;
 }
 
+/* An html fence's frame (Wiki.App.Islands' HtmlFrame): as wide as the
+   text, without a border, and as high as its content, which the
+   application measures and sets in the frame's style. A very long block is
+   capped at most of the window's height, and scrolls inside the frame. */
+.wiki-html {
+  display: block;
+  width: 100%;
+  max-height: 80vh;
+  border: 0;
+}
+
+/* The document inside such a frame (Wiki.Core.Markdown.Frame), whose
+   stylesheet this is too: no margin, and no background of its own, so that
+   the page's shows through. The block is in a .page-body, styled as the
+   page's own body; flow-root keeps the margins of its first and last
+   elements inside it, and so inside the height the application
+   measures. */
+.html-frame {
+  margin: 0;
+  background: transparent;
+}
+
+.html-frame > .page-body {
+  display: flow-root;
+}
+
+/* A frame on a slide: the slide's palette (see "Slides" below), and the
+   controls and scroll bars of that scheme. */
+.html-frame-light {
+  color-scheme: light;
+}
+
+.html-frame-dark {
+  color-scheme: dark;
+}
+
 .page-body blockquote {
   margin: 1rem 0;
   padding: 0 1rem;
@@ -2411,8 +2447,12 @@ body:has(.slides-view) {
    a dark box, and a table's header dark. So the light themes re-declare the
    page's light set for the slide, and the dark theme its dark set, whatever
    the system prefers; the frame, notes and controls around the slide stay
-   the page's. The two sets are the ones at the top of this file. */
-.slide {
+   the page's. The two sets are the ones at the top of this file. An html
+   fence's frame on a slide is drawn in the slide's set too: the frame's
+   body has the class html-frame-light or html-frame-dark
+   (Wiki.Core.Markdown.Frame's FrameScheme). */
+.slide,
+.html-frame-light {
   --text: #1f2328;
   --background: #ffffff;
   --surface: #f6f8fa;
@@ -2461,7 +2501,8 @@ body:has(.slides-view) {
   --diff-added-word: #aceebb;
 }
 
-.slides-theme-dark .slide {
+.slides-theme-dark .slide,
+.html-frame-dark {
   --text: #e6edf3;
   --background: #0d1117;
   --surface: #151b23;

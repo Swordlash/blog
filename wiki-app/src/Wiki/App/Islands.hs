@@ -27,6 +27,13 @@
 -- everywhere else 'component' raises nothing. The element shows the error
 -- in place either way.
 --
+-- An @html@ fence is an island as well ('HtmlFrame'), although no library
+-- draws it: a frame whose document Halogen writes into its @srcdoc@
+-- attribute ("Wiki.Core.Markdown.Frame"), sandboxed so that nothing in it
+-- runs. The frame runs no script, so the page sizes it: once the frame is
+-- in the page, its height follows the height of its content
+-- ('fitFrame'), unless its fence gives it a height.
+--
 -- A moment in time ('LocalTime') is an island as well, although no
 -- library draws it. The reader's browser writes it in the reader's time
 -- zone, which the server that prerendered the page does not know. So it is
@@ -55,6 +62,7 @@ import Protolude hiding (State)
 import Web.DOM.Internal.Types (Element)
 import Web.Event.Event (EventType (..))
 import Wiki.App.Islands.Monad (MathMode (..), MonadIslands (..), drawnProblem)
+import Wiki.Core.Markdown.Frame (frameSandbox)
 import Wiki.Core.Markdown.Render (lineNumbers, scrollingCode)
 import Wiki.Core.Markdown.Tikz (tikzDocument)
 import Wiki.Core.Math (Macros (..))
@@ -75,6 +83,11 @@ data Island
     -- and with its lines numbered if the fence says
     -- ('Wiki.Core.Markdown.Ast.codeNumbered').
     CodeBlock (Maybe Text) (Maybe Int) Bool Text
+  | -- | An @html@ fence's frame: the height its fence gives it, if it
+    -- gives one ('Wiki.Core.Markdown.Ast.frameHeight'; otherwise the page
+    -- fits the frame to its content), and the document it shows, as
+    -- 'Wiki.Core.Markdown.Frame.frameDocument' makes it.
+    HtmlFrame (Maybe Int) Text
   | -- | A moment in time, written as the reader's browser writes one.
     LocalTime UTCTime
   deriving stock (Eq, Show)
@@ -145,6 +158,28 @@ islands toOutput =
         HH.pre
           (scrollingCode rows (["wiki-code"] <> ["numbered" | numbered]))
           ([lineNumbers code | numbered] <> [HH.code [HP.ref ref] []])
+      -- The document is the frame's srcdoc, which Halogen writes as any
+      -- other property, so that the prerendered page carries the frame
+      -- too, escaped as an attribute's value. A property rather than an
+      -- attribute: setting the attribute loads the document again even
+      -- when it is the same, and the program adopting a prerendered page
+      -- would load every frame twice; Halogen sets a property only when it
+      -- differs. The sandbox comes before the document: a frame reads its
+      -- sandbox when it loads a document.
+      --
+      -- A height the fence gives is the frame's style, and its
+      -- data-height, which tells the page's script to leave the frame as
+      -- it is ('fitFrame'); both are in the prerendered page.
+      HtmlFrame height document ->
+        HH.iframe
+          ( [ HP.ref ref
+            , HP.class_ (HH.ClassName "wiki-html")
+            , HP.title "HTML block"
+            , HP.attr (HH.AttrName "sandbox") frameSandbox
+            , HP.srcDoc document
+            ]
+              <> concat [[HP.attr (HH.AttrName "style") ("height: " <> show h <> "px"), HP.attr (HH.AttrName "data-height") (show h)] | Just h <- [height]]
+          )
       LocalTime at -> [hh|<time ref={{ ref }} class="wiki-time" datetime={{ iso at }}></time>|]
 
     -- The event islands.js sends a diagram's or a picture's element when
@@ -181,9 +216,10 @@ islands toOutput =
       -- ('Drawn').
       Mermaid source -> H.liftEffect (renderMermaid source element)
       Tikz source -> H.liftEffect (renderTikz source (tikzDocument source) element)
-      -- A listing and a time never fail; one may be in the slot of a
-      -- formula that did, whose problem then goes.
+      -- A listing, a frame and a time never fail; one may be in the slot
+      -- of a formula that did, whose problem then goes.
       CodeBlock language _ _ code -> H.liftEffect (highlightCode language code element) >> report Nothing
+      HtmlFrame _ _ -> H.liftEffect (fitFrame element) >> report Nothing
       LocalTime at -> H.liftEffect (renderTime at element) >> report Nothing
 
     -- Tell the parent of a failure, and of a success after one.

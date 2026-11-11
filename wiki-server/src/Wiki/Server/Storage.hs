@@ -476,10 +476,10 @@ openWith collect config place = do
         (settings, serverKept, newestGeneration, migrated) <- case engine of
           Engine p -> withResource p.writer $ \c -> do
             (_, said) <- migrateSaying c
-            -- The links are filled, if this version did not fill them,
-            -- in the same transaction ("Wiki.Server.Storage.Rows",
-            -- "Links").
-            withTransaction True c (runDb c (ensureHomeDocument >> void ensureLinks >> resolvePendingLinks))
+            -- The links are filled, and the pages' search text made
+            -- again, if this version did not fill or make them, in the
+            -- same transaction ("Wiki.Server.Storage.Rows", "Links").
+            withTransaction True c (runDb c (ensureHomeDocument >> void ensureLinks >> resolvePendingLinks >> void ensureSearchText))
             when collect $ do
               collectGarbage c place.dataDir
               -- Uploads and exports left by a server that stopped: nothing
@@ -583,14 +583,16 @@ data Migrated = Migrated
 -- be restored. A database of an earlier wiki-server ('OldSchema') or of a
 -- newer one ('Wiki.Server.Storage.Migrate.SchemaTooNew') is refused, as the
 -- server refuses it. It also fills the table of links if this version of
--- how links are read did not ('ensureLinks'), as opening the storage
--- would: the deploy's migration then takes that time, before the new
--- server must answer, and the check reads the table filled.
+-- how links are read did not ('ensureLinks'), and makes every page's
+-- search text again if this version of how it is made did not
+-- ('ensureSearchText'), as opening the storage would: the deploy's
+-- migration then takes that time, before the new server must answer, and
+-- the check reads the table filled.
 migrateDatabase :: Place -> IO Migrated
 migrateDatabase place = withDatabase place $ \c -> do
   before <- databaseVersion c
   (applied, said) <- migrateSaying c
-  withTransaction True c (runDb c (void ensureLinks >> resolvePendingLinks))
+  withTransaction True c (runDb c (void ensureLinks >> resolvePendingLinks >> void ensureSearchText))
   pure Migrated {from = before, to = fromMaybe before (lastMay applied), said}
 
 -- | 'CheckProblem' is why @wiki-server check@ failed.

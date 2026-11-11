@@ -80,6 +80,7 @@ import Wiki.Core.Version (Author, latestVersions)
 spec :: Spec
 spec = do
   demoPages
+  htmlFrame
   serverPage
   servedPages
   savedHomePage
@@ -132,6 +133,25 @@ demoPages = for_ ["/", "/blog/"] $ \base -> describe ("Wiki.App.Static, adopted,
           had = Set.fromList (map fst original)
           built = [what | (ident, what) <- adopted, not (ident `Set.member` had)]
       (lost, built) `shouldBe` ([], [])
+
+-- | An html fence's frame (the Markdown guide shows one) is adopted as the
+-- prerender wrote it, its sandbox and its document in its attributes: the
+-- same element, with the same markup. A frame written again would load
+-- its document again.
+htmlFrame :: Spec
+htmlFrame = describe "an html fence's frame, adopted" $
+  it "keeps the Markdown guide's frame as the prerender wrote it" $ do
+    let at = Page (path "docs") (path "markdown-guide")
+        path = either (panic . show) identity . parsePath
+    container <- prerendered "/" at
+    original <- nodesOf container
+    html <- markup container
+    html `shouldSatisfy` T.isInfixOf "<iframe class=\"wiki-html\" sandbox=\"allow-same-origin allow-popups allow-popups-to-escape-sandbox\" srcdoc=\"&lt;!DOCTYPE html&gt;"
+    (_, dispose) <- startRoute Adopt (demoState demoNow) "/" at container
+    markup container >>= (`shouldBe` html)
+    adopted <- nodesOf container
+    dispose
+    map fst adopted `shouldBe` map fst original
 
 -- | The server's build has one page for every address: the application as
 -- it shows before it has loaded anything. The program adopts it at any

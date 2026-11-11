@@ -193,32 +193,36 @@ writing = describe "written" $ do
 slugOf :: Text -> Slug
 slugOf = either (panic . show) identity . mkSlug
 
+-- | The public blog the posts' HTML is rendered in.
+blogSpace :: Space
+blogSpace =
+  Space
+    { id = SpaceId "s1"
+    , name = "Blog"
+    , slug = slugOf "blog"
+    , parent = Nothing
+    , public = True
+    , sealed = False
+    , encryption = Nothing
+    , owner = Nothing
+    , active = True
+    , personalContainer = False
+    , mathMacros = ""
+    , createdAt = time 1
+    , position = 0
+    , subspaceOrder = ByName
+    , pageOrder = ByName
+    , homePage = Nothing
+    , icon = Nothing
+    , description = ""
+    , blog = True
+    , boxNumbering = InPage
+    }
+
 html :: Spec
-html = describe "a post's HTML" $
+html = describe "a post's HTML" $ do
   it "is the wiki's render, through the allowlist, its links and attachments under the public address" $ do
-    let blog =
-          Space
-            { id = SpaceId "s1"
-            , name = "Blog"
-            , slug = slugOf "blog"
-            , parent = Nothing
-            , public = True
-            , sealed = False
-            , encryption = Nothing
-            , owner = Nothing
-            , active = True
-            , personalContainer = False
-            , mathMacros = ""
-            , createdAt = time 1
-            , position = 0
-            , subspaceOrder = ByName
-            , pageOrder = ByName
-            , homePage = Nothing
-            , icon = Nothing
-            , description = ""
-            , blog = True
-            , boxNumbering = InPage
-            }
+    let blog = blogSpace
         pageOf i t body attachments = Page {id = PageId i, space = blog.id, parent = Nothing, title = t, slug = slugOf i, body, attachments, createdAt = time 1, updatedAt = time 1, position = 0, template = False, createdBy = Nothing, updatedBy = Nothing}
         tree = Attachment {id = AttachmentId "a1", name = FileName "tree.png", mediaType = MimeType "image/png", size = 3, source = SourceBlob (BlobId "b1")}
         post =
@@ -253,6 +257,15 @@ html = describe "a post's HTML" $
     -- A heading spoiler's section is shown as written, without its marker.
     out `shouldSatisfy` T.isInfixOf "<h2 id=\"a-question\">A question</h2><p>Its answer.</p>"
     out `shouldNotSatisfy` T.isInfixOf "<details"
+
+  it "holds an html fence's source as a listing, never its frame or its HTML: a feed reader has no sandbox" $ do
+    let blog = blogSpace
+        post = Page {id = PageId "post", space = blog.id, parent = Nothing, title = "Post", slug = slugOf "post", body = "```html\n<style>p { color: red }</style>\n<p style=\"margin: 0\" onclick=\"steal()\">Framed</p>\n```\n", attachments = [], createdAt = time 1, updatedAt = time 1, position = 0, template = False, createdBy = Nothing, updatedBy = Nothing}
+    out <- postHtml "https://wiki.example/" [] [blog] blog [post] post
+    out `shouldSatisfy` T.isInfixOf "<pre><code class=\"language-html\">&lt;style&gt;p { color: red }&lt;/style&gt;\n&lt;p style=\"margin: 0\" onclick=\"steal()\"&gt;Framed&lt;/p&gt;\n</code></pre>"
+    out `shouldNotSatisfy` T.isInfixOf "<iframe"
+    out `shouldNotSatisfy` T.isInfixOf "<style"
+    out `shouldNotSatisfy` T.isInfixOf "<p style"
 
 --------------------------------------------------------------------------------
 -- Served

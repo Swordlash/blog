@@ -92,7 +92,8 @@ import Data.Text qualified as T
 import Halogen.HTML qualified as HH
 import Protolude
 import Wiki.Core.Markdown.Ast
-import Wiki.Core.Markdown.Render (Options, renderSections)
+import Wiki.Core.Markdown.Frame (FrameScheme (..))
+import Wiki.Core.Markdown.Render (Options (..), renderSections)
 
 -- | 'Deck': a page as slides, with its display options. There is always at
 -- least one slide.
@@ -439,10 +440,25 @@ data RenderedSlide w i = RenderedSlide
   }
 
 -- | The deck's slides as HTML, rendered as one document
--- ('renderSections').
+-- ('renderSections'). An @html@ fence's frame on a slide is drawn in the
+-- colours of the deck's theme ('slideScheme'), and one in the notes, which
+-- are shown beside the slide in the page's colours, in the system's: the
+-- deck is rendered once for each, and each part taken from its own. The
+-- two renders are one document each, so their islands have the same keys.
 renderDeck :: Options page w i -> Deck -> [RenderedSlide w i]
-renderDeck opts deck = triples (renderSections opts (concat [[foldMap (pure . titleBlock) s.title, s.body, s.notes] | s <- deck.slides]))
+renderDeck opts deck = zipWith fromBoth (triples (render opts {frameScheme = slideScheme deck.options.theme})) (triples (render opts))
   where
+    render o = renderSections o (concat [[foldMap (pure . titleBlock) s.title, s.body, s.notes] | s <- deck.slides])
+    fromBoth onSlide inPage = RenderedSlide {title = onSlide.title, body = onSlide.body, notes = inPage.notes}
     triples = \case
       title : body : notes : rest -> RenderedSlide {title, body, notes} : triples rest
       _ -> []
+
+-- | The colours a slide of this theme is drawn in, whatever the system
+-- prefers (the stylesheet's @.slide@): dark for the dark theme, light for
+-- the others.
+slideScheme :: Theme -> FrameScheme
+slideScheme = \case
+  Dark -> DarkScheme
+  Beamer -> LightScheme
+  Light -> LightScheme

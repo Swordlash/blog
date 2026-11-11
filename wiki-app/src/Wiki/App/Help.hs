@@ -36,8 +36,8 @@ data HelpSection = HelpSection
   deriving stock (Eq, Show)
 
 -- | The help, for a wiki that defined these kinds of box: lists, tasks,
--- tables, emoji, code, mathematics, Mermaid diagrams, TikZ pictures, and
--- the boxes, from the Markdown guide; then this wiki's own kinds of box. A
+-- tables, emoji, code, mathematics, Mermaid diagrams, TikZ pictures, HTML
+-- in a frame of its own, and the boxes, from the Markdown guide; then this wiki's own kinds of box. A
 -- section the guide no longer has is left out.
 helpSections :: [BoxKind] -> [HelpSection]
 helpSections kinds =
@@ -51,6 +51,7 @@ helpSections kinds =
     , (2, "Mathematics")
     , (2, "Diagrams")
     , (2, "Pictures")
+    , (2, "HTML with its own styles")
     , (2, "Notes and boxes")
     ]
     <> [HelpSection "This wiki's kinds of box" (ownKinds kinds)]

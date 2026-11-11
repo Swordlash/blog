@@ -47,6 +47,7 @@ import Test.Browser.Slides qualified as Slides
 import Test.Browser.Source qualified as Source
 import Test.Browser.Spaces qualified as Spaces
 import Test.Browser.Spoilers qualified as Spoilers
+import Test.Browser.HtmlBlock qualified as HtmlBlock
 import Test.Browser.Stars qualified as Stars
 import Test.Browser.Vault qualified as Vault
 import Test.Browser.Workspace qualified as Workspace
@@ -116,6 +117,7 @@ spec = do
   describe "Reading offline and installing" (Offline.spec BrowserDOM)
   describe "Tables of contents and templates" (Contents.spec BrowserDOM)
   describe "Spoilers and listings that scroll" (Spoilers.spec BrowserDOM)
+  describe "HTML in a frame of its own" (HtmlBlock.spec BrowserDOM)
   describe "Copying a code block" (CopyCode.spec BrowserDOM)
   describe "The writing assistant" (Assistant.spec BrowserDOM)
   describe "The assistant's keys across devices, and the user's keys" (Vault.spec BrowserDOM)
