@@ -26,7 +26,8 @@
 -- the rehearsal starts it with is not a failed check.
 --
 -- So what the checks drive on the old program is stable: the options of
--- @serve@ and of the database, @users add@, @users list@ and its table
+-- @serve@ (port 0 among them) and of the database, the line @serve@ logs
+-- for each listener's address ('listenedAt'), @users add@, @users list@ and its table
 -- (beside the running server), @\/healthz@ (its schema
 -- version), the admin listener's API
 -- (@info@, the spaces, a space at a path, their pages and a page at a path, and the routes
@@ -48,8 +49,8 @@
 -- checks write (an account, a provider, settings), so they run on scratch
 -- databases, never on the wiki the move fills.
 --
--- Both servers listen on loopback addresses, on ports the system gives.
--- They are read through their administration listener, which is served
+-- Both servers listen on loopback addresses, on ports the system gives,
+-- which the rehearsal reads from their logs. They are read through their administration listener, which is served
 -- to the loopback address as an administrator without a sign-in
 -- ("Wiki.Server"). The scratch directory is the caller's: it is made here
 -- (readable only by the owner, as @data/@ is, since the copy holds the
@@ -66,6 +67,9 @@ module Wiki.Server.Rehearsal
   , Check (..)
   , Seeding (..)
   , Server (..)
+  , withServer
+  , listenAnywhere
+  , listenedAt
   , checks
   , runConsoleIn
   , consoleEnvironment
@@ -109,7 +113,6 @@ import Data.Time (getCurrentTime)
 import Database.Beam (Beamable, Columnar, Database, DatabaseSettings, Table (..), TableEntity, all_, defaultDbSettings, delete, insert, insertValues, runDelete, runInsert, runSelectReturningList, runUpdate, select, update, val_, (<-.), (==.))
 import Network.HTTP.Client (CookieJar, Manager, Request (..), RequestBody (..), Response, createCookieJar, defaultManagerSettings, httpLbs, managerResponseTimeout, newManager, parseRequest, responseBody, responseCookieJar, responseHeaders, responseStatus, responseTimeoutMicro, responseVersion)
 import Network.HTTP.Types (hLocation, hSetCookie, statusCode, urlEncode)
-import Network.Socket qualified as N
 import Options.Applicative
 import Protolude
 import Servant.Client.Core qualified as Servant
@@ -274,11 +277,7 @@ rehearse o = either identity identity <$> runExceptT steps
         for fixtures $ \(name, after) -> (name,) <$> liftIO (after server)
       let lines' = [either (\why -> name <> ": failed: " <> why) (const (name <> ": passed")) r | (name, r) <- results]
       pure (if all (isRight . snd) results then Rehearsed lines' else ChecksFailed lines')
-    serveArgs choice extra listen admin =
-      ["serve"]
-        <> placeArgs choice
-        <> ["--listen", "127.0.0.1:" <> show listen, "--admin-listen", "127.0.0.1:" <> show admin]
-        <> extra
+    serveArgs choice extra = ["serve"] <> placeArgs choice <> listenAnywhere <> extra
     placeArgs choice = ["--data", o.scratch] <> databaseArgs choice
     databaseArgs = \case
       SqliteChosen file -> ["--sqlite", file]
@@ -322,63 +321,90 @@ data Server = Server
   -- server, as @wiki-server users@ always may.
   }
 
--- | Run a program's server on two loopback ports the system gives, wait
--- until it answers, run the action, and stop the server however the
--- action ends. The place's options (@--data@ and the database's) are
--- those the server is started with, and those its console is run with.
--- What the server writes goes to a log file in the scratch directory, not
--- a pipe: a pipe nobody reads fills up and stops the server. The log is
--- bytes, read as UTF-8; the server runs with a UTF-8 locale
--- ('consoleEnvironment'), so that an old one does not fail on a name it
--- logs. A server that exits, or does not answer within a minute, is
--- reported to @failed@ with the end of its log.
-withServer :: FilePath -> FilePath -> [[Char]] -> (Int -> Int -> [[Char]]) -> (Text -> ExceptT RehearsalOutcome IO a) -> (Server -> ExceptT RehearsalOutcome IO a) -> ExceptT RehearsalOutcome IO a
+-- | Run a program's server, wait until it answers, run the action, and
+-- stop the server however the action ends. The arguments are the whole
+-- command line after the program; the rehearsal starts @serve@ with
+-- @--listen 127.0.0.1:0 --admin-listen 127.0.0.1:0@ ('listenAnywhere'),
+-- so the system gives each listener a free port, and the addresses are
+-- read from the server's log ('listenedAt'). No port is chosen here, so
+-- nothing can take one between its choice and its use. The place's
+-- options (@--data@ and the database's) are those its console is run
+-- with. What the server writes goes to a log file in the scratch
+-- directory, not a pipe: a pipe nobody reads fills up and stops the
+-- server. The log is bytes, read as UTF-8; the server runs with a UTF-8
+-- locale ('consoleEnvironment'), so that an old one does not fail on a
+-- name it logs. A server that exits, or does not log its addresses and
+-- answer within a minute, is reported to @failed@ with the end of its
+-- log.
+withServer :: FilePath -> FilePath -> [[Char]] -> [[Char]] -> (Text -> ExceptT RehearsalOutcome IO a) -> (Server -> ExceptT RehearsalOutcome IO a) -> ExceptT RehearsalOutcome IO a
 withServer logFile program placeArgs args failed act = do
-  listen <- liftIO freePort
-  admin <- liftIO freePort
   logHandle <- liftIO (openFile logFile WriteMode)
   environment <- liftIO (consoleEnvironment <$> getEnvironment)
-  (_, _, _, process) <- liftIO (createProcess (proc program (args listen admin)) {env = Just environment, std_in = NoStream, std_out = UseHandle logHandle, std_err = UseHandle logHandle})
-  let server = Server {adminApi = "http://127.0.0.1:" <> show admin <> "/admin/api/v1", public = "http://127.0.0.1:" <> show listen, console = runConsole program placeArgs}
-      stop = do
+  (_, _, _, process) <- liftIO (createProcess (proc program args) {env = Just environment, std_in = NoStream, std_out = UseHandle logHandle, std_err = UseHandle logHandle})
+  let stop = do
         terminateProcess process
         void (timeout 20_000_000 (waitForProcess process))
         hClose logHandle
   ExceptT $
     ( runExceptT $
-        liftIO (answers process server) >>= \case
+        liftIO (answers process logFile) >>= \case
           Left how -> do
-            said <- liftIO (T.strip . T.takeEnd 2000 . decodeUtf8 <$> readFile' logFile)
+            said <- liftIO (T.strip . T.takeEnd 2000 <$> readLog logFile)
             failed (toS program <> " " <> how <> (if T.null said then "" else ": " <> said))
-          Right () -> act server
+          Right (public, admin) -> act Server {adminApi = admin <> "/api/v1", public, console = runConsole program placeArgs}
     )
       `finally` stop
-  where
-    readFile' f = try @SomeException (BS.readFile f) <&> either (const "") identity
 
--- | Wait for the server to answer @info@, for a minute; 'Left' says how it
--- failed to.
-answers :: ProcessHandle -> Server -> IO (Either Text ())
-answers process server = do
+-- | The options that make @wiki-server serve@ listen on a port the system
+-- gives for each of its two listeners, on the loopback address. Every
+-- version of the server takes port 0, and logs the address it took.
+listenAnywhere :: [[Char]]
+listenAnywhere = ["--listen", "127.0.0.1:0", "--admin-listen", "127.0.0.1:0"]
+
+-- | Wait, for a minute, until the server has logged the addresses of its
+-- public and admin listeners and answers @info@ on the admin one. 'Right'
+-- has the two addresses, as 'listenedAt' reads them; 'Left' says how the
+-- server failed to answer.
+answers :: ProcessHandle -> FilePath -> IO (Either Text (Text, Text))
+answers process logFile = do
   manager <- newManager defaultManagerSettings
-  let attempt :: Int -> IO (Either Text ())
+  let attempt :: Int -> IO (Either Text (Text, Text))
       attempt n =
         getProcessExitCode process >>= \case
           Just code -> pure (Left ("exited (" <> show code <> ") before it answered"))
           Nothing -> do
-            ok <- either (const False) (const True) <$> getJson manager (server.adminApi <> "/info")
-            if
-              | ok -> pure (Right ())
-              | n <= 0 -> pure (Left "did not answer within a minute")
-              | otherwise -> threadDelay 250_000 >> attempt (n - 1)
+            logged <- readLog logFile
+            found <- case (listenedAt "public" logged, listenedAt "admin" logged) of
+              (Just public, Just admin) -> getJson manager (admin <> "/api/v1/info") <&> either (const Nothing) (const (Just (public, admin)))
+              _ -> pure Nothing
+            case found of
+              Just addresses -> pure (Right addresses)
+              Nothing
+                | n <= 0 -> pure (Left "did not answer within a minute")
+                | otherwise -> threadDelay 250_000 >> attempt (n - 1)
   attempt 240
 
--- | A port on the loopback address that nothing listens on now.
-freePort :: IO Int
-freePort =
-  bracket (N.socket N.AF_INET N.Stream N.defaultProtocol) N.close $ \s -> do
-    N.bind s (N.SockAddrInet 0 (N.tupleToHostAddress (127, 0, 0, 1)))
-    N.socketPort s <&> fromIntegral
+-- | The address a listener of the server took, as the server's log says:
+-- the line @event=listening listener=NAME address=URL@ that every version
+-- of the server writes for each listener once it listens ("Wiki.Server").
+-- The address is the listener's root with no slash at its end: the public
+-- listener's @http:\/\/127.0.0.1:41377@ (its base path, @\/@, dropped),
+-- the admin listener's @http:\/\/127.0.0.1:41378\/admin@. 'Nothing' while
+-- the log has no such line.
+listenedAt :: Text -> Text -> Maybe Text
+listenedAt name logged =
+  head
+    [ T.dropWhileEnd (== '/') (T.dropAround (== '"') address)
+    | line <- T.lines logged
+    , let fields = T.words line
+    , "event=listening" `elem` fields
+    , ("listener=" <> name) `elem` fields
+    , Just address <- [asum (map (T.stripPrefix "address=") fields)]
+    ]
+
+-- | The server's log so far, as UTF-8; empty when it cannot be read.
+readLog :: FilePath -> IO Text
+readLog file = try @SomeException (BS.readFile file) <&> either (const "") decodeUtf8
 
 -- | A POST of JSON, answered with JSON: the value, or why not. A write
 -- through the administration API answers 200 or 201, and is made with the

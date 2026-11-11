@@ -13,7 +13,7 @@
 # With --postgres it reads the variables toolchain/ci-postgres.sh prints
 # (WIKI_TEST_DATABASE_URL, WIKI_TEST_PG_DUMP, WIKI_TEST_PG_RESTORE,
 # WIKI_TEST_PSQL), and makes two databases there, the wiki's and the copy's,
-# dropped first. With --move the wiki is in SQLite, and NEW rehearses its
+# in a namespace of the run's own, dropped when it ends. With --move the wiki is in SQLite, and NEW rehearses its
 # move to PostgreSQL, as `deploy-local.sh --move-to-postgres` does (WP5.80b):
 # OLD serves a copy in SQLite, NEW copies it into an empty database of that
 # PostgreSQL and serves it there, and each check compares what the two read.
@@ -26,10 +26,12 @@
 # with: the migration gives it a home page of its own beside that page. A
 # later OLD ignores the profile's homePage and keeps the space's home page,
 # which the rehearsal accepts as well.
-# What this script sends OLD (serve's options, POST spaces, POST
-# spaces/ID/pages and PUT spaces/ID/profile) is part of what the rehearsal
-# keeps stable (the README's CI section): OLD is the base branch's program,
-# which this script, from the pull request, must still drive.
+# What this script sends OLD (serve's options, port 0 among them, POST
+# spaces, POST spaces/ID/pages and PUT spaces/ID/profile) and what it reads
+# of it (the line its log has for each listener's address) is part of what
+# the rehearsal keeps stable (the README's CI section): OLD is the base
+# branch's program, which this script, from the pull request, must still
+# drive.
 set -eu
 old=${1:?usage: rehearse-ci.sh OLD NEW [--postgres | --move]}
 new=${2:?usage: rehearse-ci.sh OLD NEW [--postgres | --move]}
@@ -43,73 +45,82 @@ esac
 
 work=$(mktemp -d)
 pid=''
+# The databases this run made on the PostgreSQL, dropped when it ends.
+databases=''
 cleanup() {
   [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+  for db in $databases; do
+    "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "DROP DATABASE IF EXISTS $db WITH (FORCE)" || true
+  done
   rm -rf "$work"
 }
 trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
 data=$work/data
 mkdir -p "$data"
+
+# The PostgreSQL may be shared with other runs (toolchain/ci-postgres.sh
+# keeps one container for every session on a machine), so the databases
+# this run makes are named in a namespace of its own, in the shape the
+# server's tests use (Test.Database.namespaceFor): wiki_test_, the time the
+# run began, eight random letters and digits. A run killed before its trap
+# leaves them behind; the server's PostgreSQL tests drop them once they are
+# six hours old.
+namespace=wiki_test_$(date +%s)_$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 8)_
+make_database() {
+  databases="$databases $1"
+  "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "CREATE DATABASE $1"
+}
 
 if [ -n "$postgres" ]; then
   : "${WIKI_TEST_DATABASE_URL:?run toolchain/ci-postgres.sh start first}"
   base=${WIKI_TEST_DATABASE_URL%/*}
-  for db in rehearsal_live rehearsal_scratch; do
-    "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "DROP DATABASE IF EXISTS $db"
-    "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "CREATE DATABASE $db"
-  done
-  set -- --database "$base/rehearsal_live" --pg-dump "$WIKI_TEST_PG_DUMP" --pg-restore "$WIKI_TEST_PG_RESTORE"
-  scratch_args="--scratch-database $base/rehearsal_scratch --scratch-pg-restore $WIKI_TEST_PG_RESTORE"
+  live=${namespace}rehearsal_live scratch=${namespace}rehearsal_scratch
+  make_database "$live"
+  make_database "$scratch"
+  set -- --database "$base/$live" --pg-dump "$WIKI_TEST_PG_DUMP" --pg-restore "$WIKI_TEST_PG_RESTORE"
+  scratch_args="--scratch-database $base/$scratch --scratch-pg-restore $WIKI_TEST_PG_RESTORE"
 elif [ -n "$move" ]; then
   : "${WIKI_TEST_DATABASE_URL:?run toolchain/ci-postgres.sh start first}"
   base=${WIKI_TEST_DATABASE_URL%/*}
-  "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "DROP DATABASE IF EXISTS rehearsal_move"
-  "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "CREATE DATABASE rehearsal_move"
+  target=${namespace}rehearsal_move
+  make_database "$target"
   set -- --sqlite "$data/wiki.sqlite"
-  scratch_args="--move-to-database $base/rehearsal_move"
+  scratch_args="--move-to-database $base/$target"
 else
   set -- --sqlite "$data/wiki.sqlite"
   scratch_args=''
 fi
 
-# OLD serves the wiki on two loopback ports this run picks, the listener's
-# and the admin listener's, side by side. Both are below 32768: Linux hands
-# out ports for outgoing connections from 32768 up (ip_local_port_range),
-# so none of the runner's own connections, such as the tests' to
-# PostgreSQL, can hold one of them. A port taken all the same, by another
-# server, makes OLD stop at once with "Address already in use": the run
-# then tries another pair, ten pairs at most, before it gives up.
-attempt=0
+# OLD serves the wiki on two loopback ports the system gives it
+# (127.0.0.1:0), the listener's and the admin listener's, and logs each
+# address it took, one line per listener:
+#
+#   level=info event=listening listener=admin address=http://127.0.0.1:41377/admin/ ...
+#
+# The script reads the admin listener's from that line. No port is chosen
+# here, so two runs side by side, or a port another process holds, never
+# collide. Every wiki-server since the first logs that line, so the base
+# branch's does too.
+"$old" serve --data "$data" "$@" --listen 127.0.0.1:0 --admin-listen 127.0.0.1:0 >"$work/old.log" 2>&1 &
+pid=$!
+tries=0
+api=''
 while :; do
-  port=$((20000 + (($$ + attempt * 17) % 6380) * 2))
-  admin=$((port + 1))
-  "$old" serve --data "$data" "$@" --listen "127.0.0.1:$port" --admin-listen "127.0.0.1:$admin" >"$work/old.log" 2>&1 &
-  pid=$!
-  api=http://127.0.0.1:$admin/admin/api/v1
-  tries=0
-  answered=''
-  while :; do
-    if curl -fsS "$api/info" >/dev/null 2>&1; then
-      answered=1
-      break
-    fi
-    tries=$((tries + 1))
-    if [ "$tries" -gt 120 ] || ! kill -0 "$pid" 2>/dev/null; then
-      break
-    fi
-    sleep 0.5
-  done
-  [ -z "$answered" ] || break
-  if ! kill -0 "$pid" 2>/dev/null && grep -q 'Address already in use' "$work/old.log" && [ "$attempt" -lt 9 ]; then
-    printf 'rehearse-ci: port %s or %s is taken, trying another pair\n' "$port" "$admin" >&2
-    wait "$pid" 2>/dev/null || true
-    pid=''
-    attempt=$((attempt + 1))
-    continue
+  if [ -z "$api" ]; then
+    admin=$(sed -n 's|.*event=listening listener=admin address="\{0,1\}\(http://[^ "]*\)/admin/"\{0,1\}\( .*\)\{0,1\}$|\1|p' "$work/old.log" | head -n 1)
+    [ -z "$admin" ] || api=$admin/admin/api/v1
   fi
-  cat "$work/old.log" >&2
-  printf 'rehearse-ci: the old wiki-server did not answer\n' >&2
-  exit 1
+  if [ -n "$api" ] && curl -fsS "$api/info" >/dev/null 2>&1; then
+    break
+  fi
+  tries=$((tries + 1))
+  if [ "$tries" -gt 120 ] || ! kill -0 "$pid" 2>/dev/null; then
+    cat "$work/old.log" >&2
+    printf 'rehearse-ci: the old wiki-server did not answer\n' >&2
+    exit 1
+  fi
+  sleep 0.5
 done
 
 post() {

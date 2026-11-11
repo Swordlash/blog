@@ -553,6 +553,14 @@ jobs:
       if: matrix.group == 'unit'
       run: sh toolchain/test-check-changelog.sh
 
+    # The script that starts PostgreSQL for the tests, against containers
+    # of the test's own names: started twice it keeps the same container
+    # and port, and a host port another process holds does not stop it.
+    # About half a minute.
+    - name: Test ci-postgres.sh
+      if: matrix.group == 'postgres'
+      run: sh toolchain/test-ci-postgres.sh
+
     # The two database groups use separate hosted VMs. Only PostgreSQL
     # needs a container; unit and SQLite never start or discover a cluster.
     - name: Start PostgreSQL for the tests
@@ -562,6 +570,14 @@ jobs:
     - name: Test
       if: matrix.group != 'deploy'
       run: npm run test-native
+
+    # Runs of the PostgreSQL tests that share one server, as the sessions
+    # on one machine share ci-postgres.sh's container: two at once, and one
+    # after a run killed part-way, each in a namespace of its own. About
+    # twenty seconds.
+    - name: Test runs of the PostgreSQL tests side by side
+      if: matrix.group == 'postgres'
+      run: sh toolchain/test-postgres-namespaces.sh "$(cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:test:wiki-server-test)"
 
     # The upgrade from the base branch, rehearsed as a deploy rehearses it
     # (toolchain/rehearse-ci.sh): the base's wiki-server makes a wiki on a
@@ -649,7 +665,8 @@ jobs:
       run: sh toolchain/test-ci-prune-caches.sh
 
     # The rehearsal script's ports, against a fake old and new wiki-server:
-    # below 32768, and another pair when one is taken. Two seconds.
+    # port 0 for the old server's listeners, the admin listener's address
+    # read from its log, and two runs side by side. Six seconds.
     - name: Test rehearse-ci.sh
       if: matrix.group == 'deploy'
       run: sh toolchain/test-rehearse-ci.sh

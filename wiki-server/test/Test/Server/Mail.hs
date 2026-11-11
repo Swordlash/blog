@@ -75,8 +75,7 @@ overSmtp = describe "over SMTP" $ do
     result `shouldSatisfy` either (T.isInfixOf "RCPT TO with 550") (const False)
     result `shouldSatisfy` either (not . T.isInfixOf "s3cr3t") (const False)
 
-  it "says so when nothing listens" $ do
-    port <- freePort
+  it "says so when nothing listens" $ withSilentPort $ \port -> do
     let mailer = smtpMailer Smtp {host = "127.0.0.1", port, security = Plain, user = Nothing, from = "wiki@example.org"} Nothing (Url "https://wiki.example.org/")
     mailer.deliver (invitationMessage mailer.publicUrl (Email "bea@example.org") (InvitationToken "s3cr3t") expiry) >>= (`shouldSatisfy` isLeft)
 
@@ -181,13 +180,21 @@ sink takes = do
                     | otherwise -> reply "250 ok" >> loop
       loop
 
+-- | A socket bound to a port of 127.0.0.1 the system gives, and listening.
 listening :: IO Socket
 listening = do
+  socket <- bound
+  listen socket 1
+  pure socket
+
+-- | A socket bound to a port of 127.0.0.1 the system gives (port 0), not
+-- listening.
+bound :: IO Socket
+bound = do
   infos :: [AddrInfo] <- getAddrInfo (Just defaultHints {addrFlags = [AI_NUMERICHOST, AI_NUMERICSERV], addrSocketType = Stream}) (Just "127.0.0.1") (Just "0")
   info <- maybe (panic "no address") pure (head infos)
   socket <- openSocket info
-  bind socket (addrAddress info)
-  listen socket 1
+  bind socket (addrAddress info) `onException` close socket
   pure socket
 
 portOf :: Socket -> IO Word16
@@ -196,6 +203,9 @@ portOf socket =
     SockAddrInet p _ -> fromIntegral p
     other -> panic ("not IPv4: " <> show other)
 
--- | A port nothing listens on: one that was free a moment ago.
-freePort :: IO Word16
-freePort = bracket listening close portOf
+-- | Run the action with a port nothing listens on. The port is held by a
+-- socket bound to it that does not listen, for as long as the action runs:
+-- a connection to it is refused, and no other process can take the port
+-- meanwhile.
+withSilentPort :: (Word16 -> IO a) -> IO a
+withSilentPort act = bracket bound close (portOf >=> act)

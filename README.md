@@ -2748,7 +2748,11 @@ on a PostgreSQL it starts after its tests.
 
 The rehearsal drives the base branch's program only through what that
 program already has, so that much of it is stable: the options of
-`wiki-server serve` and of the database, `wiki-server users add` with the
+`wiki-server serve` and of the database (port 0 among them: the rehearsal
+starts the old server on ports the system gives), the line `serve` logs for
+each listener's address (`event=listening listener=admin
+address=http://127.0.0.1:41377/admin/`), from which it reads those ports,
+`wiki-server users add` with the
 password on standard input, `wiki-server users list` and its table (the check
 "ways in" reads SIGNS IN of each login before and after), the admin listener's API answered as the
 administrator without a sign-in (`info`, the spaces, their pages and a page
@@ -3077,8 +3081,17 @@ The server's tests (`wiki-server-test`) run once on SQLite and once on
 PostgreSQL. For PostgreSQL they take the server `WIKI_TEST_DATABASE_URL` names
 (a database of a server on which they may make and drop databases of their
 own, as CI's container, `toolchain/ci-postgres.sh`), with the `pg_dump` and
-`pg_restore` `WIKI_TEST_PG_DUMP` and `WIKI_TEST_PG_RESTORE` name; without it
-they start a cluster of their own in a temporary directory when `initdb` and
+`pg_restore` `WIKI_TEST_PG_DUMP` and `WIKI_TEST_PG_RESTORE` name. `sh
+toolchain/ci-postgres.sh start` prints these variables: it starts the
+container `wiki-ci-postgres` (or `$WIKI_CI_POSTGRES_NAME`) on a port Docker
+chooses, or, when the container already runs and answers, leaves it as it is
+and prints the port it has; `env` prints them without starting anything,
+`restart` makes a new container, and `stop` removes it. Runs that share the
+server do not meet: each names its databases `wiki_test_<time>_<random>_…`,
+drops them when it ends, and drops those of a run killed six hours ago or
+more. Without
+`WIKI_TEST_DATABASE_URL` the tests start a cluster of their own in a temporary
+directory when `initdb` and
 `pg_ctl` are installed (on the `PATH`, or under `/usr/lib/postgresql/*/bin`,
 as Debian's `postgresql` package puts them), and stop it at the end; without
 either, the PostgreSQL half is reported as pending, not passed. The smoke test

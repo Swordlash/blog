@@ -179,18 +179,15 @@ const provider = createServer(async (request, response) => {
 });
 // localhost, not 127.0.0.1: another site than the wiki's.
 const providerOrigin = `http://localhost:${await listenOn(provider, undefined)}`;
-// The wiki's port, chosen first, since its address is the redirect URI's.
-const probe = createServer();
-const wikiPort = await listenOn(probe, "127.0.0.1");
-await new Promise((done) => probe.close(done));
 
-// The server, on free ports, its log read for the addresses it took. It
-// starts without the guide (--no-guide): the test starts from a wiki with no
-// spaces, as the import of the demo's counts what it brings into it.
+// The server, on ports the system gives (port 0), its log read for the
+// addresses it took. It starts without the guide (--no-guide): the test
+// starts from a wiki with no spaces, as the import of the demo's counts what
+// it brings into it.
 const server = spawn(
   wikiServer,
   [
-    "serve", "--data", data, "--static", app, "--listen", `127.0.0.1:${wikiPort}`, "--admin-listen", "127.0.0.1:0", "--no-guide",
+    "serve", "--data", data, "--static", app, "--listen", "127.0.0.1:0", "--admin-listen", "127.0.0.1:0", "--no-guide",
   ],
   { stdio: ["ignore", "pipe", "pipe"] },
 );
@@ -207,8 +204,11 @@ const listening = new Promise((ready, fail) => {
 });
 // Deadlines must not keep a completed smoke test process alive.
 const origin = await Promise.race([listening, new Promise((_, fail) => setTimeout(() => fail(new Error(`wiki-server did not start:\n${log}`)), timeout).unref())]);
+// The wiki's port, which its public address and the providers' redirect
+// URI name.
+const wikiPort = new URL(origin).port;
 const url = (path) => `${origin}${path}`;
-const here = (page) => new URL(page.url()).pathname;
+const here =(page) => new URL(page.url()).pathname;
 console.log(`note: wiki-server at ${origin}, data in ${data}, administrator ${adminLogin}`);
 
 const browser = await chromium.launch();
