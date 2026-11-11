@@ -1532,6 +1532,19 @@ which the wiki pins since #227.
   the session's cookie reaches a sandboxed frame's first load of a
   private space's attachment, on which the design depends. This is the
   frame external plugins will run in (decision 69).
+- **WP5.94 No port chosen by number in a script or a test (the owner,
+  2026-11-11: "fixed ports are stupid").** `toolchain/ci-postgres.sh`
+  publishes PostgreSQL on 55432, inside the range Linux hands out for
+  outgoing connections, and a job on a hosted runner failed to bind it;
+  `toolchain/rehearse-ci.sh` picks a port from its process number and
+  tries again on a collision. Wherever a script or a test needs a port,
+  the system or Docker chooses it and the script reads it back: Docker's
+  `--publish 127.0.0.1::5432` with `docker port`, the server's
+  `--listen 127.0.0.1:0` with the address it logs, a socket bound to
+  port 0 in Haskell. A deployment's own ports stay what the operator
+  sets (`--port`, `--db-port`): those must not move. The container CI
+  and the session's machine share by name keeps working for agents that
+  find it running: they read its port, they do not assume it.
 - **WP5.91 TODO lists: tasks ticked in the page, saved together (#204,
   the first of three; the owner, 2026-11-11).** A task (`- [ ]`, `- [x]`,
   the syntax the wiki has; the owner chose it over a new one) shows a box
