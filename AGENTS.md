@@ -33,7 +33,11 @@ early, as soon as the session thinks the branch has a chance to pass (the owner,
 each is based on the branch of the one before, a stack (the owner, 2026-11-11), so
 that the owner merges them from the bottom without a rebase and a second run of CI
 between; pull requests that share no file stay based on `main`. When a lower branch
-changes, the session rebases the branches above it onto it. The owner merges a stack
+changes, the session rebases the branches above it onto it. A pull request's base is
+set before its branch is pushed, never after: a run takes the base its pull request
+had when the push arrived, a change of base starts no run, and the `changelog` job of
+a run started against `main` counts the lower pull requests' entries as this one's and
+fails. The owner merges a stack
 from the bottom, as he chooses. After a merge commit, which his bypass of the
 linear-history rule allows, the next pull request, which GitHub retargets to `main`,
 needs nothing: the session leaves it as it is, and its checks stand. After a squash or
