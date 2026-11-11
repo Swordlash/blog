@@ -2110,11 +2110,12 @@ to the demo, keeping `data/`.
   APIs only, no forms posted elsewhere, no frames of the wiki on other sites,
   and frames of the wiki's own addresses only. An `html` fence's frame runs
   no script; an interactive SVG's frame runs the SVG's own scripts in a
-  sandbox without the wiki's origin, and the server sends that SVG with a
-  policy that loads and connects nothing (`interactiveSvgPolicy`), so the
-  scripts reach no cookie, no storage, no page and no connection, in the
-  frame or opened alone in a tab (where a script can still send its own tab
-  to another address, as any page can).
+  sandbox without the wiki's origin, and the server sends that SVG, to a
+  frame's load alone, with a policy that loads and connects nothing
+  (`interactiveSvgPolicy`), so the scripts reach no cookie, no storage, no
+  page and no fetch (Chromium still lets them open a WebRTC connection,
+  which carries nothing of the wiki's). Opened in a tab, the same address is
+  a download. It needs HTTPS or localhost; elsewhere the SVG is an image.
   The demo carries it in its pages; the server sends it as a header too, and
   turns off the camera, the microphone and the location. So a script slipped
   into a page, past the allowlist of its HTML, has nowhere to send an

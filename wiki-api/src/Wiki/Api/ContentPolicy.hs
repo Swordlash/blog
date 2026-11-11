@@ -131,15 +131,16 @@ headerPolicy hosts = renderPolicy (directives (pagePolicy hosts) <> [("frame-anc
 
 -- | The policy the server sends with an SVG attachment's interactive form,
 -- the address an interactive SVG's frame loads ("Wiki.Core.Markdown.Frame"):
--- the SVG's own inline scripts and styles run, and nothing else. The same
--- policy holds wherever the document is opened, in the wiki's frame or by
--- itself in a tab.
+-- the SVG's own inline scripts and styles run, and nothing else. The
+-- server sends it only to a frame's load ("Wiki.Server.Api"); a tab gets
+-- the plain answer.
 interactiveSvgPolicy :: Text
 interactiveSvgPolicy =
   renderPolicy
     [ -- The frame's own sandbox ('scriptSandbox', scripts and nothing more),
       -- so that the document has an opaque origin even where no frame gives
-      -- it one: no cookie, no storage, no way into the page that shows it.
+      -- it one, should the server's rule that only a frame gets this answer
+      -- ever be got round: no cookie, no storage, no way into the page.
       ("sandbox", T.words scriptSandbox)
     , -- Nothing loads or connects but what follows: no fetch,
       -- XMLHttpRequest, WebSocket or beacon (there is no connect-src), no
@@ -155,6 +156,10 @@ interactiveSvgPolicy =
       ("img-src", ["data:"])
     , -- Only the wiki's own pages may show it in a frame.
       ("frame-ancestors", ["'self'"])
+    , -- No WebRTC connection, whose STUN packets no fetch directive
+      -- covers. Chromium does not know this directive yet and ignores it,
+      -- as tried (see "Wiki.Core.Markdown.Frame"); it holds where known.
+      ("webrtc", ["'block'"])
     ]
 
 -- | The providers' API addresses: Anthropic's and OpenAI's, which the

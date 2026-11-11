@@ -60,9 +60,13 @@
 -- address is the attachment's interactive form
 -- ('Wiki.Core.Markdown.Link.frameUrl'). The server answers it, for an
 -- attachment whose stored type is SVG ('framesInteractively') and for no
--- other, with a @Content-Security-Policy@ that lets the SVG's own inline
--- scripts and styles run and nothing else
--- ("Wiki.Api.ContentPolicy.interactiveSvgPolicy"). The frame is
+-- other, and only to a frame's load (@Sec-Fetch-Dest: iframe@), with a
+-- @Content-Security-Policy@ that lets the SVG's own inline scripts and
+-- styles run and nothing else
+-- ("Wiki.Api.ContentPolicy.interactiveSvgPolicy"). The application asks
+-- for a frame only in a secure context (HTTPS, or the loopback host),
+-- where browsers send that header; elsewhere the embed is an image. The
+-- frame is
 -- 'svgFrameHeight' pixels high unless the embed gives a height
 -- (@{.interactive height=600}@, read as an @html@ fence's,
 -- "Wiki.Core.Markdown.Ast.frameHeight"): the page cannot measure a
@@ -82,6 +86,13 @@
 --   @fetch@, @XMLHttpRequest@, @sendBeacon@ and WebSockets are refused,
 --   to the wiki and to any other site alike, and its @img-src data:@
 --   loads no image from an address.
+-- * WebRTC is not stopped. An @RTCPeerConnection@ with a STUN server of
+--   the script's choosing sends that host UDP packets, which no fetch
+--   directive covers, and Chromium ignores the policy's @webrtc 'block'@
+--   (\"Unrecognized Content-Security-Policy directive\"), kept for the
+--   browsers that know it. What could leave that way is what the script
+--   holds: the SVG's own content and what the reader types into the
+--   frame, never anything of the wiki's, which it cannot read.
 -- * The sandbox has no @allow-top-navigation@, @allow-popups@,
 --   @allow-modals@ or @allow-forms@: the frame cannot navigate the page,
 --   open a tab, show a dialog or submit a form.
@@ -93,14 +104,18 @@
 --   @frame-ancestors 'none'@ and is not shown.
 -- * The answer's policy has @frame-ancestors 'self'@: only the wiki's own
 --   pages may frame the interactive form.
--- * Opened by itself in a tab, the same address runs under the same
---   policy, its @sandbox@ included: an opaque origin, no cookie, no
---   storage, no request, no new tab, no dialog. One thing is left, which
---   no policy stops: like any page, it can send its own tab to another
---   address, and take along what its script holds. That is the SVG's own
---   content and whatever the reader types into it, never anything of the
---   wiki's, which it cannot read. So the interactive form opened alone is
---   a page of the SVG's author shown at the wiki's address.
+-- * The interactive answer goes to a frame's load alone. Opened by itself
+--   in a tab, embedded in an @\<img>@ or fetched, the same address gets
+--   the plain answer: a download, under a policy that runs no script. Were
+--   it a page in a tab, anyone who may upload an SVG could hand out the
+--   address of a scripted page under the wiki's host name, which can send
+--   what is typed into it away by navigating its own tab, as any page
+--   can. A browser's cache keeps the two answers apart (@Vary:
+--   Sec-Fetch-Dest@, and a tag of the interactive one's own).
+-- * Should that rule ever be got round, the interactive answer's policy
+--   still starts with @sandbox allow-scripts@, which is why it is there:
+--   an opaque origin, no cookie, no storage, no request, no new tab, no
+--   dialog, wherever the document is shown.
 --
 -- The frame is loaded by the page, so the browser sends the session's
 -- cookie with that first request, and an SVG of a private space loads for

