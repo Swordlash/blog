@@ -56,9 +56,10 @@
 -- ('Wiki.Core.Markdown.Link.frameUrl') and the caller draws frames
 -- ('svgFrame'): a @\<span class=\"svg-frame\">@ that holds the frame,
 -- an island, and after it an empty
--- @\<a class=\"svg-frame-open\" target=\"_blank\">@ to the same
--- address, whose label ("Open in a new tab") the stylesheet draws, as a
--- code block's copy button's, so that the page's text gains no words.
+-- @\<a class=\"svg-frame-download\" download>@ to the attachment's plain
+-- form, which downloads the file, whose label ("Download flame.svg") the
+-- stylesheet draws from its @download@ attribute, as a code block's copy
+-- button's, so that the page's text gains no words.
 -- Otherwise it is the image, as without the class.
 --
 -- __Layout.__ Headings carry their @id@, and end with an empty link to
@@ -685,7 +686,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
                   ( HH.span
                       (idAndClasses attrs ["svg-frame"])
                       [ draw k shown
-                      , HH.a [HP.href frame, HP.target "_blank", HP.rel "noopener", classesProp ["svg-frame-open"], HP.attr (HH.AttrName "aria-label") "Open in a new tab"] []
+                      , HH.a [HP.href ref.url, HP.download ref.name, classesProp ["svg-frame-download"], HP.attr (HH.AttrName "aria-label") ("Download " <> ref.name)] []
                       ]
                   )
               ]

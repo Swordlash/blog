@@ -50,9 +50,10 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..), vaultFormat, withSealed)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Backlink (Backlink (..))
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
+import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Notification (PageLocation (..))
 import Wiki.Core.Page (Page (..), summaryOf)
 import Wiki.Core.Path (parsePath, pathOf)
@@ -330,6 +331,13 @@ requests = describe "its requests" $ do
       url <- runHttpWiki env (attachmentUrl a)
       url `shouldSatisfy` (\u -> "api/v1/attachments/" `T.isPrefixOf` u || "https://" `T.isPrefixOf` u)
     readIORef asked `shouldReturn` []
+
+  it "gives a stored SVG's interactive address in a secure context only, where the browser names a frame's load" $ do
+    let svg = Attachment {id = AttachmentId "a1", name = FileName "flame.svg", mediaType = MimeType "image/svg+xml", size = 1, source = SourceBlob (BlobId "b1")}
+        png = Attachment {id = AttachmentId "a2", name = FileName "flame.png", mediaType = MimeType "image/png", size = 1, source = SourceBlob (BlobId "b2")}
+    frameUrlIn True svg `shouldBe` Just "api/v1/attachments/a1/flame.svg?interactive"
+    frameUrlIn False svg `shouldBe` Nothing
+    frameUrlIn True png `shouldBe` Nothing
 
 answers :: Spec
 answers = describe "its answers" $ do

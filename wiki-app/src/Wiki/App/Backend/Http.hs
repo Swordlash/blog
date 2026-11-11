@@ -61,6 +61,7 @@ module Wiki.App.Backend.Http
   , newImmediateHttpEnv
   , runHttpWiki
   , cacheOf
+  , frameUrlIn
 
     -- * Importing into the server
   , previewImport
@@ -91,6 +92,7 @@ import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Halogen.JSBits (inBrowser)
 import Halogen.Subscription (Subscribe (..))
 import Halogen.Subscription qualified as HS
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
@@ -101,6 +103,7 @@ import Servant.Client.Core (BaseUrl (..), ClientError (..), RunClient (..), Sche
 import Servant.Client.Core qualified as Servant
 import Servant.Client.Generic (AsClientT)
 import Servant.Multipart.API (Mem)
+import Web.HTML.Window qualified as Window
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AccountApi (..), AdminApi (..), ArchiveApi (..), AssistantApi (..), AttachmentsApi (..), EncryptedApi (..), InvitationsApi (..), PagesApi (..), PasswordResetApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount (..), PasswordChange (..), SignInMethods)
@@ -145,6 +148,7 @@ import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (forgetReads)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.Vault (identitySlot)
+import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Encrypted (KeyGrant (..), PageKey (..))
 import Wiki.Core.Id (PageId (..), SpaceId)
@@ -465,6 +469,20 @@ write endpoint = send endpoint <* modifyCache afterWrite <* forgetFound
 write_ :: (MonadIO m) => HttpWiki IO NoContent -> HttpWiki m (Either WikiError ())
 write_ endpoint = void <$> write endpoint
 
+-- | The address an interactive SVG's frame loads ('Links.attachmentFrameUrl'),
+-- if the page is a secure context (HTTPS, or the loopback host; the first
+-- argument), and otherwise none, so that the embed stays an image. The
+-- server gives the interactive form only to a frame's load, which the
+-- browser names in @Sec-Fetch-Dest@, and Chromium sends that header only
+-- from a secure context: over plain HTTP to another host the frame would
+-- get the plain answer, a download, and stay blank. A page the server
+-- prerendered for such a reader holds the frame all the same, since the
+-- server cannot know the reader's context; the program then puts the
+-- image in its place, which is a repair. Natively there is no page, and
+-- the context counts as secure.
+frameUrlIn :: Bool -> Attachment -> Maybe Text
+frameUrlIn secure a = guard secure *> Links.attachmentFrameUrl a
+
 instance (MonadIO m) => MonadWiki (HttpWiki m) where
   session =
     orThrow . fmap (fmap fromSessionInfo) $
@@ -553,7 +571,11 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- The server serves an attachment's bytes at an API address, which the
   -- program can build without a request.
   attachmentUrl = pure . Links.attachmentUrl
-  attachmentFrameUrl = pure . Links.attachmentFrameUrl
+
+  -- Only in a secure context: see 'frameUrlIn'.
+  attachmentFrameUrl a = liftIO $ do
+    secure <- if inBrowser then (.isSecureContext) <$> Window.window else pure True
+    pure (frameUrlIn secure a)
 
   -- The document's address answers with its bytes, or with the API's
   -- refusal, which 'send' reads as any other ("Wiki.App.Backend.Http.Client").

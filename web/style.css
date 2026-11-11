@@ -1424,9 +1424,9 @@ select {
    SvgFrame): a frame as wide as the text, at the height its height
    attribute gives, which the reader can drag taller or shorter by its
    corner, since the page cannot measure a document of another origin.
-   Under it, on the right, a link to open the same address in a new tab,
-   whose label is drawn here so that the page's text gains no words, as a
-   code block's copy button's. */
+   Under it, on the right, a link that downloads the file, whose label is
+   drawn here from its download attribute (the file's name) so that the
+   page's text gains no words, as a code block's copy button's. */
 .svg-frame {
   display: block;
   margin: 0.5rem 0;
@@ -1442,15 +1442,15 @@ select {
   overflow: hidden;
 }
 
-.svg-frame-open {
+.svg-frame-download {
   display: block;
   width: fit-content;
   margin-left: auto;
   font-size: 0.8rem;
 }
 
-.svg-frame-open::before {
-  content: "Open in a new tab";
+.svg-frame-download::before {
+  content: "Download " attr(download);
 }
 
 /* The document inside such a frame (Wiki.Core.Markdown.Frame), whose

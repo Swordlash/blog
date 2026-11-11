@@ -38,26 +38,26 @@ shows' source expected = markdownWith framing source `shouldReturn` expected
 
 spec :: Spec
 spec = describe "Markdown.Render, an interactive SVG" $ do
-  it "shows an SVG attachment with the class in a frame, its caption the frame's title, with a link to open it in a tab" $
+  it "shows an SVG attachment with the class in a frame, its caption the frame's title, with a link that downloads the file" $
     "![Where the time goes](attachment:flame.svg){.interactive}"
       `shows'` ( "<p><span class=\"svg-frame interactive\">"
                    <> "<iframe data-src=\"/files/flame.svg?interactive\" height=\"500\" sandbox=\"allow-scripts\" title=\"Where the time goes\"></iframe>"
-                   <> "<a aria-label=\"Open in a new tab\" class=\"svg-frame-open\" href=\"/files/flame.svg?interactive\" rel=\"noopener\" target=\"_blank\"></a>"
+                   <> "<a aria-label=\"Download flame.svg\" class=\"svg-frame-download\" download=\"flame.svg\" href=\"/files/flame.svg\"></a>"
                    <> "</span></p>"
                )
   it "titles a frame without a caption with the file's name, and keeps the embed's id" $
     "![](attachment:flame.svg){#cpu .interactive}"
       `shows'` ( "<p><span class=\"svg-frame interactive\" id=\"cpu\">"
                    <> "<iframe data-src=\"/files/flame.svg?interactive\" height=\"500\" sandbox=\"allow-scripts\" title=\"flame.svg\"></iframe>"
-                   <> "<a aria-label=\"Open in a new tab\" class=\"svg-frame-open\" href=\"/files/flame.svg?interactive\" rel=\"noopener\" target=\"_blank\"></a>"
+                   <> "<a aria-label=\"Download flame.svg\" class=\"svg-frame-download\" download=\"flame.svg\" href=\"/files/flame.svg\"></a>"
                    <> "</span></p>"
                )
   it "gives the frame the height the embed gives, read as an html fence's" $ do
     let heightOf attributes = markdownWith framing {svgFrame = Just (\_ frame -> HH.text (show frame.height))} ("![](attachment:flame.svg){" <> attributes <> "}")
-    heightOf ".interactive height=640" `shouldReturn` "<p><span class=\"svg-frame interactive\">640<a aria-label=\"Open in a new tab\" class=\"svg-frame-open\" href=\"/files/flame.svg?interactive\" rel=\"noopener\" target=\"_blank\"></a></span></p>"
-    heightOf ".interactive height=640px" `shouldReturn` "<p><span class=\"svg-frame interactive\">640<a aria-label=\"Open in a new tab\" class=\"svg-frame-open\" href=\"/files/flame.svg?interactive\" rel=\"noopener\" target=\"_blank\"></a></span></p>"
-    heightOf ".interactive height=9000" `shouldReturn` "<p><span class=\"svg-frame interactive\">4000<a aria-label=\"Open in a new tab\" class=\"svg-frame-open\" href=\"/files/flame.svg?interactive\" rel=\"noopener\" target=\"_blank\"></a></span></p>"
-    heightOf ".interactive height=tall" `shouldReturn` "<p><span class=\"svg-frame interactive\">500<a aria-label=\"Open in a new tab\" class=\"svg-frame-open\" href=\"/files/flame.svg?interactive\" rel=\"noopener\" target=\"_blank\"></a></span></p>"
+    heightOf ".interactive height=640" `shouldReturn` "<p><span class=\"svg-frame interactive\">640<a aria-label=\"Download flame.svg\" class=\"svg-frame-download\" download=\"flame.svg\" href=\"/files/flame.svg\"></a></span></p>"
+    heightOf ".interactive height=640px" `shouldReturn` "<p><span class=\"svg-frame interactive\">640<a aria-label=\"Download flame.svg\" class=\"svg-frame-download\" download=\"flame.svg\" href=\"/files/flame.svg\"></a></span></p>"
+    heightOf ".interactive height=9000" `shouldReturn` "<p><span class=\"svg-frame interactive\">4000<a aria-label=\"Download flame.svg\" class=\"svg-frame-download\" download=\"flame.svg\" href=\"/files/flame.svg\"></a></span></p>"
+    heightOf ".interactive height=tall" `shouldReturn` "<p><span class=\"svg-frame interactive\">500<a aria-label=\"Download flame.svg\" class=\"svg-frame-download\" download=\"flame.svg\" href=\"/files/flame.svg\"></a></span></p>"
   it "shows an SVG without the class as the image it always was" $
     "![flame](attachment:flame.svg)" `shows'` "<p><img alt=\"flame\" src=\"/files/flame.svg\"></p>"
   it "shows an image where the attachment has no interactive form: another type, or no server" $ do
