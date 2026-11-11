@@ -20,14 +20,19 @@ import Data.Time (addUTCTime)
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
+import Test.Browser.Http (Asked (..), answerRaw, asked, holdAt, release, serveDemo, serverStarts, serverStops, startServer)
 import Test.Browser.Mount (clickButton, slugs, startChangedWith)
 import Test.Hspec.Halogen
+import Web.Storage.IndexedDB (MonadIndexedDB)
+import Wiki.Api (SpacesApi (..), WikiApi (..))
 import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Mem.State (MemState (..), insertPage, savePageIn)
-import Wiki.App.Demo (demoNow)
+import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
+import Wiki.Core.Id (PageId (..))
 import Wiki.Core.Page qualified as Core
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space qualified as Core
@@ -41,7 +46,7 @@ $( browserJS
      ]
  )
 
-spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = describe "tasks ticked in a page" $ do
   it "strikes a ticked task through at once, counts it, and saves one version that differs only in the box" $ runPage $ do
     (ui, wiki) <- page m "user-admin" tasksText
@@ -158,6 +163,73 @@ spec m = describe "tasks ticked in a page" $ do
     find ui ".page-ticks-save" >>= click
     eventually $ bodyOf wiki `shouldReturn` T.replace "- [ ] Next" "- [x] Next" tasksText
 
+  it "keeps each box with its task when a sorted list moves it: ticking the first of two unticked tasks ticks it alone" $ runPage $ do
+    (ui, _) <- page m "user-admin" tasksText
+    eventually $ sortedLabels ui `shouldReturn` ["New", "Next", "Old"]
+    box 5 ui >>= click
+    eventually $ sortedLabels ui `shouldReturn` ["Next", "Old", "New"]
+    -- In the order shown: Next not ticked, Old and New ticked.
+    eventually $ sortedChecked ui `shouldReturn` [False, True, True]
+    checked ui `shouldReturn` [False, False, False, False, True, True, False]
+    -- And back: unticked, New goes up again, and only Old stays ticked.
+    box 5 ui >>= click
+    eventually $ sortedLabels ui `shouldReturn` ["New", "Next", "Old"]
+    eventually $ sortedChecked ui `shouldReturn` [False, False, True]
+
+  it "shows the view's state after a click it does not take, and after Discard" $ runPage $ do
+    -- The parser reads the text in Unicode's composed form, so the box
+    -- after a label written decomposed is not where the text has it: the
+    -- tick is refused.
+    (ui, wiki) <- page m "user-admin" "See[^e\x301].\n\n[^e\x301]: - [ ] Refused\n\n- [ ] Taken\n"
+    box 1 ui >>= click
+    eventually $ find ui ".page-ticks-note" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "was not found")
+    eventually $ (box 1 ui >>= (`getProperty` "checked")) `shouldReturn` "false"
+    length <$> findAll ui ".page-ticks-count" `shouldReturn` 0
+    -- A box the view takes is ticked, and Discard unticks it again.
+    box 0 ui >>= click
+    eventually $ (box 0 ui >>= (`getProperty` "checked")) `shouldReturn` "true"
+    find ui ".page-ticks-discard" >>= click
+    eventually $ (box 0 ui >>= (`getProperty` "checked")) `shouldReturn` "false"
+    (box 1 ui >>= (`getProperty` "checked")) `shouldReturn` "false"
+    bodyOf wiki `shouldReturn` "See[^e\x301].\n\n[^e\x301]: - [ ] Refused\n\n- [ ] Taken\n"
+
+  it "takes no tick while a form of the page is open, so a move cannot lose one" $ runPage $ do
+    (ui, wiki) <- page m "user-admin" tasksText
+    clickButton ui ".page-actions button" "Move"
+    _ <- find ui ".inline-form"
+    -- The first box, which carries no index while it is disabled.
+    let firstBox = find ui ".page-body input[type='checkbox']"
+    eventually $ (firstBox >>= (`getProperty` "disabled")) `shouldReturn` "true"
+    length <$> findAll ui ".page-body input[data-task]" `shouldReturn` 0
+    clickButton ui ".inline-form button" "Cancel"
+    eventually $ (box 0 ui >>= (`getProperty` "disabled")) `shouldReturn` "false"
+    bodyOf wiki `shouldReturn` tasksText
+
+  it "keeps the page the reader went to when the answer about the page they left comes late" $ runPage $ do
+    serverStarts
+    serveDemo
+    let guide = demoPage "markdown-guide"
+        guideAt = endpointUrl (\e -> e.spaces.pageAt guide.space (slugs ["markdown-guide"]))
+    -- The save meets a newer version, and the page as it is now is held.
+    answerRaw "PUT" ("api/v1/pages/" <> guide.id.text) 409 "{\"error\":\"Conflict\",\"message\":\"Saved since.\"}"
+    ui <- startServer m (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
+    -- The guide is long, and its islands many.
+    eventuallyWithin 20000 (find ui ".page-body input[aria-label='Read it'][data-task]") >>= click
+    eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    holdAt "GET" guideAt
+    find ui ".page-ticks-save" >>= click
+    eventually $ length . filter (\a -> a.method == "GET" && a.url == guideAt) <$> asked >>= (`shouldSatisfy` (>= 2))
+    -- The reader goes to the space's home page meanwhile, in the same view.
+    find ui ".breadcrumbs a[href$='#/s/docs/']" >>= click
+    find ui ".leave-confirm button.danger" >>= click
+    eventually $ find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
+    release
+    settle
+    find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
+    length <$> findAll ui ".page-ticks-note, .page-ticks-count" `shouldReturn` 0
+    length <$> findAll ui ".page-body input[aria-label='Read it']" `shouldReturn` 0
+    serverStops
+
   it "reaches the boxes with Tab and ticks them with Space" $ runPage $ do
     (ui, _) <- page m "user-admin" tasksText
     box 0 ui >>= focus
@@ -179,14 +251,20 @@ spec m = describe "tasks ticked in a page" $ do
     box i ui = find ui (".page-body input[data-task='" <> show i <> "']")
     -- Whether each box is ticked, by the tasks' indices.
     checked ui = for [0 .. 6] $ \i -> (== "true") <$> (box i ui >>= (`getProperty` "checked"))
-    -- The tasks of the sorted list, in the order shown.
+    -- The tasks of the sorted list, in the order shown, and whether each
+    -- box is ticked.
     sortedLabels ui = findAll ui ".page-body .sorted .task-text" >>= traverse textContent
+    sortedChecked ui = findAll ui ".page-body .sorted input" >>= traverse (fmap (== "true") . (`getProperty` "checked"))
 
 -- | The page the tests tick: tasks under a task (indices 1 to 3), and a
 -- sorted list (4 to 6) whose first task is done.
 tasksText :: Text
 tasksText =
   "# Tasks\n\n- [ ] Buy milk\n- [ ] Pack\n  - [ ] Shoes\n  - [ ] Coat\n\n{.sorted}\n- [x] Old\n- [ ] New\n- [ ] Next\n"
+
+-- | A page of the demo, by its slug.
+demoPage :: Text -> Core.Page
+demoPage slug = fromMaybe (panic ("no page " <> slug)) (head [p | p <- Map.elems (demoState demoNow).pages, p.slug == fromMaybe (panic slug) (head (slugs [slug]))])
 
 -- | The demo's Projects space.
 projects :: [Slug]
