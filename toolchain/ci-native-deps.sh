@@ -11,11 +11,12 @@
 # GitHub Actions it also writes from-cache=true to the step's outputs, so
 # that the workflow does not save a cache that holds no new download. A
 # download that fails while the cache holds no version of the package is
-# tried once more after $APT_RETRY_PAUSE seconds (default 30), then the
-# script fails, naming the package. An install that fails for any other
-# reason (a package's setup, a dependency apt cannot resolve) fails at once,
-# as before. apt itself already tries each download four times
-# (Acquire::Retries is 3 by default since apt 2.3), so a blip of seconds
+# tried once more after $APT_RETRY_PAUSE seconds (default 30), when the
+# failed attempt took less than $APT_RETRY_WITHIN seconds (default 120);
+# then the script fails, naming the package. An install that fails for any
+# other reason (a package's setup, a dependency apt cannot resolve) fails at
+# once, as before. apt itself already retries a failed download
+# (Acquire::Retries, 3 by default since apt 2.3.2), so a blip of seconds
 # needs nothing from here; the pause is for one of a minute.
 set -eu
 cd "$(dirname "$0")/.."
@@ -27,6 +28,7 @@ case $profile in
 esac
 cache=${APT_ARCHIVE_DIR:-$HOME/.cache/wiki-apt}
 pause=${APT_RETRY_PAUSE:-30}
+within=${APT_RETRY_WITHIN:-120}
 missing=
 for list in $lists; do
   while IFS= read -r package; do
@@ -134,11 +136,18 @@ from_cache() {
 
 if [ -n "$missing" ]; then
   mkdir -p "$cache"
-  sudo apt-get update
+  # An update that fails leaves the index the runner has, which the install
+  # and the cache can still work from.
+  sudo apt-get update || echo 'apt-get update failed; going on with the package index the machine has.'
   attempt=1
-  # Package names come from the fixed list above; splitting is intentional.
-  # shellcheck disable=SC2086
-  until apt_get install --yes --no-install-recommends $missing; do
+  while :; do
+    started=$(date +%s)
+    # Package names come from the fixed list above; splitting is intentional.
+    # shellcheck disable=SC2086
+    if apt_get install --yes --no-install-recommends $missing; then
+      break
+    fi
+    took=$(($(date +%s) - started))
     # Only a failed download is worth another try or the cache: when apt
     # needs nothing more from the network, the install failed for another
     # reason, and apt has said which.
@@ -154,7 +163,12 @@ if [ -n "$missing" ]; then
       fi
       break
     fi
-    if [ "$attempt" -ge 2 ]; then
+    # A second try is for a blip. An attempt that took longer than
+    # $APT_RETRY_WITHIN seconds (apt waiting on each archive in turn) is an
+    # outage, and a second one would take as long again.
+    if [ "$attempt" -ge 2 ] || [ "$took" -ge "$within" ]; then
+      [ "$attempt" -ge 2 ] ||
+        printf 'The failed attempt took %s seconds, %s or more: no second try.\n' "$took" "$within" >&2
       printf 'Could not download%s, and %s.\n' "$needed" "$reason" >&2
       exit 1
     fi

@@ -36,8 +36,9 @@ mkdir -p "$work/bin"
 # $FAKE/downloads-fail-once (removed when used) exists or --no-download is
 # given, which fail with exit 100 before anything is installed; then dpkg
 # installs everything, unless $FAKE/dpkg-fails exists. update succeeds,
-# with apt's warning when downloads fail, as on the runners. Each call is
-# logged, one per line, and each package installed, with where from.
+# with apt's warning when downloads fail, as on the runners, and fails
+# when $FAKE/update-fails exists. Each call is logged, one per line, and
+# each package installed, with where from.
 cat >"$work/bin/apt-get" <<'FAKE'
 #!/bin/sh
 printf 'apt-get %s\n' "$*" >>"$FAKE/calls"
@@ -57,6 +58,10 @@ if [ "$command" = update ]; then
   if [ -e "$FAKE/downloads-fail" ] || [ -e "$FAKE/downloads-fail-once" ]; then
     echo "W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'"
     echo 'W: Some index files failed to download. They have been ignored, or old ones used instead.'
+  fi
+  if [ -e "$FAKE/update-fails" ]; then
+    echo 'E: The repository is not signed.'
+    exit 100
   fi
   exit 0
 fi
@@ -189,9 +194,12 @@ older='libxml2-utils_2.9.14+dfsg-1.3ubuntu3_amd64.deb libxml2-utils_2.9.14+dfsg-
 
 # case_ <name> <cached archives> [flag files]: runs the script's base
 # profile with the index, the image's packages installed, the archives in
-# the cache and the flags (downloads-fail, downloads-fail-once, dpkg-fails)
-# set. Leaves the output in $work/out, the exit status in $status, the
-# fake's log in $work/fake/calls and the step's outputs in $work/output.
+# the cache and the flags (downloads-fail, downloads-fail-once, dpkg-fails,
+# update-fails) set; $status_lines, when set, replaces the image's packages,
+# and $retry_within is the script's APT_RETRY_WITHIN (default 600, so that
+# a test's attempt is always short). Leaves the output in $work/out, the
+# exit status in $status, the fake's log in $work/fake/calls and the
+# step's outputs in $work/output.
 case_() {
   name=$1
   rm -rf "$work/fake" "$work/cache"
@@ -206,6 +214,7 @@ case_() {
   status=0
   PATH="$work/bin:$PATH" FAKE="$work/fake" APT_ARCHIVE_DIR="$work/cache" \
     GITHUB_OUTPUT="$work/output" APT_RETRY_PAUSE=7 \
+    APT_RETRY_WITHIN="${retry_within:-600}" \
     sh "$script" base >"$work/out" 2>&1 || status=$?
 }
 
@@ -305,6 +314,21 @@ case_ 'the cache is empty' '' downloads-fail
 expect_status fails
 expect_log 'nothing installed' '^installed' 0
 expect_output 'and it names the packages' "holds no version of libxml2-utils libxmlextra1."
+
+retry_within=0
+case_ 'a long failed attempt' '' downloads-fail
+unset retry_within
+expect_status fails
+expect_log 'no pause, no second try' '^sleep' 0
+expect_log 'one install that downloads' 'Packages=true install' 1
+expect_output 'and it says why' 'no second try'
+expect_output 'and names the packages' 'holds no version of libxml2-utils libxmlextra1.'
+
+case_ 'the update fails' "$older" downloads-fail update-fails
+expect_status ok
+expect_output 'and it says so' 'apt-get update failed'
+expect_log 'the install goes on, from the cache' "^installed libxml2-utils 2.9.14+dfsg-1.3ubuntu3.9 from" 1
+expect_from_cache true
 
 case_ 'the download fails once' '' downloads-fail-once
 expect_status ok
