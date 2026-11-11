@@ -100,9 +100,10 @@
 -- application, the header has an "Install" button.
 --
 -- The one route change the shell does not simply follow is one away from
--- an editor with unsaved changes. It asks the editor ('Editor.IsDirty')
--- and, if the draft would be lost, asks the reader in place whether to
--- leave. By then the browser's address is already the new route's (a link
+-- unsaved changes: an editor's, or the ticks of a page's tasks not saved
+-- yet ("Wiki.App.View.Page"). It asks the editor ('Editor.IsDirty') and
+-- the view ('HasUnsaved') and, if something would be lost, asks the reader
+-- in place whether to leave. By then the browser's address is already the new route's (a link
 -- was followed, or the back button pressed). So staying goes back through
 -- the session history to the editor's entry, by as many entries as lie in
 -- between ('historyEntry' numbers them), as the browser's buttons would.
@@ -258,7 +259,7 @@ type Slots =
      , "part" :-> H.Slot (Const Void) Void PartSlot
      , "reset" :-> H.Slot (Const Void) ResetView.Output ()
      , "signIn" :-> H.Slot SignInView.Query SignInView.Output ()
-     , "view" :-> H.Slot (Const Void) ViewOutput ViewSlot
+     , "view" :-> H.Slot ViewQuery ViewOutput ViewSlot
      ]
 
 -- | 'ViewSlot' is the index of a child under the label "view". These
@@ -387,9 +388,9 @@ data State m = State
   , kept :: Bool
   -- ^ Whether the demo's changes are saved in the browser ('demoKept').
   , settled :: Bool
-  , leaving :: Maybe Route
-  -- ^ A route followed away from an editor with unsaved changes, about
-  -- which the reader is being asked.
+  , leaving :: Maybe (Route, Unsaved)
+  -- ^ A route followed away from unsaved changes, about which the reader
+  -- is being asked, and whose changes they are.
   , entry :: Int
   -- ^ The number of the session history entry for the route shown
   -- ('historyEntry'), which staying in the editor goes back to.
@@ -421,6 +422,14 @@ data State m = State
   -- after its first render, since a page the server prerendered cannot
   -- know it; and always natively, where there is no reader's browser.
   }
+
+-- | Whose changes a route followed away would lose ('leaving'): what the
+-- question before leaving names.
+data Unsaved
+  = -- | An editor's text.
+    EditorChanges
+  | -- | The ticks of a page's tasks, made in the page view and not saved.
+    PageTicks
 
 -- | What the administration's section on the wiki's data shows.
 data Panel
@@ -580,8 +589,8 @@ component =
             </button>
             <main class="wiki-content">
               {{ offlineCopyLine st }}
-              {% if isJust st.leaving %}
-                {{ leaveConfirm }}
+              {% for (_, unsaved) in maybeToList st.leaving %}
+                {{ leaveConfirm unsaved }}
               {% end %}
               {{ content st }}
             </main>
@@ -1275,15 +1284,20 @@ component =
     loading = [hh|<p class="loading">Loading…</p>|]
 
     -- Asked when a route is followed away from unsaved changes ('leaving').
-    leaveConfirm :: H.ComponentHTML Action Slots m
-    leaveConfirm =
+    leaveConfirm :: Unsaved -> H.ComponentHTML Action Slots m
+    leaveConfirm unsaved =
       [hh|
         <div class="confirm leave-confirm" role="alertdialog">
-          <p>This page has changes that are not saved. Leave the editor and lose them?</p>
+          <p>{{ question }}</p>
           <button type="button" class="danger" onClick={{ const Leave }}>Leave</button>
           <button type="button" onClick={{ const Stay }}>Stay</button>
         </div>
       |]
+      where
+        question :: Text
+        question = case unsaved of
+          EditorChanges -> "This page has changes that are not saved. Leave the editor and lose them?"
+          PageTicks -> "This page has ticked tasks that are not saved. Leave the page and lose them?"
 
     notFound :: State m -> H.ComponentHTML Action Slots m
     notFound st =
@@ -1389,24 +1403,29 @@ component =
             modify (\st -> st {entry = now})
             H.liftEffect revealFragment
           else do
-            dirty <- or <$> H.queryAll "editor" (Editor.IsDirty identity)
-            if dirty
-              then do
+            editing <- or <$> H.queryAll "editor" (Editor.IsDirty identity)
+            ticked <- or <$> H.queryAll "view" (HasUnsaved identity)
+            let unsaved
+                  | editing = Just EditorChanges
+                  | ticked = Just PageTicks
+                  | otherwise = Nothing
+            case unsaved of
+              Just what -> do
                 shut <- shutMenu
-                modify (shut . \st -> st {leaving = Just r})
-              else arrive r now
+                modify (shut . \st -> st {leaving = Just (r, what)})
+              Nothing -> arrive r now
       Leave -> do
         now <- H.liftEffect historyEntry
-        gets (\st -> st.leaving) >>= traverse_ (`arrive` now)
+        gets (\st -> st.leaving) >>= traverse_ ((`arrive` now) . fst)
       Stay -> do
         st <- get
         modify (\s -> s {leaving = Nothing})
         -- The address is that of the route not followed. Going back to the
-        -- editor's entry leaves the history as the browser's buttons
-        -- would, with the route not followed ahead of it; the router
-        -- announces the route already shown. Without a number for that
-        -- entry (there is none natively), the editor's address replaces
-        -- the other.
+        -- entry of the route shown (the editor's, or the page's with its
+        -- ticks) leaves the history as the browser's buttons would, with
+        -- the route not followed ahead of it; the router announces the
+        -- route already shown. Without a number for that entry (there is
+        -- none natively), the shown route's address replaces the other.
         now <- H.liftEffect historyEntry
         if st.entry /= now
           then H.liftEffect (historyGo (st.entry - now))

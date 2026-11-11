@@ -94,7 +94,7 @@ data State = State
   , loaded :: Loaded
   }
 
-type Slots = Body.IslandSlots .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("home" .== H.Slot (Const Void) ViewOutput ())
+type Slots = Body.IslandSlots .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("home" .== H.Slot ViewQuery ViewOutput ())
 
 data Action
   = Initialize
@@ -104,7 +104,7 @@ data Action
   | -- | What the home page's view tells: passed on to the shell.
     FromHome ViewOutput
 
-component :: forall query m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component ViewQuery Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -119,6 +119,9 @@ component =
           H.mkEval
             H.defaultEval
               { H.handleAction = handleAction
+              , -- The shell's question is the home page's to answer: its
+                -- ticks are the blog's unsaved changes.
+                H.handleQuery = H.query "home" ()
               , H.initialize = Just Initialize
               , H.receive = Just . Receive
               }

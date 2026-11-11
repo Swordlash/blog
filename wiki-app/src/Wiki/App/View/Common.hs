@@ -8,6 +8,7 @@ module Wiki.App.View.Common
     Context (..)
   , PageWidth (..)
   , ViewOutput (..)
+  , ViewQuery (..)
 
     -- * Permissions, as the client hides what they forbid
   , principalOf
@@ -124,6 +125,14 @@ data ViewOutput
     Entered
   | -- | The reader chose how wide pages are laid out: the shell keeps it.
     ChoseWidth PageWidth
+
+-- | What the shell asks a view. A view that does not answer is taken to
+-- have nothing to say.
+data ViewQuery a
+  = -- | Whether leaving the view would lose changes the reader has not
+    -- saved, which the shell then asks about before it follows a route
+    -- away: the page view's unsaved ticks ("Wiki.App.View.Page").
+    HasUnsaved (Bool -> a)
 
 -- | The wiki's built-in math macros as the administration keeps them, as
 -- the first block of a formula's macros, marked so that the islands read
