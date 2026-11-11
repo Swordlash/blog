@@ -8,11 +8,12 @@
 module Test.Server.Rehearsal (unitSpec, spec) where
 
 import Data.Aeson (encode)
+import Data.IORef (readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Database.Beam (runUpdate, update, val_, (<-.), (==.))
-import Network.HTTP.Client (defaultManagerSettings, managerResponseTimeout, newManager, responseTimeoutMicro)
-import Network.HTTP.Types (hContentType)
+import Network.HTTP.Client (defaultManagerSettings, httpLbs, managerResponseTimeout, newManager, parseRequest, responseStatus, responseTimeoutMicro)
+import Network.HTTP.Types (hContentType, statusCode)
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, info)
 import Protolude
 import System.IO.Temp (withSystemTempDirectory)
@@ -29,7 +30,7 @@ import Wiki.Server.Console (listing, runUsers, usersParser)
 import Wiki.Server.CopyDatabase (CopyOptions (..), CopyOutcome (..), runCopy)
 import Wiki.Server.Options (DatabaseChoice (..))
 import Wiki.Server.Password (hashWith, parameters)
-import Wiki.Server.Rehearsal (Check (..), PageAt (..), PageRead (..), PagesRead (..), Seeding (..), Server (..), SpaceRead (..), checks, compareHomes, comparePages, compareWaysIn, consoleEnvironment, isolateCopy, pathAsBuilt, readPages, readSpaces, readUsersList, runConsoleIn)
+import Wiki.Server.Rehearsal (Check (..), PageAt (..), PageRead (..), PagesRead (..), RehearsalOutcome (..), Seeding (..), Server (..), SpaceRead (..), checks, compareHomes, comparePages, compareWaysIn, consoleEnvironment, isolateCopy, listenAnywhere, listenedAt, pathAsBuilt, readPages, readSpaces, readUsersList, runConsoleIn, withServer)
 import Wiki.Server.Storage (Place (..), migrateDatabase, withStorageAside)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (settingsLike, storeSetting)
@@ -198,9 +199,34 @@ homesUnitSpec = describe "the upgrade's rehearsal, the home pages check" $ do
 -- mail through its mail server.
 spec :: Backing -> Spec
 spec backing = do
+  serversSpec backing
   copySpec backing
   checksSpec backing
   moveSpec backing
+
+-- | The servers the rehearsal starts: each listener on a port the system
+-- gives (port 0), its address read from the line the server logs for it.
+serversSpec :: Backing -> Spec
+serversSpec backing = describe "the upgrade's rehearsal, its servers" $ do
+  it "reads each listener's address from the line the server logs for it" $ withDemoRunning backing identity $ \r -> do
+    logged <- T.unlines . reverse <$> readIORef r.logged
+    listenedAt "public" logged `shouldBe` Just r.public
+    listenedAt "admin" logged `shouldBe` Just (r.admin <> "/admin")
+    listenedAt "public" "level=info event=starting" `shouldBe` Nothing
+  it "starts a program's server on ports the system gives, and reaches it at the addresses it logs" $ withDemoPlace backing $ \at _ ->
+    withSystemTempDirectory "wiki-rehearsal-server" $ \dir -> do
+      program <- wikiServerProgram
+      manager <- newManager defaultManagerSettings
+      let place = placeArgsOf at
+          statusOf url = statusCode . responseStatus <$> (parseRequest (toS url) >>= (`httpLbs` manager))
+      reached <- runExceptT $ withServer (dir <> "/server.log") program place (["serve"] <> place <> listenAnywhere <> ["--no-guide"]) (throwError . OldNotDriven) $ \server ->
+        liftIO ((,,) server.public <$> statusOf (server.adminApi <> "/info") <*> statusOf (server.public <> "/healthz"))
+      case reached of
+        Right (public, answered, health) -> do
+          public `shouldSatisfy` T.isPrefixOf "http://127.0.0.1:"
+          public `shouldNotBe` "http://127.0.0.1:0"
+          (answered, health) `shouldBe` (200, 200)
+        Left _ -> expectationFailure "the server did not answer"
 
 copySpec :: Backing -> Spec
 copySpec backing = describe "the upgrade's rehearsal, its copy of the wiki" $ do

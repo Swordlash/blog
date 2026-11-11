@@ -242,6 +242,11 @@ withServerUsing given raw sendMail action = do
                         logWith logger Warning [("event", "connection"), ("listener", l.name), ("error", show e)]
                   )
                 $ defaultSettings
+        -- The line "event=listening listener=NAME address=URL" is how a
+        -- caller that started the server on port 0 learns the port the
+        -- system gave: the upgrade's rehearsal reads it of the old program
+        -- ('Wiki.Server.Rehearsal.listenedAt', toolchain/rehearse-ci.sh),
+        -- so it stays as it is, and changes only compatibly.
         addresses <- for bound $ \(socket, (_, (l, secure))) -> do
           address <- getSocketName socket
           logWith logger Info [("event", "listening"), ("listener", l.name), ("address", showAddress (isJust secure) address <> l.mount), ("principal", case l.finding of EveryoneAdministers -> "administrator"; BySession _ -> "by-session")]

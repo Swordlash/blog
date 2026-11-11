@@ -26,10 +26,12 @@
 # with: the migration gives it a home page of its own beside that page. A
 # later OLD ignores the profile's homePage and keeps the space's home page,
 # which the rehearsal accepts as well.
-# What this script sends OLD (serve's options, POST spaces, POST
-# spaces/ID/pages and PUT spaces/ID/profile) is part of what the rehearsal
-# keeps stable (the README's CI section): OLD is the base branch's program,
-# which this script, from the pull request, must still drive.
+# What this script sends OLD (serve's options, port 0 among them, POST
+# spaces, POST spaces/ID/pages and PUT spaces/ID/profile) and what it reads
+# of it (the line its log has for each listener's address) is part of what
+# the rehearsal keeps stable (the README's CI section): OLD is the base
+# branch's program, which this script, from the pull request, must still
+# drive.
 set -eu
 old=${1:?usage: rehearse-ci.sh OLD NEW [--postgres | --move]}
 new=${2:?usage: rehearse-ci.sh OLD NEW [--postgres | --move]}
@@ -72,44 +74,35 @@ else
   scratch_args=''
 fi
 
-# OLD serves the wiki on two loopback ports this run picks, the listener's
-# and the admin listener's, side by side. Both are below 32768: Linux hands
-# out ports for outgoing connections from 32768 up (ip_local_port_range),
-# so none of the runner's own connections, such as the tests' to
-# PostgreSQL, can hold one of them. A port taken all the same, by another
-# server, makes OLD stop at once with "Address already in use": the run
-# then tries another pair, ten pairs at most, before it gives up.
-attempt=0
+# OLD serves the wiki on two loopback ports the system gives it
+# (127.0.0.1:0), the listener's and the admin listener's, and logs each
+# address it took, one line per listener:
+#
+#   level=info event=listening listener=admin address=http://127.0.0.1:41377/admin/ ...
+#
+# The script reads the admin listener's from that line. No port is chosen
+# here, so two runs side by side, or a port another process holds, never
+# collide. Every wiki-server since the first logs that line, so the base
+# branch's does too.
+"$old" serve --data "$data" "$@" --listen 127.0.0.1:0 --admin-listen 127.0.0.1:0 >"$work/old.log" 2>&1 &
+pid=$!
+tries=0
+api=''
 while :; do
-  port=$((20000 + (($$ + attempt * 17) % 6380) * 2))
-  admin=$((port + 1))
-  "$old" serve --data "$data" "$@" --listen "127.0.0.1:$port" --admin-listen "127.0.0.1:$admin" >"$work/old.log" 2>&1 &
-  pid=$!
-  api=http://127.0.0.1:$admin/admin/api/v1
-  tries=0
-  answered=''
-  while :; do
-    if curl -fsS "$api/info" >/dev/null 2>&1; then
-      answered=1
-      break
-    fi
-    tries=$((tries + 1))
-    if [ "$tries" -gt 120 ] || ! kill -0 "$pid" 2>/dev/null; then
-      break
-    fi
-    sleep 0.5
-  done
-  [ -z "$answered" ] || break
-  if ! kill -0 "$pid" 2>/dev/null && grep -q 'Address already in use' "$work/old.log" && [ "$attempt" -lt 9 ]; then
-    printf 'rehearse-ci: port %s or %s is taken, trying another pair\n' "$port" "$admin" >&2
-    wait "$pid" 2>/dev/null || true
-    pid=''
-    attempt=$((attempt + 1))
-    continue
+  if [ -z "$api" ]; then
+    admin=$(sed -n 's|.*event=listening listener=admin address="\{0,1\}\(http://[^ "]*\)/admin/"\{0,1\}\( .*\)\{0,1\}$|\1|p' "$work/old.log" | head -n 1)
+    [ -z "$admin" ] || api=$admin/admin/api/v1
   fi
-  cat "$work/old.log" >&2
-  printf 'rehearse-ci: the old wiki-server did not answer\n' >&2
-  exit 1
+  if [ -n "$api" ] && curl -fsS "$api/info" >/dev/null 2>&1; then
+    break
+  fi
+  tries=$((tries + 1))
+  if [ "$tries" -gt 120 ] || ! kill -0 "$pid" 2>/dev/null; then
+    cat "$work/old.log" >&2
+    printf 'rehearse-ci: the old wiki-server did not answer\n' >&2
+    exit 1
+  fi
+  sleep 0.5
 done
 
 post() {
