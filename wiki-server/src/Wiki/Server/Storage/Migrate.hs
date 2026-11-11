@@ -48,6 +48,7 @@ module Wiki.Server.Storage.Migrate
   , misnumbered
   , knownVersion
   , migrate
+  , migrateSaying
   , migrateWithin
   , applySteps
   , applyMigrations
@@ -153,7 +154,13 @@ knownVersion suffix = maybe 0 stepNumber (lastMay (stepsFor suffix))
 -- | Migrate a database to this program's schema. The result is the
 -- versions applied, none for a database that was already up to date.
 migrate :: (Backend be) => Connection be -> IO [Int]
-migrate c = applySteps (stepsFor (schemaSuffix c)) c
+migrate = fmap fst . migrateSaying
+
+-- | 'migrate', with the lines the steps applied have to tell ('CodeStep'),
+-- in the order of the steps: what @wiki-server migrate@ prints, and the
+-- server logs, once the migration is committed.
+migrateSaying :: (Backend be) => Connection be -> IO ([Int], [Text])
+migrateSaying c = applyStepsSaying (stepsFor (schemaSuffix c)) c
 
 -- | Apply the schema files a database has not had yet, as 'applySteps'
 -- does: for steps that are all SQL.
@@ -168,7 +175,11 @@ applyMigrations = applySteps . map InSql
 -- and so is one that holds tables but no version of this schema
 -- ('OldSchema'); either is left alone.
 applySteps :: (Backend be) => [Step] -> Connection be -> IO [Int]
-applySteps given c = do
+applySteps given = fmap fst . applyStepsSaying given
+
+-- | 'applySteps', with the lines the steps applied have to tell.
+applyStepsSaying :: (Backend be) => [Step] -> Connection be -> IO ([Int], [Text])
+applyStepsSaying given c = do
   for_ (misnumbered given) (throwIO . StepsMisnumbered)
   withTransaction True c (pendingSteps given c)
 
@@ -182,11 +193,13 @@ migrateWithin :: (Backend be) => Connection be -> IO [Int]
 migrateWithin c = do
   let steps = stepsFor (schemaSuffix c)
   for_ (misnumbered steps) (throwIO . StepsMisnumbered)
-  pendingSteps steps c
+  fst <$> pendingSteps steps c
 
 -- | Apply and record the steps a database has not had yet, in the running
--- transaction, the steps' numbers already checked.
-pendingSteps :: (Backend be) => [Step] -> Connection be -> IO [Int]
+-- transaction, the steps' numbers already checked. The result is the
+-- versions applied, and the lines the steps in code among them have to
+-- tell.
+pendingSteps :: (Backend be) => [Step] -> Connection be -> IO ([Int], [Text])
 pendingSteps given c = do
   let steps = sortOn stepNumber given
   current <- versionOf c
@@ -194,13 +207,14 @@ pendingSteps given c = do
   when (current > known) $
     throwIO SchemaTooNew {found = current, known}
   let pending = filter (\s -> stepNumber s > current) steps
-  for_ pending $ \s -> do
-    case s of
-      InSql m -> runScript c m.statements
+  said <- for pending $ \s -> do
+    told <- case s of
+      InSql m -> [] <$ runScript c m.statements
       InCode CodeStep {run} -> run c
     now <- getCurrentTime
     runDb c (runInsert (insert schemaDb.wiki_schema (insertValues [SchemaRow {version = fromIntegral (stepNumber s), applied_at = now}])))
-  pure (map stepNumber pending)
+    pure told
+  pure (map stepNumber pending, concat said)
 
 -- | The error for steps of the schema whose numbers are not 1, 2, 3 and so
 -- on, each once: a step in code given a number a schema file has, or a

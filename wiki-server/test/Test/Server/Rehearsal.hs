@@ -97,6 +97,8 @@ waysInUnitSpec = describe "the upgrade's rehearsal, the ways in check" $ do
     readUsersList (T.unlines [heading, "dee    Dee   no"]) `shouldSatisfy` isLeft
     -- The console's own table, with its padding removed from a row.
     readUsersList (T.replace "Zed  " "Zed" (printed [("ann", "Ann Lee", False, yes), ("zed", "Zed", False, yes)])) `shouldSatisfy` isLeft
+  it "passes a login step 15 of the schema renamed: gone under the old login, new under the new one" $
+    compareWaysIn (Map.fromList [("łucja", "yes"), ("ada", "yes")]) (Map.fromList [("user-1a2b3c4d", "yes"), ("ada", "yes")]) `shouldBe` Right ()
   it "fails for each login that signed in before and does not after, naming it, and for nothing else" $ do
     let was = Map.fromList [("admin", "yes"), ("ann", "yes"), ("bo", "no (no password)"), ("gone", "yes"), ("off", "no (disabled)")]
         now = Map.fromList [("admin", "yes"), ("ann", "no (no password)"), ("bo", "yes"), ("new", "no (no password)"), ("off", "yes")]
@@ -305,6 +307,25 @@ checksSpec backing = describe "the upgrade's rehearsal, its checks" $ do
         -- cannot drive ('OldNotDriven'), not a failed check.
         beforeIt held seeded manager server >>= either (`shouldSatisfy` T.isInfixOf "did not print its table") (const (expectationFailure "the before read the output as the table"))
       _ -> expectationFailure "there is no check named ways in"
+  it "passes the logins check when the upgrade renames the login it wrote, which signs in under the new one" $ withDemoPlace backing $ \at serve -> do
+    -- This program plays an old one without step 15 of the schema: the
+    -- database forgets that the step and those after it ran, before the
+    -- seed and after each of the old console's commands, which migrate
+    -- it. The server of the before then migrates it, as the new program
+    -- would. This holds while the steps from 15 on make no table: step 15
+    -- makes none.
+    let forget = withConnectionTo at $ \c -> do
+          begin True c
+          runScript c "DELETE FROM wiki_schema WHERE version >= 15;"
+          commitTransaction c
+        oldConsole place args input = consoleOn place args input <* forget
+    forget
+    rehearseWith oldConsole "logins" at serve pass serve `shouldReturn` Right ()
+    -- The check had something to rehearse: its account was renamed.
+    accounts <- withStorageAside at listAccounts
+    [a.user.login.text | (a, _) <- accounts, a.user.displayName == "Rehearsal login"] `shouldSatisfy` \case
+      [login] -> "user-" `T.isPrefixOf` login
+      _ -> False
   it "fails the roots check, naming the space, when a space no longer answers at its address" $ withDemoPlace backing $ \at serve -> do
     let moveBlog = withConnectionTo at $ \c -> do
           begin True c

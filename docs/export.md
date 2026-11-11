@@ -155,6 +155,9 @@ merges an archive's log into its own: each entry it does not have, by its
 `id`, is brought in as it was written, so an export of the server imported
 back restores its log and importing an archive twice brings nothing twice;
 the import is then recorded itself. The demo's import leaves the log out.
+An entry's `address` is where the change came from: a network address,
+`console` for the server's console, or `migration` for a step of the
+server's schema (the logins step 15 renamed, as `user.rename`).
 
 ## How each program imports
 
@@ -166,6 +169,14 @@ the import is then recorded itself. The demo's import leaves the log out.
   way.
   Comments' authors are matched with the archive's users and with the
   administrator.
+
+  Both refuse an archive with a login the rule of a login refuses (since
+  2026-11-06: only ASCII letters, digits and punctuation, at least one
+  letter or digit, not `~` first, at most 64 characters), naming the user,
+  rather than bring the login in: an archive of a wiki from before that
+  rule may hold one. Give the user an ASCII login in `users.json` and
+  import it again. The merge below brings no users, and takes such an
+  archive.
 - **The server, into a wiki with content** (the administration's import, a
   merge; `Wiki.Server.Import` and `docs/api.md` describe it) matches spaces
   and pages by path and keeps its own users. A page's comments come with its

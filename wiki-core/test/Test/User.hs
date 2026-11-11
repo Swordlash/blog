@@ -30,6 +30,18 @@ spec = describe "Wiki.Core.User" $ do
       parseLogin "_a_" `shouldBe` Right (Login "_a_")
     it "refuses a login that starts with ~, which marks the server's own principals" $
       parseLogin "~administrator" `shouldBe` Left "A login cannot start with ~."
+
+  describe "loginProblem" $ do
+    it "finds nothing in a login that follows the rule" $
+      map (loginProblem . Login) ["ada", "rita@example.org", "user-1a2b3c4d"] `shouldBe` [Nothing, Nothing, Nothing]
+    it "says why parseLogin refuses a stored login" $ do
+      loginProblem (Login "łucja") `shouldBe` Just "A login has only ASCII letters, digits and punctuation."
+      loginProblem (Login "~x") `shouldBe` Just "A login cannot start with ~."
+      loginProblem (Login "") `shouldBe` Just "A login cannot be blank."
+    it "refuses a stored login with white space around it, which parseLogin would trim" $
+      loginProblem (Login " ada") `shouldBe` Just "A login has no white space around it."
+
+  describe "Login" $
     it "is the bare text in JSON, which decoding does not check" $ do
       encode (Login "ada") `shouldBe` "\"ada\""
       decode "\"~x\"" `shouldBe` Just (Login "~x")

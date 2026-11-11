@@ -201,8 +201,8 @@ spec backing = describe "the schema's versions" $ do
     it "migrate an empty database to this program's version, then find nothing to do" $
       withEmptyPlaceIn backing $ \at -> do
         known <- withConnectionTo at (\c -> pure (knownVersion (schemaSuffix c)))
-        migrateDatabase at `shouldReturn` Migrated {from = 0, to = known}
-        migrateDatabase at `shouldReturn` Migrated {from = known, to = known}
+        migrateDatabase at `shouldReturn` Migrated {from = 0, to = known, said = []}
+        migrateDatabase at `shouldReturn` Migrated {from = known, to = known, said = []}
 
     it "check a wiki with every table and record read, and change nothing" $
       withEmptyPlaceIn backing $ \at -> do

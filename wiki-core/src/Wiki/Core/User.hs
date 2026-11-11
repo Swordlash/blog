@@ -16,6 +16,7 @@ module Wiki.Core.User
 
     -- * Accounts
   , parseLogin
+  , loginProblem
   , checkNewPassword
   , parseEmail
   , minimumPasswordLength
@@ -157,8 +158,8 @@ groupsOf membership user = Map.keysSet (Map.filter (Set.member user) membership)
 -- agree on, and a personal space's slug is its owner's login made a slug
 -- ('Wiki.Core.Slug.slugify'), which spells an ASCII login's letters and
 -- digits without losing one (a login of punctuation alone would make no
--- slug at all), so the login finds the space. A login made before the rule is
--- kept, and still signs in.
+-- slug at all), so the login finds the space. Every stored login follows
+-- the rule ('loginProblem').
 parseLogin :: Text -> Either Text Login
 parseLogin raw
   | T.null login = Left "A login cannot be blank."
@@ -170,6 +171,22 @@ parseLogin raw
   | otherwise = Right (Login login)
   where
     login = T.strip raw
+
+-- | 'loginProblem' is why a login as it is stored breaks the rules of
+-- 'parseLogin', or 'Nothing' when it follows them: the login must be
+-- exactly what 'parseLogin' makes of it. A login 'parseLogin' refuses
+-- breaks them, and so does one with white space around it, which
+-- 'parseLogin' would trim. The server's @wiki-server check@ reads every
+-- stored login with it, and an import every login of an archive
+-- ('Wiki.Core.Export.checkLogins'). A login made before 2026-11-06 could
+-- break the rule; the server renamed each such login when it was upgraded
+-- (step 15 of its schema).
+loginProblem :: Login -> Maybe Text
+loginProblem stored = case parseLogin stored.text of
+  Left why -> Just why
+  Right parsed
+    | parsed /= stored -> Just "A login has no white space around it."
+    | otherwise -> Nothing
 
 -- | A new password, or why it is invalid: shorter than
 -- 'minimumPasswordLength' characters, or longer than

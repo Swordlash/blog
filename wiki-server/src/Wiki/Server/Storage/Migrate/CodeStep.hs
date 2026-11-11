@@ -49,11 +49,19 @@ import Wiki.Server.Storage.Backend (Backend (..))
 -- in the old form made through the old program, and read back in the new
 -- form after the migration. That check goes into
 -- 'Wiki.Server.Rehearsal.checks', with the others.
+--
+-- A step may have something to tell the person who migrates: a change
+-- someone must hear of, such as the logins step 15 renamed. The step
+-- returns those lines rather than printing them, since the migration's
+-- transaction may still be undone after the step has run. @wiki-server
+-- migrate@ prints them once the migration is committed, and the server
+-- writes them to its log when it migrates as it starts.
 data CodeStep = CodeStep
   { version :: Int
   -- ^ Its number, in the sequence of the schema files.
   , name :: Text
   -- ^ What it does, for a person to read, as a file's name says it.
-  , run :: forall be. (Backend be) => Connection be -> IO ()
-  -- ^ The step, run in the migration's transaction.
+  , run :: forall be. (Backend be) => Connection be -> IO [Text]
+  -- ^ The step, run in the migration's transaction. Its result is the
+  -- lines it has to tell, none for most steps.
   }

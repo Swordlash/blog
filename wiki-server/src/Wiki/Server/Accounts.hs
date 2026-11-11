@@ -448,8 +448,10 @@ landWith st now address intent claimed = do
     newAccount settings detail = do
       uid <- liftIO (UserId . UUID.toText <$> generateV4)
       let tries = take 100 (loginCandidates claimed)
-          made login =
-            makeAccount now address settings (uid, Login login, fromMaybe login (mfilter (not . T.null) (T.strip <$> claimed.name)), Nothing)
+          -- Each login goes through the rule, as every new login does.
+          made raw = case parseLogin raw of
+            Left why -> pure (Left (Invalid why))
+            Right login -> makeAccount now address settings (uid, login, fromMaybe login.text (mfilter (not . T.null) (T.strip <$> claimed.name)), Nothing)
           go = \case
             [] -> do
               -- A hundred are taken: use one with a random suffix, which
@@ -469,14 +471,15 @@ landWith st now address intent claimed = do
 -- at the provider, else their e-mail address's local part, else their
 -- name, turned into something a login can be (lower case, letters, digits,
 -- dots and underscores, with dashes between words, at most 40
--- characters), else @user@; then the same with @-2@, @-3@ and so on after
--- it.
+-- characters), the first of them the rules of 'parseLogin' take (one of
+-- dots and underscores alone does not), else @user@; then the same with
+-- @-2@, @-3@ and so on after it.
 loginCandidates :: Claimed -> [Text]
 loginCandidates claimed = base : [base <> "-" <> show n | n <- [2 :: Int ..]]
   where
     -- A login that is an e-mail address (Microsoft's are) gives its local
     -- part.
-    base = fromMaybe "user" (find (not . T.null) (map loginOf (catMaybes [localPart <$> claimed.login, (\e -> localPart e.text) <$> claimed.email, claimed.name])))
+    base = fromMaybe "user" (find (isRight . parseLogin) (map loginOf (catMaybes [localPart <$> claimed.login, (\e -> localPart e.text) <$> claimed.email, claimed.name])))
     localPart = T.takeWhile (/= '@')
     loginOf = T.take 40 . T.intercalate "-" . filter (not . T.null) . T.split (not . allowed) . T.toLower
     allowed ch = isAscii ch && (isAlphaNum ch || ch == '.' || ch == '_')

@@ -460,6 +460,20 @@ wholeWikis backing = describe "importArchive and exportArchive" $ do
       importArchive st demoArchive >>= (`shouldSatisfy` isLeft)
       tableRows st `shouldReturn` original
 
+  -- WP5.87 of docs/PLAN.md: an archive of a wiki from before step 15 of
+  -- the schema may hold a login the rule of a login refuses.
+  it "refuse an archive with a login the rule of a login refuses, naming the user, and leave the storage empty" $
+    withStorageIn backing $ \_ st -> do
+      original <- tableRows st
+      let renamed u = if u.login == Login "editor" then User {id = u.id, login = Login "łucja", displayName = u.displayName, avatar = u.avatar} else u
+          older = demoArchive {Export.users = map renamed demoArchive.users}
+      importArchive st older
+        `shouldReturn` Left "users.json: the user \"user-editor\" has the login \"łucja\", which the wiki no longer takes: A login has only ASCII letters, digits and punctuation. Give the user a login of ASCII letters, digits and punctuation in users.json, and import the archive again."
+      tableRows st `shouldReturn` original
+      -- An import that merges brings no users, so the archive is read
+      -- all the same.
+      readArchive (Map.fromList (writeArchive older)) `shouldSatisfy` isRight
+
   it "give a space the archive gives no home page the default one, as an older wiki's archive may hold, but the container of personal spaces" $
     withStorageIn backing $ \_ st -> do
       let teamless = [if s.name == "Team" then S.withHome Nothing s else s | s <- demoArchive.spaces]

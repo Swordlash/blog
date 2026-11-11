@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+Every login is ASCII (WP5.87). Step 15 of the schema, a `CodeStep`
+(`Step0015`), renames each login that breaks the rule of 2026-11-06, a
+copy of `parseLogin` frozen in the step, to `user-` and the first eight
+ASCII letters and digits of the user's id (`user-1`, `user-2`, … for an id
+with none), with `-2`, `-3`, … where that is taken ignoring the case of
+ASCII letters, in the order of the users' ids. It writes a `user.rename`
+entry to the audit log for each, as the operator, from `migration`. A
+`CodeStep`'s `run` now returns lines to tell: `migrateSaying` collects
+them, `wiki-server migrate` prints them after its first line
+(`MigratedTo` holds lines, `Migrated` has `said`), and the server logs
+those of the migration as its storage opens (`Storage`'s `migrated`, the
+event `migration`). `wiki-server check` refuses a users row whose login
+`loginProblem` refuses (`WaysIn.brokenLogins`). The import of a whole
+wiki refuses an archive with such a login (`checkLogins`), and an account
+a provider makes takes only a login candidate `parseLogin` accepts. The
+rehearsal has a seventh check, `logins`: on a copy before step 15 it makes
+an account with `users add`, writes a login beyond ASCII into its row
+through a row type of its own, and after the upgrade signs in with the
+password under the login the step gave.
+
 A page's backlinks (WP5.88, #189) are read from a new table, `page_links`
 (step 14 of the schema): each link on a page that may lead to a page, with
 the page it leads to now. `insertPage` and `updatePageText`, the only

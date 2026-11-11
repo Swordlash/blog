@@ -41,12 +41,13 @@ spec backing = describe "the table of links" $ do
     withDemoAt backing $ \at st -> do
       written <- linkRows st
       written `shouldSatisfy` (not . null)
-      -- The database as it was at step 13: no table, no step 14, no
-      -- version of the links.
+      -- The database as it was at step 13: no table, no step 14 or
+      -- after it, no version of the links. Step 15 runs again, and finds
+      -- no login to rename.
       withConnectionTo at $ \c -> do
         begin True c
         runScript c "DROP TABLE page_links;"
-        runScript c "DELETE FROM wiki_schema WHERE version = 14;"
+        runScript c "DELETE FROM wiki_schema WHERE version >= 14;"
         runDb c (deleteSettingsLike linksVersionSetting [])
         commitTransaction c
       withStorageAside at $ \reopened -> do

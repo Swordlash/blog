@@ -22,10 +22,11 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
 import Database.Beam (runUpdate, update, val_, (<-.), (==.))
 import Network.HTTP.Types (Header, hContentType, methodDelete, methodGet, methodPost, methodPut)
 import Protolude
-import Test.Database (Backing, placeOptionsOf)
+import Test.Database (Backing, placeOptionsOf, withConnectionTo)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AccountApi (..), AdminApi (..), SpacesApi (..), WikiApi (..))
@@ -40,7 +41,7 @@ import Wiki.Api.Admin (Directory (..), ServerStatus (..), WikiSettings (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message (..), NewAccountRecord (..), PasswordRecordChange (..), RegistrationFor (..), Stretch (..), bytesOf, messageOf)
-import Wiki.Api.Types (NewPage (..), NewSpace (..), SessionInfo (..))
+import Wiki.Api.Types (NewPage (..), NewSpace (..), PersonalSpaceSwitch (..), SessionInfo (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (SpaceId, UserId (..))
 import Wiki.Core.Page (Page (..))
@@ -52,8 +53,11 @@ import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
 import Wiki.Server.Opaque (loadServerSetup, registerHere)
 import Wiki.Server.Options (ServeOptions (..))
 import Wiki.Server.Password (hashWith, parameters)
-import Wiki.Server.Storage (withStorageAside, writing)
-import Wiki.Server.Storage.Rows (storeRecord)
+import Wiki.Server.Storage (reading, withStorageAside, writing)
+import Wiki.Server.Storage.Backend (withTransaction)
+import Wiki.Server.Storage.Migrate.Code.Step0015 (step0015)
+import Wiki.Server.Storage.Migrate.CodeStep (CodeStep (..))
+import Wiki.Server.Storage.Rows (IdentityRow (..), identityOf, insertIdentity, storeRecord)
 import Wiki.Server.Storage.Schema (Users (..), WikiDb (..), wikiDb)
 
 spec :: Backing -> Spec
@@ -66,6 +70,7 @@ spec backing = describe "accounts over HTTP" $ do
   opaque backing
   pages backing
   guards backing
+  renamedLogins backing
 
 -- | An address of the API on a listener.
 onPublic, onAdmin :: Running -> Text -> Text
@@ -629,3 +634,48 @@ guards backing = describe "requests from other sites" $ do
     reply.status `shouldBe` 403
     same <- passwordSignIn r (onPublic r) [("Sec-Fetch-Site", "same-origin")] "editor" "editor's password"
     same.status `shouldBe` 200
+
+-- | WP5.87 of docs/PLAN.md: a login from before the rule of a login, which
+-- step 15 of the schema renames ("Wiki.Server.Storage.Migrate.Code.Step0015").
+-- The step is run by itself on the demo's database, between two servers,
+-- as an upgrade runs it between the old server and the new one.
+renamedLogins :: Backing -> Spec
+renamedLogins backing = describe "a login step 15 of the schema renamed" $
+  it "signs in with the same password under the new login, an OPAQUE record and a hash from before OPAQUE alike, and keeps its sessions, personal space and identity" $
+    withDemoPlace backing $ \at serve -> do
+      let setLogin r uid login = withStorageAside r.place $ \st -> writing st (runUpdate (update wikiDb.users (\x -> x.login <-. val_ login) (\x -> x.id ==. val_ uid)))
+      (session, space) <- serve $ \r -> do
+        givePassword r "user-editor" "editor's password"
+        legacyAccount r "user-reader" "reader's old password"
+        -- Logins made before the rule, as an older server kept them.
+        setLogin r "user-editor" "łucja"
+        setLogin r "user-reader" "żaneta"
+        token <- signInAs r "łucja" "editor's password"
+        turnedOn <- send r methodPut (onPublic r "api/v1/account/personal-space") [(hContentType, "application/json"), cookie token] (encode PersonalSpaceSwitch {enabled = True})
+        space :: Space <- jsonAs 200 turnedOn
+        now <- getCurrentTime
+        withStorageAside r.place $ \st -> writing st (insertIdentity now (UserId "user-editor") "elsewhere" "subject-1" Nothing Nothing)
+        pure (token, space)
+      said <- withConnectionTo at $ \c -> withTransaction True c (case step0015 of CodeStep {run} -> run c)
+      said
+        `shouldBe` [ "Renamed the login \"łucja\" of the user user-editor to \"user-useredit\", since a login is now ASCII letters, digits and punctuation, with a letter or digit, at most 64 characters and not ~ first. The user signs in with the same password under the new login."
+                   , "Renamed the login \"żaneta\" of the user user-reader to \"user-userread\", since a login is now ASCII letters, digits and punctuation, with a letter or digit, at most 64 characters and not ~ first. The user signs in with the same password under the new login."
+                   ]
+      serve $ \r -> do
+        -- The session from before is the same user's, under the new login.
+        (kept, _) <- sessionWith r [cookie session]
+        ((\u -> (u.id, u.login)) <$> kept.user) `shouldBe` Just (UserId "user-editor", Login "user-useredit")
+        -- The same passwords sign in under the new logins: an OPAQUE
+        -- record, and a hash from before OPAQUE, which the sign-in moves
+        -- to OPAQUE.
+        token <- signInAs r "user-useredit" "editor's password"
+        _ <- signInAs r "user-userread" "reader's old password"
+        _ <- signInAs r "user-userread" "reader's old password"
+        -- The old login names nobody.
+        (.status) <$> passwordSignIn r (onPublic r) [] "łucja" "editor's password" `shouldReturn` 401
+        -- The personal space is the user's, at its address.
+        mine :: Maybe Space <- getUrlWith r (onPublic r "api/v1/account/personal-space") [cookie token] >>= jsonAs 200
+        ((\s -> (s.id, s.slug, s.owner)) <$> mine) `shouldBe` Just (space.id, space.slug, Just (UserId "user-editor"))
+        -- So is the identity at a provider.
+        found <- withStorageAside r.place $ \st -> reading st (identityOf "elsewhere" "subject-1")
+        ((\i -> i.user) <$> found) `shouldBe` Just (UserId "user-editor")

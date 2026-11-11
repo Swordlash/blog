@@ -41,15 +41,23 @@ Tests use the constructor.
 
 ### Logins: `Login` (`Wiki.Core.User`)
 
-Rules today: `checkLogin` in `Wiki.Core.User`. A login is trimmed of white
-space, has 1 to 64 characters, no white space or control character inside,
-and does not start with `~` (the server's own principals). The server
-compares logins without regard to case (`COLLATE NOCASE`).
+Rules today: `parseLogin` in `Wiki.Core.User`. A login is trimmed of white
+space, has 1 to 64 characters, only ASCII letters, digits and punctuation
+(since 2026-11-06), at least one letter or digit, and does not start with
+`~` (the server's own principals). The server compares logins ignoring the
+case of ASCII letters. A stored login is exactly what `parseLogin` makes of
+it (`loginProblem`): step 15 of the server's schema renamed every login
+made before the rule that broke it (to `user-` and eight characters of the
+user's id), and `wiki-server check` refuses one that breaks it.
 
 Applied today in: `Wiki.Server.Accounts.createAccount` (the console's
 `users add`), `Accounts.prepared` (registration and invitations),
-`Wiki.Server.Storage`'s `createUser` (the administration), the in-memory
-backend's `createUser`.
+`Accounts.landWith` (an account a provider creates, from
+`loginCandidates`), `Wiki.Server.Storage`'s `createUser` and
+`createUserWithRecord` (the administration), the in-memory backend's
+`createUser`, and an archive's users where an import brings them
+(`Wiki.Core.Export.checkLogins`: the server's import into an empty wiki
+and the demo's).
 
 | Field or argument | Decision |
 | --- | --- |
@@ -62,14 +70,9 @@ backend's `createUser`.
 | the console's `LOGIN` argument of `users password`, `admin`, `disable`, `second-factor-remove`, `remove` | `Text`: a lookup, like sign-in |
 | mentions (`Wiki.Core.Notification.mentionedIn`, `mentionable`) | `Text`: an `@name` in a page is a lookup of a login, not a login |
 
-Accepted today though the rule refuses it, kept as it is:
-
-- An archive restored into an empty server keeps its users' logins as
-  `users.json` gives them, without `parseLogin` (`Wiki.Core.Export`'s
-  `parseUser`, then `Wiki.Server.Storage`'s import). A hand-edited archive
-  can bring a blank login or one starting with `~`.
-- The login made for an account a provider creates (`loginCandidates` in
-  `Wiki.Server.Accounts`) is built to follow the rule and is not parsed.
+An archive's `users.json` is read without the rule (`parseUser`), since an
+import that merges brings no users; an import that brings them refuses an
+archive with a login the rule refuses, naming the user.
 
 ### Passwords: `Password` (`Wiki.Core.User`)
 
