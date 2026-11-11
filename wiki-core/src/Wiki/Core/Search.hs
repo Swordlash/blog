@@ -72,7 +72,7 @@ import Data.Text.Unsafe qualified as U
 import Protolude
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Markdown.Ast (Block (..), BoxHead (..), Footnote (..), ListItem (..), SpoilerHead (..), parseMarkdown, plainText)
-import Wiki.Core.Markdown.Html (htmlText, parseHtml)
+import Wiki.Core.Markdown.Html (htmlText, parseFrameHtml, parseHtml)
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Slug (Slug, foldLetter)
 
@@ -234,8 +234,8 @@ searchable title body = Searchable {title = folded title, body = folded (bodyTex
 
 -- | The text of a page's Markdown as a reader sees it, in one line: the
 -- words of its blocks without their syntax, and the sources of its code,
--- diagrams and formulas. For raw HTML, the text the page shows
--- ("Wiki.Core.Markdown.Html"), without the tags. The source as it is, if
+-- diagrams and formulas. For raw HTML and an @html@ fence, the text the
+-- page shows ("Wiki.Core.Markdown.Html"), without the tags and the CSS. The source as it is, if
 -- it does not parse.
 bodyText :: Text -> Text
 bodyText source =
@@ -261,6 +261,8 @@ bodyText source =
       MarkerError written _ -> written
       Footnotes notes -> T.intercalate "\n" [blocks bs | Footnote _ _ bs <- notes]
       RawHtmlBlock raw -> htmlText (parseHtml raw)
+      -- The text the frame shows, without the CSS.
+      HtmlBlock raw -> htmlText (parseFrameHtml raw)
       -- The list it stands for is the headings' text, already included.
       TableOfContents -> ""
 

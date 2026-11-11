@@ -82,6 +82,7 @@ library
       Wiki.Core.Markdown.Box
       Wiki.Core.Markdown.Edit
       Wiki.Core.Markdown.Emoji
+      Wiki.Core.Markdown.Frame
       Wiki.Core.Markdown.Html
       Wiki.Core.Markdown.Link
       Wiki.Core.Markdown.Mention

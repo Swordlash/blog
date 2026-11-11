@@ -22,6 +22,18 @@
 -- the slot's index: Halogen tells two children apart by their slot address,
 -- and a document can hold the same formula twice.
 --
+-- __HTML blocks.__ An @html@ fence is an island too ('htmlBlock'): the
+-- application shows it in a frame of its own ("Wiki.Core.Markdown.Frame"),
+-- whose document the renderer makes from the block. Its HTML goes through
+-- the allowlist widened by styles ("Wiki.Core.Markdown.Html.FrameHtml"),
+-- its links and sources are resolved as raw HTML's are in the page
+-- ('resolvedAttributes'), and a link opens in a new tab, with
+-- @target=\"_blank\"@ and @rel=\"noopener noreferrer\"@, since a frame
+-- cannot show another document. A link to a place in the page (@#intro@)
+-- leads nowhere from the frame, and keeps its text without its @href@. By
+-- default the block's source is written as an HTML listing, as a feed
+-- shows it, since a feed reader has no sandbox to show a frame in.
+--
 -- __Macros.__ Each formula receives the earlier formulas in the document
 -- that define macros ("Wiki.Core.Math"), in order. So a page's macro
 -- definitions apply to every formula after them, as in a LaTeX document,
@@ -146,6 +158,7 @@ import Halogen.HTML.Properties qualified as HP
 import Protolude
 import Wiki.Core.Markdown.Ast
 import Wiki.Core.Markdown.Box (BoxCounter, BoxIcon (..), BoxKind (..), Numbering, alertKindName, boxCaption, boxStyle, countBox, countSection, definedKind, noNumbers, startCounting)
+import Wiki.Core.Markdown.Frame (frameDocument)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
 import Wiki.Core.Markdown.Toc (contentsNav, tableOfContents)
@@ -178,6 +191,10 @@ data Options page w i = Options
   , tikz :: IslandKey -> Text -> HH.HTML w i
   -- ^ A TikZ picture: its source, as written in the fence
   -- ("Wiki.Core.Markdown.Tikz" makes it TeX).
+  , htmlBlock :: IslandKey -> Text -> Text -> HH.HTML w i
+  -- ^ An @html@ fence: its source, as written, and the document its frame
+  -- shows ('Wiki.Core.Markdown.Frame.frameDocument'), for the frame's
+  -- @srcdoc@.
   , resolveLink :: Text -> LinkTarget page
   -- ^ What a link's or an embed's destination, as written, points at.
   , pageHref :: page -> Text
@@ -245,6 +262,7 @@ defaultOptions =
     , mathDisplay = \_ _ tex -> HH.div [HP.class_ (HH.ClassName "math display")] [HH.text tex]
     , mermaid = \_ src -> HH.pre [HP.class_ (HH.ClassName "mermaid")] [HH.text src]
     , tikz = \_ src -> HH.pre [HP.class_ (HH.ClassName "tikz")] [HH.text src]
+    , htmlBlock = \_ src _ -> HH.pre_ [HH.code [HP.class_ (HH.ClassName "language-html")] [HH.text src]]
     , resolveLink = defaultResolveLink
     , pageHref = identity
     , resolveMention = const Nothing
@@ -355,6 +373,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
            in [if opts.copyButtons then HH.div [classesProp ["code-block"]] [listing, copyButton] else listing]
       Mermaid src -> island src <&> \k -> [opts.mermaid k src]
       Tikz src -> island src <&> \k -> [opts.tikz k src]
+      HtmlBlock src -> island src <&> \k -> [opts.htmlBlock k src (frameDocument (frameContent opts src))]
       -- A block of nothing but definitions (a page's macros, WP5.41) shows
       -- nothing; its macros hold for the formulas after it all the same.
       MathBlock tex
@@ -682,6 +701,7 @@ noteText = T.unwords . T.words . T.unwords . map blockText
       Spoiler h bs -> T.unwords [plainText h.description, noteText bs]
       MarkerError written _ -> written
       RawHtmlBlock raw -> Html.htmlText (Html.parseHtml raw)
+      HtmlBlock raw -> Html.htmlText (Html.parseFrameHtml raw)
       _ -> ""
 
 firstNote :: [Footnote] -> Int
@@ -930,41 +950,49 @@ linkDestinations = concatMap block
       Html.TextNode _ -> []
       Html.Content x -> content inLink x
 
--- | Render an element the allowlist kept, with its attributes. A URL is
--- resolved as a Markdown link's or embed's is ('resolveLink'), except that
--- a relative address may also name an attachment. A source is looked up as
--- an attachment first, since a page cannot be shown in an @img@. A link is
--- looked up as an attachment only if it names no page. The resolved URL is
--- written only if its scheme is harmless; otherwise the attribute is
--- dropped, and an @a@ that leads nowhere gets the class
--- @link-unresolved@, as a Markdown link would show it. A link to an
--- attachment downloads it, and one that leaves the wiki gets
--- @rel=\"noopener\"@, as in Markdown.
+-- | Render an element the allowlist kept, with its attributes resolved
+-- ('resolvedAttributes').
 htmlElement :: forall page w i. Options page w i -> Text -> [Html.Attribute] -> [HH.HTML w i] -> HH.HTML w i
-htmlElement opts name attrs = HH.element (HH.ElemName name) (concatMap prop attrs <> unresolvedClass)
+htmlElement opts name attrs = HH.element (HH.ElemName name) (map attr (resolvedAttributes opts attrs))
   where
     -- The element is made by name, so its properties are typed by no
     -- element's row.
-    href :: Maybe [HP.IProp Empty i]
+    attr :: (Text, Text) -> HP.IProp Empty i
+    attr (key, value) = HP.attr (HH.AttrName key) value
+
+-- | The attributes of an element the allowlist kept, as the page writes
+-- them. A URL is resolved as a Markdown link's or embed's is
+-- ('resolveLink'), except that a relative address may also name an
+-- attachment. A source is looked up as an attachment first, since a page
+-- cannot be shown in an @img@. A link is looked up as an attachment only
+-- if it names no page. The resolved URL is written only if its scheme is
+-- harmless; otherwise the attribute is dropped, and an @a@ that leads
+-- nowhere gets the class @link-unresolved@, as a Markdown link would show
+-- it. A link to an attachment downloads it, and one that leaves the wiki
+-- gets @rel=\"noopener\"@, as in Markdown.
+resolvedAttributes :: forall page w i. Options page w i -> [Html.Attribute] -> [(Text, Text)]
+resolvedAttributes opts attrs = concatMap prop attrs <> unresolvedClass
+  where
+    href :: Maybe [(Text, Text)]
     href = linkProps <$> attribute "href" attrs
     broken = maybe False null href
-    unresolvedClass = [attr "class" "link-unresolved" | broken, isNothing (attribute "class" attrs)]
+    unresolvedClass = [("class", "link-unresolved") | broken, isNothing (attribute "class" attrs)]
     prop (key, value) = case key of
       "href" -> fromMaybe [] href
       "src" -> sourceProp key value
       "poster" -> sourceProp key value
-      "class" | broken -> [attr key (value <> " link-unresolved")]
-      _ -> [attr key value]
+      "class" | broken -> [(key, value <> " link-unresolved")]
+      _ -> [(key, value)]
     linkProps dest = case relativeFirst False dest of
       External url
-        | safeHref url -> attr "href" url : [attr "rel" "noopener" | isExternal url]
-      Page page -> [attr "href" (opts.pageHref page)]
+        | safeHref url -> ("href", url) : [("rel", "noopener") | isExternal url]
+      Page page -> [("href", opts.pageHref page)]
       Attachment ref
-        | safeHref ref.url -> [attr "href" ref.url, attr "download" ref.name]
+        | safeHref ref.url -> [("href", ref.url), ("download", ref.name)]
       _ -> []
     sourceProp key dest = case relativeFirst True dest of
-      External url | safeSrc url -> [attr key url]
-      Attachment ref | safeSrc ref.url -> [attr key ref.url]
+      External url | safeSrc url -> [(key, url)]
+      Attachment ref | safeSrc ref.url -> [(key, ref.url)]
       _ -> []
     -- Resolve a path as an attachment's name, and through 'resolveLink':
     -- the attachment first for a source, 'resolveLink' first for a link.
@@ -976,5 +1004,26 @@ htmlElement opts name attrs = HH.element (HH.ElemName name) (concatMap prop attr
     unlessResolved target fallback = case target of
       Unresolved -> fallback
       found -> found
-    attr :: Text -> Text -> HP.IProp Empty i
-    attr key = HP.attr (HH.AttrName key)
+
+-- | An @html@ fence's HTML as its frame shows it: through the allowlist
+-- widened by styles ("Wiki.Core.Markdown.Html.parseFrameHtml"), its URLs
+-- resolved as raw HTML's are in the page ('resolvedAttributes'), and
+-- written out as HTML again. The addresses stay as the page writes them,
+-- relative to the page's base address, which the frame's document
+-- inherits. A link opens in a new tab: a frame cannot show the document it
+-- leads to (the page's policy lets no other document into a frame), and
+-- an attachment it leads to is opened there rather than downloaded, which
+-- the frame's sandbox forbids. A link to a place in the page (@#intro@)
+-- has nowhere to lead from the frame, and keeps its text alone.
+frameContent :: Options page w i -> Text -> Text
+frameContent opts = Html.renderHtml . map resolve . Html.parseFrameHtml
+  where
+    resolve :: Html.Node Void -> Html.Node Void
+    resolve = \case
+      Html.Element name attrs children -> Html.Element name (inFrame name (resolvedAttributes opts attrs)) (map resolve children)
+      Html.TextNode t -> Html.TextNode t
+    inFrame name attrs
+      | name == "a" =
+          let kept = [(k, v) | (k, v) <- attrs, k `notElem` ["rel", "download"], not (k == "href" && "#" `T.isPrefixOf` v)]
+           in kept <> (if any ((== "href") . fst) kept then [("target", "_blank"), ("rel", "noopener noreferrer")] else [])
+      | otherwise = attrs
