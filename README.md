@@ -2947,6 +2947,15 @@ The database jobs cache downloaded apt `.deb` archives, by Ubuntu
 release, architecture, runner image and package list. Apt still installs and
 configures them normally, including TeX's format generation. A warm cache
 avoids downloading the TeX packages again; it does not skip package setup.
+Every native job restores these archives, and only postgres saves them. When
+they hold every archive the runner image's own package index names, as on an
+exact hit, the install runs at once, with no `apt-get update` and no network;
+otherwise the update runs first, with no retries and for at most 45 seconds,
+since apt waits on a name that does not resolve as long as the resolver does
+(`toolchain/ci-native-deps.sh`). When the runners cannot reach their Ubuntu
+mirror and the cache lacks a version the index names, the job fails, as it
+always has: installing older cached versions instead would mean resolving
+dependencies by hand against apt.
 
 Hosted builds cache `dist-newstyle` as well as the dependency store. The native
 job has a snapshot of `dist-newstyle/native`; wasm has a separate snapshot of its
