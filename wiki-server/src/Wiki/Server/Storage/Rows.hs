@@ -2128,8 +2128,14 @@ storeServerSettings s = do
 -- does a later step of the schema that writes a page's text: it writes
 -- through rows of its own, not through 'writeLinks', and the links of
 -- the pages it changed are then filled again.
+--
+-- 2: raw HTML is cut into tokens as the browser cuts it (WP5.89): the
+-- content of a @\<style>@, a @\<textarea>@ and the other elements the
+-- HTML parser reads as text ends at the element's own end tag, so a link
+-- after one that held a tag of its own name (a style with @"<style>"@ in a
+-- string) is read where it was swallowed before.
 linksVersion :: Int
-linksVersion = 1
+linksVersion = 2
 
 -- | The setting that says which 'linksVersion' filled @page_links@.
 linksVersionSetting :: Text

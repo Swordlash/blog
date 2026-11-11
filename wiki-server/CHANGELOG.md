@@ -7,6 +7,11 @@ class other than `numbered` and `norender` (WP5.89, #196): a `latex`
 fence is display math, an `html` fence is read through the page's
 allowlist as raw HTML is, without its styles, and `norender` keeps a
 listing. The HTML it gives pandoc is written by wiki-core's `renderHtml`.
+`linksVersion` is 2: raw HTML is now cut into tokens as the browser cuts
+it, so a link after a `<style>` or a `<textarea>` that held a tag of its
+own name is read where it was swallowed before, and `page_links` is
+filled again when the program opens a database version 1 filled. A link
+in an `html` block is no link of the page's.
 
 Every login is ASCII (WP5.87). Step 15 of the schema, a `CodeStep`
 (`Step0015`), renames each login that breaks the rule of 2026-11-06, a
