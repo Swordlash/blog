@@ -29,7 +29,13 @@ handles the review rounds and amends the plan. Changes to `docs/PLAN.md` alone g
 straight to `main`, without a pull request; code goes through one, one per work package,
 opened ready for review, not as a draft, on its own branch. The pull request is opened
 early, as soon as the session thinks the branch has a chance to pass (the owner,
-2026-11-10).
+2026-11-10). When several pull requests are open together and touch common files,
+each is based on the branch of the one before, a stack (the owner, 2026-11-11), so
+that the owner merges them from the bottom without a rebase and a second run of CI
+between; pull requests that share no file stay based on `main`. When a lower branch
+changes, the session rebases the branches above it onto it. The owner merges a stack
+from the bottom, with merge commits: a squash or a rebase of a lower one would leave
+its commits, rewritten, in the ones above.
 
 Each work package has two reviews on a Fable session (the owner, 2026-11-10): the
 session's own review of the subagent's branch, before the pull request is opened, and
