@@ -879,7 +879,8 @@ renderRawHtml opts raw = fromPieces (concatMap pieces (Html.parseHtml raw))
 -- a link inside a link's text is shown as text and is not one, an embed's
 -- caption is plain text, a block spoiler that is written wrong shows its
 -- blocks but not its description, and code, a formula or a diagram holds
--- no link. An image's or a video's @src@ in raw HTML is never a page, and
+-- no link. Nor does an @html@ fence: its links are in its frame, which
+-- opens them in a new tab, not on the page. An image's or a video's @src@ in raw HTML is never a page, and
 -- is left out. A page's backlinks ("Wiki.App.Backlinks") are counted
 -- from what this finds, so that the list and the links on the page agree.
 linkDestinations :: [Block] -> [Text]
@@ -907,6 +908,9 @@ linkDestinations = concatMap block
       Mermaid _ -> []
       Tikz _ -> []
       MathBlock _ -> []
+      -- A link in an html fence is in its frame, a document of its own,
+      -- and is not one of the page's (WP5.89 of docs/PLAN.md).
+      HtmlBlock _ -> []
       MarkerError _ _ -> []
       TableOfContents -> []
     -- As 'renderBlocks' reads them: raw HTML among the inlines is parsed

@@ -379,7 +379,9 @@ Each page lists the pages that link to it under **Linked from**, in the
 sidebar below the space's pages: a link counts as the page shows it and a
 click follows it (a path, a wiki link, a permanent link, an embed of a page,
 a link in a page's HTML), each page once and never a page's link to itself,
-and only the pages the reader may read are listed. An encrypted space's
+and only the pages the reader may read are listed. A link in an `html`
+block is not counted: it is in the block's frame, which opens it in a new
+tab, not on the page. An encrypted space's
 pages have no list and are in none, since the server cannot read them.
 Text selected in a page gets **Copy link** beside **Comment**: its address
 ends in the browser's own text fragment (`#:~:text=…`), and Chrome, Edge,
