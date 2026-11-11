@@ -144,7 +144,7 @@ import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Browser (ArticleLink (..), Selected (..), absoluteUrl, clickedThread, copyText, followArticleLink, markFragment, readSelection, reveal, revealFragment)
-import Wiki.App.Editor.Browser (guardUnload)
+import Wiki.App.Editor.Browser (focusInView, guardUnload)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Live (Feed (..), Heard)
 import Wiki.App.Live qualified as Live
@@ -274,6 +274,10 @@ data State = State
   , fetches :: Int
   -- ^ How many fetches of the page the view has started: only the answer
   -- to the latest, on this visit, is shown.
+  , lastBox :: Maybe Int
+  -- ^ The task whose box the reader set last, by its index: its box has
+  -- the focus again after a render that moved it, drew it anew, or took
+  -- the focus away with the bar's buttons (Discard, a save).
   }
 
 -- | An address put on the clipboard: by a click on a heading's or a box's
@@ -363,6 +367,7 @@ component =
               , running = False
               , visit = 0
               , fetches = 0
+              , lastBox = Nothing
               }
       , render
       , eval =
@@ -805,6 +810,7 @@ component =
           -- Another page or version: the shell asked before leaving the
           -- ticks ('HasUnsaved'), and the reader chose Leave.
           stage (Ticking.Clear LeftConfirmed)
+          modify (\st -> st {lastBox = Nothing})
           modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
           -- The people mentioned are looked up again: the current user may
@@ -960,10 +966,16 @@ component =
       -- A box changed: the rules for the tasks under a task decide the
       -- ticks, and the page shows its text with them. A click on a box the
       -- view does not take now has the box drawn anew ('Ticking.step').
-      Tick i ticked ->
+      -- The box toggled keeps the focus, though a sorted list moved its
+      -- item (a keyed element moved with insertBefore loses the focus) or
+      -- the box was drawn anew; the boxes the rules changed with it do not
+      -- take it.
+      Tick i ticked -> do
         gets boxesEnabled >>= \case
           True -> stage (Ticking.Clicked i ticked)
           False -> stage (Ticking.Refused i)
+        modify (\st -> st {lastBox = Just i})
+        focusLastBox
       -- One save of the text with the ticks, against the version they
       -- were made on.
       SaveTicks -> do
@@ -981,6 +993,9 @@ component =
             else case result of
               Right saved -> do
                 stage (Ticking.Saved saved)
+                -- The Save button that had the focus is gone with the
+                -- ticks: the focus goes back to the box set last.
+                focusLastBox
                 modify $ \s ->
                   s
                     { loaded = case s.loaded of
@@ -995,7 +1010,11 @@ component =
               -- stay on the page shown, and the bar says so.
               Left (Conflict _) -> stage Ticking.Conflicted >> catchUp
               Left e -> stage (Ticking.SaveFailed ("The ticks could not be saved: " <> errorMessage e))
-      DiscardTicks -> stage (Ticking.Clear Discarded)
+      -- The Discard button that had the focus is gone with the ticks: the
+      -- focus goes back to the box set last.
+      DiscardTicks -> do
+        stage (Ticking.Clear Discarded)
+        focusLastBox
       -- The page as it is now, the ticks lost, as the bar said.
       ReloadLosingTicks -> do
         stage (Ticking.Clear ReloadConfirmed)
@@ -1163,6 +1182,19 @@ component =
       modify (\st -> st {staging = Ticking.step event st.staging})
       after <- gets unsaved
       when (before /= after) $ H.liftEffect (guardUnload after)
+
+    -- Give the box set last the focus, scrolled into view by the least
+    -- amount, once the render that follows a change is done (a change of
+    -- the state renders before the action goes on). A disabled box has no
+    -- index ("Wiki.Core.Markdown.Render"), so while the boxes are disabled
+    -- (a save under way) nothing is focused, and the focus stays where it
+    -- was, or on the page itself; the page does not scroll.
+    focusLastBox :: H.HalogenM State Action Slots ViewOutput m ()
+    focusLastBox = do
+      st <- get
+      for_ st.lastBox $ \i -> do
+        holder <- H.getRef st.text
+        for_ holder $ \h -> H.liftEffect (liftIO (h.querySelector ("input[data-task=\"" <> show i <> "\"]") >>= traverse_ focusInView))
 
     -- A fetch of the page begins: its number, with the visit's.
     startFetch :: H.HalogenM State Action Slots ViewOutput m (Int, Int)

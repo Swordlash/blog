@@ -393,6 +393,39 @@ spec m = describe "tasks ticked in a page" $ do
     (find ui ".page-body input[aria-label='Write the page']" >>= (`getProperty` "checked")) `shouldReturn` "false"
     serverStops
 
+  it "keeps the focus on the box toggled with Space, though a sorted list moves its item, and after Discard" $ runPage $ do
+    (ui, _) <- page m "user-admin" tasksText
+    eventually $ sortedLabels ui `shouldReturn` ["New", "Next", "Old"]
+    -- Old is done and stands before New and Next in the source: unticked,
+    -- it moves up; ticked again, down.
+    box 4 ui >>= focus
+    press "Space"
+    eventually $ sortedLabels ui `shouldReturn` ["Old", "New", "Next"]
+    focusedIs ".page-body input[data-task='4']" `shouldReturn` True
+    press "Space"
+    eventually $ sortedLabels ui `shouldReturn` ["New", "Next", "Old"]
+    focusedIs ".page-body input[data-task='4']" `shouldReturn` True
+    -- New, ticked, moves down.
+    box 5 ui >>= focus
+    press "Space"
+    eventually $ sortedLabels ui `shouldReturn` ["Next", "Old", "New"]
+    focusedIs ".page-body input[data-task='5']" `shouldReturn` True
+    -- In a list that is not sorted the box keeps it too; and a parent's,
+    -- whose tick ticks its children, keeps it, not a child's.
+    box 0 ui >>= focus
+    press "Space"
+    eventually $ (box 0 ui >>= (`getProperty` "checked")) `shouldReturn` "true"
+    focusedIs ".page-body input[data-task='0']" `shouldReturn` True
+    box 1 ui >>= focus
+    press "Space"
+    eventually $ checked ui `shouldReturn` [True, True, True, True, True, True, False]
+    focusedIs ".page-body input[data-task='1']" `shouldReturn` True
+    -- Discard takes the bar's buttons away: the focus goes back to the box
+    -- set last.
+    find ui ".page-ticks-discard" >>= click
+    eventually $ length <$> findAll ui ".page-ticks-count" `shouldReturn` 0
+    focusedIs ".page-body input[data-task='1']" `shouldReturn` True
+
   it "reaches the boxes with Tab and ticks them with Space" $ runPage $ do
     (ui, _) <- page m "user-admin" tasksText
     box 0 ui >>= focus
