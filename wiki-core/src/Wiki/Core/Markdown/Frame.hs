@@ -55,9 +55,10 @@
 -- runs. Some SVGs need their scripts: a flame graph zooms on a click and
 -- searches. With the class @interactive@
 -- (@![flame](attachment:flame.svg){.interactive}@) the renderer shows such
--- an SVG in an @\<iframe>@ instead ("Wiki.Core.Markdown.Render"), whose
+-- an SVG in an @\<iframe>@ instead ("Wiki.Core.Markdown.Render"; the
+-- application draws it as an island, "Wiki.App.Islands"). The frame's
 -- address is the attachment's interactive form
--- ('Wiki.Core.Markdown.Link.frameUrl'): the server answers it, for an
+-- ('Wiki.Core.Markdown.Link.frameUrl'). The server answers it, for an
 -- attachment whose stored type is SVG ('framesInteractively') and for no
 -- other, with a @Content-Security-Policy@ that lets the SVG's own inline
 -- scripts and styles run and nothing else
