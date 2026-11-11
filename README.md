@@ -2804,9 +2804,11 @@ fast-forwarded to their head, so the push to `main` is normally that very commit
 Pull requests stacked on one another's branches (`AGENTS.md`) are tested each merged
 into the branch below it, the rehearsal's old program being that branch's wiki-server.
 When the lower one merges, GitHub retargets the upper one to `main` without starting a
-run, so it keeps the checks its head passed and can be merged at once. Those checks
-tested the merged tree only if `main` took nothing else in between; its merge is never
-counted as tested on `main`, and the full CI runs there after it.
+run. After a merge commit it keeps the checks its head passed and can be merged at once;
+those checks tested the merged tree only if `main` took nothing else in between, so its
+merge is not counted as tested on `main`, and the full CI runs there after it. After a
+squash or a rebase, the session rebases it onto `main` (`AGENTS.md`), which starts a
+new run.
 
 ### Which runner, and who may run on it
 

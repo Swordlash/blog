@@ -20,12 +20,14 @@ name: CI
 # GitHub deletes its branch and retargets the upper one to main. That
 # starts no run: a change of base is the type `edited`, which is left out
 # so that editing a title or a description does not build everything
-# again. The upper one keeps the checks of its head, which were run on top
-# of the lower branch, whose content is then main's; the owner merges it
-# without waiting. The tree those checks tested is the merged tree only if
-# main took nothing else in between. The push to main of the upper one's
-# merge is never counted as tested (toolchain/ci-already-tested.sh says
-# why), so the full CI runs on main for it.
+# again. After a merge commit, the upper one keeps the checks of its head,
+# which were run on top of the lower branch, whose content is then main's;
+# the owner merges it without waiting. The tree those checks tested is the
+# merged tree only if main took nothing else in between. The push to main
+# of the upper one's merge is then not counted as tested
+# (toolchain/ci-already-tested.sh says why), so the full CI runs on main
+# for it. After a squash or a rebase, the session rebases the upper one
+# onto main (AGENTS.md), and its new head gets a run as any pull request's.
 on:
   push:
     branches:

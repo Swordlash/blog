@@ -13,10 +13,10 @@
 # head already contained main; a head that main fast-forwards to contains
 # it.
 #
-# Stacked pull requests (AGENTS.md) are not counted, except the lowest.
-# The upper one's run tested its head merged into the branch below it,
-# and the owner merges the stack with merge commits, from the bottom: the
-# upper one's merge commit has the lower one's merge commit as its first
+# Stacked pull requests (AGENTS.md) merged with merge commits, from the
+# bottom, are not counted, except the lowest. The upper one's run tested
+# its head merged into the branch below it, and the upper one's merge
+# commit has the lower one's merge commit as its first
 # parent, which is not in the upper head, so its second parent is not a
 # candidate even when the trees are the same, and the full CI runs on
 # main. That is meant. The rule above leans on main only moving forward,
@@ -24,7 +24,9 @@
 # merged it into. A lower branch is rebased and force-pushed, and the base
 # an upper run was merged into need not be in the upper head, so the same
 # tree on main and in the upper head would not prove that the run tested
-# it. The run on main is then the check of the merged tree.
+# it. The run on main is then the check of the merged tree. (After a
+# squash or a rebase of the lower one, the upper one is rebased onto main
+# and is an ordinary pull request again.)
 #
 # Usage: ci-already-tested.sh <sha>, with GITHUB_REPOSITORY and GH_TOKEN
 # set (a token that may read the repository's Actions runs) and the
