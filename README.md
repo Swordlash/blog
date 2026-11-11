@@ -2947,6 +2947,12 @@ The database jobs cache downloaded apt `.deb` archives, by Ubuntu
 release, architecture, runner image and package list. Apt still installs and
 configures them normally, including TeX's format generation. A warm cache
 avoids downloading the TeX packages again; it does not skip package setup.
+Every native job restores these archives, and only postgres saves them. When
+a download fails, as when the runners cannot reach their Ubuntu mirror,
+`toolchain/ci-native-deps.sh` installs the newest version the cache holds of
+each package it could not download, without the network, and postgres does not
+save the cache that run; a package the cache holds no version of is tried once
+more after half a minute, and then the job fails, naming it.
 
 Hosted builds cache `dist-newstyle` as well as the dependency store. The native
 job has a snapshot of `dist-newstyle/native`; wasm has a separate snapshot of its

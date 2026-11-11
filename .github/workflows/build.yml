@@ -300,9 +300,13 @@ jobs:
         node-version: ${{ env.NODE_VERSION }}
 
     # Cache downloads, not an extracted installation: apt/dpkg must still
-    # configure TeX and run its triggers on each fresh hosted runner.
+    # configure TeX and run its triggers on each fresh hosted runner. Every
+    # group restores the archives, the base list's among them (a restore
+    # takes about three seconds), so that an install needs no download when
+    # the cache holds the version the index names, and has the cache to fall
+    # back on when the Ubuntu mirror cannot be reached
+    # (toolchain/ci-native-deps.sh).
     - name: Identify the apt cache platform
-      if: matrix.group == 'sqlite' || matrix.group == 'postgres'
       id: apt-platform
       run: |
         . /etc/os-release
@@ -310,7 +314,6 @@ jobs:
         echo "image=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 
     - name: Restore native apt archives
-      if: matrix.group == 'sqlite' || matrix.group == 'postgres'
       uses: actions/cache/restore@v5
       id: apt-cache
       with:
@@ -319,11 +322,15 @@ jobs:
         restore-keys: ${{ runner.os }}-${{ runner.arch }}-apt-v1-${{ steps.apt-platform.outputs.os }}-
 
     - name: Install native test dependencies
+      id: native-deps
       run: sh toolchain/ci-native-deps.sh ${{ (matrix.group == 'unit' || matrix.group == 'deploy') && 'base' || 'full' }}
 
-    # One writer for each shared cache; both database jobs read the same apt archives.
+    # One writer for each shared cache; every native job reads the same apt
+    # archives. Not saved when the install fell back on the cache
+    # (from-cache): nothing new was downloaded, and saved under a new key
+    # the old archives would stay that key's for as long as the key lives.
     - name: Save native apt archives
-      if: matrix.group == 'postgres' && steps.apt-cache.outputs.cache-hit != 'true'
+      if: matrix.group == 'postgres' && steps.apt-cache.outputs.cache-hit != 'true' && steps.native-deps.outputs.from-cache != 'true'
       uses: actions/cache/save@v5
       with:
         path: ~/.cache/wiki-apt/*.deb
@@ -600,6 +607,13 @@ jobs:
       if: matrix.group == 'deploy'
       run: sh toolchain/test-ci-already-tested.sh
 
+    # The native jobs' apt install, against a fake apt-get whose downloads
+    # fail: from the archive cache, or a failure naming the package. A
+    # second.
+    - name: Test ci-native-deps.sh
+      if: matrix.group == 'deploy'
+      run: sh toolchain/test-ci-native-deps.sh
+
     - name: Test ci-pick-runner.sh
       if: matrix.group == 'deploy'
       run: sh toolchain/test-ci-pick-runner.sh
@@ -667,6 +681,23 @@ jobs:
         ghc-version: ${{ matrix.ghc }}
         cabal-version: ${{ env.CABAL_VERSION }}
         cabal-update: false
+
+    # The native job's apt archives, restored and never saved here, as
+    # there: the install needs no download when they hold the version the
+    # index names, and falls back on them when the mirror cannot be reached.
+    - name: Identify the apt cache platform
+      id: apt-platform
+      run: |
+        . /etc/os-release
+        echo "os=$ID-$VERSION_ID" >> "$GITHUB_OUTPUT"
+        echo "image=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore native apt archives
+      uses: actions/cache/restore@v5
+      with:
+        path: ~/.cache/wiki-apt/*.deb
+        key: ${{ runner.os }}-${{ runner.arch }}-apt-v1-${{ steps.apt-platform.outputs.os }}-${{ steps.apt-platform.outputs.image }}-${{ hashFiles('toolchain/ci-native-*-packages.txt') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-apt-v1-${{ steps.apt-platform.outputs.os }}-
 
     - name: Install the system packages the build links with
       run: sh toolchain/ci-native-deps.sh base
