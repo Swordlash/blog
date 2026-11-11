@@ -116,11 +116,14 @@
 -- then stays until the answer. Each visit
 -- of an address has a number ('visit'), and an answer to a request of an
 -- earlier visit changes nothing of this one; a fetch's answer is shown
--- only if it is the latest fetch ('fetches').
+-- only if it is the latest fetch ('fetches'). The page shown is never
+-- replaced by an older version of itself ('takesPage'), whatever asked
+-- for it and whenever the answer comes.
 module Wiki.App.View.Page
   ( Input (..)
   , Slots
   , component
+  , takesPage
   )
 where
 
@@ -1012,7 +1015,7 @@ component =
                 modify $ \s ->
                   s
                     { loaded = case s.loaded of
-                        Ready _ urls deck contents -> Ready saved urls deck contents
+                        Ready shown urls deck contents | takesPage (Just shown) saved -> Ready saved urls deck contents
                         other -> other
                     , changed = False
                     }
@@ -1060,7 +1063,7 @@ component =
       -- Only the answer to the latest fetch of this visit: another
       -- navigation, or another reload, may have overtaken this one.
       onFetch latest $ do
-        takeFetched loaded
+        void (takeFetched loaded)
         H.raise Loaded
 
     -- Fetch the page's comments (again).
@@ -1169,13 +1172,22 @@ component =
     -- the live channel watching it ('watch'); its comments
     -- ('loadThreads'). Both fetches ('load', 'catchUp') go through here,
     -- so that none of these is forgotten by one of them.
-    takeFetched :: Loaded -> H.HalogenM State Action Slots ViewOutput m ()
+    --
+    -- An older version of the page shown is dropped here, with nothing
+    -- done ('takesPage'): a fetch asked for before a save may answer after
+    -- it. Whether the page was taken is the result.
+    takeFetched :: Loaded -> H.HalogenM State Action Slots ViewOutput m Bool
     takeFetched loaded = do
-      adopt loaded
-      resolvePeople
-      gets (\st -> pageOf st.loaded) >>= traverse_ (H.raise . Showing)
-      watch
-      loadThreads
+      shown <- gets (\st -> pageOf st.loaded)
+      case loaded of
+        Ready new _ _ _ | not (takesPage shown new) -> pure False
+        _ -> do
+          adopt loaded
+          resolvePeople
+          gets (\st -> pageOf st.loaded) >>= traverse_ (H.raise . Showing)
+          watch
+          loadThreads
+          pure True
 
     -- The page as it is now, fetched while there are unsaved ticks (after
     -- a save's conflict, or when the reader asks to see the new version),
@@ -1184,9 +1196,8 @@ component =
     catchUp = do
       latest <- startFetch
       now <- gets (\st -> st.input) >>= fetch
-      onFetch latest $ do
-        modify (\s -> s {changed = False})
-        takeFetched now
+      onFetch latest $
+        whenM (takeFetched now) (modify (\s -> s {changed = False}))
 
     -- The staging after an event ("Wiki.App.View.Ticking"'s 'Ticking.step'),
     -- and the browser's question before closing the tab, which it asks
@@ -1437,6 +1448,26 @@ pageOf :: Loaded -> Maybe Page
 pageOf = \case
   Ready page _ _ _ -> Just page
   _ -> Nothing
+
+-- | Whether the view takes a page it was given (a fetch's answer, a
+-- save's), with the page it shows: not when the two are the same page
+-- (the same 'Page.id') and the one given is an older version.
+--
+-- A version is the page's @updatedAt@, which the backend sets on every
+-- save of the title or the text, later than the one before. Restoring an
+-- old version saves it again, as a newer version, which is taken. A page
+-- deleted and made again at the same address has another id, and is
+-- taken. The same version is taken: it has the same title and text.
+-- What a save does not version (the page's place in the tree, the
+-- template mark, the attachments) comes as the answer has it, which a
+-- late answer may have older.
+--
+-- So the order the answers come in cannot put an older version back: a
+-- fetch asked for before a save and answered after it is dropped.
+takesPage :: Maybe Page -> Page -> Bool
+takesPage shown given = case shown of
+  Just page | page.id == given.id -> given.updatedAt >= page.updatedAt
+  _ -> True
 
 -- | The place the page's links, and its comments' links, are resolved
 -- from: where the page is.

@@ -2,7 +2,9 @@
 -- on any sequence of events, a tick the reader made leaves the staging
 -- only for one of the reasons it lists (a save of this visit, Discard, a
 -- Leave, a reload asked for, the right to edit lost), and what the page
--- shows is always its page's text with the ticks written in.
+-- shows is always its page's text with the ticks written in. And the page
+-- view's rule for a page it is given ("Wiki.App.View.Page"'s
+-- 'takesPage'): never an older version of the page shown.
 module Test.Ticking (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -12,6 +14,7 @@ import Protolude
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Gen, Property, arbitrary, chooseInt, counterexample, elements, forAllBlind, frequency, listOf, (.&&.), (===), (==>))
+import Wiki.App.View.Page (takesPage)
 import Wiki.App.View.Ticking
 import Wiki.Core.Id (PageId (..), SpaceId (..))
 import Wiki.Core.Markdown.Tasks (applyTicks)
@@ -105,7 +108,20 @@ consistent s = case s.page of
   Just p -> applyTicks s.ticks p.body === Right s.shown
 
 spec :: Spec
-spec = describe "Wiki.App.View.Ticking" $ do
+spec = do
+  describe "Wiki.App.View.Page.takesPage" $ do
+    it "drops an older version of the page shown, and takes a newer one or the same" $ do
+      let shown = pageOf "p" tasksText 5
+      takesPage (Just shown) (pageOf "p" tasksText 4) `shouldBe` False
+      takesPage (Just shown) (pageOf "p" tasksText 6) `shouldBe` True
+      takesPage (Just shown) (pageOf "p" tasksText 5) `shouldBe` True
+    it "takes another page, whatever its version, and any page when none is shown" $ do
+      takesPage (Just (pageOf "p" tasksText 5)) (pageOf "q" tasksText 4) `shouldBe` True
+      takesPage Nothing (pageOf "p" tasksText 4) `shouldBe` True
+  ticking
+
+ticking :: Spec
+ticking = describe "Wiki.App.View.Ticking" $ do
   prop "keeps every tick through any event but a save, a reason to clear and a click, and shows the page with them" $
     forAllBlind (listOf genEvent) $ \events -> forAllBlind genEvent $ \made ->
       let s = after' events

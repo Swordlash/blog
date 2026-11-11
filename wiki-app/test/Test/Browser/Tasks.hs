@@ -418,6 +418,46 @@ spec m = describe "tasks ticked in a page" $ do
     length <$> findAll ui ".leave-confirm" `shouldReturn` 0
     serverStops
 
+  it "keeps the boxes just saved when a read of the page asked for before the save answers after it" $ runPage $ do
+    serverStarts
+    serveDemo
+    let guide = demoPage "markdown-guide"
+        short = (guide {Core.body = "# Markdown guide\n\n- [ ] a\n- [ ] b\n"}) :: Core.Page
+        saved = (short :: Core.Page) {body = "# Markdown guide\n\n- [x] a\n- [ ] b\n", updatedAt = addUTCTime 60 short.updatedAt}
+        guideAt = endpointUrl (\e -> e.spaces.pageAt guide.space (slugs ["markdown-guide"]))
+        pageAt = "api/v1/pages/" <> guide.id.text
+        readsAsked = length . filter (\a -> a.method == "GET" && a.url == guideAt) <$> asked
+        boxes ui = findAll ui ".page-body input[data-task]" >>= traverse (`getProperty` "checked")
+    -- Every read of the page answers the version before the save.
+    answerWith "GET" guideAt 200 short
+    answerWith "PUT" (pageAt <> "/template") 200 ((short :: Core.Page) {template = True})
+    answerWith "PUT" pageAt 200 saved
+    ui <- startServer m (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
+    eventually $ boxes ui `shouldReturn` ["false", "false"]
+    -- The template switch has the shell reload the wiki and the page,
+    -- whose read is held.
+    holdAt "GET" guideAt
+    before <- readsAsked
+    find ui ".use-as-template" >>= click
+    eventually $ readsAsked >>= (`shouldSatisfy` (> before))
+    -- The reader ticks a box and saves while the read is out.
+    eventually $ length <$> findAll ui ".page-body input[data-task]" `shouldReturn` 2
+    find ui ".page-body input[data-task='0']" >>= click
+    find ui ".page-ticks-save" >>= click
+    eventually $ length <$> findAll ui ".page-ticks-count" `shouldReturn` 0
+    boxes ui `shouldReturn` ["true", "false"]
+    -- The reads answer now, with the version before the save: the page
+    -- shown is newer, and stays.
+    -- Nothing on the page says the answers were dropped: a while for
+    -- them to come.
+    release
+    unsafeIOToPageM (threadDelay 2000000)
+    settle
+    eventually $ length <$> findAll ui ".page-body input[data-task]" `shouldReturn` 2
+    boxes ui `shouldReturn` ["true", "false"]
+    length <$> findAll ui ".page-ticks-count, .page-ticks-note" `shouldReturn` 0
+    serverStops
+
   it "shows a mention the newer version brings, after a conflict" $ runPage $ do
     (ui, wiki) <- page m "user-admin" tasksText
     box 0 ui >>= click
