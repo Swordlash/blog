@@ -22,8 +22,8 @@ import Test.Server.Fixture
 import Wiki.Api (AccountApi (..), AdminApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), UsersApi (..), WikiApi (..))
 import Wiki.Api.Account (Account (..), AccountDisabled (..), NewAccount (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), Directory (..), GroupName (..), ServerStatus (..), UserPage (..), UserSummary (..), WikiSettings (..))
-import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.ContentPolicy (interactiveSvgPolicy)
+import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (attachmentFrameUrl, attachmentUrl, avatarUrl, links, searchUrl, spaceIconUrl)
 import Wiki.Api.Opaque (NewAccountRecord (..))
 import Wiki.Api.Types
