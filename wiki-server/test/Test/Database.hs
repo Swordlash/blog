@@ -60,7 +60,6 @@ import Data.ByteString.Char8 qualified as BC
 import Data.IORef (atomicModifyIORef', newIORef)
 import Database.PostgreSQL.Simple qualified as Pg
 import Database.PostgreSQL.Simple.Types (Query (..))
-import Network.Socket qualified as Socket
 import System.Directory (doesFileExist, findExecutable, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
@@ -273,8 +272,12 @@ withCluster bin act = do
   tmp <- getCanonicalTemporaryDirectory
   bracket (createTempDirectory tmp "wiki-pg") remove $ \dir -> do
     when root (callProcess "chown" ["postgres", dir])
-    port <- freePort
-    let run :: FilePath -> [[Char]] -> IO ()
+    -- The cluster listens on no TCP port (listen_addresses is empty), only
+    -- on a Unix socket in its own directory, which the port only names
+    -- (.s.PGSQL.5432). No other cluster's socket is in that directory, so
+    -- PostgreSQL's default port cannot collide.
+    let port = 5432 :: Int
+        run :: FilePath -> [[Char]] -> IO ()
         run program args
           | root = callProcess "su" ["postgres", "-s", "/bin/sh", "-c", unwords' ((bin </> program) : args)]
           | otherwise = callProcess (bin </> program) args
@@ -285,15 +288,6 @@ withCluster bin act = do
       `finally` run "pg_ctl" ["-D", dir </> "data", "-m", "immediate", "stop"]
   where
     remove dir = void (readProcessWithExitCode "rm" ["-rf", dir] "")
-
--- | A port nobody listens on now, for the cluster's socket's name.
-freePort :: IO Int
-freePort = do
-  s <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
-  Socket.bind s (Socket.SockAddrInet 0 (Socket.tupleToHostAddress (127, 0, 0, 1)))
-  port <- Socket.socketPort s
-  Socket.close s
-  pure (fromIntegral port)
 #else
 -- Without PostgreSQL there is no PostgreSQL backing to run: the note says
 -- so, and the group runs on SQLite alone, or not at all.

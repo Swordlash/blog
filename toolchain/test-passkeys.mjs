@@ -21,7 +21,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { cp, mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright";
@@ -53,17 +52,17 @@ execFileSync(wikiServer, ["users", "add", "--data", data, "ada", "--display-name
   stdio: ["pipe", "inherit", "inherit"],
 });
 
-const probe = createServer();
-const port = await new Promise((ready) => probe.listen(0, "127.0.0.1", () => ready(probe.address().port)));
-await new Promise((done) => probe.close(done));
-const server = spawn(wikiServer, ["serve", "--data", data, "--static", app, "--listen", `127.0.0.1:${port}`, "--no-admin-listen"], {
+// The server on a port the system gives (port 0), read from the address it
+// logs for its listener.
+const server = spawn(wikiServer, ["serve", "--data", data, "--static", app, "--listen", "127.0.0.1:0", "--no-admin-listen"], {
   stdio: ["ignore", "pipe", "pipe"],
 });
 let log = "";
-await new Promise((ready, fail) => {
+const port = await new Promise((ready, fail) => {
   const read = (chunk) => {
     log += chunk;
-    if (/listener=public/.test(log)) ready();
+    const match = /listener=public address="?http:\/\/127\.0\.0\.1:(\d+)\//m.exec(log);
+    if (match) ready(match[1]);
   };
   server.stdout.on("data", read);
   server.stderr.on("data", read);
