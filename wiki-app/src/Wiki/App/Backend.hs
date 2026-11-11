@@ -202,6 +202,7 @@ import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.ServerSettings (AssistantService, HomePage, defaultHomePage)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment)
+import Wiki.Core.Backlink (Backlink)
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
@@ -644,6 +645,18 @@ class (Monad m) => MonadWiki m where
   pageLocation :: PageId -> m (Either WikiError PageLocation)
   default pageLocation :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> m (Either WikiError PageLocation)
   pageLocation = lift . pageLocation
+
+  -- | The pages that link to a page, its backlinks (issue #189): each page
+  -- whose text has a link that leads to it, as "Wiki.App.Backlinks" counts
+  -- a link, listed once, in 'Wiki.Core.Backlink.backlinkOrder'. A page's
+  -- link to itself is not listed. Only the pages the current user may view
+  -- are listed, and nothing says how many others there are. The front
+  -- page's and an encrypted space's pages have none, and are not listed
+  -- ('Wiki.App.Backlinks.counted'). A page the current user may not view
+  -- is 'NotFound', as for 'pageLocation'.
+  pageBacklinks :: PageId -> m (Either WikiError [Backlink])
+  default pageBacklinks :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> m (Either WikiError [Backlink])
+  pageBacklinks = lift . pageBacklinks
 
   -- | A new page in a space, at its top level or under another of its pages,
   -- with a title (its slug made from it) and a Markdown body. It goes last

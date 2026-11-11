@@ -14,8 +14,10 @@
 -- space alone, as Confluence does: its icon and name, a link back to the
 -- directory and a menu of the other spaces to switch to, a link up to its
 -- parent space, its home page and its list of pages, its pages as a tree,
--- its templates ('Wiki.Core.Page.template') apart from the tree, and its
--- subspaces below them. Elsewhere the sidebar lists the spaces. A space's
+-- the pages that link to the page shown, under "Linked from" (issue #189,
+-- 'Wiki.App.Backend.pageBacklinks'), its templates
+-- ('Wiki.Core.Page.template') apart from the tree, and its subspaces below
+-- them. Elsewhere the sidebar lists the spaces. A space's
 -- own route shows its home page, if it has one
 -- ('Wiki.Core.Space.homePage'), and otherwise its list of pages. A space
 -- shown as a blog shows its posts instead, under its home page
@@ -197,6 +199,7 @@ import Wiki.App.View.Users qualified as UsersView
 import Wiki.App.View.VerifyEmail qualified as VerifyEmailView
 import Wiki.App.View.WhatsNew qualified as WhatsNewView
 import Wiki.Core.Attachment (findAttachment)
+import Wiki.Core.Backlink (Backlink (..))
 import Wiki.Core.Blog (excerpt, firstImage)
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Export (Archive (..), readArchive, withoutHomeDocument, writeArchive)
@@ -406,6 +409,11 @@ data State m = State
   -- ^ The page the page view last said it shows ('Showing'), with its
   -- body: the head's preview describes the page with it. The space's list
   -- of pages has no bodies.
+  , backlinks :: Maybe (PageId, [Backlink])
+  -- ^ The pages that link to the page the route shows, with that page's
+  -- id ('backlinksOf'), for the sidebar's "Linked from"; empty when they
+  -- could not be read. Loaded with the space ('loadBacklinks'), and again
+  -- after every change, since a save of another page changes them.
   , seen :: Maybe Int
   -- ^ The number of the newest changelog entry the reader has seen on the
   -- page "What's new?", as this browser keeps it ('whatsNewSeenKey'): 0
@@ -492,45 +500,55 @@ component =
           let (Around signedIn users spaces home icons avatars kept, here) = fromMaybe (Around anonymous [] [] Nothing mempty mempty False, NoSpace) loaded
           switcherHolder <- H.newRefLabel "space-switcher"
           menuHolder <- H.newRefLabel "user-switcher"
-          pure
-            State
-              { router
-              , welcome
-              , demo
-              , migration
-              , accounts
-              , live
-              , feed
-              , world = if isJust loaded then WorldReady else WorldLoading
-              , route
-              , session = signedIn
-              , users
-              , spaces
-              , home
-              , icons
-              , avatars
-              , here
-              , switcherOpen = False
-              , switcherHolder
-              , switcherWatch = Nothing
-              , sidebarFolded = False
-              , chosenWidth = Compact
-              , generation = 0
-              , menuOpen = False
-              , menuHolder
-              , menuWatch = Nothing
-              , demoAccountOpen = False
-              , panel = Actions Nothing
-              , kept
-              , settled = False
-              , leaving = Nothing
-              , entry = 0
-              , offline = False
-              , offlineCopy = Nothing
-              , installable = False
-              , shown = Nothing
-              , seen = Nothing
-              }
+          let begun =
+                State
+                  { router
+                  , welcome
+                  , demo
+                  , migration
+                  , accounts
+                  , live
+                  , feed
+                  , world = if isJust loaded then WorldReady else WorldLoading
+                  , route
+                  , session = signedIn
+                  , users
+                  , spaces
+                  , home
+                  , icons
+                  , avatars
+                  , here
+                  , switcherOpen = False
+                  , switcherHolder
+                  , switcherWatch = Nothing
+                  , sidebarFolded = False
+                  , chosenWidth = Compact
+                  , generation = 0
+                  , menuOpen = False
+                  , menuHolder
+                  , menuWatch = Nothing
+                  , demoAccountOpen = False
+                  , panel = Actions Nothing
+                  , kept
+                  , settled = False
+                  , leaving = Nothing
+                  , entry = 0
+                  , offline = False
+                  , offlineCopy = Nothing
+                  , installable = False
+                  , shown = Nothing
+                  , backlinks = Nothing
+                  , seen = Nothing
+                  }
+          -- The page's backlinks too, if the backend has them at once, so
+          -- that the sidebar's first render is the prerendered one; else
+          -- 'Initialize' loads them.
+          backlinks <- for (guard (isJust loaded) *> backlinksOf begun) $ \pid -> fmap (pid,) <$> atOnce (listedBacklinks pid)
+          -- Made whole here, before the first render: left to the render,
+          -- the demo's backend would follow every page's links in the
+          -- middle of adopting the page, after the header already answers
+          -- and before the page's view does.
+          pure $! begun {backlinks = forced (join backlinks)}
       , render
       , eval =
           H.mkEval
@@ -1082,6 +1100,14 @@ component =
           {% else %}
             {{ pageTree st.router Followed path space tree ((\p -> p.id) <$> currentPage st) (\_ _ _ -> []) }}
           {% end %}
+          {% if not (null linkedFrom) %}
+            <h2>Linked from</h2>
+            <ul class="sidebar-backlinks">
+              {% for b in linkedFrom %}
+                <li><a {{ Router.linkProps st.router Followed (locationRoute b.location Nothing) }}>{{ b.title }}</a></li>
+              {% end %}
+            </ul>
+          {% end %}
           {% if not (null templates) %}
             <h2>Templates</h2>
             <ul class="sidebar-templates">
@@ -1111,6 +1137,11 @@ component =
         subspaces = subspacesOf st.spaces (Just space.id)
         -- The space's templates are listed apart from its tree.
         tree = treePages pages
+        -- The pages that link to the page shown, once they are its: none
+        -- shows nothing, as no templates or no subspaces do.
+        linkedFrom = case st.backlinks of
+          Just (pid, listed) | Just pid == here -> listed
+          _ -> []
         templates = templatePages pages
         here = (\p -> p.id) <$> currentPage st
         -- The space this one is under, if the user may go there.
@@ -1318,7 +1349,9 @@ component =
         -- since the initial state cannot change the address.
         gets (\st -> (st.world, st.here)) >>= \case
           (WorldReady, Following _ Nothing) -> loadHere True
-          (WorldReady, _) -> announce
+          (WorldReady, _) -> do
+            whenM (gets (\st -> isNothing st.backlinks)) loadBacklinks
+            announce
           _ -> loadEverything
       RetryWorld -> do
         modify (\st -> st {world = WorldLoading})
@@ -1616,7 +1649,24 @@ component =
               now <- gets (\s -> s.route)
               when (spaceOfRoute now == Just path) $
                 modify (\s -> s {here = result})
-      announce
+      -- Loaded again, or loaded for the first time, as for the server's
+      -- prerender: the backlinks are part of what settles. Otherwise
+      -- the route has moved within what was shown, and is announced
+      -- without waiting for them.
+      if again then loadBacklinks >> announce else announce >> loadBacklinks
+
+    -- Load the backlinks of the page the route shows ('backlinksOf'), or
+    -- forget those of another. Unless the route has moved to another page
+    -- meanwhile.
+    loadBacklinks :: H.HalogenM (State m) Action Slots output m ()
+    loadBacklinks =
+      gets backlinksOf >>= \case
+        Nothing -> modify (\s -> s {backlinks = Nothing})
+        Just pid -> do
+          listed <- lift (listedBacklinks pid)
+          now <- get
+          when (backlinksOf now == Just pid) $
+            modify (\s -> s {backlinks = forced (Just (pid, listed))})
 
     -- Ask where the page of a permanent address is, and go there: its own
     -- address replaces the permanent one in the history, so that Back
@@ -1829,6 +1879,25 @@ currentPageOf = pageAt
 -- given when it names no page.
 canonicalPath :: Space -> [PageSummary] -> [Slug] -> [Slug]
 canonicalPath space pages path = fromMaybe path (currentPageOf space pages path >>= \p -> pagePathOf space pages p.id)
+
+-- | The page whose backlinks the sidebar shows: the page the route shows
+-- in a space the sidebar shows alone, which the wiki's front page's space
+-- is not.
+backlinksOf :: State m -> Maybe PageId
+backlinksOf st = case st.here of
+  InSpace _ space _ | not (homeSpace (context st) space.id) -> (\p -> p.id) <$> currentPage st
+  _ -> Nothing
+
+-- | The backlinks loaded, made whole: each entry and its title. The
+-- demo's backend answers with a list made as it is read, and a list left
+-- to the render would be made in the middle of it.
+forced :: Maybe (PageId, [Backlink]) -> Maybe (PageId, [Backlink])
+forced loaded = foldr (\b rest -> b.page `seq` b.title `seq` b.location `seq` rest) () (foldMap snd loaded) `seq` loaded
+
+-- | A page's backlinks, none when they cannot be read: the sidebar leaves
+-- the section out then, as for a page nothing links to.
+listedBacklinks :: (MonadWiki n) => PageId -> n [Backlink]
+listedBacklinks pid = fromRight [] <$> pageBacklinks pid
 
 currentPage :: State m -> Maybe PageSummary
 currentPage st = case (st.route, st.here) of

@@ -234,8 +234,9 @@ serveDemo = do
       pure (me, home, spaces, pages, people, threads, counts)
   -- What the bell, the "Watch" buttons and the mentions read
   -- ("Wiki.App.View.Bell", "Wiki.App.View.Watch", "Wiki.App.View.Body"),
-  -- and the stars ("Wiki.App.View.Star"): none.
-  (named, watched) <- unsafeIOToPageM $ do
+  -- and the stars ("Wiki.App.View.Star"): none. And the pages that link to
+  -- each page, which the space's sidebar lists.
+  (named, watched, linking) <- unsafeIOToPageM $ do
     wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
     runMemWiki wiki $ do
       named <- for (concatMap (\(_, _, _, full) -> full) pages) $ \p -> do
@@ -245,11 +246,13 @@ serveDemo = do
         (<>)
           <$> for (concatMap (\(_, ps, _, _) -> ps) pages) (\p -> (endpointUrl (\e -> e.notifications.pageWatch p.id),) . fromRight (Watch False Unchosen) <$> watching (WatchPage p.id))
           <*> for spaces (\s -> (endpointUrl (\e -> e.notifications.spaceWatch s.id),) . fromRight (Watch False Unchosen) <$> watching (WatchSpace s.id))
-      pure (named, watched)
+      linking <- for (concatMap (\(_, ps, _, _) -> ps) pages) $ \p -> (endpointUrl (\e -> e.pages.backlinks p.id),) . fromRight [] <$> pageBacklinks p.id
+      pure (named, watched, linking)
   answerWith "GET" (endpointUrl (\e -> e.notifications.list)) 200 Notifications {unread = 0, items = []}
   answerWith "GET" (endpointUrl (\e -> e.stars.list)) 200 ([] :: [StarredPage])
   for_ named $ \(logins, found) -> unless (null logins) (answerWith "GET" (endpointUrl (\e -> e.notifications.people logins)) 200 found)
   for_ watched $ \(url, w) -> answerWith "GET" url 200 w
+  for_ linking $ \(url, listed) -> answerWith "GET" url 200 listed
   for_ threads $ \(p, ts) -> answerWith "GET" (endpointUrl (\e -> (e.comments p).list)) 200 ts
   answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = [], boxes = [], homePage = me.homePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
   for_ home $ \document@(space, page) -> do
@@ -993,7 +996,9 @@ views m = describe "the application over it" $ do
         for_ page $ \p -> do
           threads <- fromRight [] <$> listThreads p.id
           _ <- mentionable (Body.unasked Body.noPeople (p.body : [c.body | t <- threads, c <- t.comments]))
-          watching (WatchPage p.id)
+          _ <- watching (WatchPage p.id)
+          -- The pages that link to it, in the sidebar.
+          pageBacklinks p.id
         -- The page's "Star" button's and the header's "Starred".
         _ <- starred
         _ <- notifications
@@ -1108,9 +1113,11 @@ comments m = describe "a page's comments" $ do
       _ <- listPages blog.id
       page <- either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])
       threads <- either (panic . show) identity <$> listThreads page.id
-      -- The bell's, the page's "Watch" button's, and its "Star" button's.
+      -- The bell's, the page's "Watch" button's, and its "Star" button's;
+      -- and the pages that link to it, in the sidebar.
       _ <- notifications
       _ <- watching (WatchPage page.id)
+      _ <- pageBacklinks page.id
       _ <- starred
       -- The wiki's home, whose icon is the wiki's favicon.
       _ <- getHomeDocument

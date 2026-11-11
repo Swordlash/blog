@@ -127,6 +127,7 @@ module Wiki.App.Backend.Http.Cache
   , withPostDetails
   , withPageAt
   , withPageLocation
+  , withBacklinks
   , withDraft
   , forgetDraft
   , withSearch
@@ -176,6 +177,7 @@ import Wiki.Api.ServerSettings (ServerSettings)
 import Wiki.Api.Stars (StarredPage)
 import Wiki.Api.WhatsNew (WhatsNew)
 import Wiki.App.Backend (Session, WikiError (..))
+import Wiki.Core.Backlink (Backlink)
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Comment (Thread)
 import Wiki.Core.Draft (Draft)
@@ -211,6 +213,9 @@ data Cache = Cache
   -- move changes it. The server prerenders a permanent address only when
   -- it names no page the reader may view, so what a page carries here is
   -- that refusal.
+  , backlinks :: Map PageId (Either WikiError [Backlink])
+  -- ^ 'Wiki.App.Backend.pageBacklinks', by page: page content, since a
+  -- save of another page changes it.
   , drafts :: Map PageId CachedDraft
   -- ^ 'Wiki.App.Backend.getDraft', by page. A page without an entry is
   -- not known: the next read fetches its draft.
@@ -315,6 +320,7 @@ emptyCache =
     , postDetails = mempty
     , pageAt = mempty
     , pageLocations = mempty
+    , backlinks = mempty
     , drafts = mempty
     , searches = []
     , versionLists = mempty
@@ -383,6 +389,11 @@ withPageAt sid path p c = c {pageAt = Map.insert (sid, path) p c.pageAt}
 -- | The cache with where a page is, or why that was refused.
 withPageLocation :: PageId -> Either WikiError PageLocation -> Cache -> Cache
 withPageLocation pid l c = c {pageLocations = Map.insert pid l c.pageLocations}
+
+-- | The cache with the pages that link to a page, or why they could not
+-- be listed.
+withBacklinks :: PageId -> Either WikiError [Backlink] -> Cache -> Cache
+withBacklinks pid b c = c {backlinks = Map.insert pid b c.backlinks}
 
 -- | Set what the cache knows of the signed-in user's draft of a page.
 withDraft :: PageId -> CachedDraft -> Cache -> Cache
@@ -512,8 +523,8 @@ afterEvent pid = \case
 forgetThreads :: PageId -> Cache -> Cache
 forgetThreads pid c = c {threads = Map.delete pid c.threads}
 
--- | The cache without page content: the pages, where pages are, the lists
--- of a space's pages, the details of a blog's posts, the version lists, the searches,
+-- | The cache without page content: the pages, where pages are, which
+-- pages link to them, the lists of a space's pages, the details of a blog's posts, the version lists, the searches,
 -- the directory's page counts and the starred pages. These change whenever anyone saves,
 -- creates, moves or deletes a page. The backend drops them when the
 -- reader first goes to another route, and caches them no more after that
@@ -523,6 +534,7 @@ forgetPageContent c =
   c
     { pageAt = mempty
     , pageLocations = mempty
+    , backlinks = mempty
     , pages = mempty
     , postDetails = mempty
     , versionLists = mempty

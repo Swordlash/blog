@@ -94,11 +94,12 @@ where
 
 import Control.Concurrent.Async qualified as Async
 import Crypto.Random (getRandomBytes)
-import Data.Aeson (Value (..), eitherDecode)
+import Data.Aeson (Value (..), eitherDecode, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteArray.Encoding (Base (..), convertToBase)
 import Data.ByteString qualified as BS
+import Data.CaseInsensitive qualified as CI
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
@@ -118,6 +119,7 @@ import System.IO (hClose)
 import System.Posix.Files (setFileMode)
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, getProcessExitCode, proc, terminateProcess, waitForProcess, withCreateProcess)
 import System.Timeout (timeout)
+import Wiki.Api (requestMarker)
 import Wiki.Api.ServerSettings (ProviderKind (..), kindName)
 import Wiki.App.Account (MonadAccount (..))
 import Wiki.App.Backend (Session (..))
@@ -376,6 +378,18 @@ freePort =
     N.bind s (N.SockAddrInet 0 (N.tupleToHostAddress (127, 0, 0, 1)))
     N.socketPort s <&> fromIntegral
 
+-- | A POST of JSON, answered with JSON: the value, or why not. A write
+-- through the administration API answers 200 or 201, and is made with the
+-- header the application's own writes carry ('Wiki.Api.requestMarker'),
+-- which every listener asks of a write.
+postJson :: Manager -> Text -> Value -> IO (Either Text Value)
+postJson manager url body =
+  try @SomeException (parseRequest (toS url) >>= \r -> httpLbs r {method = "POST", requestHeaders = [("Content-Type", "application/json"), bimap (CI.mk . encodeUtf8) encodeUtf8 requestMarker], requestBody = RequestBodyLBS (encode body)} manager) <&> \case
+    Left e -> Left (show e)
+    Right response
+      | statusCode (responseStatus response) `notElem` [200, 201] -> Left ("POST " <> url <> " answered " <> show (statusCode (responseStatus response)))
+      | otherwise -> first (\why -> "POST " <> url <> ": " <> toS why) (eitherDecode (responseBody response))
+
 -- | A GET of JSON: the value, or why not.
 getJson :: Manager -> Text -> IO (Either Text Value)
 getJson manager url =
@@ -492,9 +506,11 @@ consoleEnvironment environment
   where
     locale = fromMaybe "" (find (not . null) (mapMaybe (`lookup` environment) ["LC_ALL", "LC_CTYPE", "LANG"]))
 
--- | Every check, in the order they run.
+-- | Every check, in the order they run. The links check comes first: it
+-- writes a space and its pages on the old program, which the checks after
+-- it then read before the migration as they read them after.
 checks :: [Check]
-checks = [pagesCheck, accountsCheck, homesCheck, rootsCheck, waysInCheck]
+checks = [linksCheck, pagesCheck, accountsCheck, homesCheck, rootsCheck, waysInCheck]
 
 -- | A check that holds nothing and makes nothing before the old program
 -- serves the copy.
@@ -507,6 +523,38 @@ simpleCheck name before after =
     , before = \() () -> before
     , after = \() -> after
     }
+
+--------------------------------------------------------------------------------
+-- The links check
+
+-- | The links check (WP5.88 of docs/PLAN.md, issue #189): a page that
+-- another page linked to before the upgrade lists that page among its
+-- backlinks after it. The new program fills its table of links when it
+-- first opens the copy ("Wiki.Server.Storage.Rows", "Links"), and this
+-- checks that it did. Before the migration it makes a space of its own on
+-- the old program, with a page and a page that links to it by its title,
+-- through the administration API (@POST spaces@ and @POST
+-- spaces\/\<id>\/pages@, stable already: toolchain/rehearse-ci.sh seeds a
+-- wiki with them). After it, the first page's
+-- backlinks (@GET pages\/\<id>\/backlinks@) must hold the second. The
+-- space stays in the copy, which is thrown away.
+linksCheck :: Check
+linksCheck = simpleCheck "links" before after
+  where
+    before manager server = runExceptT $ do
+      suffix <- liftIO (decodeUtf8 . convertToBase Base16 <$> (getRandomBytes 4 :: IO ByteString))
+      space <- ExceptT (postJson manager (server.adminApi <> "/spaces") (object ["parent" .= Null, "name" .= ("Rehearsal links " <> suffix)]))
+      sid <- maybe (throwError "the new space has no id") pure (field "id" space)
+      let pageIn title body = do
+            made <- ExceptT (postJson manager (server.adminApi <> "/spaces/" <> sid <> "/pages") (object ["parent" .= Null, "title" .= title, "body" .= body]))
+            maybe (throwError ("the new page " <> title <> " has no id")) pure (field "id" made)
+      linked <- pageIn "Linked page" ""
+      linking <- pageIn "Linking page" ("See [[Linked page]]." :: Text)
+      pure (linked, linking)
+    after (linked, linking) manager server = runExceptT $ do
+      listed <- ExceptT (getJson manager (server.adminApi <> "/pages/" <> linked <> "/backlinks")) >>= asList "the backlinks"
+      unless (Just linking `elem` map (field "page") listed) $
+        throwError ("the page " <> linked <> " does not list the page " <> linking <> ", which links to it, among its backlinks")
 
 --------------------------------------------------------------------------------
 -- The pages check

@@ -7,7 +7,7 @@
 module Test.Browser.Shell (spec) where
 
 import Control.Monad.UUID (MonadUUID)
-import Data.IORef (readIORef)
+import Data.IORef (IORef, readIORef)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -21,8 +21,8 @@ import Test.Browser.Mount (clickButton, slugs, start, startChanged, startOn, sta
 import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
-import Wiki.App.Backend (MonadWiki (..))
-import Wiki.App.Backend.Mem (runMemWiki)
+import Wiki.App.Backend (MonadWiki (..), WikiError)
+import Wiki.App.Backend.Mem (MemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
@@ -30,6 +30,7 @@ import Wiki.App.Route (Route (..))
 import Wiki.App.Route qualified as R
 import Wiki.Core.Id (PageId (..))
 import Wiki.Core.Page (Page (body, id, space, title, updatedAt))
+import Wiki.Core.Space (Space (id))
 
 -- The address the test page is at (test/jsbits/test-location.js).
 $( browserJS
@@ -38,6 +39,11 @@ $( browserJS
      , ("js_history_go", "wiki_test_history_go", Safe, [t|Int -> IO ()|])
      ]
  )
+
+-- | A program of the demo's backend, run on the wiki a test started, as
+-- whoever is signed in there: its answer, which must be one.
+onWiki :: IORef MemState -> MemWiki IO (Either WikiError a) -> PageM s a
+onWiki wiki program = unsafeIOToPageM (either (panic . show) identity <$> runMemWiki wiki program)
 
 -- | The id of the demo's page with this title.
 demoPage :: Text -> PageId
@@ -286,6 +292,65 @@ spec m = do
     -- A version the page does not have is not found, as a page is.
     missing <- startOn m wiki (PermanentLink page.id (Just (addUTCTime 1 page.updatedAt)))
     find missing ".wiki-content .error-not-found" >>= (`shouldSatisfy'` "nothing here")
+
+  -- A page's backlinks (WP5.88 of docs/PLAN.md), under "Linked from" in
+  -- the space's sidebar.
+  -- A route that changes within one page (a slide, a version) loads the
+  -- page's backlinks again, after it is shown: neither waits for the
+  -- other, and the view keeps its place.
+  it "moves through a deck's slides and a page's version with its backlinks in the sidebar, and without any" $ runPage $ do
+    let guide = slugs ["markdown-guide", "presentations"]
+        deckRoute = PageSlides (slugs ["docs"]) guide 1 1
+        movedThrough ui listed = do
+          find ui ".slides-position" >>= (`shouldHaveText` "1 / 9")
+          eventually $ (traverse textContent =<< findAll ui ".wiki-sidebar .sidebar-backlinks a") `shouldReturn` listed
+          find ui ".slides-next" >>= click
+          find ui ".slides-position" >>= (`shouldHaveText` "2 / 9")
+          eventually $ location `shouldReturn` "#/s/docs/p/markdown-guide/presentations/slides/?slide=2"
+          find ui ".slides-next" >>= click
+          find ui ".slides-position" >>= (`shouldHaveText` "3 / 9")
+          eventually $ (traverse textContent =<< findAll ui ".wiki-sidebar .sidebar-backlinks a") `shouldReturn` listed
+    (deck, wiki) <- startWith m (Just "user-admin") deckRoute
+    movedThrough deck ["Markdown guide"]
+    unmount deck
+    -- A version of the page, then the page as it is now.
+    docs <- onWiki wiki (getSpace (slugs ["docs"]))
+    page <- onWiki wiki (getPage docs.id guide)
+    version <- startOn m wiki (PageAtVersion (slugs ["docs"]) guide page.updatedAt)
+    find version ".version-note" >>= (`shouldSatisfy'` "")
+    eventually $ (traverse textContent =<< findAll version ".wiki-sidebar .sidebar-backlinks a") `shouldReturn` ["Markdown guide"]
+    find version ".version-note a" >>= click
+    eventually $ location `shouldReturn` "#/s/docs/p/markdown-guide/presentations/"
+    eventually $ (traverse textContent =<< findAll version ".wiki-sidebar .sidebar-backlinks a") `shouldReturn` ["Markdown guide"]
+    unmount version
+    -- The same deck once nothing links to it: no section, the same moves.
+    markdownGuide <- onWiki wiki (getPage docs.id (slugs ["markdown-guide"]))
+    _ <- onWiki wiki (savePage markdownGuide.id markdownGuide.updatedAt markdownGuide.title "# Markdown guide\n\nNo links now.")
+    unlinked <- startOn m wiki deckRoute
+    movedThrough unlinked []
+    length <$> findAll unlinked ".wiki-sidebar .sidebar-backlinks" `shouldReturn` 0
+
+  it "lists the pages that link to the page shown in the sidebar, each leading to its page, and not one saved without its link" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-admin") Home
+    unmount ui
+    docs <- onWiki wiki (getSpace (slugs ["docs"]))
+    blog <- onWiki wiki (getSpace (slugs ["blog"]))
+    _ <- onWiki wiki (createPage docs.id Nothing "Glossary" "# Glossary")
+    hello <- onWiki wiki (getPage blog.id (slugs ["hello-world"]))
+    linked <- onWiki wiki (savePage hello.id hello.updatedAt hello.title "# Hello, world\n\nSee the [[/docs/glossary|glossary]].")
+    glossary <- startOn m wiki (Page (slugs ["docs"]) (slugs ["glossary"]))
+    eventually $ (traverse textContent =<< findAll glossary ".wiki-sidebar .sidebar-backlinks a") `shouldReturn` ["Hello, world"]
+    find glossary ".wiki-sidebar .sidebar-backlinks a[href$='#/s/blog/p/hello-world/']" >>= click
+    find glossary ".page-body h1" >>= (`shouldHaveText` "Hello, world")
+    eventually $ location `shouldReturn` "#/s/blog/p/hello-world/"
+    unmount glossary
+    -- Saved without the link, the post is no longer listed, and the
+    -- glossary shows no section at all.
+    _ <- onWiki wiki (savePage hello.id linked.updatedAt hello.title "# Hello, world\n\nNo link now.")
+    again <- startOn m wiki (Page (slugs ["docs"]) (slugs ["glossary"]))
+    find again ".page-body h1" >>= (`shouldHaveText` "Glossary")
+    length <$> findAll again ".wiki-sidebar .sidebar-backlinks" `shouldReturn` 0
+    textContent (root again) >>= (`shouldSatisfy` (not . T.isInfixOf "Linked from"))
   where
     shouldSatisfy' element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)
     location = unsafeIOToPageM (fromJSText <$> js_location_hash)

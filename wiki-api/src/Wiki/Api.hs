@@ -115,6 +115,7 @@ import Wiki.Api.Version (PageVersion, VersionTime, pageVersion)
 import Wiki.Api.WhatsNew (WhatsNew)
 import Wiki.Core.Assistant.Vault (CredentialId, VaultTag)
 import Wiki.Core.Attachment (Attachment, FileName)
+import Wiki.Core.Backlink (Backlink)
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
@@ -461,6 +462,12 @@ data PagesApi form mode = PagesApi
   -- for the page's permanent address (@\/l\/\<page id>\/@). A page the
   -- caller may not view is 'Wiki.Api.Error.NotFound', with the same body
   -- as an id no page has.
+  , backlinks :: mode :- Capture "page" PageId :> "backlinks" :> Get '[JSON] [Backlink]
+  -- ^ @pageBacklinks@: the pages that link to the page, each with its id,
+  -- its title and where it is now (@[{"page": "…", "title": "On-call",
+  -- "location": {"space": ["team"], "page": ["on-call"]}}]@), only those
+  -- the caller may view. A page the caller may not view is
+  -- 'Wiki.Api.Error.NotFound', as for @location@.
   , shift :: mode :- Capture "page" PageId :> "shift" :> ReqBody '[JSON] ShiftBy :> Post '[JSON] Page
   -- ^ @shiftPage@.
   , template :: mode :- Capture "page" PageId :> "template" :> ReqBody '[JSON] PageTemplate :> Put '[JSON] Page

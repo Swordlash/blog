@@ -445,6 +445,8 @@ instance Copyable Watches
 
 instance Copyable Stars
 
+instance Copyable PageLinks
+
 instance Copyable Notifications
 
 instance Copyable Settings
@@ -509,6 +511,7 @@ copiedTables =
   , plain wikiDb.comments
   , plain wikiDb.watches
   , plain wikiDb.stars
+  , plain wikiDb.page_links
   , plain wikiDb.notifications
   , plain wikiDb.sessions
   , plain wikiDb.invitations

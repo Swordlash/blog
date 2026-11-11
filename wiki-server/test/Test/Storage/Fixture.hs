@@ -130,6 +130,7 @@ tableRows st = reading st rows
         , dump "comments" wikiDb.comments
         , dump "watches" wikiDb.watches
         , dump "stars" wikiDb.stars
+        , dump "page_links" wikiDb.page_links
         , dump "notifications" wikiDb.notifications
         , dump "settings" wikiDb.settings
         , dump "sign_in_providers" wikiDb.sign_in_providers

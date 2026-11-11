@@ -46,6 +46,7 @@ module Wiki.Core.Space
   , rootPage
   , pagePath
   , pagesAt
+  , pagesAtWith
   , pageAt
   , pageAtExactly
   , parentOrRoot
@@ -492,7 +493,14 @@ pagePath space = pathUnder (rootPage space)
 -- without that segment ('Wiki.Core.Path.resolveUnder'): the address a page
 -- had while the home page had a segment of its own.
 pagesAt :: (TreeNode p, NodeId p ~ PageId) => Space -> [p] -> [Slug] -> Either (PathError p) [p]
-pagesAt space pages = resolveUnder (rootPage space >>= \r -> find (\p -> nodeId p == r) pages) (findChild pages)
+pagesAt space pages = pagesAtWith space (\r -> find (\p -> nodeId p == r) pages) (findChild pages)
+
+-- | 'pagesAtWith' is 'pagesAt' with the space's pages looked up by id and
+-- by their parent and slug, rather than searched in a list: what a caller
+-- that reads many paths of a large space gives it, with the pages in
+-- maps.
+pagesAtWith :: (TreeNode p, NodeId p ~ PageId) => Space -> (PageId -> Maybe p) -> (Maybe PageId -> Slug -> Maybe p) -> [Slug] -> Either (PathError p) [p]
+pagesAtWith space byId child = resolveUnder (rootPage space >>= byId) child
 
 -- | 'pageAt' is the page a path names in a space ('pagesAt'), if any.
 pageAt :: (TreeNode p, NodeId p ~ PageId) => Space -> [p] -> [Slug] -> Maybe p

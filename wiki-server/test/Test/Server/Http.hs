@@ -24,6 +24,7 @@ import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Contract (Fixture (..))
 import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Contract.Admin qualified as Admin
+import Wiki.App.Backend.Contract.Backlinks qualified as Backlinks
 import Wiki.App.Backend.Contract.Comments qualified as Comments
 import Wiki.App.Backend.Contract.Notifications qualified as Notifications
 import Wiki.App.Backend.Contract.Stars qualified as Stars
@@ -56,6 +57,7 @@ spec backing = describe "HttpWiki against the server's API" $ do
   Comments.spec (type (HttpWiki IO)) fixture
   Notifications.spec (type (HttpWiki IO)) fixture
   Stars.spec (type (HttpWiki IO)) fixture
+  Backlinks.spec (type (HttpWiki IO)) fixture
   importing backing
   where
     fixture example =

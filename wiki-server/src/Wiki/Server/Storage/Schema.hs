@@ -60,6 +60,7 @@ module Wiki.Server.Storage.Schema
   , Watches (..)
   , Stars (..)
   , Notifications (..)
+  , PageLinks (..)
 
     -- * Encrypted spaces
   , KeyGrants (..)
@@ -615,6 +616,29 @@ instance Table Stars where
     deriving anyclass (Beamable)
   primaryKey r = StarKey r.user_id r.page_id
 
+-- | A link on a page (@page_links@, migration @0014-page-links@): the
+-- page, the link's place among its links, its destination as written,
+-- the name a page must have for the link to lead to it once created or
+-- moved ('Wiki.App.Route.linkName', its first 200 characters), the page
+-- it leads to now, and whether it is to be resolved again before the
+-- transaction commits. What a page's backlinks are read from.
+data PageLinks f = PageLinkRow
+  { source_id :: Columnar f Text
+  , ordinal :: Columnar f Int32
+  , destination :: Columnar f Text
+  , name :: Columnar f (Maybe Text)
+  , target_id :: Columnar f (Maybe Text)
+  , pending :: Columnar f Bool
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table PageLinks where
+  data PrimaryKey PageLinks f = PageLinkKey (Columnar f Text) (Columnar f Int32)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = PageLinkKey r.source_id r.ordinal
+
 -- | A notification (@notifications@). @seq@ is its place among all
 -- notifications; the database numbers a new one.
 data Notifications f = NotificationRow
@@ -834,6 +858,10 @@ deriving stock instance Eq (Stars Identity)
 
 deriving stock instance Show (Stars Identity)
 
+deriving stock instance Eq (PageLinks Identity)
+
+deriving stock instance Show (PageLinks Identity)
+
 deriving stock instance Eq (Notifications Identity)
 
 deriving stock instance Show (Notifications Identity)
@@ -954,6 +982,7 @@ data WikiDb f = WikiDb
   , watches :: f (TableEntity Watches)
   , stars :: f (TableEntity Stars)
   , notifications :: f (TableEntity Notifications)
+  , page_links :: f (TableEntity PageLinks)
   , settings :: f (TableEntity Settings)
   , sign_in_providers :: f (TableEntity SignInProviders)
   , audit_log :: f (TableEntity AuditLog)

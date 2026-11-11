@@ -50,6 +50,7 @@ module Wiki.App.Backend.Mem.State
   , postDetailsIn
   , getPageIn
   , pageLocationIn
+  , backlinksIn
   , searchPagesIn
   , getDraftIn
   , listVersionsIn
@@ -194,9 +195,11 @@ import Wiki.Api.Stars qualified as Star
 import Wiki.Api.WhatsNew (WhatsNew, newestEntry)
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
+import Wiki.App.Backlinks qualified as Links
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), parseFileName, uploadedMimeType)
+import Wiki.Core.Backlink (Backlink (..), backlinkOrder)
 import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (Comment), Thread (Thread), absentAuthor, checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
@@ -437,18 +440,31 @@ versionsRead found st = foldl' step st found
 -- soon enough to pay for that, while a reader who never searches never
 -- pays. Once made, the text is stored with the page until the page
 -- changes.
+--
+-- The page's links ('Wiki.App.Backlinks.pageLinks') are kept the same
+-- way: a page's backlinks follow every page's links, and parsing every
+-- page again at each page shown would make every move between pages wait.
 data Prepared = Prepared
   { version :: UTCTime
   -- ^ The page's 'updatedAt' when it was prepared. A page's title and body
   -- change only with a new version, so a page whose version is not this
   -- one is prepared again instead of being searched with stale text.
   , text :: ~Searchable
+  , links :: ~[Text]
+  -- ^ The destinations of the page's links that may lead to a page.
   }
   deriving stock (Eq, Show)
 
--- | A page's prepared text, made when it is first needed.
+-- | A page's prepared text and links, made when they are first needed.
 prepare :: Page -> Prepared
-prepare p = Prepared {version = p.updatedAt, text = searchable p.title p.body}
+prepare p = Prepared {version = p.updatedAt, text = searchable p.title p.body, links = Links.pageLinks p.body}
+
+-- | A page's links, as 'Prepared' keeps them if they were made from this
+-- version of it, and otherwise read from its text on the spot.
+linksOf :: MemState -> Page -> [Text]
+linksOf st p = case Map.lookup p.id st.searchText of
+  Just prepared | prepared.version == p.updatedAt -> prepared.links
+  _ -> Links.pageLinks p.body
 
 -- | Prepare every page's text again: for a wiki whose pages were put in
 -- whole, loaded from IndexedDB or imported from an archive.
@@ -958,6 +974,48 @@ pageLocationIn pid st = do
   if Home.isHomeSpace st.server.homePage s.id
     then pure PageLocation {space = [], page = []}
     else maybe (Left NotFound) (\path -> pure PageLocation {space = map (\x -> x.slug) c, page = path}) (Space.pagePath s (`Map.lookup` st.pages) p.id)
+
+-- | The pages that link to a page ('Wiki.App.Backend.pageBacklinks'),
+-- found by resolving every page's links now ("Wiki.App.Backlinks"): the
+-- demo keeps no table of links, and its wiki is small. The page is
+-- checked as 'pageLocationIn' checks it. Every link is followed as the
+-- current user's click follows it, among the spaces whose paths they can
+-- see ('listSpacesIn'), and the pages they may not view are left out.
+backlinksIn :: PageId -> MemState -> Either WikiError [Backlink]
+backlinksIn pid st = do
+  target <- findPage st pid
+  (s, c) <- findSpace st target.space
+  requireView st c
+  pure $
+    if not (Links.counted st.server.homePage s)
+      then []
+      else
+        backlinkOrder
+          [ Backlink {page = p.id, title = p.title, location = PageLocation {space = map (\x -> x.slug) chain, page = path}}
+          | (source, chain, pages) <- sources
+          , p <- Map.elems pages.byId
+          , p.id /= pid
+          , pid `elem` mapMaybe (runIdentity . Links.linkTarget world pages p.id) (linksOf st p)
+          , Just path <- [Space.pagePath source (`Map.lookup` pages.byId) p.id]
+          ]
+  where
+    -- The spaces whose paths the current user can see, each with its
+    -- pages.
+    linked = Map.fromList [(x.id, Links.linkedSpace x (pagesOf x.id st)) | x <- listSpacesIn st]
+    world =
+      Links.LinkWorld
+        { Links.spaces = map (\x -> x.space) (Map.elems linked)
+        , Links.pagesIn = \sid -> Identity (Map.lookup sid linked)
+        , Links.exists = \i -> Identity (any (\p -> Map.member p.space linked) (Map.lookup i st.pages))
+        }
+    -- The spaces whose pages are counted, and the current user may view.
+    sources =
+      [ (x.space, chain, x)
+      | x <- Map.elems linked
+      , Links.counted st.server.homePage x.space
+      , let chain = chainOf st x.space.id
+      , canView (currentPrincipal st) st.grants chain
+      ]
 
 -- | A page with who wrote it ('Page.createdBy', 'Page.updatedBy'): the
 -- authors of its first version and of the version it is now, as the

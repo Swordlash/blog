@@ -528,6 +528,11 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- that, so that a page moved meanwhile is found where it is now. The
   -- same read for any space: an encrypted space's paths are plain.
   pageLocation pid = pageContent (\c -> Map.lookup pid c.pageLocations) (endpoints.pages.location pid) (withPageLocation pid)
+
+  -- Page content: another page's save changes the list. The server
+  -- answers it for a page of an encrypted space too, empty, since it
+  -- cannot read the text of the pages there.
+  pageBacklinks pid = pageContent (\c -> Map.lookup pid c.backlinks) (endpoints.pages.backlinks pid) (withBacklinks pid)
   createPage sid parent title body =
     encryptedFetched sid (write (getResponse <$> endpoints.spaces.createPage sid NewPage {parent, title, body})) (sealedCreatePage sid parent title body)
       >>= keepingSpaces (\p -> [(p.id, p.space)])

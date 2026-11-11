@@ -244,6 +244,7 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
       Right p -> needWriters p >> query (getPageIn sid path)
       refused -> pure refused
   pageLocation = query . pageLocationIn
+  pageBacklinks = query . backlinksIn
   createPage sid parent title body = writeAt (createPageIn sid parent title body) >>= withWritersRead
   savePage pid base title body = needFirstVersion pid >> writeAt (savePageIn pid base title body) >>= withWritersRead
   movePage pid sid parent = write (movePageIn pid sid parent) >>= withWritersRead

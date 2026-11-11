@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+`GET pages/<page>/backlinks` lists the pages that link to a page, each
+with its id, title and `location` (WP5.88, #189), those the caller may
+view; a page the caller may not view is 404, as for `location`.
+
 `GET pages/<page>/location` answers where a page is now, by its id, as a
 `PageLocation` (WP5.81, #194): its space's path and its own, both empty
 for the wiki's own home page. A page the caller may not view is 404 with
