@@ -509,8 +509,12 @@ spec m = describe "tasks ticked in a page" $ do
     -- The tasks of the sorted list, in the order shown, and whether each
     -- box is ticked.
     sortedLabels ui = findAll ui ".page-body .sorted .task-text" >>= traverse textContent
-    -- The Markdown guide's task "Read it", once the long guide is shown.
-    readIt ui = eventuallyWithin 20000 (find ui ".page-body input[aria-label='Read it'][data-task]")
+    -- The Markdown guide's task "Read it", once the long guide is shown
+    -- and its islands have done drawing, which moves the box meanwhile.
+    readIt ui = do
+      box' <- eventuallyWithin 20000 (find ui ".page-body input[aria-label='Read it'][data-task]")
+      settle
+      pure box'
     sortedChecked ui = findAll ui ".page-body .sorted input" >>= traverse (fmap (== "true") . (`getProperty` "checked"))
 
 -- | The page the tests tick: tasks under a task (indices 1 to 3), and a
