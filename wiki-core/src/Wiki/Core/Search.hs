@@ -54,6 +54,7 @@ module Wiki.Core.Search
   , Searchable (..)
   , searchable
   , bodyText
+  , searchVersion
 
     -- * Folding
   , foldText
@@ -235,8 +236,14 @@ searchable title body = Searchable {title = folded title, body = folded (bodyTex
 -- | The text of a page's Markdown as a reader sees it, in one line: the
 -- words of its blocks without their syntax, and the sources of its code,
 -- diagrams and formulas. For raw HTML and an @html@ fence, the text the
--- page shows ("Wiki.Core.Markdown.Html"), without the tags and the CSS. The source as it is, if
--- it does not parse.
+-- page shows ("Wiki.Core.Markdown.Html"), without the tags and the CSS.
+-- The source as it is, if it does not parse.
+--
+-- A server stores this text, and its fold ('foldText'), for each page it
+-- holds, and searches what it stored. So a change to what this gives for
+-- any page, here, in the parser or in the allowlist, and a change to
+-- 'foldText', must bump 'searchVersion': that is what makes a server make
+-- every page's stored text again when it is upgraded.
 bodyText :: Text -> Text
 bodyText source =
   T.unwords (T.words (either (const source) blocks (parseMarkdown source)))
@@ -265,6 +272,21 @@ bodyText source =
       HtmlBlock raw -> htmlText (parseFrameHtml raw)
       -- The list it stands for is the headings' text, already included.
       TableOfContents -> ""
+
+-- | 'searchVersion' is the version of how a page's search text is made
+-- from its title and its source: 'bodyText', and 'foldText' for the fold.
+-- A server stores both for each page, and makes them again for every page
+-- when it opens a database whose stored text another version made
+-- ("Wiki.Server.Storage.Rows.ensureSearchText"). Any change to what
+-- 'bodyText' or 'foldText' gives for some page adds one.
+--
+-- 2: an @html@ fence is the text its frame shows, not its source; a
+-- @latex@ fence is a formula; and raw HTML is read with the browser's rule
+-- for the elements it reads as text (WP5.89 of docs/PLAN.md). Version 1,
+-- the text before, was never stamped in a database: a database with no
+-- stamp is made again too.
+searchVersion :: Int
+searchVersion = 2
 
 -- | A text as it is compared: each character as 'foldLetter' folds it,
 -- ignoring case and diacritics.

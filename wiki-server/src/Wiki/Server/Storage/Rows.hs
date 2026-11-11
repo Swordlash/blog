@@ -184,6 +184,8 @@ module Wiki.Server.Storage.Rows
   , markSpaceLinks
   , resolvePendingLinks
   , ensureLinks
+  , ensureSearchText
+  , searchVersionSetting
   , linkingPages
   , fromTopNamed
   , followAmong
@@ -267,7 +269,7 @@ import Wiki.Core.Order (ChildOrder (..), Sibling (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Path (TreeNode (..), ancestry)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
-import Wiki.Core.Search (bodyText, foldText)
+import Wiki.Core.Search (bodyText, foldText, searchVersion)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), personalName, withName)
 import Wiki.Core.Space qualified as Space
@@ -2288,6 +2290,47 @@ ensureLinks = do
         pure (length bodies)
       resolvePendingLinks
       storeSetting linksVersionSetting (show linksVersion)
+      pure (Just (sum counts))
+
+-- | The setting that says which 'Wiki.Core.Search.searchVersion' made the
+-- pages' stored search text and fold.
+searchVersionSetting :: Text
+searchVersionSetting = "search-version"
+
+-- | 'ensureSearchText' makes every page's stored search text and its fold
+-- ('searchFold') again from its title and source, unless this version of
+-- how search text is made ('Wiki.Core.Search.searchVersion') made them:
+-- the search reads what is stored, and a page an earlier program wrote
+-- would otherwise be found by its old text until it is next saved. Only
+-- those two columns are written, and only where they differ, so no page's
+-- source, version or time of change does, and a second run changes
+-- nothing. PostgreSQL's @search_words@ follows the fold by itself. A page
+-- of an encrypted space has no text on the server, and is left as it is.
+-- The pages are read one space at a time. It says how many pages it
+-- changed, or 'Nothing' when the text was this version's.
+--
+-- Its own stamp, apart from the links' ('linksVersion'): the links depend
+-- on how they are followed too, and the search text on how it is folded,
+-- and a change to one need not read every page again for the other.
+ensureSearchText :: (Backend be) => Db be (Maybe Int)
+ensureSearchText = do
+  made <- settingValue searchVersionSetting
+  if made == Just (show searchVersion)
+    then pure Nothing
+    else do
+      sealed <- Set.fromList . map (\k -> k.page_id) <$> runSelectReturningList (select (all_ wikiDb.page_keys))
+      spaces <- Map.keys <$> loadSpaces
+      counts <- for spaces $ \sid -> do
+        rows <- runSelectReturningList (select ((\p -> (p.id, p.title, p.body, p.search_text, p.search_fold)) <$> filter_ (\p -> p.space_id ==. val_ sid.text) (all_ wikiDb.pages)))
+        fmap sum . for rows $ \(pid, title, body, stored, storedFold) -> do
+          let searchText = bodyText body
+              searchFolded = searchFold title searchText
+          if pid `Set.member` sealed || (searchText, searchFolded) == (stored, storedFold)
+            then pure (0 :: Int)
+            else do
+              runUpdate (update wikiDb.pages (\p -> mconcat [p.search_text <-. val_ searchText, p.search_fold <-. val_ searchFolded]) (\p -> p.id ==. val_ pid))
+              pure 1
+      storeSetting searchVersionSetting (show searchVersion)
       pure (Just (sum counts))
 
 -- | The pages whose links lead to a page, but the page itself, each with

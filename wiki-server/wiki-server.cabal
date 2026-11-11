@@ -375,6 +375,7 @@ test-suite wiki-server-test
         Test.Storage.Encrypted
         Test.Storage.Keys
         Test.Storage.Links
+        Test.Storage.SearchText
         Test.Storage.Migrate
         Test.Storage.Permissions
         Test.Storage.Removal
