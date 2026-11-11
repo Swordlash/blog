@@ -27,12 +27,15 @@ failures=0
 mkdir -p "$work/bin"
 
 # The fake apt-get. $FAKE/index is the package index, a line per package:
-# its name, its version and the packages it depends on, joined by commas.
+# its name, its version and the packages it depends on, joined by commas,
+# each a name or name>=version. $FAKE/debs, when it exists, gives in the
+# same form the dependencies of other versions, those of cached archives.
 # $FAKE/status lists what is installed, a name and a version per line.
 # install resolves the packages asked for (names, or archives by their
 # path) and the dependencies not installed, then, as apt does: with
 # --print-uris it prints a line per archive the archive directory lacks
-# (quoted URI, file name, size, hash) and stops; without, an archive it
+# (quoted URI, file name, size, hash; in reverse order when
+# $FAKE/uris-reversed exists) and stops; without, an archive it
 # lacks is downloaded into it, unless $FAKE/downloads-fail or
 # $FAKE/downloads-fail-once (removed when used) exists or --no-download is
 # given, which fail with exit 100 before anything is installed; then dpkg
@@ -69,20 +72,33 @@ if [ "$command" = update ]; then
   exit 0
 fi
 [ "$command" = install ] && [ -n "$archives" ] || { echo 'fake apt-get: unexpected call' >&2; exit 2; }
-installed() { grep -q "^$1 " "$FAKE/status"; }
+# satisfied <dependency>: the dependency, a name or name>=version, is met by
+# a package selected already or by the version installed.
+satisfied() {
+  dep_name=${1%%>=*}
+  dep_min=
+  [ "$dep_name" = "$1" ] || dep_min=${1#*>=}
+  ! grep -q "^$dep_name " "$FAKE/selected" || return 0
+  have=$(awk -v n="$dep_name" '$1 == n { print $2; exit }' "$FAKE/status")
+  [ -n "$have" ] || return 1
+  [ -z "$dep_min" ] || dpkg --compare-versions "$have" ge "$dep_min"
+}
 # selected: a line per package, "name version file explicit".
 : >"$FAKE/selected"
 # select_ <name> [version file explicit]: selects the package, unless it is
-# selected already, and resolves its dependencies. Without a version, the
-# package is an archive given by its path, selected already.
+# selected already, and resolves its dependencies: those $FAKE/debs gives
+# for that version (lines as the index's), else the index's. Without a
+# version, the package is an archive given by its path, selected already.
 select_() {
   if [ $# -gt 1 ]; then
     ! grep -q "^$1 " "$FAKE/selected" || return 0
     printf '%s %s %s %s\n' "$1" "$2" "$3" "$4" >>"$FAKE/selected"
   fi
-  deps=$(awk -v n="$1" '$1 == n { print $3 }' "$FAKE/index" | tr ',' ' ')
-  for dep in $deps; do
-    installed "$dep" || resolve "$dep"
+  chosen=$(awk -v n="$1" '$1 == n { print $2 }' "$FAKE/selected")
+  deps=$(awk -v n="$1" -v v="$chosen" '$1 == n && $2 == v { print $3; exit }' "$FAKE/debs" 2>/dev/null)
+  [ -n "$deps" ] || deps=$(awk -v n="$1" '$1 == n { print $3 }' "$FAKE/index")
+  for dep in $(printf '%s' "$deps" | tr ',' ' '); do
+    satisfied "$dep" || resolve "${dep%%>=*}"
   done
 }
 resolve() {
@@ -113,6 +129,7 @@ lacking=$(awk -v d="$archives" '$4 == "no" { print $3 }' "$FAKE/selected" | whil
   [ -e "$archives/$file" ] || printf '%s\n' "$file"
 done)
 if [ -n "$print_uris" ]; then
+  [ ! -e "$FAKE/uris-reversed" ] || lacking=$(printf '%s\n' "$lacking" | tac)
   for file in $lacking; do
     printf "'http://azure.archive.ubuntu.com/ubuntu/pool/main/%s' %s 39384 SHA512:0\n" "$file" "$file"
   done
@@ -182,10 +199,12 @@ chmod 755 "$work/bin/apt-get" "$work/bin/dpkg-query" "$work/bin/sudo" \
 # The index the cases share: libxml2-utils, the one package of the base
 # list a runner lacks, depends on libxml2 (installed) and on libxmlextra1
 # (not installed, and with an epoch, as apt writes it in an archive's name).
+# libpq-dev, on the image, depends on libpq5 at least its own version.
 index='libxml2-utils 2.9.14+dfsg-1.3ubuntu3.10 libxml2,libxmlextra1
 libxmlextra1 1:1.1
 libxml2 2.9.14+dfsg-1.3ubuntu3.10
-libpq-dev 16.15-0ubuntu0.24.04.1
+libpq-dev 16.15-0ubuntu0.24.04.1 libpq5>=16.15-0ubuntu0.24.04.1
+libpq5 16.15-0ubuntu0.24.04.1
 libncurses-dev 6.4+20240113-1ubuntu2.2
 '
 on_image='libpq-dev 16.15-0ubuntu0.24.04.1
@@ -199,7 +218,8 @@ older='libxml2-utils_2.9.14+dfsg-1.3ubuntu3_amd64.deb libxml2-utils_2.9.14+dfsg-
 # profile with the index, the image's packages installed, the archives in
 # the cache and the flags (downloads-fail, downloads-fail-once, dpkg-fails,
 # update-fails, update-hangs) set; $status_lines, when set, replaces the
-# image's packages, $retry_within is the script's APT_RETRY_WITHIN (default
+# image's packages, $debs_lines, when set, is $FAKE/debs (the dependencies
+# of cached versions), $retry_within is the script's APT_RETRY_WITHIN (default
 # 600, so that a test's attempt is always short) and $update_limit its
 # APT_UPDATE_LIMIT (default 45). Leaves the output in $work/out, the
 # exit status in $status, the fake's log in $work/fake/calls and the
@@ -210,6 +230,7 @@ case_() {
   mkdir -p "$work/fake" "$work/cache"
   printf '%s' "$index" >"$work/fake/index"
   printf '%s' "${status_lines-$on_image}" >"$work/fake/status"
+  [ -z "${debs_lines:-}" ] || printf '%s' "$debs_lines" >"$work/fake/debs"
   for file in $2; do echo cached >"$work/cache/$file"; done
   shift 2
   for flag; do touch "$work/fake/$flag"; done
@@ -382,6 +403,44 @@ expect_log 'no update' 'update$' 0
 expect_log 'no second try' 'Packages=true install' 1
 expect_log 'no pause' '^sleep' 0
 expect_from_cache unset
+
+# The index's libpq-dev needs a newer libpq5 than the one installed; the
+# cache holds only an older libpq-dev and no libpq5. apt's first plan names
+# both, the plan with the cached libpq-dev neither when that libpq-dev
+# makes do with the installed libpq5: the cache serves, in whichever order
+# apt lists the two.
+status_lines='libncurses-dev 6.4+20240113-1ubuntu2.2
+libxml2 2.9.14+dfsg-1.3ubuntu3.10
+libxml2-utils 2.9.14+dfsg-1.3ubuntu3.10
+libpq5 16.13-0ubuntu0.24.04.1
+'
+old_pq='libpq-dev_16.13-0ubuntu0.24.04.1_amd64.deb'
+debs_lines='libpq-dev 16.13-0ubuntu0.24.04.1 libpq5>=16.13-0ubuntu0.24.04.1
+'
+for order in '' uris-reversed; do
+  case_ "an older parent needs no newer dependency${order:+ ($order)}" "$old_pq" downloads-fail $order
+  expect_status ok
+  expect_log 'the cached libpq-dev, by its path' "^installed libpq-dev 16.13-0ubuntu0.24.04.1 from $old_pq" 1
+  expect_log 'no libpq5 installed' '^installed libpq5' 0
+  expect_log 'libpq5 not given to apt' '^apt-get .*libpq5' 0
+  expect_output 'the first plan named libpq5' 'libpq5'
+  if grep -q -F 'holds no version' "$work/out"; then
+    fail 'the output calls a package uncached'
+  else
+    echo "ok   $name: no package called uncached"
+  fi
+  expect_output 'it says it used the cache' 'installed the versions the archive cache holds.'
+  expect_from_cache true
+done
+
+debs_lines='libpq-dev 16.13-0ubuntu0.24.04.1 libpq5>=16.14-0ubuntu0.24.04.1
+'
+case_ 'the older parent needs a newer dependency too' "$old_pq" downloads-fail
+expect_status fails
+expect_log 'nothing installed' '^installed' 0
+expect_output 'and it names the dependency alone' "Could not download libpq-dev libpq5, and the archive cache ($work/cache) holds no version of libpq5."
+expect_from_cache unset
+unset status_lines debs_lines
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures failures"

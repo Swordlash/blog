@@ -100,6 +100,10 @@ newest_cached() {
 # download, one asked for or a dependency, is replaced by the newest archive
 # of it the cache holds, given to apt by its path, until apt needs no
 # download; apt then installs and configures them all with --no-download.
+# Each round replaces every package of apt's plan the cache has a file for,
+# then asks apt again: an older archive can depend on older versions, so a
+# package the cache lacks may drop out of the next plan. The cache fails
+# only when a round can replace nothing, the plan then being final.
 # When the cache cannot serve, returns 1 with the reason in $reason, before
 # dpkg has touched anything. When the install itself fails, exits. apt does
 # not check an archive given by its path against the index's hash, as it
@@ -115,16 +119,23 @@ from_cache() {
     fi
     [ -n "$fetch" ] || break
     rounds=$((rounds + 1))
+    if [ "$rounds" -gt 10 ]; then
+      # shellcheck disable=SC2086
+      reason="apt still wants to download$(printf ' %s' $fetch) after 10 rounds"
+      return 1
+    fi
     uncached=
+    substituted=
     for package in $fetch; do
       file=$(newest_cached "$package")
       # A file already given to apt and still to be fetched is one apt does
       # not take; the cache has nothing else to offer for that package.
       case " $wanted " in *" $file "*) file= ;; esac
-      if [ -z "$file" ] || [ "$rounds" -gt 10 ]; then
+      if [ -z "$file" ]; then
         uncached="$uncached $package"
         continue
       fi
+      substituted=1
       replaced=
       next=
       for word in $wanted; do
@@ -138,7 +149,7 @@ from_cache() {
       [ -n "$replaced" ] || next="$next $file"
       wanted=$next
     done
-    if [ -n "$uncached" ]; then
+    if [ -z "$substituted" ]; then
       reason="the archive cache ($cache) holds no version of$uncached"
       return 1
     fi
