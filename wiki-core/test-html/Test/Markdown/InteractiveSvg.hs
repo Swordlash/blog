@@ -5,6 +5,7 @@
 module Test.Markdown.InteractiveSvg (spec) where
 
 import Data.Row (Empty)
+import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Properties qualified as HP
@@ -67,5 +68,11 @@ spec = describe "Markdown.Render, an interactive SVG" $ do
   it "shows an image where the caller draws no frames, as a feed or an export" $
     markdownWith framing {svgFrame = Nothing} "![flame](attachment:flame.svg){.interactive}"
       `shouldReturn` "<p><img alt=\"flame\" class=\"interactive\" src=\"/files/flame.svg\"></p>"
+  it "gives the braces to the image, beside a list and inside one" $ do
+    framedIn <- markdownWith framing "![f](attachment:flame.svg){.interactive}\n- [ ] a task\n"
+    framedIn `shouldSatisfy` T.isPrefixOf "<p><span class=\"svg-frame interactive\">"
+    framedIn `shouldSatisfy` T.isInfixOf "<ul"
+    inItem <- markdownWith framing "- ![f](attachment:flame.svg){.interactive}\n- b\n"
+    inItem `shouldSatisfy` T.isInfixOf "<li><span class=\"svg-frame interactive\">"
   it "finds an interactive SVG among the page's links as any embed" $
     fmap linkDestinations (parseMarkdown "![flame](attachment:flame.svg){.interactive}") `shouldBe` Right ["attachment:flame.svg"]
