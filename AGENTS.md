@@ -171,4 +171,7 @@ Those of haskell-halogen's `AGENTS.md` apply unchanged, in short:
   is a reason to look for another, not to reimplement it; if nothing exists, say so in the
   report so the plan records it. Keep JavaScript to `browserJS` bindings and a few lines
   around a library's call.
-- Each package keeps a `CHANGELOG.md` with an `Unreleased` section once it has users.
+- The packages' `CHANGELOG.md` files are frozen as they stood on 2026-11-11 and are not
+  added to (the owner, 2026-11-11: the paragraph each pull request added at the top of
+  "Unreleased" conflicted on nearly every pull request). What a pull request changed is
+  said once, in its entry under `changelog/`.
