@@ -433,6 +433,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Spaces
       Test.Browser.Spoilers
       Test.Browser.Stars
+      Test.Browser.Tasks
       Test.Browser.WhatsNew
       Test.Browser.Text
       Test.Browser.Vault

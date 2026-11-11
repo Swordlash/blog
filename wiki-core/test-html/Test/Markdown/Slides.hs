@@ -80,3 +80,12 @@ spec = describe "Slides.renderDeck" $ do
       `shouldReturn` [ "<p>One</p><div class=\"slide-step\"><div class=\"incremental\"><ul>"
                          <> "<li>a</li><li>b<div class=\"slide-step-item\"></div></li></ul></div></div>"
                      ]
+
+  it "shows a list of tasks item by item as any list, with its boxes" $ do
+    let deck = either (panic . show) deckOf (parseMarkdown "[[!incremental]]\n- [x] a\n- [ ] b\n[[/incremental]]\n")
+        shown k = deck {slides = map (showingStep k) deck.slides}
+    traverse (\s -> renderHtml s.body) (renderDeck defaultOptions (shown 1))
+      `shouldReturn` [ "<div class=\"incremental\"><ul class=\"task-list\">"
+                         <> "<li class=\"task-list-item task-done\"><input aria-label=\"a\" checked disabled type=\"checkbox\"> <span class=\"task-text\">a</span></li>"
+                         <> "<li class=\"task-list-item\"><input aria-label=\"b\" disabled type=\"checkbox\"> <span class=\"task-text\">b</span><div class=\"slide-step-item slide-step-later\"></div></li></ul></div>"
+                     ]

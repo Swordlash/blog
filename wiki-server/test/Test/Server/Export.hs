@@ -192,6 +192,12 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     headers bs `shouldBe` [(1, "a")]
     filter (== "toc") (query (\case P.Str t -> [t]; _ -> []) bs) `shouldBe` ["toc", "toc"]
 
+  it "leaves out a line of attributes alone, and keeps a sorted list's tasks in the order of the source" $ do
+    bs <- blocksOf ToOther place "Before.\n\n{.sorted}\n- [x] Old\n- [ ] New\n"
+    show bs `shouldNotSatisfy` T.isInfixOf "sorted"
+    filter (`elem` ["Old", "New"]) (query (\case P.Str t -> [t]; _ -> []) bs) `shouldBe` ["Old", "New"]
+    query (\case P.Str t -> [t]; _ -> []) bs `shouldSatisfy` elem "\9746"
+
   it "lets through only what the allowlist keeps of raw HTML, and reads it as pandoc's own" $ do
     bs <- blocksOf ToOther place "<script>alert('no')</script>\n\nPress <kbd>Ctrl</kbd> and <b onclick=\"steal()\">this</b>.\n\n<div class=\"box\"><img src=\"tree.png\" alt=\"A tree\" onerror=\"steal()\"></div>\n"
     raw bs `shouldBe` []
