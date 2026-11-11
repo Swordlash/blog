@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Every login is ASCII (WP5.87): `loginProblem` says why a stored login
+breaks the rules of `parseLogin`, or that it is not exactly what
+`parseLogin` makes of it (white space around it); the sentence that a
+login made before the rule is kept is gone. `Wiki.Core.Export.checkLogins`
+refuses an archive's users when one has such a login, for an import that
+brings them. `actionText` knows `user.rename`, "Changed a user's login",
+and an audit entry's address may be `migration`.
+
 A page's backlinks (WP5.88, #189): `linkDestinations` gives the
 destination of every link the renderer makes of some blocks, in document
 order: Markdown and wiki links, embeds, and the `a` elements of raw HTML

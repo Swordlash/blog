@@ -1715,7 +1715,7 @@ In order, and what a failure at each step leaves:
 | PostgreSQL looked at first: a container of the compose project `<name>` set up on another port than `--db-port` is refused untouched, and one that runs is asked whether its database `wiki` is empty before anything is written. Otherwise its files are written and it is started as a deploy on PostgreSQL starts it, and the database checked to be empty | The wiki untouched; PostgreSQL put back exactly as it was found (its files' bytes, a container stopped again or removed, a volume removed when the move made it); a database that holds a wiki is left as it is, and refused |
 | The service stopped (it must stop), and the wiki backed up into `data/backups` | The service started again on SQLite, and PostgreSQL put back as it was found; so too for any other error in this and the next two steps |
 | `wiki-server copy-database` into PostgreSQL | The service started again on SQLite; PostgreSQL empty, as the copy left it |
-| `wiki-server rehearse --move-to-database`: the upgrade's checks (links, pages, accounts, home pages, roots, ways in) with this program as old and new, the old on a copy in SQLite and the new on a copy of that in PostgreSQL | The service started again on SQLite; PostgreSQL emptied again |
+| `wiki-server rehearse --move-to-database`: the upgrade's checks (links, pages, accounts, home pages, roots, ways in, logins) with this program as old and new, the old on a copy in SQLite and the new on a copy of that in PostgreSQL | The service started again on SQLite; PostgreSQL emptied again |
 | The switch: the deployment `previous/` held moved to `previous.before-move`, `data/wiki.sqlite` set aside into `data/replaced/<time>/`, the deployment on SQLite kept in `previous/`, the page copied back, the binary, the console `bin/wiki`, the unit and the state on PostgreSQL | Switched back, undoing only the steps this run did, the last first (a journal notes each once it is done): the files this run kept in `previous/`, the SQLite file into `data/`, the deployment `previous/` held before; then PostgreSQL emptied and put back as it was found, and the service started on SQLite. A deployment kept by an earlier deploy is never restored. The switch back puts back by copies first and deletes what the move saved only once all of it is back: a step that fails stops it there, the service stopped, everything saved is where the move says, and `--rollback --yes` finishes |
 | The service started, and must answer | Switched back, as above |
 
@@ -1903,14 +1903,30 @@ to the demo, keeping `data/`.
   `rclone copy <remote>/attachments ./attachments` first.)
 - **Migrating and checking by hand.** The server migrates its database to its
   own version of the schema when it starts. `wiki-server migrate --data DIR`
-  (or `bin/wiki migrate …`) does only that, and says from which version; and
+  (or `bin/wiki migrate …`) does only that, and says from which version, with
+  a line for each thing a step has to tell. Step 15 renames each login made
+  before the rule of a login (2026-11-06: only ASCII letters, digits and
+  punctuation, at least one letter or digit, not `~` first, at most 64
+  characters) that breaks it, to `user-` and the first eight letters and
+  digits of the user's id, and says so. The administration's Activity lists
+  each rename too ("Changed a user's login", from `migration`), and a server
+  that migrates as it starts (the Docker image) writes the lines to its log.
+  Nothing tells the person: pass the new login on. They sign in with the same
+  password under it.
+
+  ```text
+  Migrated the database from version 14 to 15 of the schema.
+  Renamed the login "łucja" of the user 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d to "user-1a2b3c4d": a login has only ASCII letters, digits and punctuation now. The user signs in with the same password under the new login.
+  ```
+
   `wiki-server check --data DIR` reads every row of every table, and the wiki's
   records built from them, as the program does, changes nothing, and lists the
   tables with their rows. It also says which records break a rule the wiki
-  keeps: a space with a page beside its home page at the top of its pages, and
-  an account whose stored password no sign-in can use (an OPAQUE record
+  keeps: a space with a page beside its home page at the top of its pages, an
+  account whose stored password no sign-in can use (an OPAQUE record
   without its stretch or the other way round, a record or a stretch that does
-  not decode, a hash from before OPAQUE the server cannot read). When everything
+  not decode, a hash from before OPAQUE the server cannot read), and an account
+  whose login breaks the rule of a login. When everything
   reads, it ends by saying how the enabled accounts sign in, and names those
   with no way in (the first twenty by login, then how many more); that is not a
   failure, since an account made without a password, an imported one and one
