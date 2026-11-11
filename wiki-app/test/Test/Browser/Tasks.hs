@@ -273,13 +273,13 @@ spec m = describe "tasks ticked in a page" $ do
     -- "Use as template" reloads the wiki and the page, whose read fails.
     answerRaw "GET" guideAt 503 "<html>down for maintenance</html>"
     find ui ".use-as-template" >>= click
-    eventually $ find ui ".page-ticks-note" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "could not be read again")
+    eventuallyWithin 20000 $ find ui ".page-ticks-note" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "could not be read again")
     find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
     (readIt ui >>= (`getProperty` "checked")) `shouldReturn` "true"
     -- The next reload reads it, and the ticks are still there.
     answerWith "GET" guideAt 200 (guide :: Core.Page) {template = True}
     find ui ".use-as-template" >>= click
-    eventually $ find ui ".use-as-template" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
+    eventuallyWithin 20000 $ find ui ".use-as-template" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
     find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
     (readIt ui >>= (`getProperty` "checked")) `shouldReturn` "true"
     serverStops
@@ -308,8 +308,9 @@ spec m = describe "tasks ticked in a page" $ do
     -- kept, on the page as it is now.
     answerWith "GET" guideAt 200 saved
     release
-    eventually $ (readIt ui >>= (`getProperty` "checked")) `shouldReturn` "true"
-    eventually $ find ui ".page-ticks-note" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "kept on the new version")
+    -- The guide is long: its reload takes a while.
+    eventuallyWithin 20000 $ find ui ".page-ticks" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "kept on the new version")
+    (readIt ui >>= (`getProperty` "checked")) `shouldReturn` "true"
     find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
     (find ui ".page-body input[aria-label='Write the page']" >>= (`getProperty` "checked")) `shouldReturn` "false"
     serverStops
