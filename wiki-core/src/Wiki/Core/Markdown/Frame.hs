@@ -37,9 +37,10 @@
 -- http-equiv="refresh">@, a @\<base>@ to another site, a nested frame with
 -- an address, a form and a link to @_top@ are refused there.
 --
--- __Two sandboxes.__ The plugins of issue #200 will run their own scripts
--- in a frame. That frame gets 'scriptSandbox': scripts, and never the
--- wiki's origin. A frame that both runs scripts and has the wiki's origin
+-- __Two sandboxes.__ An interactive SVG (issue #200) will run its own
+-- scripts in a frame, and so will the external plugins after it (issue
+-- #186, decision 69 of docs/PLAN.md). That frame gets 'scriptSandbox':
+-- scripts, and never the wiki's origin. A frame that both runs scripts and has the wiki's origin
 -- could reach the page, its cookies and its storage, so no sandbox the
 -- wiki writes ever has both tokens ('sandboxes').
 module Wiki.Core.Markdown.Frame
@@ -62,9 +63,10 @@ import Protolude
 frameSandbox :: Text
 frameSandbox = "allow-same-origin allow-popups allow-popups-to-escape-sandbox"
 
--- | The sandbox reserved for a frame that runs scripts of its own (the
--- plugins of issue #200): scripts, and never the wiki's origin, so that
--- the scripts can reach nothing of the wiki's. Nothing uses it yet.
+-- | The sandbox reserved for a frame that runs scripts of its own (an
+-- interactive SVG, issue #200, and then the external plugins, issue #186):
+-- scripts, and never the wiki's origin, so that the scripts can reach
+-- nothing of the wiki's. Nothing uses it yet.
 scriptSandbox :: Text
 scriptSandbox = "allow-scripts allow-popups allow-popups-to-escape-sandbox"
 
