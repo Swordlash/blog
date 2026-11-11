@@ -424,6 +424,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Avatars
       Test.Browser.Policy
       Test.Browser.Problems
+      Test.Browser.Folds
       Test.Browser.Providers
       Test.Browser.Search
       Test.Browser.Security

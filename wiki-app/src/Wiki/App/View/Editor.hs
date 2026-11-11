@@ -94,6 +94,14 @@
 -- The toolbar's "Emoji" menu searches the same names, in a field of its
 -- own, and writes the one chosen at the cursor.
 --
+-- CodeMirror folds spoilers (WP5.96 of docs/PLAN.md): a block spoiler, and
+-- the section of a heading spoiler, fold and unfold by a marker in a gutter
+-- beside the text, by a click on the mark a fold leaves, and by
+-- Ctrl+Shift+[ and Ctrl+Shift+]. The check that finds the text's problems
+-- finds the spoilers' lines too ("Wiki.Core.Markdown.Folds"), and the
+-- component offers them to CodeMirror ('offerFolds'). A fold hides lines
+-- and changes no text: the draft, the preview and a save have all of it.
+--
 -- The toolbar's commands are pure functions ("Wiki.Core.Markdown.Edit"). A
 -- button or a shortcut reads the text and the selection, applies the
 -- command, and writes the change back as one edit that undo reverts in one
@@ -294,6 +302,7 @@ import Wiki.App.Editor.Browser
   , insertAtCursor
   , mentionAsked
   , nextProblem
+  , offerFolds
   , onPreviewEntry
   , paneShown
   , pastedFiles
@@ -368,6 +377,7 @@ import Wiki.Core.Markdown.Edit
   , textColours
   )
 import Wiki.Core.Markdown.Emoji (emojiMatches)
+import Wiki.Core.Markdown.Folds (spoilerFolds)
 import Wiki.Core.Markdown.Problems qualified as Problems
 import Wiki.Core.Markdown.Render (IslandKey)
 import Wiki.Core.Page (Page, PageSummary, titleLine, withTitleLine)
@@ -2148,7 +2158,9 @@ component =
     -- Check the text for problems once the typing has stopped for the
     -- given time (in microseconds), as the preview follows it: a wait of
     -- its own, which the next change kills. The check runs on a worker
-    -- thread ('liftIO'), so a long page does not hold up the typing.
+    -- thread ('liftIO'), so a long page does not hold up the typing. The
+    -- same check finds the spoilers CodeMirror offers to fold (WP5.96),
+    -- which it takes only for the text they were found in.
     scheduleCheck :: Int -> H.HalogenM State Action Slots ViewOutput m ()
     scheduleCheck delay = do
       gets (\st -> st.checkWait) >>= traverse_ H.kill
@@ -2157,8 +2169,10 @@ component =
         gets (\st -> st.loaded) >>= \case
           Ready w -> do
             found <- liftIO (evaluate (force (Problems.checkText w.body)))
+            folds <- liftIO (evaluate (force (spoilerFolds w.body)))
             modify $ \st -> keepDrawnFailures st {checkWait = Nothing, checked = found, checkedText = w.body}
             publishProblems
+            gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (offerFolds host w.body folds))
           _ -> modify (\st -> st {checkWait = Nothing})
       modify (\st -> st {checkWait = Just waiting})
 

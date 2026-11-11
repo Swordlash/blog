@@ -18,6 +18,12 @@ module Test.Browser.Text
   , clearBody
   , mathIn
   , problemsMarked
+  , editorHost
+  , selectText
+  , watchEditor
+  , inputsSeen
+  , foldsTold
+  , proposeText
   )
 where
 
@@ -25,6 +31,7 @@ import Data.Aeson (FromJSON (..), decodeStrict, withObject, (.:))
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Protolude hiding (find)
 import Test.Hspec.Halogen
+import Web.DOM.Internal.Types qualified as Web
 
 $( browserJS
      ["jsbits/test-editor.js"]
@@ -38,6 +45,12 @@ $( browserJS
      , ("js_clear_body", "wiki_test_editor_clear_body", Safe, [t|IO ()|])
      , ("js_math", "wiki_test_editor_math", Safe, [t|IO JSText|])
      , ("js_problems", "wiki_test_editor_problems", Safe, [t|IO JSText|])
+     , ("js_host", "wiki_test_editor_host", Safe, [t|IO Web.Element|])
+     , ("js_select", "wiki_test_editor_select", Safe, [t|Int -> Int -> IO ()|])
+     , ("js_watch", "wiki_test_editor_watch", Safe, [t|IO ()|])
+     , ("js_inputs", "wiki_test_editor_inputs", Safe, [t|IO Int|])
+     , ("js_folds_told", "wiki_test_editor_folds_told", Safe, [t|IO JSText|])
+     , ("js_propose", "wiki_test_editor_propose", Safe, [t|Int -> JSText -> IO ()|])
      ]
  )
 
@@ -129,3 +142,49 @@ data Marked = Marked Int Int Text
 
 instance FromJSON Marked where
   parseJSON = withObject "problem" $ \o -> Marked <$> o .: "from" <*> o .: "to" <*> o .: "message"
+
+-- | The element the open editor's CodeMirror is in, its host: what the
+-- application's functions on the editor take ("Wiki.App.Editor.Browser").
+editorHost :: Mounted s q o m -> PageM s Web.Element
+editorHost ui = do
+  _ <- editorText ui
+  unsafeIOToPageM js_host
+
+-- | Select from one position to another (in UTF-16 units) in the editor's
+-- text, and give it the focus, changing nothing: where a test then presses
+-- a key.
+selectText :: Mounted s q o m -> Int -> Int -> PageM s ()
+selectText ui start end = do
+  _ <- editorText ui
+  unsafeIOToPageM (js_select start end)
+  settle
+
+-- | Count the editor's input events, and keep what each of its
+-- @wiki-folds@ events tells, from now on.
+watchEditor :: Mounted s q o m -> PageM s ()
+watchEditor ui = do
+  _ <- editorText ui
+  unsafeIOToPageM js_watch
+
+-- | How many input events the editor made since 'watchEditor': one for
+-- each change of its text.
+inputsSeen :: Mounted s q o m -> PageM s Int
+inputsSeen ui = do
+  _ <- editorText ui
+  unsafeIOToPageM js_inputs
+
+-- | The folds each @wiki-folds@ event told since 'watchEditor', in order.
+foldsTold :: Mounted s q o m -> PageM s [[(Int, Int)]]
+foldsTold ui = do
+  _ <- editorText ui
+  told <- unsafeIOToPageM (fromJSText <$> js_folds_told)
+  pure (fromMaybe [] (decodeStrict (encodeUtf8 told)))
+
+-- | Put text into the editor's text at a position (in UTF-16 units) as the
+-- writing assistant's tracked change, which leaves the selection where it
+-- is.
+proposeText :: Mounted s q o m -> Int -> Text -> PageM s ()
+proposeText ui at text = do
+  _ <- editorText ui
+  unsafeIOToPageM (js_propose at (toJSText text))
+  settle

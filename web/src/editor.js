@@ -60,6 +60,18 @@
 //   (wikiEditor.problems, through jsbits/editor.js) and never computed here:
 //   their ranges underlined in red, a marker in a gutter of their own, the
 //   message on hover, and wikiEditor.nextProblem moving to the next one.
+// - spoilers fold (WP5.96 of docs/PLAN.md), with CodeMirror's own folding:
+//   a block spoiler, from its start marker to its end marker, and a heading
+//   spoiler's section. Which lines fold is Haskell's
+//   (Wiki.Core.Markdown.Folds), set by the component (wikiEditor.foldable,
+//   through jsbits/editor.js) and never computed here: a marker in a
+//   gutter of its own folds and unfolds, and so do Ctrl+Shift+[ and
+//   Ctrl+Shift+] (Cmd+Alt+[ and Cmd+Alt+] on a Mac) on the cursor's line.
+//   The component may fold any ranges of lines too (wikiEditor.fold,
+//   unfold and foldedLines), and is told by a "wiki-folds" event, whose
+//   detail is the folds as JSON [[first, last]], when the author folds or
+//   unfolds, or an edit moves or opens a fold. A fold changes what is
+//   shown, never the text: it makes no "wiki-input" event.
 //
 // The text is never normalised: the document's only line separator is
 // "\n", so a "\r" the page holds stays where it is and the text handed back
@@ -74,10 +86,26 @@ import {
   insertCompletionText,
   pickedCompletion,
 } from "@codemirror/autocomplete";
-import { ChangeSet, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { Annotation, ChangeSet, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
 import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, standardKeymap } from "@codemirror/commands";
-import { Language, LanguageSupport, ensureSyntaxTree, syntaxHighlighting, syntaxTree } from "@codemirror/language";
+import {
+  Language,
+  LanguageSupport,
+  codeFolding,
+  ensureSyntaxTree,
+  foldCode,
+  foldEffect,
+  foldGutter,
+  foldKeymap,
+  foldNodeProp,
+  foldService,
+  foldedRanges,
+  syntaxHighlighting,
+  syntaxTree,
+  unfoldCode,
+  unfoldEffect,
+} from "@codemirror/language";
 // The language alone, not markdown(): that brings HTML's, CSS's and
 // JavaScript's parsers for HTML in a page, list continuation on Enter and
 // tag completion, none of which the editor wants.
@@ -396,8 +424,152 @@ const texMath = {
   ],
 };
 
-// The wiki's Markdown: CodeMirror's (GFM) with the math above.
-const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser.configure(texMath), [], "markdown");
+// CodeMirror's Markdown folds every paragraph, list, quotation, fence and
+// table (its foldNodeProp). The editor folds spoilers only (see the folds
+// below), so every node of the tree is given a fold of none.
+const noFold = () => null;
+const noSyntaxFolds = { props: [foldNodeProp.add(() => noFold)] };
+
+// The wiki's Markdown: CodeMirror's (GFM) with the math above, and without
+// its folds.
+const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser.configure([texMath, noSyntaxFolds]), [], "markdown");
+
+// The folds the editor offers (WP5.96 of docs/PLAN.md): the spoilers'
+// ranges of lines, as Haskell finds them with the wiki's own parser
+// (Wiki.Core.Markdown.Folds), each kept as {from, to}, the end of its first
+// line and the end of its last, so that a fold leaves its first line in
+// sight. They are set for the text they were found in (offerFolds), and
+// follow each change of the text until the next ones come: text typed at
+// the end of a first line stays before its fold, and a range a change
+// touches (as a fold, below) is dropped until then.
+const offerFolds = StateEffect.define();
+
+const offered = StateField.define({
+  create: () => [],
+  update(ranges, tr) {
+    for (const effect of tr.effects) if (effect.is(offerFolds)) return effect.value;
+    if (!tr.docChanged) return ranges;
+    return ranges
+      .filter((range) => !touches(tr.changes, range.from, range.to))
+      .map((range) => ({ from: tr.changes.mapPos(range.from, 1), to: tr.changes.mapPos(range.to, -1) }));
+  },
+});
+
+// Ranges of lines given as JSON [[first, last]], or [] for anything else.
+const parsedRanges = (json) => {
+  try {
+    const ranges = JSON.parse(json);
+    return Array.isArray(ranges) ? ranges.filter((range) => Array.isArray(range) && range.length === 2) : [];
+  } catch {
+    return [];
+  }
+};
+
+// A range of lines (from 1, both included) as a fold's {from, to}, or null
+// for lines the text does not have or a range of one line.
+const linesRange = (doc, first, last) =>
+  Number.isInteger(first) && Number.isInteger(last) && first >= 1 && last > first && last <= doc.lines
+    ? { from: doc.line(first).to, to: doc.line(last).to }
+    : null;
+
+// A transaction of the component's own folding (wikiEditor.fold and
+// unfold), which the "wiki-folds" event does not report back.
+const byProgram = Annotation.define();
+
+// The folds of a state, as [[first, last]], lines from 1, in the order of
+// the text.
+const foldedLinesOf = (state) => {
+  const found = [];
+  foldedRanges(state).between(0, state.doc.length, (from, to) => {
+    found.push([state.doc.lineAt(from).number, state.doc.lineAt(to).number]);
+  });
+  return found;
+};
+
+// The gutter's markers and the keys ask CodeMirror which range a line
+// folds: the one offered that starts at the line's end.
+const offeredFold = foldService.of((state, lineStart, lineEnd) => {
+  for (const range of state.field(offered)) {
+    if (range.from === lineEnd && range.to > lineEnd) return { from: lineEnd, to: range.to };
+  }
+  return null;
+});
+
+// The mark a fold leaves at the end of its first line: three dots, which a
+// click unfolds, read out as how many lines are hidden.
+const foldMark = (view, onclick, hidden) => {
+  const mark = document.createElement("span");
+  mark.className = "cm-foldPlaceholder cm-wiki-folded";
+  mark.textContent = "\u2026";
+  const label = hidden === 1 ? "1 line hidden, click to show it" : `${hidden} lines hidden, click to show them`;
+  mark.title = label;
+  mark.setAttribute("role", "button");
+  mark.setAttribute("aria-label", label);
+  mark.onclick = onclick;
+  return mark;
+};
+
+// The gutter's marker: an open fold can be closed, a closed one opened.
+const foldMarker = (open) => {
+  const marker = document.createElement("span");
+  marker.className = open ? "cm-wiki-fold-open" : "cm-wiki-fold-closed";
+  marker.textContent = open ? "\u2304" : "\u203a";
+  marker.title = open ? "Fold" : "Unfold";
+  return marker;
+};
+
+// Whether a change of the text touches a fold's range {from, to}: its
+// hidden part, or its end. Text typed or deleted at the end of the first
+// line, before the mark, is in sight, and does not touch it.
+const touches = (changes, from, to) => {
+  let touched = false;
+  changes.iterChangedRanges((changedFrom, changedTo) => {
+    if (changedFrom <= to && changedTo > from) touched = true;
+  });
+  return touched;
+};
+
+// A change of the text that touches a fold opens it, so that no hidden text
+// changes unseen and no fold is left on lines other than the ones it was
+// made on: whatever made the change, typing, a toolbar command, the
+// assistant, an undo. CodeMirror itself opens a fold whose inside a
+// deletion touches, or the cursor enters. This also opens one at its end:
+// text typed after the mark (where End puts the cursor on a folded line)
+// would go on the fold's last line, which is hidden, and Backspace at the
+// start of the line after it would join that line to the hidden one. A
+// change elsewhere moves the fold with its lines.
+const openTouchedFolds = EditorState.transactionExtender.of((tr) => {
+  if (!tr.docChanged) return null;
+  const effects = [];
+  foldedRanges(tr.startState).between(0, tr.startState.doc.length, (from, to) => {
+    if (!touches(tr.changes, from, to)) return;
+    const range = { from: tr.changes.mapPos(from, 1), to: tr.changes.mapPos(to, -1) };
+    if (range.to > range.from) effects.push(unfoldEffect.of(range));
+  });
+  return effects.length > 0 ? { effects } : null;
+});
+
+// Folding, as one extension: the ranges offered, CodeMirror's folds with
+// the mark above, and its gutter, which looks again whenever the ranges
+// offered change. Of the library's keys, those that fold and unfold the
+// cursor's line: the two that fold and unfold everything are Ctrl+Alt+[
+// and Ctrl+Alt+], which AltGr sends on Windows, where several layouts type
+// a bracket with it.
+const foldKeys = foldKeymap.filter((binding) => binding.run === foldCode || binding.run === unfoldCode);
+
+const folding = [
+  offered,
+  offeredFold,
+  openTouchedFolds,
+  codeFolding({
+    preparePlaceholder: (state, range) => state.doc.lineAt(range.to).number - state.doc.lineAt(range.from).number,
+    placeholderDOM: foldMark,
+  }),
+  foldGutter({
+    markerDOM: foldMarker,
+    foldingChanged: (update) => update.startState.field(offered) !== update.state.field(offered),
+  }),
+];
 
 // The selection, kept in sight while the text does not have the focus
 // (issue #120): the browser shows a selection only where the focus is, so
@@ -1106,6 +1278,9 @@ export function attach(textarea, host, original, codeTokens) {
   // and whether it was empty.
   let toldSelection = "";
   let toldEmpty = true;
+  // The folds last told by a "wiki-folds" event, or made by the component,
+  // as JSON [[first, last]].
+  let toldFolds = "[]";
 
   // A textarea nobody has typed in has its cursor at the start, which is
   // the title line's "#": the cursor starts instead where the page's text
@@ -1131,7 +1306,7 @@ export function attach(textarea, host, original, codeTokens) {
       // while the completion's list is open, when it may choose (the
       // completion's keys come first); Tab and the toolbar's shortcuts are
       // the component's (the form's keydown).
-      keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...historyKeymap, ...textKeys]),
+      keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...historyKeymap, ...textKeys, ...foldKeys]),
       EditorView.lineWrapping,
       new LanguageSupport(wikiMarkdown),
       syntaxHighlighting(highlighter),
@@ -1139,6 +1314,7 @@ export function attach(textarea, host, original, codeTokens) {
       unclosedMath,
       keptSelection,
       lintGutter(),
+      folding,
       EditorView.contentAttributes.of({
         "aria-label": textarea.getAttribute("aria-label") ?? "",
         spellcheck: "true",
@@ -1158,6 +1334,19 @@ export function attach(textarea, host, original, codeTokens) {
         }
         if (update.docChanged) {
           host.dispatchEvent(new CustomEvent("wiki-input", { detail: update.state.doc.toString() }));
+        }
+        // The folds changed other than by the component (the gutter, the
+        // keys, the mark, or an edit that moved or opened one): told as
+        // JSON [[first, last]]. A fold that only moved within its lines
+        // (text typed before its mark) is nothing new.
+        if (foldedRanges(update.startState) !== foldedRanges(update.state)) {
+          const now = JSON.stringify(foldedLinesOf(update.state));
+          if (now !== toldFolds) {
+            toldFolds = now;
+            if (!update.transactions.some((tr) => tr.annotation(byProgram))) {
+              host.dispatchEvent(new CustomEvent("wiki-folds", { detail: now }));
+            }
+          }
         }
         const before = update.startState.field(changes.field).length;
         const after = update.state.field(changes.field).length;
@@ -1262,6 +1451,47 @@ export function attach(textarea, host, original, codeTokens) {
       });
       view.dispatch(setDiagnostics(view.state, diagnostics));
     },
+    // The spoilers' folds Haskell found in `text` (Wiki.Core.Markdown.Folds),
+    // as [{from, to}], lines from 1: what the gutter and the keys offer to
+    // fold, in place of what they offered before. Folds found in another
+    // text (one typed since, or the text before a reload) are not taken:
+    // their lines would be the wrong ones. The component checks the text
+    // again after each change, so the folds of the text shown come next.
+    foldable: (text, list) => {
+      if (text !== view.state.doc.toString()) return;
+      const { doc } = view.state;
+      const ranges = (Array.isArray(list) ? list : []).map((fold) => linesRange(doc, fold.from, fold.to)).filter((range) => range !== null);
+      view.dispatch({ effects: offerFolds.of(ranges) });
+    },
+    // Fold each range of `ranges`, JSON [[first, last]], lines from 1,
+    // `first` staying in sight: any range, offered or not. A range the
+    // text does not have, or of one line, folds nothing. Not reported by
+    // a "wiki-folds" event.
+    fold: (ranges) => {
+      const { doc } = view.state;
+      const effects = parsedRanges(ranges)
+        .map(([first, last]) => linesRange(doc, first, last))
+        .filter((range) => range !== null)
+        .map((range) => foldEffect.of(range));
+      if (effects.length > 0) view.dispatch({ effects, annotations: byProgram.of(true) });
+    },
+    // Unfold the folds that start on the first line of a range of
+    // `ranges`, JSON [[first, last]]. Not reported by a "wiki-folds" event.
+    unfold: (ranges) => {
+      const { doc } = view.state;
+      const effects = [];
+      for (const [first] of parsedRanges(ranges)) {
+        if (!Number.isInteger(first) || first < 1 || first > doc.lines) continue;
+        const line = doc.line(first);
+        foldedRanges(view.state).between(line.from, line.to, (from, to) => {
+          if (from >= line.from && from <= line.to) effects.push(unfoldEffect.of({ from, to }));
+        });
+      }
+      if (effects.length > 0) view.dispatch({ effects, annotations: byProgram.of(true) });
+    },
+    // The folds, as JSON [[first, last]], lines from 1, in the order of the
+    // text.
+    foldedLines: () => JSON.stringify(foldedLinesOf(view.state)),
     // The cursor to the next problem after it (or the first), with its
     // message shown, and the focus in the text.
     nextProblem: () => {
@@ -1326,8 +1556,10 @@ export function attach(textarea, host, original, codeTokens) {
     },
   };
   host.wikiEditor = editor;
-  // The problems found before CodeMirror had loaded.
+  // The problems found before CodeMirror had loaded, and the folds, if
+  // they were found in the text it was given.
   if (host.wikiProblems) editor.problems(host.wikiProblems);
+  if (host.wikiFolds) editor.foldable(host.wikiFolds.text, host.wikiFolds.folds);
   // For the browser tests, which find the text by what one types into.
   view.contentDOM.wikiEditor = editor;
   editors.add(editor);

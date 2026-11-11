@@ -115,6 +115,7 @@ module Wiki.Core.Markdown.Ast
   , listingLanguage
   , spoilerProblemText
   , validSpoilerName
+  , leadingHeading
   , formulasOf
   , attribute
   , classes

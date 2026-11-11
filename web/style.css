@@ -7606,6 +7606,34 @@ a.mention {
   text-underline-offset: 0.2em;
 }
 
+/* Folded spoilers (web/src/editor.js, WP5.96): the gutter's markers, quiet
+   until hovered, and the mark a fold leaves at the end of its first line,
+   which a click unfolds. */
+.editor-cm .cm-foldGutter .cm-gutterElement {
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 0.15rem;
+}
+
+.editor-cm .cm-foldGutter .cm-gutterElement:hover {
+  color: var(--accent);
+}
+
+.editor-cm .cm-editor .cm-wiki-folded {
+  margin: 0 0.3rem;
+  padding: 0 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  cursor: pointer;
+}
+
+.editor-cm .cm-editor .cm-wiki-folded:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .editor-cm .cm-wiki-change-controls {
   display: inline-flex;
   gap: 0.15rem;
