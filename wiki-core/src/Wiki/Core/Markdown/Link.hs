@@ -82,6 +82,13 @@ data AttachmentRef = AttachmentRef
   , mediaType :: Maybe Text
   -- ^ Its media type (@video/mp4@), if known; otherwise the file name's
   -- extension decides how it is shown.
+  , frameUrl :: Maybe Text
+  -- ^ The URL of the attachment's interactive form, which a frame loads
+  -- when the embed asks for it (@{.interactive}@, "Wiki.Core.Markdown.Frame"):
+  -- an SVG the wiki's server stores, served with the headers that let its
+  -- scripts run cut off from the wiki. 'Nothing' for every other
+  -- attachment, and wherever no server sends those headers (the demo, a
+  -- feed, an export): the embed is then an image.
   }
   deriving stock (Eq, Show)
 

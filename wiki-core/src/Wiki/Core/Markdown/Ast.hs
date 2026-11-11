@@ -396,7 +396,10 @@ codeRows attrs = do
 -- a whole number above 0, held to at most 4000. Anything else (0, a
 -- fraction, another unit), and no @height@, gives none, and the frame is
 -- as high as its content. The page caps a frame at 80% of the window's
--- height either way.
+-- height either way. An interactive SVG's frame reads its embed's
+-- @height@ the same way (@![flame](attachment:flame.svg){.interactive
+-- height=600}@, "Wiki.Core.Markdown.Frame"), and without one is
+-- 'Wiki.Core.Markdown.Frame.svgFrameHeight' high.
 frameHeight :: Attributes -> Maybe Int
 frameHeight attrs = do
   written <- attribute "height" attrs
