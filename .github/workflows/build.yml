@@ -302,10 +302,10 @@ jobs:
     # Cache downloads, not an extracted installation: apt/dpkg must still
     # configure TeX and run its triggers on each fresh hosted runner. Every
     # group restores the archives, the base list's among them (a restore
-    # takes about three seconds), so that an install needs no download when
-    # the cache holds the version the index names, and has the cache to fall
-    # back on when the Ubuntu mirror cannot be reached
-    # (toolchain/ci-native-deps.sh).
+    # takes about three seconds), so that an install needs no apt-get update
+    # and no network when the cache holds the version the runner image's
+    # index names (toolchain/ci-native-deps.sh), as on the day the Ubuntu
+    # mirror could not be reached.
     - name: Identify the apt cache platform
       id: apt-platform
       run: |
@@ -322,15 +322,11 @@ jobs:
         restore-keys: ${{ runner.os }}-${{ runner.arch }}-apt-v1-${{ steps.apt-platform.outputs.os }}-
 
     - name: Install native test dependencies
-      id: native-deps
       run: sh toolchain/ci-native-deps.sh ${{ (matrix.group == 'unit' || matrix.group == 'deploy') && 'base' || 'full' }}
 
-    # One writer for each shared cache; every native job reads the same apt
-    # archives. Not saved when the install fell back on the cache
-    # (from-cache): nothing new was downloaded, and saved under a new key
-    # the old archives would stay that key's for as long as the key lives.
+    # One writer for each shared cache; every native job reads the same apt archives.
     - name: Save native apt archives
-      if: matrix.group == 'postgres' && steps.apt-cache.outputs.cache-hit != 'true' && steps.native-deps.outputs.from-cache != 'true'
+      if: matrix.group == 'postgres' && steps.apt-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v5
       with:
         path: ~/.cache/wiki-apt/*.deb
@@ -607,9 +603,9 @@ jobs:
       if: matrix.group == 'deploy'
       run: sh toolchain/test-ci-already-tested.sh
 
-    # The native jobs' apt install, against a fake apt-get whose downloads
-    # fail: from the archive cache, or a failure naming the package. Takes
-    # about two seconds, without root or the network.
+    # The native jobs' apt install, against a fake apt-get: no update when
+    # the archive cache serves, a bounded one otherwise. Takes about two
+    # seconds, without root or the network.
     - name: Test ci-native-deps.sh
       if: matrix.group == 'deploy'
       run: sh toolchain/test-ci-native-deps.sh
@@ -683,8 +679,8 @@ jobs:
         cabal-update: false
 
     # The native job's apt archives, restored and never saved here, as
-    # there: the install needs no download when they hold the version the
-    # index names, and falls back on them when the mirror cannot be reached.
+    # there: the install needs no update and no download when they hold the
+    # version the runner image's index names.
     - name: Identify the apt cache platform
       id: apt-platform
       run: |

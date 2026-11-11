@@ -16,21 +16,14 @@
 # when something has to be downloaded, and then the update runs. It runs
 # bounded (no retries, $APT_UPDATE_LIMIT seconds in all, default 45; a
 # healthy one takes about five), because apt waits on a name that does not
-# resolve for as long as the resolver does.
+# resolve for as long as the resolver does. An update that fails or is
+# stopped leaves the index the machine has, and the install goes on.
 #
-# When a download fails all the same (the mirror
-# unreachable), the script installs the newest version the cache holds of
-# each package apt could not fetch, without any download, and says so; on
-# GitHub Actions it also writes from-cache=true to the step's outputs, so
-# that the workflow does not save a cache that holds no new download. A
-# download that fails while the cache holds no version of the package is
-# tried once more after $APT_RETRY_PAUSE seconds (default 30), when the
-# failed attempt took less than $APT_RETRY_WITHIN seconds (default 120);
-# then the script fails, naming the package. An install that fails for any
-# other reason (a package's setup, a dependency apt cannot resolve) fails at
-# once, as before. apt itself already retries a failed download
-# (Acquire::Retries, 3 by default since apt 2.3.2), so a blip of seconds
-# needs nothing from here; the pause is for one of a minute.
+# When the mirror cannot be reached and the cache lacks a version the index
+# names, the install fails, as it always has: there is no fallback to older
+# cached versions, since installing those means resolving dependencies by
+# hand against apt. apt itself retries a failed download (Acquire::Retries,
+# 3 by default since apt 2.3.2).
 set -eu
 cd "$(dirname "$0")/.."
 profile=${1:-full}
@@ -40,8 +33,6 @@ case $profile in
   *) printf 'usage: ci-native-deps.sh [base|full]\n' >&2; exit 2 ;;
 esac
 cache=${APT_ARCHIVE_DIR:-$HOME/.cache/wiki-apt}
-pause=${APT_RETRY_PAUSE:-30}
-within=${APT_RETRY_WITHIN:-120}
 update_limit=${APT_UPDATE_LIMIT:-45}
 missing=
 for list in $lists; do
@@ -64,160 +55,24 @@ apt_get() {
     "$@"
 }
 
-# to_fetch <packages or archives>: the names of the packages whose archives
-# apt would download to install these, one per line; nothing when the cache
-# holds every one. apt's --print-uris prints one line per download, the URI
-# in quotes and then the file's name in the archive directory, which starts
-# with the package's name and an underscore. Fails when apt cannot resolve
-# the install at all.
-to_fetch() {
-  # The words are package names and archive paths; splitting is intentional.
-  # shellcheck disable=SC2086
-  uris=$(apt_get --print-uris -qq install --yes --no-install-recommends $*) || return 1
-  printf '%s\n' "$uris" | sed -n "s/^'[^']*' \([^_ ]*\)_.*/\1/p"
-}
-
-# newest_cached <package>: the path of the newest archive of the package in
-# the cache, or nothing. An archive's name is <package>_<version>_<arch>.deb,
-# with a version's epoch colon written %3a.
-newest_cached() {
-  best=
-  best_version=
-  for file in "$cache/$1"_*.deb; do
-    [ -e "$file" ] || continue
-    version=${file##*/}
-    version=${version#"$1"_}
-    version=$(printf '%s' "${version%_*}" | sed 's/%3[aA]/:/g')
-    if [ -z "$best" ] || dpkg --compare-versions "$version" gt "$best_version"; then
-      best=$file
-      best_version=$version
-    fi
-  done
-  printf '%s' "$best"
-}
-
-# from_cache: install $missing from the cache alone. Each package apt would
-# download, one asked for or a dependency, is replaced by the newest archive
-# of it the cache holds, given to apt by its path, until apt needs no
-# download; apt then installs and configures them all with --no-download.
-# Each round replaces every package of apt's plan the cache has a file for,
-# then asks apt again: an older archive can depend on older versions, so a
-# package the cache lacks may drop out of the next plan. The cache fails
-# only when a round can replace nothing, the plan then being final.
-# When the cache cannot serve, returns 1 with the reason in $reason, before
-# dpkg has touched anything. When the install itself fails, exits. apt does
-# not check an archive given by its path against the index's hash, as it
-# does an archive it takes from the cache by name: these are archives an
-# earlier run of this workflow downloaded and apt checked then.
-from_cache() {
-  wanted=$missing
-  rounds=0
-  while :; do
-    if ! fetch=$(to_fetch "$wanted"); then
-      reason='apt cannot install the versions the archive cache holds'
-      return 1
-    fi
-    [ -n "$fetch" ] || break
-    rounds=$((rounds + 1))
-    if [ "$rounds" -gt 10 ]; then
-      # shellcheck disable=SC2086
-      reason="apt still wants to download$(printf ' %s' $fetch) after 10 rounds"
-      return 1
-    fi
-    uncached=
-    substituted=
-    for package in $fetch; do
-      file=$(newest_cached "$package")
-      # A file already given to apt and still to be fetched is one apt does
-      # not take; the cache has nothing else to offer for that package.
-      case " $wanted " in *" $file "*) file= ;; esac
-      if [ -z "$file" ]; then
-        uncached="$uncached $package"
-        continue
-      fi
-      substituted=1
-      replaced=
-      next=
-      for word in $wanted; do
-        if [ "$word" = "$package" ]; then
-          next="$next $file"
-          replaced=1
-        else
-          next="$next $word"
-        fi
-      done
-      [ -n "$replaced" ] || next="$next $file"
-      wanted=$next
-    done
-    if [ -z "$substituted" ]; then
-      reason="the archive cache ($cache) holds no version of$uncached"
-      return 1
-    fi
-  done
-  printf 'Installing from the archive cache, without a download:%s\n' "$wanted"
-  # shellcheck disable=SC2086
-  apt_get install --yes --no-install-recommends --no-download $wanted || exit 1
-}
-
 if [ -n "$missing" ]; then
   mkdir -p "$cache"
-  # First against the index the image came with, without an update: when
-  # the cache holds every archive apt would need, install at once. apt
-  # still checks each archive against that index's hashes.
-  if needed=$(to_fetch "$missing" 2>/dev/null) && [ -z "$needed" ]; then
+  # What apt would download, against the index the image came with: one
+  # line per archive, which --print-uris prints starting with the quoted
+  # URI. Empty when the cache holds every one.
+  # Package names come from the fixed list above; splitting is intentional.
+  # shellcheck disable=SC2086
+  if uris=$(apt_get --print-uris -qq install --yes --no-install-recommends $missing 2>/dev/null) &&
+    ! printf '%s\n' "$uris" | grep -q "^'"; then
     echo 'The archive cache holds every archive the index names: installing without an update or a download.'
     # shellcheck disable=SC2086
     apt_get install --yes --no-install-recommends --no-download $missing
-    missing=
+  else
+    sudo timeout "$update_limit" apt-get -o Acquire::Retries=0 update ||
+      echo "apt-get update failed or took more than $update_limit seconds; going on with the package index the machine has."
+    # shellcheck disable=SC2086
+    apt_get install --yes --no-install-recommends $missing
   fi
-fi
-
-if [ -n "$missing" ]; then
-  # Bounded: no retries, and $APT_UPDATE_LIMIT seconds in all, since apt
-  # has no timeout for a name that does not resolve. An update that fails
-  # or is stopped leaves the index the machine has (apt replaces a
-  # repository's index files together, when all of them have arrived),
-  # which the install and the cache can still work from.
-  sudo timeout "$update_limit" apt-get -o Acquire::Retries=0 update ||
-    echo "apt-get update failed or took more than $update_limit seconds; going on with the package index the machine has."
-  attempt=1
-  while :; do
-    started=$(date +%s)
-    # Package names come from the fixed list above; splitting is intentional.
-    # shellcheck disable=SC2086
-    if apt_get install --yes --no-install-recommends $missing; then
-      break
-    fi
-    took=$(($(date +%s) - started))
-    # Only a failed download is worth another try or the cache: when apt
-    # needs nothing more from the network, the install failed for another
-    # reason, and apt has said which.
-    needed=$(to_fetch "$missing") || exit 1
-    [ -n "$needed" ] || exit 1
-    # shellcheck disable=SC2086
-    needed=$(printf ' %s' $needed)
-    if from_cache; then
-      printf 'Could not download%s: installed the versions the archive cache holds.\n' "$needed"
-      if [ -n "${GITHUB_OUTPUT:-}" ]; then
-        echo 'from-cache=true' >>"$GITHUB_OUTPUT"
-        printf '::warning::apt could not download%s; installed from the archive cache.\n' "$needed"
-      fi
-      break
-    fi
-    # A second try is for a blip. An attempt that took longer than
-    # $APT_RETRY_WITHIN seconds (apt waiting on each archive in turn) is an
-    # outage, and a second one would take as long again.
-    if [ "$attempt" -ge 2 ] || [ "$took" -ge "$within" ]; then
-      [ "$attempt" -ge 2 ] ||
-        printf 'The failed attempt took %s seconds, %s or more: no second try.\n' "$took" "$within" >&2
-      printf 'Could not download%s, and %s.\n' "$needed" "$reason" >&2
-      exit 1
-    fi
-    printf 'Could not download%s, and %s; trying again in %s seconds.\n' \
-      "$needed" "$reason" "$pause"
-    sleep "$pause"
-    attempt=$((attempt + 1))
-  done
 fi
 xmllint --version
 [ "$profile" = full ] || exit 0

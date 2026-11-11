@@ -1,22 +1,19 @@
 #!/bin/sh
-# Regression tests of toolchain/ci-native-deps.sh, against a fake apt-get
-# whose downloads can be made to fail, as when GitHub's runners cannot
-# reach their Ubuntu mirror: the install when the download works (a bounded
-# update first), when the cache holds the very version the index names (no
-# update at all), when the update fails or hangs, when it holds only older
-# versions (the newest of them is installed
-# by its path, a dependency's as well, and the step's outputs say
-# from-cache=true), when it holds no version of a package (one more try
-# after a pause, then a failure naming the package), when the download
-# fails once and works the second time, and when the install fails for a
-# reason other than a download (no second try, no cache).
+# Regression tests of toolchain/ci-native-deps.sh, against a fake apt-get:
+# nothing to install; the archive cache holds every archive the index
+# names (no apt-get update at all, one install with --no-download);
+# something must be downloaded (apt is asked first, then the update runs,
+# bounded, then the install); the update fails or hangs (the install goes
+# on); the download fails, as when GitHub's runners cannot reach their
+# Ubuntu mirror (the script fails with apt's message, and nothing is
+# installed from anywhere else); and dpkg fails.
 #
 #   sh toolchain/test-ci-native-deps.sh
 #
-# Needs neither root nor the network: sudo, apt-get, dpkg-query, xmllint
-# and sleep are fakes on the PATH the script under test sees first, and
-# apt's archive directory is a temporary one. The real dpkg compares
-# versions. The base profile is tested, with the real package list.
+# Needs neither root nor the network: sudo, apt-get, dpkg-query and xmllint
+# are fakes on the PATH the script under test sees first, and apt's archive
+# directory is a temporary one. The base profile is tested, with the real
+# package list.
 set -eu
 cd "$(dirname "$0")/.."
 script=$(pwd)/toolchain/ci-native-deps.sh
@@ -27,23 +24,18 @@ failures=0
 mkdir -p "$work/bin"
 
 # The fake apt-get. $FAKE/index is the package index, a line per package:
-# its name, its version and the packages it depends on, joined by commas,
-# each a name or name>=version. $FAKE/debs, when it exists, gives in the
-# same form the dependencies of other versions, those of cached archives.
+# its name, its version and the packages it depends on, joined by commas.
 # $FAKE/status lists what is installed, a name and a version per line.
-# install resolves the packages asked for (names, or archives by their
-# path) and the dependencies not installed, then, as apt does: with
-# --print-uris it prints a line per archive the archive directory lacks
-# (quoted URI, file name, size, hash; in reverse order when
-# $FAKE/uris-reversed exists) and stops; without, an archive it
-# lacks is downloaded into it, unless $FAKE/downloads-fail or
-# $FAKE/downloads-fail-once (removed when used) exists or --no-download is
-# given, which fail with exit 100 before anything is installed; then dpkg
-# installs everything, unless $FAKE/dpkg-fails exists. update succeeds,
-# with apt's warning when downloads fail, as on the runners, fails when
-# $FAKE/update-fails exists and hangs for half a minute when
-# $FAKE/update-hangs does. Each call is logged, one per line, and each
-# package installed, with where from.
+# install selects the packages asked for and the dependencies not
+# installed, then, as apt does: with --print-uris it prints a line per
+# archive the archive directory lacks (quoted URI, file name, size, hash)
+# and stops; without, an archive it lacks is downloaded into it, unless
+# $FAKE/downloads-fail exists or --no-download is given, which fail with
+# exit 100 before anything is installed; then dpkg installs everything,
+# unless $FAKE/dpkg-fails exists. update succeeds, with apt's warning when
+# downloads fail, as on the runners, fails when $FAKE/update-fails exists
+# and hangs for half a minute when $FAKE/update-hangs does. Each call is
+# logged, one per line, and each package installed.
 cat >"$work/bin/apt-get" <<'FAKE'
 #!/bin/sh
 printf 'apt-get %s\n' "$*" >>"$FAKE/calls"
@@ -60,7 +52,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 if [ "$command" = update ]; then
-  if [ -e "$FAKE/downloads-fail" ] || [ -e "$FAKE/downloads-fail-once" ]; then
+  if [ -e "$FAKE/downloads-fail" ]; then
     echo "W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble/InRelease  Temporary failure resolving 'azure.archive.ubuntu.com'"
     echo 'W: Some index files failed to download. They have been ignored, or old ones used instead.'
   fi
@@ -72,82 +64,31 @@ if [ "$command" = update ]; then
   exit 0
 fi
 [ "$command" = install ] && [ -n "$archives" ] || { echo 'fake apt-get: unexpected call' >&2; exit 2; }
-# satisfied <dependency>: the dependency, a name or name>=version, is met by
-# a package selected already or by the version installed.
-satisfied() {
-  dep_name=${1%%>=*}
-  dep_min=
-  [ "$dep_name" = "$1" ] || dep_min=${1#*>=}
-  ! grep -q "^$dep_name " "$FAKE/selected" || return 0
-  have=$(awk -v n="$dep_name" '$1 == n { print $2; exit }' "$FAKE/status")
-  [ -n "$have" ] || return 1
-  [ -z "$dep_min" ] || dpkg --compare-versions "$have" ge "$dep_min"
-}
-# selected: a line per package, "name version file explicit".
+# selected: a line per package, "name version file".
 : >"$FAKE/selected"
-# select_ <name> [version file explicit]: selects the package, unless it is
-# selected already, and resolves its dependencies: those $FAKE/debs gives
-# for that version (lines as the index's), else the index's. Without a
-# version, the package is an archive given by its path, selected already.
 select_() {
-  if [ $# -gt 1 ]; then
-    ! grep -q "^$1 " "$FAKE/selected" || return 0
-    printf '%s %s %s %s\n' "$1" "$2" "$3" "$4" >>"$FAKE/selected"
-  fi
-  chosen=$(awk -v n="$1" '$1 == n { print $2 }' "$FAKE/selected")
-  deps=$(awk -v n="$1" -v v="$chosen" '$1 == n && $2 == v { print $3; exit }' "$FAKE/debs" 2>/dev/null)
-  [ -n "$deps" ] || deps=$(awk -v n="$1" '$1 == n { print $3 }' "$FAKE/index")
-  for dep in $(printf '%s' "$deps" | tr ',' ' '); do
-    satisfied "$dep" || resolve "${dep%%>=*}"
-  done
-}
-resolve() {
+  ! grep -q "^$1 " "$FAKE/selected" || return 0
   line=$(awk -v n="$1" '$1 == n' "$FAKE/index")
   [ -n "$line" ] || { echo "E: Unable to locate package $1"; exit 100; }
   set -- $line
-  select_ "$1" "$2" "$1_$(printf '%s' "$2" | sed 's/:/%3a/g')_amd64.deb" no
+  printf '%s %s %s_%s_amd64.deb\n' "$1" "$2" "$1" "$2" >>"$FAKE/selected"
+  for dep in $(printf '%s' "${3:-}" | tr ',' ' '); do
+    grep -q "^$dep " "$FAKE/status" || select_ "$dep"
+  done
 }
-# An archive given by its path is that package's candidate, whatever the
-# index says: the archives first, then the names.
-for word in $words; do
-  case $word in
-    /*)
-      base=${word##*/}
-      version=${base#*_}
-      printf '%s %s %s yes\n' "${base%%_*}" \
-        "$(printf '%s' "${version%_*}" | sed 's/%3a/:/g')" "$base" >>"$FAKE/selected"
-      ;;
-  esac
-done
-for word in $words; do
-  case $word in
-    /*) base=${word##*/}; select_ "${base%%_*}" ;;
-    *) resolve "$word" ;;
-  esac
-done
-lacking=$(awk -v d="$archives" '$4 == "no" { print $3 }' "$FAKE/selected" | while read -r file; do
+for word in $words; do select_ "$word"; done
+lacking=$(awk '{ print $3 }' "$FAKE/selected" | while read -r file; do
   [ -e "$archives/$file" ] || printf '%s\n' "$file"
 done)
 if [ -n "$print_uris" ]; then
-  [ ! -e "$FAKE/uris-reversed" ] || lacking=$(printf '%s\n' "$lacking" | tac)
   for file in $lacking; do
     printf "'http://azure.archive.ubuntu.com/ubuntu/pool/main/%s' %s 39384 SHA512:0\n" "$file" "$file"
   done
   exit 0
 fi
 if [ -n "$lacking" ]; then
-  if [ -n "$no_download" ]; then
-    echo 'E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?'
-    exit 100
-  fi
-  if [ -e "$FAKE/downloads-fail-once" ]; then
-    rm "$FAKE/downloads-fail-once"
-    failing=1
-  else
-    failing=
-  fi
-  if [ -n "$failing" ] || [ -e "$FAKE/downloads-fail" ]; then
-    for file in $lacking; do
+  if [ -n "$no_download" ] || [ -e "$FAKE/downloads-fail" ]; then
+    [ -n "$no_download" ] || for file in $lacking; do
       echo "E: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/pool/main/$file  Temporary failure resolving 'azure.archive.ubuntu.com'"
     done
     echo 'E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?'
@@ -162,9 +103,9 @@ if [ -e "$FAKE/dpkg-fails" ]; then
   echo 'E: Sub-process /usr/bin/dpkg returned an error code (1)'
   exit 100
 fi
-while read -r name version file explicit; do
+while read -r name version file; do
   printf '%s %s\n' "$name" "$version" >>"$FAKE/status"
-  printf 'installed %s %s from %s\n' "$name" "$version" "$file" >>"$FAKE/calls"
+  printf 'installed %s %s\n' "$name" "$version" >>"$FAKE/calls"
 done <"$FAKE/selected"
 FAKE
 
@@ -184,62 +125,48 @@ cat >"$work/bin/sudo" <<'FAKE'
 exec "$@"
 FAKE
 
-cat >"$work/bin/sleep" <<'FAKE'
-#!/bin/sh
-printf 'sleep %s\n' "$*" >>"$FAKE/calls"
-FAKE
-
 cat >"$work/bin/xmllint" <<'FAKE'
 #!/bin/sh
 echo 'xmllint: using libxml version 20914'
 FAKE
 chmod 755 "$work/bin/apt-get" "$work/bin/dpkg-query" "$work/bin/sudo" \
-  "$work/bin/sleep" "$work/bin/xmllint"
+  "$work/bin/xmllint"
 
 # The index the cases share: libxml2-utils, the one package of the base
 # list a runner lacks, depends on libxml2 (installed) and on libxmlextra1
-# (not installed, and with an epoch, as apt writes it in an archive's name).
-# libpq-dev, on the image, depends on libpq5 at least its own version.
+# (not installed).
 index='libxml2-utils 2.9.14+dfsg-1.3ubuntu3.10 libxml2,libxmlextra1
-libxmlextra1 1:1.1
+libxmlextra1 1.1
 libxml2 2.9.14+dfsg-1.3ubuntu3.10
-libpq-dev 16.15-0ubuntu0.24.04.1 libpq5>=16.15-0ubuntu0.24.04.1
-libpq5 16.15-0ubuntu0.24.04.1
+libpq-dev 16.15-0ubuntu0.24.04.1
 libncurses-dev 6.4+20240113-1ubuntu2.2
 '
 on_image='libpq-dev 16.15-0ubuntu0.24.04.1
 libncurses-dev 6.4+20240113-1ubuntu2.2
 libxml2 2.9.14+dfsg-1.3ubuntu3.10
 '
-current='libxml2-utils_2.9.14+dfsg-1.3ubuntu3.10_amd64.deb libxmlextra1_1%3a1.1_amd64.deb'
-older='libxml2-utils_2.9.14+dfsg-1.3ubuntu3_amd64.deb libxml2-utils_2.9.14+dfsg-1.3ubuntu3.9_amd64.deb libxmlextra1_1%3a1.0_amd64.deb'
+current='libxml2-utils_2.9.14+dfsg-1.3ubuntu3.10_amd64.deb libxmlextra1_1.1_amd64.deb'
 
 # case_ <name> <cached archives> [flag files]: runs the script's base
 # profile with the index, the image's packages installed, the archives in
-# the cache and the flags (downloads-fail, downloads-fail-once, dpkg-fails,
-# update-fails, update-hangs) set; $status_lines, when set, replaces the
-# image's packages, $debs_lines, when set, is $FAKE/debs (the dependencies
-# of cached versions), $retry_within is the script's APT_RETRY_WITHIN (default
-# 600, so that a test's attempt is always short) and $update_limit its
-# APT_UPDATE_LIMIT (default 45). Leaves the output in $work/out, the
-# exit status in $status, the fake's log in $work/fake/calls and the
-# step's outputs in $work/output.
+# the cache and the flags (downloads-fail, dpkg-fails, update-fails,
+# update-hangs) set; $status_lines, when set, replaces the image's
+# packages, and $update_limit is the script's APT_UPDATE_LIMIT (default
+# 45). Leaves the output in $work/out, the exit status in $status and the
+# fake's log in $work/fake/calls.
 case_() {
   name=$1
   rm -rf "$work/fake" "$work/cache"
   mkdir -p "$work/fake" "$work/cache"
   printf '%s' "$index" >"$work/fake/index"
   printf '%s' "${status_lines-$on_image}" >"$work/fake/status"
-  [ -z "${debs_lines:-}" ] || printf '%s' "$debs_lines" >"$work/fake/debs"
   for file in $2; do echo cached >"$work/cache/$file"; done
   shift 2
   for flag; do touch "$work/fake/$flag"; done
   : >"$work/fake/calls"
-  : >"$work/output"
   status=0
   PATH="$work/bin:$PATH" FAKE="$work/fake" APT_ARCHIVE_DIR="$work/cache" \
-    GITHUB_OUTPUT="$work/output" APT_RETRY_PAUSE=7 \
-    APT_RETRY_WITHIN="${retry_within:-600}" APT_UPDATE_LIMIT="${update_limit:-45}" \
+    APT_UPDATE_LIMIT="${update_limit:-45}" \
     sh "$script" base >"$work/out" 2>&1 || status=$?
 }
 
@@ -259,7 +186,7 @@ expect_status() {
   echo "ok   $name: $1"
 }
 
-# expect_log <what> <grep -c pattern> <count>: the fake's log has that many
+# expect_log <what> <grep pattern> <count>: the fake's log has that many
 # lines matching.
 expect_log() {
   got=$(grep -c -e "$2" "$work/fake/calls" || true)
@@ -291,15 +218,9 @@ expect_output() {
   fi
 }
 
-# expect_from_cache <true|unset>: what the step's outputs say.
-expect_from_cache() {
-  if [ "$1" = true ]; then
-    grep -q -x 'from-cache=true' "$work/output" || { fail 'no from-cache=true in the outputs'; return; }
-  else
-    [ ! -s "$work/output" ] || { fail "outputs: $(cat "$work/output")"; return; }
-  fi
-  echo "ok   $name: from-cache $1"
-}
+update='^apt-get -o Acquire::Retries=0 update$'
+install='Packages=true install --yes --no-install-recommends libxml2-utils$'
+install_cached='Packages=true install --yes --no-install-recommends --no-download libxml2-utils$'
 
 status_lines="${on_image}libxml2-utils 2.9.14+dfsg-1.3ubuntu3.10
 "
@@ -308,139 +229,58 @@ unset status_lines
 expect_status ok
 expect_log 'no apt-get at all' '^apt-get' 0
 
-update='^apt-get -o Acquire::Retries=0 update$'
-
-case_ 'the download works' ''
+case_ 'the cache serves everything' "$current" downloads-fail
 expect_status ok
+expect_log 'no update at all' 'update$' 0
+expect_log 'one install, with --no-download' "$install_cached" 1
+expect_log 'no other install' 'Packages=true install' 1
+expect_log 'no download' '^download ' 0
+expect_log 'the package installed' '^installed libxml2-utils ' 1
+expect_log 'its dependency too' '^installed libxmlextra1 ' 1
+expect_output 'and it says so' 'installing without an update or a download'
+
+case_ 'something must be downloaded' ''
+expect_status ok
+expect_before 'apt is asked first' '--print-uris' "$update"
 expect_log 'one update, bounded' "$update" 1
 expect_log 'no other update' 'update$' 1
-expect_before 'asked what it would download, before the update' '--print-uris' "$update"
-expect_before 'the update before the install' "$update" 'Packages=true install'
+expect_before 'then the install' "$update" "$install"
 expect_log 'one install' 'Packages=true install' 1
 expect_log 'both archives downloaded' '^download ' 2
-expect_log 'the index version installed' '^installed libxml2-utils 2.9.14+dfsg-1.3ubuntu3.10 from libxml2-utils_' 1
-expect_log 'its dependency too' '^installed libxmlextra1 1:1.1 from' 1
-expect_log 'no pause' '^sleep' 0
-expect_from_cache unset
+expect_log 'the package installed' '^installed libxml2-utils ' 1
 for file in $current; do
   [ -e "$work/cache/$file" ] || fail "$file is not kept in the cache"
 done
 
-case_ 'the cache holds the index version' "$current" downloads-fail
-expect_status ok
-expect_log 'no update at all' 'update$' 0
-expect_log 'one install, with --no-download' 'Packages=true install --yes --no-install-recommends --no-download libxml2-utils$' 1
-expect_log 'no other install' 'Packages=true install' 1
-expect_log 'the index version installed' '^installed libxml2-utils 2.9.14+dfsg-1.3ubuntu3.10 from libxml2-utils_' 1
-expect_output 'and it says so' 'installing without an update or a download'
-expect_from_cache unset
-
-case_ 'the cache holds older versions' "$older" downloads-fail
-expect_status ok
-expect_log 'the newest cached version, by its path' "^installed libxml2-utils 2.9.14+dfsg-1.3ubuntu3.9 from libxml2-utils_2.9.14+dfsg-1.3ubuntu3.9_amd64.deb" 1
-expect_log "the dependency's cached version" '^installed libxmlextra1 1:1.0 from libxmlextra1_1%3a1.0_amd64.deb' 1
-expect_log 'installed without a download' "^apt-get .*--no-download .*$work/cache/libxml2-utils_2.9.14+dfsg-1.3ubuntu3.9_amd64.deb" 1
-expect_log 'no pause' '^sleep' 0
-expect_output 'and it says so' 'Could not download libxml2-utils libxmlextra1: installed the versions the archive cache holds.'
-expect_from_cache true
-if [ "$(ls "$work/cache" | wc -l)" -ne 3 ]; then
-  fail "the cache changed: $(ls "$work/cache")"
-fi
-
-case_ 'the cache lacks a dependency' 'libxml2-utils_2.9.14+dfsg-1.3ubuntu3.9_amd64.deb' downloads-fail
-expect_status fails
-expect_log 'one pause, then one more try' '^sleep 7$' 1
-expect_log 'two installs that download' 'Packages=true install --yes --no-install-recommends libxml2-utils' 2
-expect_log 'nothing installed' '^installed' 0
-expect_output 'and it names the package' "Could not download libxml2-utils libxmlextra1, and the archive cache ($work/cache) holds no version of libxmlextra1."
-expect_from_cache unset
-
-case_ 'the cache is empty' '' downloads-fail
-expect_status fails
-expect_log 'nothing installed' '^installed' 0
-expect_output 'and it names the packages' "holds no version of libxml2-utils libxmlextra1."
-
-retry_within=0
-case_ 'a long failed attempt' '' downloads-fail
-unset retry_within
-expect_status fails
-expect_log 'no pause, no second try' '^sleep' 0
-expect_log 'one install that downloads' 'Packages=true install' 1
-expect_output 'and it says why' 'no second try'
-expect_output 'and names the packages' 'holds no version of libxml2-utils libxmlextra1.'
-
-case_ 'the update fails' "$older" downloads-fail update-fails
+case_ 'the update fails' '' update-fails
 expect_status ok
 expect_output 'and it says so' 'apt-get update failed'
-expect_log 'the install goes on, from the cache' "^installed libxml2-utils 2.9.14+dfsg-1.3ubuntu3.9 from" 1
-expect_from_cache true
+expect_log 'the install goes on' '^installed libxml2-utils ' 1
 
 update_limit=1
-case_ 'the update hangs' "$older" downloads-fail update-hangs
+case_ 'the update hangs' '' update-hangs
 unset update_limit
 expect_status ok
 expect_output 'it is stopped, and it says so' 'apt-get update failed or took more than 1 seconds'
-expect_log 'the install goes on, from the cache' "^installed libxml2-utils 2.9.14+dfsg-1.3ubuntu3.9 from" 1
-expect_from_cache true
+expect_log 'the install goes on' '^installed libxml2-utils ' 1
 
-case_ 'the download fails once' '' downloads-fail-once
-expect_status ok
-expect_log 'one pause' '^sleep 7$' 1
-expect_log 'the index version installed' '^installed libxml2-utils 2.9.14+dfsg-1.3ubuntu3.10 from libxml2-utils_' 1
-expect_output 'and it says why it waits' 'trying again in 7 seconds'
-expect_from_cache unset
+case_ 'the download fails' 'libxml2-utils_2.9.14+dfsg-1.3ubuntu3_amd64.deb' downloads-fail
+expect_status fails
+expect_output "with apt's message" 'E: Unable to fetch some archives'
+expect_log 'one install, no second try' 'Packages=true install' 1
+expect_log 'nothing from the cache by --no-download' '--no-download' 0
+expect_log 'nothing installed' '^installed' 0
 
 case_ 'dpkg fails after a download' '' dpkg-fails
 expect_status fails
-expect_log 'no second try' 'Packages=true install' 1
-expect_log 'no pause' '^sleep' 0
-expect_log 'no install from the cache' '--no-download' 0
-expect_from_cache unset
+expect_log 'one install' 'Packages=true install' 1
+expect_log 'nothing installed' '^installed' 0
 
 case_ 'dpkg fails on what the cache holds' "$current" dpkg-fails
 expect_status fails
 expect_log 'no update' 'update$' 0
-expect_log 'no second try' 'Packages=true install' 1
-expect_log 'no pause' '^sleep' 0
-expect_from_cache unset
-
-# The index's libpq-dev needs a newer libpq5 than the one installed; the
-# cache holds only an older libpq-dev and no libpq5. apt's first plan names
-# both, the plan with the cached libpq-dev neither when that libpq-dev
-# makes do with the installed libpq5: the cache serves, in whichever order
-# apt lists the two.
-status_lines='libncurses-dev 6.4+20240113-1ubuntu2.2
-libxml2 2.9.14+dfsg-1.3ubuntu3.10
-libxml2-utils 2.9.14+dfsg-1.3ubuntu3.10
-libpq5 16.13-0ubuntu0.24.04.1
-'
-old_pq='libpq-dev_16.13-0ubuntu0.24.04.1_amd64.deb'
-debs_lines='libpq-dev 16.13-0ubuntu0.24.04.1 libpq5>=16.13-0ubuntu0.24.04.1
-'
-for order in '' uris-reversed; do
-  case_ "an older parent needs no newer dependency${order:+ ($order)}" "$old_pq" downloads-fail $order
-  expect_status ok
-  expect_log 'the cached libpq-dev, by its path' "^installed libpq-dev 16.13-0ubuntu0.24.04.1 from $old_pq" 1
-  expect_log 'no libpq5 installed' '^installed libpq5' 0
-  expect_log 'libpq5 not given to apt' '^apt-get .*libpq5' 0
-  expect_output 'the first plan named libpq5' 'libpq5'
-  if grep -q -F 'holds no version' "$work/out"; then
-    fail 'the output calls a package uncached'
-  else
-    echo "ok   $name: no package called uncached"
-  fi
-  expect_output 'it says it used the cache' 'installed the versions the archive cache holds.'
-  expect_from_cache true
-done
-
-debs_lines='libpq-dev 16.13-0ubuntu0.24.04.1 libpq5>=16.14-0ubuntu0.24.04.1
-'
-case_ 'the older parent needs a newer dependency too' "$old_pq" downloads-fail
-expect_status fails
+expect_log 'one install' 'Packages=true install' 1
 expect_log 'nothing installed' '^installed' 0
-expect_output 'and it names the dependency alone' "Could not download libpq-dev libpq5, and the archive cache ($work/cache) holds no version of libpq5."
-expect_from_cache unset
-unset status_lines debs_lines
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures failures"

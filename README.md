@@ -2951,13 +2951,11 @@ Every native job restores these archives, and only postgres saves them. When
 they hold every archive the runner image's own package index names, as on an
 exact hit, the install runs at once, with no `apt-get update` and no network;
 otherwise the update runs first, with no retries and for at most 45 seconds,
-since apt waits on a name that does not resolve as long as the resolver does.
-When a download fails, as when the runners cannot reach their Ubuntu mirror,
-`toolchain/ci-native-deps.sh` installs the newest version the cache holds of
-each package it could not download, without the network, and postgres does not
-save the cache that run; a package the cache holds no version of is tried once
-more after half a minute when the failed attempt was short (a blip, not an
-outage), and then the job fails, naming it.
+since apt waits on a name that does not resolve as long as the resolver does
+(`toolchain/ci-native-deps.sh`). When the runners cannot reach their Ubuntu
+mirror and the cache lacks a version the index names, the job fails, as it
+always has: installing older cached versions instead would mean resolving
+dependencies by hand against apt.
 
 Hosted builds cache `dist-newstyle` as well as the dependency store. The native
 job has a snapshot of `dist-newstyle/native`; wasm has a separate snapshot of its
