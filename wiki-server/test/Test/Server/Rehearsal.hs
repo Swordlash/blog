@@ -309,13 +309,14 @@ checksSpec backing = describe "the upgrade's rehearsal, its checks" $ do
       _ -> expectationFailure "there is no check named ways in"
   it "passes the logins check when the upgrade renames the login it wrote, which signs in under the new one" $ withDemoPlace backing $ \at serve -> do
     -- This program plays an old one without step 15 of the schema: the
-    -- database forgets that the step ran, before the seed and after each
-    -- of the old console's commands, which migrate it. The server of the
-    -- before then migrates it, as the new program would. This holds while
-    -- step 15, which makes no table, is the last step.
+    -- database forgets that the step and those after it ran, before the
+    -- seed and after each of the old console's commands, which migrate
+    -- it. The server of the before then migrates it, as the new program
+    -- would. This holds while the steps from 15 on make no table: step 15
+    -- makes none.
     let forget = withConnectionTo at $ \c -> do
           begin True c
-          runScript c "DELETE FROM wiki_schema WHERE version = 15;"
+          runScript c "DELETE FROM wiki_schema WHERE version >= 15;"
           commitTransaction c
         oldConsole place args input = consoleOn place args input <* forget
     forget

@@ -491,6 +491,19 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
       result <- runMemWikiWith opened.store opened.wiki (importMemWiki archive)
       result `shouldSatisfy` isLeft
       readIORef opened.wiki `shouldReturn` was
+
+    -- WP5.87 of docs/PLAN.md: an archive of a wiki from before the rule of
+    -- a login may hold a login the rule refuses.
+    it "refuses an archive with a login the rule of a login refuses, naming the user, and changes nothing" $ do
+      st <- edited
+      db <- fresh "import-login"
+      opened <- runMemDOM (openMemWiki db demo)
+      was <- readIORef opened.wiki
+      archive <- either (panic . toS) pure (readArchive (filesOf (toArchive goldenTime "test" st)))
+      let renamed u = if u.login == Login "editor" then User {id = u.id, login = Login "łucja", displayName = u.displayName, avatar = u.avatar} else u
+      result <- runMemWikiWith opened.store opened.wiki (importMemWiki archive {Export.users = map renamed archive.users})
+      result `shouldBe` Left "users.json: the user \"user-editor\" has the login \"łucja\", which the wiki no longer takes: A login has only ASCII letters, digits and punctuation. Give the user a login of ASCII letters, digits and punctuation in users.json, and import the archive again."
+      readIORef opened.wiki `shouldReturn` was
   where
     fresh name = do
       let db = memDatabase ("wiki-export-test-" <> name)
