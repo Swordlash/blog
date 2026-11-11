@@ -17,6 +17,7 @@ import Test.Markdown.Comments qualified as Comments
 import Test.Markdown.Edit qualified as Edit
 import Test.Markdown.Emoji qualified as Emoji
 import Test.Markdown.Frame qualified as Frame
+import Test.Markdown.HtmlCost qualified as HtmlCost
 import Test.Markdown.Link qualified as Link
 import Test.Markdown.Markers qualified as Markers
 import Test.Markdown.Mention qualified as Mention
@@ -50,6 +51,7 @@ main = hspec . parallel $ do
   Math.spec
   Allowlist.spec
   Frame.spec
+  HtmlCost.spec
   Link.spec
   Markers.spec
   Comments.spec

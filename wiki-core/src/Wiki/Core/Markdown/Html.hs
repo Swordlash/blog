@@ -97,6 +97,7 @@ module Wiki.Core.Markdown.Html
 where
 
 import Data.Char (isAsciiUpper)
+import Data.List (span)
 import Data.Text qualified as T
 import Protolude
 import Text.HTML.TagSoup (Tag (..), parseOptions, parseTagsOptions, renderOptions, renderTagsOptions)
@@ -227,14 +228,18 @@ htmlTokens = go 0
 -- | Text cut at the first end tag of an element of this name, as the HTML
 -- parser finds it ('htmlTokens'): what is before it, and the end tag with
 -- what follows; all of it, and nothing, when there is none.
+--
+-- The text is scanned once: what is passed over is kept as pieces, and
+-- joined once at the end, so that a content of many other end tags costs
+-- as much as its length, not its length times their number.
 endTag :: Text -> Text -> (Text, Text)
-endTag name = go ""
+endTag name = go []
   where
     go before text = case T.breakOn "</" text of
-      (_, "") -> (before <> text, "")
+      (_, "") -> (T.concat (reverse (text : before)), "")
       (ahead, tag)
-        | ends (T.drop 2 tag) -> (before <> ahead, tag)
-        | otherwise -> go (before <> ahead <> T.take 2 tag) (T.drop 2 tag)
+        | ends (T.drop 2 tag) -> (T.concat (reverse (ahead : before)), tag)
+        | otherwise -> go (T.take 2 tag : ahead : before) (T.drop 2 tag)
     ends t =
       T.map asciiLower (T.take (T.length name) t) == name
         && maybe False ((`elem` ("\t\n\f\r />" :: [Char])) . fst) (T.uncons (T.drop (T.length name) t))
@@ -275,15 +280,22 @@ foreignElements = ["svg", "math"]
 --
 -- A @\<style>@ element (in a frame's HTML) gives nothing either: its CSS
 -- is not text a reader sees.
+--
+-- The pieces are gathered in a list and joined once, so that the text of
+-- many nodes costs as much as its length.
 htmlText :: [Node a] -> Text
-htmlText = foldMap $ \case
-  Element "style" _ _ -> ""
-  Element name _ children
-    | name `elem` ["br", "hr"] -> "\n"
-    | name `elem` phrasingElements -> htmlText children
-    | otherwise -> "\n" <> htmlText children <> "\n"
-  TextNode t -> t
-  Content _ -> ""
+htmlText nodes = T.concat (pieces nodes [])
+  where
+    pieces :: [Node a] -> [Text] -> [Text]
+    pieces ns rest = foldr piece rest ns
+    piece node rest = case node of
+      Element "style" _ _ -> rest
+      Element name _ children
+        | name `elem` ["br", "hr"] -> "\n" : rest
+        | name `elem` phrasingElements -> pieces children rest
+        | otherwise -> "\n" : pieces children ("\n" : rest)
+      TextNode t -> t : rest
+      Content _ -> rest
 
 ----------------------------------------------------------------------
 -- Writing HTML
@@ -301,19 +313,18 @@ htmlText = foldMap $ \case
 -- @\<pre>@ whose text starts with a newline gets one more, which the
 -- browser drops ('finishChildren').
 renderHtml :: [Node Void] -> Text
-renderHtml = renderTagsOptions renderOptions {TagSoup.optRawTag = (== "style")} . concatMap tags
+renderHtml nodes = renderTagsOptions renderOptions {TagSoup.optRawTag = (== "style")} (foldr tags [] nodes)
   where
-    tags :: Node Void -> [Tag Text]
-    tags = \case
+    -- Each node's tags, before the tags after it: a tree of any depth is
+    -- written in as many steps as it has nodes.
+    tags :: Node Void -> [Tag Text] -> [Tag Text]
+    tags node rest = case node of
       Element name attrs children
-        | name `elem` voidElements -> [TagOpen name attrs]
-        | name == "style" -> [TagOpen name attrs, TagText (unendedCss (foldMap textOf children)), TagClose name]
-        | name == "pre", TextNode t : _ <- children, "\n" `T.isPrefixOf` t -> [TagOpen name attrs, TagText "\n"] <> concatMap tags children <> [TagClose name]
-        | otherwise -> [TagOpen name attrs] <> concatMap tags children <> [TagClose name]
-      TextNode t -> [TagText t]
-    textOf = \case
-      TextNode t -> t
-      _ -> ""
+        | name `elem` voidElements -> TagOpen name attrs : rest
+        | name == "style" -> TagOpen name attrs : TagText (unendedCss (T.concat [t | TextNode t <- children])) : TagClose name : rest
+        | name == "pre", TextNode t : _ <- children, "\n" `T.isPrefixOf` t -> TagOpen name attrs : TagText "\n" : foldr tags (TagClose name : rest) children
+        | otherwise -> TagOpen name attrs : foldr tags (TagClose name : rest) children
+      TextNode t -> TagText t : rest
 
 ----------------------------------------------------------------------
 -- The allowlist
@@ -533,7 +544,7 @@ build allowlist context = finish . foldl' step (Builder [Open "" [] []] Nothing 
       | name `elem` droppedElements = b {skipping = Just (name, 0)}
       | not (allowedHere name) = b
       | inTableStructure b.stack && name `notElem` tableElements = b
-      | otherwise = case prepare name b.stack of
+      | otherwise = case prepare name (capped b.stack) of
           Nothing -> b
           Just s
             | name `elem` voidElements -> b {stack = append (Element name kept []) s}
@@ -546,6 +557,22 @@ build allowlist context = finish . foldl' step (Builder [Open "" [] []] Nothing 
       Phrasing -> name `elem` phrasingElements
       PhrasingInLink -> name `elem` phrasingElements && name /= "a"
 
+-- | 'maxDepth' is how deep elements nest: an element started deeper is put
+-- beside the deepest instead, inside its parent, as Chromium's parser puts
+-- it (its @kMaximumHTMLParserDOMTreeDepth@, 512). Every start and end tag
+-- looks down the open elements for one it closes; with no bound, HTML of
+-- many elements never closed would cost the square of their number.
+maxDepth :: Int
+maxDepth = 512
+
+-- | The open elements, the deepest closed when they are 'maxDepth' deep,
+-- so that what starts next is put beside it. The document at the bottom
+-- does not count.
+capped :: [Open a] -> [Open a]
+capped s
+  | length (take (maxDepth + 1) s) > maxDepth = closeOne s
+  | otherwise = s
+
 -- | Add text or content where it may go: not empty, and not directly
 -- inside a table, its sections or its rows.
 appendContent :: Node a -> [Open a] -> [Open a]
@@ -557,14 +584,27 @@ appendContent node s = case node of
 -- | Add a child to the innermost element, merged with the text before it
 -- if both are text (a comment or a dropped element between them leaves
 -- nothing to separate them).
+--
+-- Texts next to each other are kept apart while their element is open, and
+-- joined once when it closes ('joinTexts'): joining each one to the text
+-- before it as it came would copy that text each time.
 append :: Node a -> [Open a] -> [Open a]
 append node = \case
-  Open n as cs : rest -> Open n as (merged cs) : rest
+  Open n as cs : rest -> Open n as (node : cs) : rest
   [] -> []
+
+-- | Children in the order of the document, each run of texts next to each
+-- other made one text.
+joinTexts :: [Node a] -> [Node a]
+joinTexts = \case
+  [] -> []
+  TextNode t : rest -> case span isText rest of
+    (texts, after) -> TextNode (T.concat (t : [x | TextNode x <- texts])) : joinTexts after
+  node : rest -> node : joinTexts rest
   where
-    merged cs = case (node, cs) of
-      (TextNode new, TextNode old : older) -> TextNode (old <> new) : older
-      _ -> node : cs
+    isText = \case
+      TextNode _ -> True
+      _ -> False
 
 inTableStructure :: [Open a] -> Bool
 inTableStructure = \case
@@ -575,7 +615,7 @@ inTableStructure = \case
 -- document is never closed.
 closeOne :: [Open a] -> [Open a]
 closeOne = \case
-  Open name attrs children : rest@(_ : _) -> append (Element name attrs (finishChildren name (reverse children))) rest
+  Open name attrs children : rest@(_ : _) -> append (Element name attrs (finishChildren name (joinTexts (reverse children)))) rest
   s -> s
 
 closeN :: Int -> [Open a] -> [Open a]
@@ -585,7 +625,7 @@ closeN n s = foldl' (\acc _ -> closeOne acc) s [1 .. n]
 -- still open ended where the HTML ends, as a browser ends it.
 finish :: Builder a -> [Node a]
 finish b = case closeN (length atEnd - 1) atEnd of
-  Open _ _ children : _ -> reverse children
+  Open _ _ children : _ -> joinTexts (reverse children)
   [] -> []
   where
     atEnd = maybe b.stack (\inside -> append (styleElement inside) b.stack) b.styling
@@ -602,12 +642,21 @@ styleElement inside = Element "style" [] [TextNode css | not (T.null css)]
 -- | CSS that cannot end its style element: each @<\/style@ in it, in any
 -- case, written @<\\/style@, in the case it had, which CSS reads as the
 -- same text ('renderHtml').
+--
+-- The CSS is lowered once and cut where the lowered text has @</style@, so
+-- that it is read once whatever it holds.
 unendedCss :: Text -> Text
-unendedCss css = case T.breakOn "</style" (T.map asciiLower css) of
-  (_, "") -> css
-  (ahead, _) ->
-    let n = T.length ahead
-     in T.take n css <> "<\\/" <> T.take 5 (T.drop (n + 2) css) <> unendedCss (T.drop (n + 7) css)
+unendedCss css = T.concat (go css (T.splitOn "</style" (T.map asciiLower css)))
+  where
+    -- The pieces of the original between the occurrences, at the lengths
+    -- of the lowered pieces (lowering ASCII keeps every length), each
+    -- occurrence written with its own case after @<\/@.
+    go original = \case
+      [] -> []
+      [_] -> [original]
+      lowered : more ->
+        let (piece, rest) = T.splitAt (T.length lowered) original
+         in piece : "<\\/" : T.take 5 (T.drop 2 rest) : go (T.drop 7 rest) more
 
 -- | A letter of ASCII in lower case; any other character as it is, so that
 -- a text keeps its length.

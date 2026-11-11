@@ -225,6 +225,13 @@ spec = describe "Markdown.Html" $ do
         `reads'` [el "b" [el "table" [el "tbody" [el "tr" [el "td" [txt "xy"]]]], txt "z"]]
     it "closes the elements opened inside one that ends" $
       "<div><b>x</div>y" `reads'` [el "div" [el "b" [txt "x"]], txt "y"]
+    it "nests elements 512 deep at most, as Chromium does, putting a deeper one beside the deepest" $ do
+      let depth = \case
+            Element _ _ children -> 1 + foldr (max . depth) 0 children
+            _ -> 0 :: Int
+          tree = parseHtml (T.replicate 600 "<div>" <> "x")
+      map depth tree `shouldBe` [512]
+      T.count "x" (htmlText tree) `shouldBe` 1
     it "drops the newline that starts a pre" $ do
       "<pre>\ncode\n</pre>" `reads'` [el "pre" [txt "code\n"]]
       "<pre>\n\ncode</pre>" `reads'` [el "pre" [txt "\ncode"]]

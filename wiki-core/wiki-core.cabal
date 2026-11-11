@@ -168,6 +168,7 @@ test-suite wiki-core-test
       Test.Markdown.Edit
       Test.Markdown.Emoji
       Test.Markdown.Frame
+      Test.Markdown.HtmlCost
       Test.Markdown.Link
       Test.Markdown.Markers
       Test.Markdown.Mention
