@@ -245,6 +245,15 @@ spec = describe "Markdown.Render" $ do
           sortedKeys = concat [keysOf inner | h <- shown, Elem _ _ _ inner' <- [h.unHTML], let inner = map HTML inner']
       keysOf shown `shouldBe` [["task-0-0", "task-1-2"]]
       sortedKeys `shouldBe` [["task-3-0", "task-2-0"]]
+    it "sorts a list whose line of attributes follows a footnote's label or a list item's marker, in the footnote or the item" $ do
+      html <- markdown "See[^n].\n\n[^n]: {.sorted}\n    - [x] Old\n    - [ ] New\n"
+      html `shouldSatisfy` T.isInfixOf "<li id=\"fn-1\"><div class=\"sorted\"><ul class=\"task-list\"><li class=\"task-list-item\"><input aria-label=\"New\""
+      "- {.sorted}\n  - [x] Old\n  - [ ] New\n"
+        `shows'` ( "<ul><li><div class=\"sorted\"><ul class=\"task-list\">"
+                     <> "<li class=\"task-list-item\"><input aria-label=\"New\" disabled type=\"checkbox\"> <span class=\"task-text\">New</span></li>"
+                     <> "<li class=\"task-list-item task-done\"><input aria-label=\"Old\" checked disabled type=\"checkbox\"> <span class=\"task-text\">Old</span></li>"
+                     <> "</ul></div></li></ul>"
+                 )
     it "numbers a footnote's tasks after the page's, as the tasks of the tree are" $
       showsWith
         defaultOptions {taskBoxes = Just (\_ _ -> panic "no change is made")}

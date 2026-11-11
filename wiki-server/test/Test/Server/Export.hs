@@ -198,6 +198,32 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     filter (`elem` ["Old", "New"]) (query (\case P.Str t -> [t]; _ -> []) bs) `shouldBe` ["Old", "New"]
     query (\case P.Str t -> [t]; _ -> []) bs `shouldSatisfy` elem "\9746"
 
+  it "leaves out a line of attributes alone and keeps what opens the blocks around it: a footnote, a list item, a quotation, a box" $ do
+    let lists = query (\case P.BulletList items -> [length items]; _ -> [])
+        codes = query (\case P.CodeBlock _ t -> [t]; _ -> [])
+        notes = query (\case P.Note bs -> [lists bs]; _ -> [])
+    noted <- blocksOf ToOther place "See[^n].\n\n[^n]: {.sorted}\n    - [x] Old\n    - [ ] New\n"
+    show noted `shouldNotSatisfy` T.isInfixOf "sorted"
+    notes noted `shouldBe` [[2]]
+    codes noted `shouldBe` []
+    itemed <- blocksOf ToOther place "- {.sorted}\n  - [x] Old\n  - [ ] New\n"
+    show itemed `shouldNotSatisfy` T.isInfixOf "sorted"
+    lists itemed `shouldBe` [1, 2]
+    codes itemed `shouldBe` []
+    quoted <- blocksOf ToOther place "> {.sorted}\n> - [x] Old\n> - [ ] New\n"
+    show quoted `shouldNotSatisfy` T.isInfixOf "sorted"
+    query (\case P.BlockQuote bs -> [lists bs]; _ -> []) quoted `shouldBe` [[2]]
+    boxed <- blocksOf ToOther place "> [!NOTE]\n> {.sorted}\n> - [x] Old\n> - [ ] New\n"
+    show boxed `shouldNotSatisfy` T.isInfixOf "sorted"
+    lists boxed `shouldBe` [2]
+    filter (`elem` ["Old", "New"]) (query (\case P.Str t -> [t]; _ -> []) boxed) `shouldBe` ["Old", "New"]
+
+  it "keeps a brace line that is no line of attributes to the wiki: in code, in a paragraph" $ do
+    coded <- blocksOf ToOther place "```\n{.sorted}\n```\n"
+    query (\case P.CodeBlock _ t -> [t]; _ -> []) coded `shouldBe` ["{.sorted}"]
+    texted <- blocksOf ToOther place "Text\n{.sorted}\n"
+    T.concat (query (\case P.Str t -> [t]; _ -> []) texted) `shouldSatisfy` T.isInfixOf "{.sorted}"
+
   it "lets through only what the allowlist keeps of raw HTML, and reads it as pandoc's own" $ do
     bs <- blocksOf ToOther place "<script>alert('no')</script>\n\nPress <kbd>Ctrl</kbd> and <b onclick=\"steal()\">this</b>.\n\n<div class=\"box\"><img src=\"tree.png\" alt=\"A tree\" onerror=\"steal()\"></div>\n"
     raw bs `shouldBe` []
