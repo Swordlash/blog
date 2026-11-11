@@ -41,6 +41,21 @@ refuses an archive's users when one has such a login, for an import that
 brings them. `actionText` knows `user.rename`, "Changed a user's login",
 and an audit entry's address may be `migration`.
 
+Tasks ticked in a page (WP5.91, #204): `Wiki.Core.Markdown.Tasks` names a
+page's tasks by their index in the order of the tree (`tasksOf`, each with
+the tasks under it), applies the rules for the tasks under a task
+(`tick`), moves ticks onto a newer text with the same tasks
+(`rebaseTicks`), and writes ticks into the text (`applyTicks`), changing
+the boxes named and nothing else: a box is found where the parser found
+its task (`parseWithTasks` gives each task's bullet), and the result is
+parsed again and checked, or refused. The renderer labels each box with
+its item's text, gives a done task's item the class `task-done` and its
+text a `span.task-text`, and enables the boxes, each with `data-task`,
+when `Options.taskBoxes` says what a change does. Attributes in braces on
+the line before a list put it in a `Div` that has them, and a list in a
+`Div` of the class `sorted` shows its done tasks last; the line is a
+marker line of the role `SetsAttributes`, which the export leaves out.
+
 A page's backlinks (WP5.88, #189): `linkDestinations` gives the
 destination of every link the renderer makes of some blocks, in document
 order: Markdown and wiki links, embeds, and the `a` elements of raw HTML
