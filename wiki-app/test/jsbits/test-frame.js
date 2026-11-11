@@ -113,3 +113,15 @@ function wiki_test_frame_mark(frameSelector) {
 function wiki_test_frame_marked(frameSelector) {
   return wikiTestFrameDocument(frameSelector)?.documentElement.dataset.wikiTestMark === "kept";
 }
+
+// Add a box 500px high at the end of the frame's document, as content that
+// changes after the frame was measured; false before the document has
+// loaded.
+function wiki_test_frame_grow(frameSelector) {
+  const body = wikiTestFrameDocument(frameSelector)?.querySelector(".page-body");
+  if (!body) return false;
+  const box = body.ownerDocument.createElement("div");
+  box.style.height = "500px";
+  body.append(box);
+  return true;
+}

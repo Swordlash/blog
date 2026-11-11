@@ -135,7 +135,11 @@ class (Monad m) => MonadIslands m where
 
   -- | Keep an @html@ fence's frame as high as its content, from now on:
   -- as its images load, as its width changes, and when it is given a new
-  -- document. Natively there is no layout to measure, and nothing to do.
+  -- document. Asked again, it measures the frame again. A frame with a
+  -- @data-height@ attribute (a height its fence gives) is left as it is,
+  -- and a frame with anything placed fixed in it is at its cap (the rule
+  -- is in @islands.js@). Natively there is no layout to measure, and
+  -- nothing to do.
   fitFrame :: Element -> m ()
   default fitFrame :: (MonadTrans t, MonadIslands n, m ~ t n) => Element -> m ()
   fitFrame = lift . fitFrame

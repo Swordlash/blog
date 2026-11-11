@@ -107,6 +107,7 @@ module Wiki.Core.Markdown.Ast
   , plainText
   , codeRows
   , codeNumbered
+  , frameHeight
   , norenderClass
   , languageOfClasses
   , listingLanguage
@@ -179,12 +180,13 @@ data Block
   | -- | Display math: a @math@ or @latex@ fence, or @$$…$$@ or @\\[…\\]@
     -- in a paragraph. The TeX source, as written between the delimiters.
     MathBlock Text
-  | -- | An @html@ fence: HTML as written, which the page shows in a frame
-    -- of its own, with the author's styles, through the allowlist of
+  | -- | An @html@ fence: its attributes (a height, 'frameHeight') and its
+    -- HTML as written, which the page shows in a frame of its own, with
+    -- the author's styles, through the allowlist of
     -- "Wiki.Core.Markdown.Html" widened by @style@
     -- ("Wiki.Core.Markdown.Frame"). Unlike 'RawHtmlBlock', which is
     -- HTML in the page itself.
-    HtmlBlock Text
+    HtmlBlock Attributes Text
   | List ListKind [ListItem]
   | -- | A pipe table: each column's alignment, the header's cells (none
     -- when the table has no header), and the rows' cells.
@@ -385,6 +387,20 @@ codeRows attrs = do
   guard (not (T.null written) && T.length written <= 6 && T.all isDigit written)
   n <- readMaybe (T.unpack written)
   guard (n > 0)
+  pure n
+
+-- | The height an @html@ fence's frame is given, in pixels, from its
+-- fence's attribute @height=N@ (@```html {height=300}@, or @height=300px@):
+-- a whole number from 1 to 4000. Anything else, and no @height@, gives
+-- none, and the frame is as high as its content. The page caps a frame at
+-- 80% of the window's height either way.
+frameHeight :: Attributes -> Maybe Int
+frameHeight attrs = do
+  written <- attribute "height" attrs
+  let digits = fromMaybe written (T.stripSuffix "px" written)
+  guard (not (T.null digits) && T.length digits <= 4 && T.all isDigit digits)
+  n <- readMaybe (T.unpack digits)
+  guard (n >= 1 && n <= 4000)
   pure n
 
 -- | Whether a code block shows a number before each line: its fence has
@@ -1028,6 +1044,9 @@ instance CM.HasAttributes Blocks where
         Spoiler h (Heading l attrs xs' : rest) | h.kind == OnHeading -> Spoiler h (Heading l (attrs <> new) xs' : rest)
         CodeBlock attrs lang t -> codeBlockWith (attrs <> new) lang t
         Div attrs xs' -> Div (attrs <> new) xs'
+        -- An html fence keeps its attributes (its height), unless they
+        -- make it a listing.
+        HtmlBlock attrs t | norenderClass `notElem` classes new -> HtmlBlock (attrs <> new) t
         -- A fence the parser has rendered already, with @norender@ in the
         -- braces after its info word (@```mermaid {.norender}@).
         other
@@ -1739,7 +1758,7 @@ listKind = \case
 codeBlockWith :: Attributes -> Maybe Text -> Text -> Block
 codeBlockWith attrs info code
   | norenderClass `elem` classes attrs = CodeBlock attrs (listingLanguage <$> lang) code
-  | otherwise = fromMaybe (CodeBlock attrs lang code) (lang >>= (`renderedBlock` code))
+  | otherwise = fromMaybe (CodeBlock attrs lang code) (lang >>= \l -> renderedBlock attrs l code)
   where
     lang = info <|> languageOfClasses (classes attrs)
 
@@ -1751,18 +1770,19 @@ codeBlockWith attrs info code
 languageOfClasses :: [Text] -> Maybe Text
 languageOfClasses = head . filter (`notElem` [numberedClass, norenderClass])
 
--- | The block a fence of this language is rendered as, if the wiki renders
+-- | The block a fence of this language and these attributes is rendered
+-- as, if the wiki renders
 -- it: a Mermaid diagram (@mermaid@), a TikZ picture (@tikz@), display
 -- math (@math@, and @latex@, which the owner asked to work as @$$@ does)
 -- or HTML in a frame (@html@). Any other language is a listing; so are
 -- @tex@, @xml@ and @svg@.
-renderedBlock :: Text -> Text -> Maybe Block
-renderedBlock lang code = case lang of
+renderedBlock :: Attributes -> Text -> Text -> Maybe Block
+renderedBlock attrs lang code = case lang of
   "mermaid" -> Just (Mermaid code)
   "tikz" -> Just (Tikz code)
   "math" -> Just (MathBlock code)
   "latex" -> Just (MathBlock code)
-  "html" -> Just (HtmlBlock code)
+  "html" -> Just (HtmlBlock attrs code)
   _ -> Nothing
 
 -- | A rendered block as the listing @norender@ makes of it, when the
@@ -1774,7 +1794,7 @@ listingOf = \case
   Mermaid code -> Just ("mermaid", code)
   Tikz code -> Just ("tikz", code)
   MathBlock code -> Just ("latex", code)
-  HtmlBlock code -> Just ("html", code)
+  HtmlBlock _ code -> Just ("html", code)
   _ -> Nothing
 
 -- | The language a listing made with @norender@ is highlighted as: its

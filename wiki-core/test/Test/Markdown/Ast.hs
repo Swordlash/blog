@@ -183,9 +183,20 @@ spec = describe "Markdown.Ast" $ do
       "```latex\n\\frac{1}{2}\n```" `parses` [MathBlock "\\frac{1}{2}\n"]
       "```{.latex}\nx\n```" `parses` [MathBlock "x\n"]
     it "reads an html fence as an html block, with its info word or its class" $ do
-      "```html\n<p style=\"color: red\">hi</p>\n```" `parses` [HtmlBlock "<p style=\"color: red\">hi</p>\n"]
-      "```{.html}\n<p>hi</p>\n```" `parses` [HtmlBlock "<p>hi</p>\n"]
-      "```{.numbered .html}\n<p>hi</p>\n```" `parses` [HtmlBlock "<p>hi</p>\n"]
+      "```html\n<p style=\"color: red\">hi</p>\n```" `parses` [HtmlBlock [] "<p style=\"color: red\">hi</p>\n"]
+      "```{.html}\n<p>hi</p>\n```" `parses` [HtmlBlock [("class", "html")] "<p>hi</p>\n"]
+      "```{.numbered .html}\n<p>hi</p>\n```" `parses` [HtmlBlock [("class", "numbered"), ("class", "html")] "<p>hi</p>\n"]
+    it "keeps an html fence's attributes, its height among them" $ do
+      "```html {height=300}\n<p>hi</p>\n```" `parses` [HtmlBlock [("height", "300")] "<p>hi</p>\n"]
+      "```html {.norender height=300}\n<p>hi</p>\n```" `parses` [CodeBlock [("class", "norender"), ("height", "300")] (Just "html") "<p>hi</p>\n"]
+    it "reads a frame's height in pixels, with px or without, and ignores anything else" $ do
+      frameHeight [("height", "300")] `shouldBe` Just 300
+      frameHeight [("height", "300px")] `shouldBe` Just 300
+      frameHeight [("class", "html"), ("height", "1")] `shouldBe` Just 1
+      frameHeight [("height", "4000")] `shouldBe` Just 4000
+      for_ ["", "px", "0", "4001", "99999", "-5", "+5", "3e2", "300.5", "300em", "30%", "abc", " 300", "300 px"] $ \written ->
+        (written, frameHeight [("height", written)]) `shouldBe` (written, Nothing)
+      frameHeight [] `shouldBe` Nothing
     it "keeps tex, xml and svg fences listings" $ do
       "```tex\nx\n```" `parses` [CodeBlock [] (Just "tex") "x\n"]
       "```xml\n<a/>\n```" `parses` [CodeBlock [] (Just "xml") "<a/>\n"]

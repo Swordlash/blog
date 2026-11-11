@@ -27,7 +27,7 @@ shows' source expected = markdown source `shouldReturn` expected
 framed :: Options Text (H.ComponentSlot Empty MemDOM Void) Void
 framed =
   wiki
-    { htmlBlock = \_ _ document ->
+    { htmlBlock = \_ _ _ document ->
         HH.iframe [HP.attr (HH.AttrName "sandbox") frameSandbox, HP.attr (HH.AttrName "srcdoc") document]
     }
 
@@ -82,6 +82,16 @@ spec = describe "Markdown.Render, an html fence" $ do
       let hashRouted = framed {pageHref = ("#/" <>)}
       markup <- markdownWith hashRouted "```html\n<a href=\"guide\">guide</a>\n```\n"
       srcdocOf markup `shouldReturn` frameDocument SystemScheme "<a href=\"#/guide\" target=\"_blank\" rel=\"noopener noreferrer\">guide</a>"
+    it "gives the frame the height its fence gives, in pixels, and ignores a height it cannot read" $ do
+      let measured = wiki {htmlBlock = \_ _ height document -> HH.text (show height <> " " <> show (document == frameDocument SystemScheme "<p>x</p>"))}
+          heightOf attributes = markdownWith measured ("```html " <> attributes <> "\n<p>x</p>\n```\n")
+      heightOf "" `shouldReturn` "Nothing True"
+      heightOf "{height=300}" `shouldReturn` "Just 300 True"
+      heightOf "{height=300px}" `shouldReturn` "Just 300 True"
+      heightOf "{.numbered height=120}" `shouldReturn` "Just 120 True"
+      heightOf "{height=tall}" `shouldReturn` "Nothing True"
+      heightOf "{height=0}" `shouldReturn` "Nothing True"
+      heightOf "{height=5000}" `shouldReturn` "Nothing True"
 
     describe "whatever the block holds, nothing of it lands outside the srcdoc" $ do
       let hostile =

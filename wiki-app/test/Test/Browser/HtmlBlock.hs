@@ -48,6 +48,7 @@ $( browserJS
      , ("js_frame_remeasure", "wiki_test_frame_remeasure", Safe, [t|JSText -> IO JSText|])
      , ("js_frame_fit", "wiki_test_frame_fit", Safe, [t|JSText -> IO JSText|])
      , ("js_window_height", "wiki_test_window_height", Safe, [t|Int -> IO ()|])
+     , ("js_frame_grow", "wiki_test_frame_grow", Safe, [t|JSText -> IO Bool|])
      ]
  )
 
@@ -126,6 +127,32 @@ spec m = describe "an html fence" $ do
         [before, after] -> (name, after) `shouldBe` (name, before)
         _ -> expectationFailure ("no heights for " <> name <> ": " <> again)
 
+  it "is as high as its fence says, and stays so as its content changes, scrolling what is taller; a height it cannot read is ignored" $ runPage $ do
+    ui <- page m "```html {height=300}\n<div style=\"height: 3000px\">tall</div>\n```\n\n```html {height=tall}\n<p>fitted</p>\n```\n"
+    _ <- find ui frame
+    let ignored = frame <> " ~ iframe.wiki-html"
+    eventually $ do
+      (high, content, _) <- heights frame
+      high `shouldBe` 300
+      content `shouldSatisfy` (> 300)
+    before <- eventually $ do
+      (high, content, _) <- heights ignored
+      content `shouldSatisfy` (> 0)
+      abs (high - content) `shouldSatisfy` (<= 1)
+      pure high
+    -- Both blocks' content grows by 500px: the one with no height the page
+    -- can read is fitted again, the other keeps its height.
+    for_ [frame, ignored] $ \f -> unsafeIOToPageM (js_frame_grow (toJSText f)) `shouldReturn` True
+    eventually $ do
+      (high, content, _) <- heights ignored
+      high `shouldSatisfy` (> before)
+      abs (high - content) `shouldSatisfy` (<= 1)
+    settle
+    (high, _, _) <- heights frame
+    high `shouldBe` 300
+    -- Measured again, it is left as it is.
+    unsafeIOToPageM (fromJSText <$> js_frame_remeasure (toJSText frame)) `shouldReturn` "300 300"
+
   it "is fitted again to the window's new height" $ runPage $ do
     ui <- page m "```html\n<div style=\"height: 3000px\">tall</div>\n```\n"
     _ <- find ui frame
@@ -171,7 +198,7 @@ spec m = describe "an html fence" $ do
       frameCount "body.html-frame-light, body.html-frame-dark" `shouldReturn` 0
 
   it "runs no script even written straight into the frame's document: the sandbox forbids it" $ runPage $ do
-    ui <- mount m (Islands.component @(Const Void) @Void) (HtmlFrame (frameDocument SystemScheme "<p>shown</p><script>parent.wikiFrameScriptRan = 'script'</script><img src=\"nowhere.png\" onerror=\"parent.wikiFrameScriptRan = 'handler'\">"))
+    ui <- mount m (Islands.component @(Const Void) @Void) (HtmlFrame Nothing (frameDocument SystemScheme "<p>shown</p><script>parent.wikiFrameScriptRan = 'script'</script><img src=\"nowhere.png\" onerror=\"parent.wikiFrameScriptRan = 'handler'\">"))
     _ <- find ui "iframe.wiki-html"
     eventually $ frameCountIn "iframe.wiki-html" "script" `shouldReturn` 1
     -- The image's error has come and gone by the time the frame loaded.
@@ -189,6 +216,16 @@ spec m = describe "an html fence" $ do
     eventually $ frameCountIn ".editor-preview iframe.wiki-html" "p.changed" `shouldReturn` 1
     eventually $ do
       (high, content, _) <- heights ".editor-preview iframe.wiki-html"
+      abs (high - content) `shouldSatisfy` (<= 1)
+    -- A height typed in, then taken away again.
+    setMarkdown ui "# Hello, world\n\n```html {height=300}\n<p class=\"changed\">Changed.</p>\n```\n"
+    eventually $ do
+      (high, _, _) <- heights ".editor-preview iframe.wiki-html"
+      high `shouldBe` 300
+    setMarkdown ui "# Hello, world\n\n```html\n<p class=\"changed\">Changed.</p>\n```\n"
+    eventually $ do
+      (high, content, _) <- heights ".editor-preview iframe.wiki-html"
+      high `shouldSatisfy` (< 300)
       abs (high - content) `shouldSatisfy` (<= 1)
 
   it "is adopted with the page that arrives with it, keeping the document it loaded" $ runPage $ do
@@ -345,8 +382,12 @@ rawText = "```html\n" <> T.unlines rawTextLines <> "```\n"
 -- | Blocks, each with its name and the height the frame should have, from
 -- the frame's cap (80% of the window): one whose height depends on the
 -- frame's (in vh, in percent of the root), read against the frame at its
--- cap; content out of the flow (placed absolutely, fixed, floated, moved
--- by a transform); and nothing at all.
+-- cap; content out of the flow (placed absolutely, floated, moved by a
+-- transform); and nothing at all. Anything placed fixed (an element, the
+-- root, the body, or a ::before or ::after of any of them) puts the frame
+-- at its cap; so does CSS whose height never settles as the frame grows
+-- (a media query on the frame's height that makes the content taller than
+-- the frame).
 sized :: [(Text, Text, Int -> Int)]
 sized =
   [ ("a box at most 100vh high that scrolls, holding a paragraph", "<div style=\"overflow: auto; max-height: 100vh\"><p>Visible</p></div>", const 56)
@@ -354,14 +395,22 @@ sized =
   , ("a box at least 100vh high", "<div style=\"min-height: 100vh\">full</div>", identity)
   , ("a box half as high as the root, which is the frame", "<style>html, body, .page-body { height: 100% }</style><div style=\"height: 50%\">half</div>", identity)
   , ("a box placed absolutely", "<div style=\"position: absolute; top: 0; height: 300px\">Visible</div>", min 300)
-  , ("a box placed fixed", "<div style=\"position: fixed; top: 0; height: 250px\">Fixed</div>", min 250)
+  , ("a box placed fixed", "<div style=\"position: fixed; top: 0; height: 250px\">Fixed</div>", identity)
   , ("a floated box", "<div style=\"float: left; width: 50px; height: 120px\"></div>", min 120)
   , ("a box moved by a transform", "<p style=\"margin: 0; height: 80px\">a</p><div style=\"height: 80px; transform: translateY(400px)\">moved</div>", min 560)
   , ("nothing", "", const 0)
   , -- Generated content has no box a script can ask for; the check of the
-    -- scroll height finds the first, the computed place the second.
+    -- scroll height finds it.
     ("an ::after placed absolutely", "<style>.x::after { content: \"Hello\"; position: absolute; top: 0; height: 300px }</style><div class=\"x\"></div>", min 300)
-  , ("a ::before placed fixed", "<style>.y::before { content: \"Fixed\"; position: fixed; top: 10px; height: 200px }</style><div class=\"y\"></div>", min 210)
+  , ("a ::before placed fixed", "<style>.y::before { content: \"Fixed\"; position: fixed; top: 10px; height: 200px }</style><div class=\"y\"></div>", identity)
+  , ("the body's ::after placed fixed", "<style>body::after { content: \"Visible\"; position: fixed; top: 10px; height: 200px }</style>", identity)
+  , ("a ::before placed fixed and moved by a transform", "<style>.x::before { content: \"Hello\"; position: fixed; top: 0; transform: translateY(300px) }</style><div class=\"x\"></div>", identity)
+  , ("the root placed fixed", "<style>html { position: fixed }</style><p>Visible</p>", identity)
+  , ("the root's ::before placed fixed", "<style>html::before { content: \"Top\"; position: fixed; top: 0 }</style><p>Visible</p>", identity)
+  , ("the body placed fixed", "<style>body { position: fixed }</style><p>Visible</p>", identity)
+  , -- Taller than the frame whenever the frame is 500px or lower: no height
+    -- below the cap settles, so the frame is at its cap.
+    ("a box taller than a low frame", "<style>@media (max-height: 500px) { .x { height: calc(100vh + 20px) } }</style><div class=\"x\">x</div>", identity)
   ]
 
 -- | The demo's Projects space with a page of this text, shown to an

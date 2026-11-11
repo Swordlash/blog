@@ -35,7 +35,7 @@ spec = describe "Slides.renderDeck" $ do
 
   it "draws an html fence's frame on a slide in its theme's colours, and in its notes in the page's" $ do
     -- The document the frame would show, as its text.
-    let opts = defaultOptions {htmlBlock = \_ _ document -> HH.text document}
+    let opts = defaultOptions {htmlBlock = \_ _ _ document -> HH.text document}
         fence = "```html\n<p>x</p>\n```"
         deck theme = "[[!slides]]{theme=" <> theme <> "}\n\n" <> fence <> "\n\n[[!notes]]\n" <> fence <> "\n[[/notes]]"
         schemes theme = for (rendered opts (deck theme)) $ \s -> do

@@ -162,7 +162,7 @@ spec = describe "Anchor" $ do
       let doc = blocksOf "A word[^n] in `code` by @ada.\n\n[^n]: The note."
       textFragment doc (quoting "word1 in code by @ada" doc.text) `shouldBe` ":~:text=word1%20in%20code%20by%20%40ada"
     it "reads nothing of an html fence's frame, which holds another document, and takes it as a break" $ do
-      let framed = defaultOptions {htmlBlock = \_ _ document -> HH.iframe [HP.attr (HH.AttrName "srcdoc") document]}
+      let framed = defaultOptions {htmlBlock = \_ _ _ document -> HH.iframe [HP.attr (HH.AttrName "srcdoc") document]}
           doc = renderedBlocks (either (panic . show) identity (renderMarkdown framed "Before it\n\n```html\n<p>inside</p>\n```\n\nafter it"))
       doc.text `shouldBe` "Before itafter it"
       textFragment doc (quoting "it" doc.text) `shouldBe` ":~:text=Before-,it"

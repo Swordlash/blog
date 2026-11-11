@@ -191,10 +191,11 @@ data Options page w i = Options
   , tikz :: IslandKey -> Text -> HH.HTML w i
   -- ^ A TikZ picture: its source, as written in the fence
   -- ("Wiki.Core.Markdown.Tikz" makes it TeX).
-  , htmlBlock :: IslandKey -> Text -> Text -> HH.HTML w i
-  -- ^ An @html@ fence: its source, as written, and the document its frame
-  -- shows ('Wiki.Core.Markdown.Frame.frameDocument'), for the frame's
-  -- @srcdoc@.
+  , htmlBlock :: IslandKey -> Text -> Maybe Int -> Text -> HH.HTML w i
+  -- ^ An @html@ fence: its source, as written, the height its fence gives
+  -- its frame, if it gives one ('frameHeight'; otherwise the frame is as
+  -- high as its content), and the document its frame shows
+  -- ('Wiki.Core.Markdown.Frame.frameDocument'), for the frame's @srcdoc@.
   , frameScheme :: FrameScheme
   -- ^ The colours an @html@ fence's frame is drawn in: the system's on a
   -- page, by default, and a slide's theme's on a slide ("Wiki.Core.Slides").
@@ -265,7 +266,7 @@ defaultOptions =
     , mathDisplay = \_ _ tex -> HH.div [HP.class_ (HH.ClassName "math display")] [HH.text tex]
     , mermaid = \_ src -> HH.pre [HP.class_ (HH.ClassName "mermaid")] [HH.text src]
     , tikz = \_ src -> HH.pre [HP.class_ (HH.ClassName "tikz")] [HH.text src]
-    , htmlBlock = \_ src _ -> HH.pre_ [HH.code [HP.class_ (HH.ClassName "language-html")] [HH.text src]]
+    , htmlBlock = \_ src _ _ -> HH.pre_ [HH.code [HP.class_ (HH.ClassName "language-html")] [HH.text src]]
     , frameScheme = SystemScheme
     , resolveLink = defaultResolveLink
     , pageHref = identity
@@ -377,7 +378,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
            in [if opts.copyButtons then HH.div [classesProp ["code-block"]] [listing, copyButton] else listing]
       Mermaid src -> island src <&> \k -> [opts.mermaid k src]
       Tikz src -> island src <&> \k -> [opts.tikz k src]
-      HtmlBlock src -> island src <&> \k -> [opts.htmlBlock k src (frameDocument opts.frameScheme (frameContent opts src))]
+      HtmlBlock attrs src -> island src <&> \k -> [opts.htmlBlock k src (frameHeight attrs) (frameDocument opts.frameScheme (frameContent opts src))]
       -- A block of nothing but definitions (a page's macros, WP5.41) shows
       -- nothing; its macros hold for the formulas after it all the same.
       MathBlock tex
@@ -705,7 +706,7 @@ noteText = T.unwords . T.words . T.unwords . map blockText
       Spoiler h bs -> T.unwords [plainText h.description, noteText bs]
       MarkerError written _ -> written
       RawHtmlBlock raw -> Html.htmlText (Html.parseHtml raw)
-      HtmlBlock raw -> Html.htmlText (Html.parseFrameHtml raw)
+      HtmlBlock _ raw -> Html.htmlText (Html.parseFrameHtml raw)
       _ -> ""
 
 firstNote :: [Footnote] -> Int
@@ -914,7 +915,7 @@ linkDestinations = concatMap block
       MathBlock _ -> []
       -- A link in an html fence is in its frame, a document of its own,
       -- and is not one of the page's (WP5.89 of docs/PLAN.md).
-      HtmlBlock _ -> []
+      HtmlBlock _ _ -> []
       MarkerError _ _ -> []
       TableOfContents -> []
     -- As 'renderBlocks' reads them: raw HTML among the inlines is parsed

@@ -363,7 +363,7 @@ probe =
     , tikz = \k src -> island k Picture src
     , -- An html fence's frame cannot fail: HTML the allowlist drops
       -- raises no problem, as in raw HTML.
-      htmlBlock = \_ _ _ -> HH.text ""
+      htmlBlock = \_ _ _ _ -> HH.text ""
     }
   where
     island k kind written = HTML (VDom.Widget (Probe k kind written))

@@ -269,7 +269,7 @@ bodyText source =
       Footnotes notes -> T.intercalate "\n" [blocks bs | Footnote _ _ bs <- notes]
       RawHtmlBlock raw -> htmlText (parseHtml raw)
       -- The text the frame shows, without the CSS.
-      HtmlBlock raw -> htmlText (parseFrameHtml raw)
+      HtmlBlock _ raw -> htmlText (parseFrameHtml raw)
       -- The list it stands for is the headings' text, already included.
       TableOfContents -> ""
 

@@ -4,7 +4,8 @@
 
 An `html` fence, `latex` as display mathematics, and `{.norender}`
 (WP5.89, #196). A fence whose language is `html` is a new block,
-`HtmlBlock`, and one whose language is `latex` a `MathBlock`, as `math`
+`HtmlBlock`, with the fence's attributes, of which `frameHeight` reads a
+height in pixels (`{height=300}`, `300px`, 1 to 4000), and one whose language is `latex` a `MathBlock`, as `math`
 is; the class `norender` keeps any of `html`, `latex`, `math`, `mermaid`
 and `tikz` a `CodeBlock` of its language (`math` as `latex`), read before
 the dispatch and in the attributes after the fence. `languageOfClasses`,
@@ -19,8 +20,8 @@ written but for `</style`, written `<\/style`. HTML is cut into tokens by
 token, up to the end tag the browser would end it at, outside `svg` and
 `math`: a style keeps its CSS byte for byte, and an element dropped with
 its content ends where the browser ends it. `htmlText` leaves CSS out. The renderer's
-`Options` have `htmlBlock`, given the block's source and its frame's
-document (`Wiki.Core.Markdown.Frame.frameDocument`: the wiki's stylesheet
+`Options` have `htmlBlock`, given the block's source, its height if the
+fence gives one, and its frame's document (`Wiki.Core.Markdown.Frame.frameDocument`: the wiki's stylesheet
 in a cascade layer, then the block in a `.page-body`), with its links
 resolved as raw HTML's are and opening in a new tab; by default the
 source is an HTML listing. `Wiki.Core.Markdown.Frame` holds the frame's

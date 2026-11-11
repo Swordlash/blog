@@ -22,6 +22,15 @@ title: HTML with its own styles, latex fences and norender
   ```
   ````
 
+  A height after the language sets the frame's height in pixels, and
+  what is taller scrolls:
+
+  ````markdown
+  ```html {height=300}
+  <div style="height: 1000px; background: linear-gradient(teal, gold)"></div>
+  ```
+  ````
+
   Scripts, event handlers, forms and frames are left out of it, as
   anywhere in a page, and nothing in the frame can run. A link in it opens
   in a new tab. The editor's toolbar has an "HTML block" button that

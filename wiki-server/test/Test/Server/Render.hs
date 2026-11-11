@@ -203,6 +203,22 @@ anonymous backing = describe "for someone not signed in" $ do
     behind `shouldSatisfy` T.isPrefixOf "</iframe><p>After.</p>"
     for_ ["alert", "<style", "<script"] $ \gone -> (ahead <> T.drop 9 behind) `shouldNotSatisfy` T.isInfixOf gone
 
+  it "renders an html fence's height as its frame's, which the program leaves as it is" $ withDemoRunning backing identity $ \r -> do
+    docs <- ok200 (getUrl r (r.public <> "/" <> links.spaces.atPath (slugs "docs"))) :: IO S.Space
+    let fences = "```html {height=300}\n<p>Sized.</p>\n```\n\n```html {height=tall}\n<p>Fitted.</p>\n```\n"
+    _ <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) Api.NewPage {parent = Nothing, title = "Sized", body = fences} >>= (jsonAs 201 :: Reply -> IO P.Page)
+    (status, html) <- page r r.public "/s/docs/p/sized/"
+    status `shouldBe` 200
+    case map (fst . T.breakOn ">") (drop 1 (T.splitOn "<iframe " (appIn html))) of
+      [sized, fitted] -> do
+        sized `shouldSatisfy` T.isInfixOf " data-height=\"300\" "
+        sized `shouldSatisfy` T.isInfixOf " style=\"height: 300px\" "
+        sized `shouldSatisfy` T.isInfixOf "Sized."
+        -- A height that is not one is ignored: the frame is fitted.
+        for_ ["data-height", "style="] $ \gone -> fitted `shouldNotSatisfy` T.isInfixOf gone
+        fitted `shouldSatisfy` T.isInfixOf "Fitted."
+      frames -> expectationFailure ("not two frames: " <> show frames)
+
   it "renders a private space as not there, with a 404, and nothing of it" $ withDemoRunning backing identity $ \r -> do
     for_ ["/s/team/", "/s/team/pages/", "/s/team/projects/", "/s/team/p/team-handbook/", "/s/team/p/team-handbook/source/", "/s/team/p/team-handbook/history/", "/s/team/p/team-handbook/slides/", "/s/team/p/nowhere/"] $ \path -> do
       (status, html) <- page r r.public path

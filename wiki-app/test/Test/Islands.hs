@@ -37,7 +37,7 @@ spec = describe "Wiki.App.Islands, prerendered" $ do
       `shouldReturn` "<pre class=\"wiki-code numbered code-scroll\" style=\"max-height: 2lh; overflow: auto\"><span aria-hidden=\"true\" class=\"code-lines\"><span></span><span></span><span></span></span><code>a\nb\nc</code></pre>"
 
   it "shows an html fence's frame with its sandbox and its document in srcdoc, escaped, and nothing inside it" $
-    renderToHtml Islands.component (HtmlFrame "<p title=\"&quot;\">a &amp; b</p></iframe><script>alert(1)</script>")
+    renderToHtml Islands.component (HtmlFrame Nothing "<p title=\"&quot;\">a &amp; b</p></iframe><script>alert(1)</script>")
       `shouldReturn` ( "<iframe class=\"wiki-html\" sandbox=\"allow-same-origin allow-popups allow-popups-to-escape-sandbox\""
                          <> " srcdoc=\"&lt;p title=&quot;&amp;quot;&quot;&gt;a &amp;amp; b&lt;/p&gt;&lt;/iframe&gt;&lt;script&gt;alert(1)&lt;/script&gt;\""
                          <> " title=\"HTML block\"></iframe>"
