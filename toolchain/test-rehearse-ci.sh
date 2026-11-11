@@ -163,9 +163,11 @@ rm -f "$work/move/psql.log"
 if run "$work/move" WIKI_TEST_DATABASE_URL=postgres://wiki@127.0.0.1:1/postgres WIKI_TEST_PSQL="$work/psql" \
   && asked_zero "$work/move" \
   && grep -q -- '--sqlite' "$work/move/new.args" \
-  && grep -q -- '--move-to-database postgres://wiki@127.0.0.1:1/rehearsal_move' "$work/move/new.args" \
-  && grep -q 'CREATE DATABASE rehearsal_move' "$work/move/psql.log"; then
-  pass 'the move rehearsal (--move) starts the old server on SQLite on port 0, and asks NEW to move it'
+  && target=$(sed -n 's|.*--move-to-database postgres://wiki@127\.0\.0\.1:1/\(wiki_test_[0-9]*_[a-z0-9]\{8\}_rehearsal_move\).*|\1|p' "$work/move/new.args") \
+  && [ -n "$target" ] \
+  && grep -qx -- "postgres://wiki@127.0.0.1:1/postgres --quiet --command CREATE DATABASE $target" "$work/move/psql.log" \
+  && grep -qx -- "postgres://wiki@127.0.0.1:1/postgres --quiet --command DROP DATABASE IF EXISTS $target WITH (FORCE)" "$work/move/psql.log"; then
+  pass 'the move rehearsal (--move) starts the old server on SQLite on port 0, asks NEW to move it into a database of the run'"'"'s own, and drops that database at the end'
 else
   fail 'the move rehearsal'
   cat "$work/move/out" >&2

@@ -3086,7 +3086,10 @@ toolchain/ci-postgres.sh start` prints these variables: it starts the
 container `wiki-ci-postgres` (or `$WIKI_CI_POSTGRES_NAME`) on a port Docker
 chooses, or, when the container already runs and answers, leaves it as it is
 and prints the port it has; `env` prints them without starting anything,
-`restart` makes a new container, and `stop` removes it. Without
+`restart` makes a new container, and `stop` removes it. Runs that share the
+server do not meet: each names its databases `wiki_test_<time>_<random>_…`,
+drops them when it ends, and drops those of a run killed six hours ago or
+more. Without
 `WIKI_TEST_DATABASE_URL` the tests start a cluster of their own in a temporary
 directory when `initdb` and
 `pg_ctl` are installed (on the `PATH`, or under `/usr/lib/postgresql/*/bin`,

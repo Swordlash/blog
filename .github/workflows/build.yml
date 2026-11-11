@@ -571,6 +571,14 @@ jobs:
       if: matrix.group != 'deploy'
       run: npm run test-native
 
+    # Runs of the PostgreSQL tests that share one server, as the sessions
+    # on one machine share ci-postgres.sh's container: two at once, and one
+    # after a run killed part-way, each in a namespace of its own. About
+    # twenty seconds.
+    - name: Test runs of the PostgreSQL tests side by side
+      if: matrix.group == 'postgres'
+      run: sh toolchain/test-postgres-namespaces.sh "$(cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:test:wiki-server-test)"
+
     # The upgrade from the base branch, rehearsed as a deploy rehearses it
     # (toolchain/rehearse-ci.sh): the base's wiki-server makes a wiki on a
     # database, and this pull request's migrates a copy of it and checks

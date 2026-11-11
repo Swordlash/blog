@@ -34,7 +34,11 @@
 #
 # The server's test suite then runs its PostgreSQL half on it
 # (wiki-server/test/Test/Database.hs), and the smoke test its server
-# (toolchain/smoke-test.sh). pg_dump, pg_restore and psql are scripts written
+# (toolchain/smoke-test.sh). Since `start` keeps a container that runs,
+# several runs may use it at once and one after another: each names its
+# databases in a namespace of its own (wiki_test_<time>_<random>_), and the
+# server's tests drop a dead run's once they are six hours old. `restart`
+# gives an empty server. pg_dump, pg_restore and psql are scripts written
 # into DIR (default: a temporary directory) that run the container's own
 # programs with `docker exec`: a pg_dump older than the server refuses it,
 # and the runner's may be older. Inside the container PostgreSQL listens on

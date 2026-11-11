@@ -14,6 +14,11 @@
 -- @\/usr\/lib\/postgresql@, and stop at the end.
 -- Without either, every PostgreSQL example is pending ("not run"), never
 -- passed. Each example gets a database of its own, dropped afterwards.
+-- Several runs may share one server (one container serves every session
+-- on a machine, toolchain/ci-postgres.sh), so every name a run makes
+-- starts with a namespace of the run's own ('namespaceFor'): when it began
+-- and eight random letters. A killed run's databases are dropped by a
+-- later run once they are six hours old ('sweepOnce').
 -- 'withPlace' copies it from a template database that the program's own
 -- 'migrate' brought to the current schema once per run, so that an example
 -- does not pay for every migration again. The copy needs PostgreSQL 15 or
@@ -38,6 +43,9 @@ module Test.Database
   , withPlace
   , withEmptyPlace
   , databaseUrl
+  , namespaceFor
+  , namespaceBegan
+  , namesUnitSpec
   , choiceOf
   , placeOptionsOf
   , withConnectionTo
@@ -49,15 +57,18 @@ import Data.Text qualified as T
 import Protolude
 import System.Environment (lookupEnv)
 import System.IO.Error (userError)
-import Test.Hspec (pendingWith)
+import Test.Hspec (Spec, describe, it, pendingWith, shouldBe, shouldSatisfy)
 import Wiki.Server.Options (DatabaseChoice (..), PlaceOptions (..))
 import Wiki.Server.Storage (Database (..), PgDatabase (..), Place (..), inDataDir)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Layout (PgPrograms (..))
 import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, openSqlite)
 #ifdef WIKI_POSTGRES
+import Crypto.Random (getRandomBytes)
+import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.IORef (atomicModifyIORef', newIORef)
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Database.PostgreSQL.Simple qualified as Pg
 import Database.PostgreSQL.Simple.Types (Query (..))
 import System.Directory (doesFileExist, findExecutable, listDirectory)
@@ -112,6 +123,11 @@ data PgServer = PgServer
   -- ^ Whether the template database ('templateName') is made yet. The
   -- first example that needs it makes it, under this lock, so that
   -- examples running at once make it only once.
+  , namespace :: Text
+  -- ^ The start of every database name this run makes ('namespaceFor').
+  , swept :: MVar Bool
+  -- ^ Whether this run has dropped the databases dead runs left
+  -- ('sweepOnce'), which it does before it makes its first.
   }
 
 -- | How a suite's title names a backing.
@@ -161,11 +177,9 @@ withPostgresBackings selection act' = do
     ioError (userError "The postgres test group requires WIKI_TEST_DATABASE_URL")
   case configured of
     Just url -> do
-      made <- newIORef 0
-      template <- newMVar False
       dump <- fromMaybe defaultPgPrograms.dump <$> lookupEnv "WIKI_TEST_PG_DUMP"
       restore <- fromMaybe defaultPgPrograms.restore <$> lookupEnv "WIKI_TEST_PG_RESTORE"
-      let server = PgServer {url = T.pack url, made, programs = PgPrograms {dump, restore}, template}
+      server <- newPgServer (T.pack url) PgPrograms {dump, restore}
       -- The server outlives the run, so the template is dropped at the
       -- end, if an example made it. A run that made none (one with
       -- --dry-run, or with no PostgreSQL example matched) never connects,
@@ -175,10 +189,21 @@ withPostgresBackings selection act' = do
     Nothing ->
       findPostgres >>= \case
         Nothing -> run (PostgresNotRun "PostgreSQL is not at hand: set WIKI_TEST_DATABASE_URL, or put initdb and pg_ctl on the PATH")
-        Just bin -> stoppedByTerm . withCluster bin $ \url -> do
-          made <- newIORef 0
-          template <- newMVar False
-          run (OnPostgres PgServer {url, made, programs = PgPrograms {dump = bin </> "pg_dump", restore = bin </> "pg_restore"}, template})
+        Just bin -> stoppedByTerm . withCluster bin $ \url ->
+          run . OnPostgres =<< newPgServer url PgPrograms {dump = bin </> "pg_dump", restore = bin </> "pg_restore"}
+
+-- | A server of the tests, for a run: with a namespace of the run's own,
+-- made of the time it began and eight random letters and digits.
+newPgServer :: Text -> PgPrograms -> IO PgServer
+newPgServer url programs = do
+  made <- newIORef 0
+  template <- newMVar False
+  swept <- newMVar False
+  began <- round <$> getPOSIXTime
+  bytes <- getRandomBytes 8
+  let letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+      random = T.pack [T.index letters (fromIntegral b `mod` T.length letters) | b <- BS.unpack bytes]
+  pure PgServer {url, made, programs, template, namespace = namespaceFor began random, swept}
 
 -- The copy is made with the strategy FILE_COPY, which copies the
 -- template's files as they are, rather than the default WAL_LOG, which
@@ -187,22 +212,26 @@ withPostgresBackings selection act' = do
 -- STRATEGY needs PostgreSQL 15 or newer.
 withPostgresPlace server dir act = do
   ensureTemplate server
-  withDatabaseMade server (" TEMPLATE " <> templateName <> " STRATEGY FILE_COPY") dir act
+  withDatabaseMade server (" TEMPLATE " <> templateName server <> " STRATEGY FILE_COPY") dir act
 
 withEmptyPostgresPlace server dir = withDatabaseMade server "" dir
 
 -- | A place whose database is made with @CREATE DATABASE@ and these
--- options, and dropped afterwards whatever is still connected to it.
+-- options, and dropped afterwards whatever is still connected to it. Its
+-- name is the run's namespace and a count.
 withDatabaseMade :: PgServer -> Text -> FilePath -> (Place -> IO a) -> IO a
 withDatabaseMade server options dir act = do
+  sweepOnce server
   n <- atomicModifyIORef' server.made (\k -> (k + 1, k + 1))
-  let name = "wiki_test_" <> show n
+  let name = server.namespace <> show n
   bracket_ (adminStatement server ("CREATE DATABASE " <> name <> options)) (adminStatement server ("DROP DATABASE IF EXISTS " <> name <> " WITH (FORCE)")) $
     act Place {dataDir = dir, database = postgresAt (encodeUtf8 (databaseUrl server.url name)), programs = server.programs}
 
--- | The name of the database the examples' databases are copied from.
-templateName :: Text
-templateName = "wiki_test_template"
+-- | The name of the database the run's examples' databases are copied
+-- from. Each run has its own: a run's template is at that run's program's
+-- schema, and another run may drop or copy it at any moment.
+templateName :: PgServer -> Text
+templateName server = server.namespace <> "template"
 
 -- | Make the template database, if no example has made it yet: a new
 -- database that the program's own 'migrate' brings to the current schema.
@@ -213,16 +242,16 @@ templateName = "wiki_test_template"
 -- connection that migrates the template is closed before any copy, and the
 -- template then refuses connections, so a test that connected to it by
 -- mistake would fail at once rather than make another example's copy
--- fail. A template a run left behind (one stopped halfway) is dropped
--- first. When making it fails, the lock is given back as it was, so the
+-- fail. When making it fails, the lock is given back as it was, so the
 -- next example tries again and reports the same failure.
 ensureTemplate :: PgServer -> IO ()
 ensureTemplate server = modifyMVar_ server.template $ \ready -> do
   unless ready $ do
-    adminStatement server ("DROP DATABASE IF EXISTS " <> templateName <> " WITH (FORCE)")
-    adminStatement server ("CREATE DATABASE " <> templateName)
-    withPostgresConnection PgDatabase {url = encodeUtf8 (databaseUrl server.url templateName), password = Nothing} (void . migrate)
-    adminStatement server ("ALTER DATABASE " <> templateName <> " WITH ALLOW_CONNECTIONS false")
+    sweepOnce server
+    adminStatement server ("DROP DATABASE IF EXISTS " <> templateName server <> " WITH (FORCE)")
+    adminStatement server ("CREATE DATABASE " <> templateName server)
+    withPostgresConnection PgDatabase {url = encodeUtf8 (databaseUrl server.url (templateName server)), password = Nothing} (void . migrate)
+    adminStatement server ("ALTER DATABASE " <> templateName server <> " WITH ALLOW_CONNECTIONS false")
   pure True
 
 -- | Drop the template database at the end of a run, if an example made
@@ -230,7 +259,28 @@ ensureTemplate server = modifyMVar_ server.template $ \ready -> do
 dropTemplate :: PgServer -> IO ()
 dropTemplate server = do
   made <- readMVar server.template
-  when made $ adminStatement server ("DROP DATABASE IF EXISTS " <> templateName <> " WITH (FORCE)")
+  when made $ adminStatement server ("DROP DATABASE IF EXISTS " <> templateName server <> " WITH (FORCE)")
+
+-- | Drop, once per run and before the run makes its first database, the
+-- databases of the tests' namespace that runs began more than six hours
+-- ago. A run drops its databases as it goes, and its template when it
+-- ends, so such databases are a killed run's. No run lasts six hours (the
+-- whole PostgreSQL group takes about a quarter of an hour), so no live
+-- run's database is dropped, while two runs at once never share a name
+-- and a leftover never stands in the way. A database that cannot be
+-- dropped is left for the next run: the sweep never fails a run. Names in
+-- the shape of the tests' before the namespace (@wiki_test_template@,
+-- @wiki_test_N@) are left alone: their age cannot be told, and a run of an
+-- older checkout may be using them; @toolchain/ci-postgres.sh restart@
+-- clears them.
+sweepOnce :: PgServer -> IO ()
+sweepOnce server = modifyMVar_ server.swept $ \done -> do
+  unless done $ do
+    now <- round <$> getPOSIXTime
+    listed <- try @SomeException (bracket (Pg.connectPostgreSQL (BC.pack (toS server.url))) Pg.close (\c -> Pg.query_ c "SELECT datname FROM pg_database WHERE datname LIKE 'wiki\\_test\\_%'"))
+    for_ [name | Pg.Only (name :: Text) <- either (const []) identity listed, Just began <- [namespaceBegan name], began < now - 6 * 3600] $ \name ->
+      void (try @SomeException (adminStatement server ("DROP DATABASE IF EXISTS " <> name <> " WITH (FORCE)")))
+  pure True
 
 -- | Run one statement on the database of the server's URL, on a connection
 -- of its own: how databases are made and dropped.
@@ -310,6 +360,41 @@ databaseUrl base name =
       (authority, pathAndQuery) = T.breakOn "/" rest
       query = T.dropWhile (/= '?') pathAndQuery
    in scheme <> authority <> "/" <> name <> query
+
+-- | The start of every database name a run of the tests makes on a server
+-- other runs may share: @wiki_test_<began>_<random>_@, with the seconds
+-- since 1970 when the run began and eight random lower-case letters and
+-- digits. A run's names are this and a count, or this and @template@.
+-- toolchain/rehearse-ci.sh and toolchain/smoke-test-postgres.mjs make
+-- their names in the same shape, so that 'sweepOnce' drops their
+-- leftovers too.
+namespaceFor :: Integer -> Text -> Text
+namespaceFor began random = "wiki_test_" <> show began <> "_" <> random <> "_"
+
+-- | When the run that made a database of the tests' namespace began, from
+-- its name; 'Nothing' for a name of another shape.
+namespaceBegan :: Text -> Maybe Integer
+namespaceBegan name = do
+  rest <- T.stripPrefix "wiki_test_" name
+  let (digits, afterDigits) = T.span isDigit rest
+  began <- readMaybe (T.unpack digits)
+  random <- T.stripPrefix "_" afterDigits
+  guard (T.length (T.takeWhile (/= '_') random) == 8 && "_" `T.isPrefixOf` T.drop 8 random)
+  pure began
+
+-- | The namespace's names: within PostgreSQL's 63 bytes, the longest
+-- included (a count as large as an 'Int', and the scripts' longest
+-- suffixes), and read back to the time their run began.
+namesUnitSpec :: Spec
+namesUnitSpec = describe "the PostgreSQL tests' database names" $ do
+  it "fit in PostgreSQL's 63 bytes, the longest included" $ do
+    let longest = namespaceFor 99999999999 "abcdefgh"
+    for_ [show (maxBound :: Int), "template", "rehearsal_scratch", "smoke_restored"] $ \suffix ->
+      T.length (longest <> suffix) `shouldSatisfy` (<= 63)
+  it "tell when their run began, and nothing of names of another shape" $ do
+    namespaceBegan (namespaceFor 1762800000 "k3x9q0az" <> "17") `shouldBe` Just 1762800000
+    namespaceBegan (namespaceFor 1762800000 "k3x9q0az" <> "template") `shouldBe` Just 1762800000
+    map namespaceBegan ["wiki_test_template", "wiki_test_17", "wiki_smoke_42", "wiki_test_1762800000_short_1", "postgres"] `shouldBe` replicate 5 Nothing
 
 -- | A place for an example's wiki in a data directory: on SQLite, the
 -- directory's own file, not there yet; on PostgreSQL, a database made for

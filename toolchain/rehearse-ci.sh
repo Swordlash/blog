@@ -13,7 +13,7 @@
 # With --postgres it reads the variables toolchain/ci-postgres.sh prints
 # (WIKI_TEST_DATABASE_URL, WIKI_TEST_PG_DUMP, WIKI_TEST_PG_RESTORE,
 # WIKI_TEST_PSQL), and makes two databases there, the wiki's and the copy's,
-# dropped first. With --move the wiki is in SQLite, and NEW rehearses its
+# in a namespace of the run's own, dropped when it ends. With --move the wiki is in SQLite, and NEW rehearses its
 # move to PostgreSQL, as `deploy-local.sh --move-to-postgres` does (WP5.80b):
 # OLD serves a copy in SQLite, NEW copies it into an empty database of that
 # PostgreSQL and serves it there, and each check compares what the two read.
@@ -45,30 +45,48 @@ esac
 
 work=$(mktemp -d)
 pid=''
+# The databases this run made on the PostgreSQL, dropped when it ends.
+databases=''
 cleanup() {
   [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+  for db in $databases; do
+    "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "DROP DATABASE IF EXISTS $db WITH (FORCE)" || true
+  done
   rm -rf "$work"
 }
 trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
 data=$work/data
 mkdir -p "$data"
+
+# The PostgreSQL may be shared with other runs (toolchain/ci-postgres.sh
+# keeps one container for every session on a machine), so the databases
+# this run makes are named in a namespace of its own, in the shape the
+# server's tests use (Test.Database.namespaceFor): wiki_test_, the time the
+# run began, eight random letters and digits. A run killed before its trap
+# leaves them behind; the server's PostgreSQL tests drop them once they are
+# six hours old.
+namespace=wiki_test_$(date +%s)_$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 8)_
+make_database() {
+  databases="$databases $1"
+  "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "CREATE DATABASE $1"
+}
 
 if [ -n "$postgres" ]; then
   : "${WIKI_TEST_DATABASE_URL:?run toolchain/ci-postgres.sh start first}"
   base=${WIKI_TEST_DATABASE_URL%/*}
-  for db in rehearsal_live rehearsal_scratch; do
-    "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "DROP DATABASE IF EXISTS $db"
-    "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "CREATE DATABASE $db"
-  done
-  set -- --database "$base/rehearsal_live" --pg-dump "$WIKI_TEST_PG_DUMP" --pg-restore "$WIKI_TEST_PG_RESTORE"
-  scratch_args="--scratch-database $base/rehearsal_scratch --scratch-pg-restore $WIKI_TEST_PG_RESTORE"
+  live=${namespace}rehearsal_live scratch=${namespace}rehearsal_scratch
+  make_database "$live"
+  make_database "$scratch"
+  set -- --database "$base/$live" --pg-dump "$WIKI_TEST_PG_DUMP" --pg-restore "$WIKI_TEST_PG_RESTORE"
+  scratch_args="--scratch-database $base/$scratch --scratch-pg-restore $WIKI_TEST_PG_RESTORE"
 elif [ -n "$move" ]; then
   : "${WIKI_TEST_DATABASE_URL:?run toolchain/ci-postgres.sh start first}"
   base=${WIKI_TEST_DATABASE_URL%/*}
-  "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "DROP DATABASE IF EXISTS rehearsal_move"
-  "$WIKI_TEST_PSQL" "$WIKI_TEST_DATABASE_URL" --quiet --command "CREATE DATABASE rehearsal_move"
+  target=${namespace}rehearsal_move
+  make_database "$target"
   set -- --sqlite "$data/wiki.sqlite"
-  scratch_args="--move-to-database $base/rehearsal_move"
+  scratch_args="--move-to-database $base/$target"
 else
   set -- --sqlite "$data/wiki.sqlite"
   scratch_args=''

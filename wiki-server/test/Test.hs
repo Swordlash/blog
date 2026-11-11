@@ -7,7 +7,7 @@ module Main (main) where
 
 import Protolude
 import Sel (secureMain)
-import Test.Database (TestGroup (..), backingName, testGroup, withBackings)
+import Test.Database (TestGroup (..), backingName, namesUnitSpec, testGroup, withBackings)
 import Test.Hspec (around_, describe, parallel)
 import Test.Hspec.Runner (Config (..), defaultConfig, hspecWith)
 import Test.Server.Access qualified as Access
@@ -82,6 +82,7 @@ main = secureMain $ do
         WaysIn.unitSpec
         CodeSteps.unitSpec
         Copy.unitSpec
+        namesUnitSpec
       for_ backings $ \b -> describe (backingName b) $ do
         independent $ do
           Contract.spec b
