@@ -1601,7 +1601,7 @@ decision 58); #188 (emojis: the
 done and closed: WP5.86, #236; the owner, 2026-11-11: Slack's names that
 GitHub's list does not have are not needed); #189 (backlinks, done: decision 71, #239); #196 (done: decision 72, #238); #200 (done: decision 73, #249: an interactive SVG in a frame
 that runs scripts and shares no origin, the frame the plugins will run
-in); #204's TODO lists (done: decision 74, #243; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3), which is next. Then the three large ones, in the owner's order of
+in); #204's TODO lists (done: decision 74, #243; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3), started 2026-11-11 at night, with the editor's folding (WP5.96) and #191 (WP5.97) beside it by the owner's word, ahead of #187. Then the three large ones, in the owner's order of
 2026-11-11: #187 (autocompletion); #191 (presentations, which bring the
 notion of a kind of page); and last #186 (plugins: decision 69, WP5.84
 first), with #190 (table views) and #204's calendar after it as plugins.
@@ -1613,6 +1613,47 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
+- **WP5.74b3 Encrypted spaces, the rest (#213; the owner, 2026-11-11, at
+  night: all of it in one pull request).** The eight items of the issue
+  (encrypted attachments and comments; a new space key when a member is
+  removed; an export decrypted in the browser; encrypting a space that
+  has pages, and turning encryption off; subspaces; decrypted titles in
+  recent changes and notifications; detecting a rolled-back version;
+  hiding the controls the server refuses) and the tests #209 left. A
+  ninth by his word the same night: an option of an encrypted space, "ask
+  for a passkey or the password before each opening", as a gate in the
+  interface (the space's key leaves the tab when the reader leaves the
+  space; the option's text says it does not stop someone with the
+  developer tools on an unlocked device), and signing out removes the
+  user's keys from the device. A second key pair kept only under the
+  passkey or password, which would make the gate hold against the
+  device's own key, was weighed and left: its cost is a new layer of
+  keys, and what it adds is narrow. Built in stages on one branch, a
+  design first, the stored formats before the rest.
+- **WP5.96 The editor folds spoilers (the owner, 2026-11-11: "edytor
+  powinien też pozwalać zwijać spoilery", before the presentations).** In
+  the source editor a spoiler block and a section whose heading is a
+  spoiler can be folded and unfolded, with CodeMirror's own folding. The
+  presentations' editor mode shows slides this way.
+- **WP5.97 Presentations as a kind of page (#191; the owner's answers of
+  2026-11-11; one pull request, on WP5.96).** A page has a kind, stored:
+  a document or a presentation. "New page" offers the two kinds, and a
+  document's templates come after choosing "Document" (the owner: the
+  other templates leave the menu's first level). The presentation's
+  syntax: each `##` opens a slide, `---` is no longer needed; `:::` gives
+  way to `[[style]]` (theme, aspect), `[[pause]]`, `[[notes]]`;
+  `[[incremental]]` or `{.incremental}` before a list as today. A
+  section's spoiler does nothing in the presentation, where a section is
+  a slide; in the editor it folds (WP5.96). The editor has two modes over
+  the same Markdown: raw, and an editor mode that lists the slides folded
+  under their titles, opens one at a time (more with Ctrl or Cmd),
+  reorders them by a handle and adds one below. The preview shows the
+  current slide as a card in editor mode, and either one slide or the
+  whole document in raw mode. The editor warns when a slide overflows,
+  yellow for a little and red for a lot. A presentation embedded in
+  another page is a viewer of its slides with first, previous, next and
+  last, drawn in the page, not a frame. Pages written in the old syntax
+  get no migration (the owner: nobody has presentations).
 - **WP5.95 No view takes an older answer over a newer one (found by
   Codex on #243, rounds 12 and 13; left there on purpose).** The page view
   drops a fetched page older than the one it shows (`takesPage`, by
