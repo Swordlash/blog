@@ -390,7 +390,7 @@ data MarkerEdit
     ShowLine Text
   | -- | Nothing: the end marker of a spoiler shown as its blocks, the
     -- deck's look and the table of contents' place, which a document
-    -- gets from the writer.
+    -- gets from the writer, and a line of attributes alone.
     DropLine
   | -- | A heading spoiler's marker, from its column up to this one,
     -- where the heading's text starts, taken out of the line.
@@ -432,6 +432,9 @@ markerEdits doc markers = Map.fromList [(m.lineAt, (m.columnAt, e)) | m <- marke
       HeadingMarker end -> Just (DropMarker end)
       -- An inline spoiler's bars are rewritten apart ('withBoxes').
       InlineBars _ _ -> Nothing
+      -- A line of attributes alone, @{.sorted}@, which pandoc's reader
+      -- would show as text.
+      SetsAttributes -> Just DropLine
 
 -- | A text with every line ended by @\\n@: CommonMark ends a line at
 -- @\\r\\n@, at @\\r@ and at @\\n@ alike, so the lines of the result are

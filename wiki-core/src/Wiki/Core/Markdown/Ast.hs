@@ -91,6 +91,8 @@ module Wiki.Core.Markdown.Ast
   , MarkerLine (..)
   , MarkerRole (..)
   , WrittenIds (..)
+  , TaskBox (..)
+  , parseWithTasks
 
     -- * Markers
   , MarkerName (..)
@@ -456,7 +458,7 @@ parseWithMarkers = fmap (\(bs, ms, _, _) -> (bs, ms)) . parseWithAllMarkers
 -- identifiers the wiki gives them ("Wiki.Server.Export.Document").
 parseWithAllMarkers :: Text -> Either ParseError ([Block], [BoxMarker], [MarkerLine], WrittenIds)
 parseWithAllMarkers source =
-  ( \(Blocks bs (Markers ms ss)) ->
+  ( \(Blocks bs (Markers ms ss _) _) ->
       let read' = map snd (toList bs)
        in ( finished read'
           , sortOn (\m -> (m.markerLine, m.markerColumn)) (ordNub ms)
@@ -514,13 +516,22 @@ writtenHeadings = concatMap $ \case
 ownId :: Attributes -> [Text]
 ownId attrs = [i | Just i <- [attribute "id" attrs], not (T.null i)]
 
+-- | Parse a page's Markdown, with the place of each of its tasks
+-- ('TaskBox') in the order of the tree: the order a walk of the blocks
+-- meets the tasks, each item before the items in it, the footnotes'
+-- tasks last, as the footnotes are. "Wiki.Core.Markdown.Tasks" names a
+-- task by its place in this order.
+parseWithTasks :: Text -> Either ParseError ([Block], [TaskBox])
+parseWithTasks source =
+  (\(Blocks bs (Markers _ _ ts) _) -> (finished (map snd (toList bs)), ts)) <$> parsed source
+
 -- | Parse a page's Markdown, each block of the page (not those inside
 -- another) with the line of the source it starts on, from 1: what the
 -- editor's preview is scrolled by, to show the block being written
 -- ("Wiki.Core.Markdown.Render"'s 'Wiki.Core.Markdown.Render.renderLines').
 parseWithLines :: Text -> Either ParseError [(Maybe Int, Block)]
 parseWithLines source =
-  (\(Blocks bs _) -> finishedWith (toList bs)) <$> parsed source
+  (\(Blocks bs _ _) -> finishedWith (toList bs)) <$> parsed source
 
 -- | What every block of a page goes through once parsed.
 finished :: [Block] -> [Block]
@@ -549,6 +560,16 @@ data BoxMarker = BoxMarker
   , boxKind :: AlertKind
   , boxTitle :: Maybe Text
   , boxNumbered :: Bool
+  }
+  deriving stock (Eq, Ord, Show)
+
+-- | 'TaskBox' is where a task's item starts in a page's source: the line
+-- and the column of its bullet (from 1, a tab counted as 'BoxMarker''s
+-- are). The task's box, @[ ]@ or @[x]@, follows the bullet on that line,
+-- after spaces. "Wiki.Core.Markdown.Tasks" ticks a box there.
+data TaskBox = TaskBox
+  { taskLine :: Int
+  , taskColumn :: Int
   }
   deriving stock (Eq, Ord, Show)
 
@@ -594,6 +615,10 @@ data MarkerRole
     -- parser read as a spoiler's are listed, so the export knows them
     -- apart from an escaped bar, a character reference and code.
     InlineBars Int Int
+  | -- | A line of attributes in braces alone, @{.sorted}@, which the
+    -- block after it takes (a list is put in a 'Div' with them). Pandoc's
+    -- reader would read it as text, so the export leaves it out.
+    SetsAttributes
   deriving stock (Eq, Ord, Show)
 
 -- | Every box's marker in a page's source, in the order of the source;
@@ -637,6 +662,7 @@ syntax =
     <> texMathSpec
     <> CME.wikilinksSpec CME.TitleAfterPipe
     <> CME.attributesSpec
+    <> attributeLineSpec
     <> CM.defaultSyntaxSpec
     <> CME.pipeTableSpec
 
@@ -964,50 +990,59 @@ barsOf (Inlines _ bs _) = bs
 
 -- | Blocks made of some inlines, with the bars of their inline spoilers.
 withBars :: Inlines -> Blocks -> Blocks
-withBars xs (Blocks bs ms) = Blocks bs (ms <> Markers [] (barsOf xs))
+withBars xs (Blocks bs ms at) = Blocks bs (ms <> Markers [] (barsOf xs) []) at
 
 -- | Blocks as the parser builds them, each with the line of the source it
 -- starts on once the parser has said ('parseWithLines'), and with the
 -- markers of the boxes among them, nested ones too ('boxMarkers'). Every
--- block made of other blocks keeps their markers.
-data Blocks = Blocks (Seq (Maybe Int, Block)) Markers
+-- block made of other blocks keeps their markers. The last field is where
+-- the parser last said these blocks start, as a line and a column
+-- ('CM.Rangeable'); blocks combined with others have none. The blocks of
+-- a list item are given their item's place just before the list is made,
+-- and a task list reads each task's place from there ('TaskBox').
+data Blocks = Blocks (Seq (Maybe Int, Block)) Markers (Maybe (Int, Int))
   deriving stock (Show)
 
 -- | The markers of boxes and of spoilers among some blocks, nested ones
--- too.
-data Markers = Markers [BoxMarker] [MarkerLine]
+-- too, and the places of their tasks, in the order of the tree.
+data Markers = Markers [BoxMarker] [MarkerLine] [TaskBox]
   deriving stock (Show)
 
+-- | Where some blocks start, if the parser has just said
+-- ('CM.Rangeable').
+startOf :: Blocks -> Maybe (Int, Int)
+startOf (Blocks _ _ at) = at
+
 instance Semigroup Markers where
-  Markers bs ss <> Markers bs' ss' = Markers (bs <> bs') (ss <> ss')
+  Markers bs ss ts <> Markers bs' ss' ts' = Markers (bs <> bs') (ss <> ss') (ts <> ts')
 
 instance Monoid Markers where
-  mempty = Markers [] []
+  mempty = Markers [] [] []
 
 instance Semigroup Blocks where
-  Blocks xs ms <> Blocks ys ns = Blocks (xs <> ys) (ms <> ns)
+  Blocks xs ms _ <> Blocks ys ns _ = Blocks (xs <> ys) (ms <> ns) Nothing
 
 instance Monoid Blocks where
-  mempty = Blocks Seq.empty mempty
+  mempty = Blocks Seq.empty mempty Nothing
 
 inline :: Inline -> Inlines
 inline x = Inlines (Seq.singleton x) [] False
 
 block :: Block -> Blocks
-block b = Blocks (Seq.singleton (Nothing, b)) mempty
+block b = Blocks (Seq.singleton (Nothing, b)) mempty Nothing
 
 -- | One block made of others, with their markers.
 around :: ([Block] -> Block) -> Blocks -> Blocks
-around make bs = Blocks (Seq.singleton (Nothing, make (blocks bs))) (markersOf bs)
+around make bs = Blocks (Seq.singleton (Nothing, make (blocks bs))) (markersOf bs) Nothing
 
 markersOf :: Blocks -> Markers
-markersOf (Blocks _ ms) = ms
+markersOf (Blocks _ ms _) = ms
 
 inlines :: Inlines -> [Inline]
 inlines (Inlines xs _ _) = toList xs
 
 blocks :: Blocks -> [Block]
-blocks (Blocks xs _) = map snd (toList xs)
+blocks (Blocks xs _ _) = map snd (toList xs)
 
 -- | The parser gives the place of each inline it makes, the formatted ones
 -- just after it makes them: an inline spoiler's place, from its first two
@@ -1023,11 +1058,12 @@ instance CM.Rangeable Inlines where
 -- | The parser says where each block is once it has made it, innermost
 -- first: a block without a line yet starts where this range does. A block
 -- the parser made several of (a paragraph split around display math) has
--- them all start there.
+-- them all start there. The range's start is kept as the blocks' place
+-- ('startOf'), the outermost one said last.
 instance CM.Rangeable Blocks where
-  ranged (CM.SourceRange ranges) (Blocks xs ms) = case ranges of
-    (start, _) : _ -> Blocks (first (<|> Just (CM.sourceLine start)) <$> xs) ms
-    [] -> Blocks xs ms
+  ranged (CM.SourceRange ranges) (Blocks xs ms at) = case ranges of
+    (start, _) : _ -> Blocks (first (<|> Just (CM.sourceLine start)) <$> xs) ms (Just (CM.sourceLine start, CM.sourceColumn start))
+    [] -> Blocks xs ms at
 
 instance CM.HasAttributes Inlines where
   addAttributes new (Inlines xs bs fresh) = Inlines (add <$> xs) bs fresh
@@ -1039,7 +1075,7 @@ instance CM.HasAttributes Inlines where
         other -> other
 
 instance CM.HasAttributes Blocks where
-  addAttributes new (Blocks xs ms) = Blocks (fmap add <$> xs) ms
+  addAttributes new (Blocks xs ms at) = Blocks (fmap add <$> xs) ms at
     where
       add = \case
         Heading l attrs xs' -> Heading l (attrs <> new) xs'
@@ -1051,6 +1087,10 @@ instance CM.HasAttributes Blocks where
         -- An html fence keeps its attributes (its height), unless they
         -- make it a listing.
         HtmlBlock attrs t | norenderClass `notElem` classes new -> HtmlBlock (attrs <> new) t
+        -- A list has no attributes of its own: it goes in a 'Div' that has
+        -- them, as pandoc's CommonMark reader puts it. @{.sorted}@ on the
+        -- line before a list is read so ("Wiki.Core.Markdown.Render").
+        l@(List _ _) | not (null new) -> Div new [l]
         -- A fence the parser has rendered already, with @norender@ in the
         -- braces after its info word (@```mermaid {.norender}@).
         other
@@ -1091,7 +1131,7 @@ instance CM.IsBlock Inlines Blocks where
 
   -- A definition has done its job once the links that use it are parsed.
   referenceLinkDefinition _ _ = mempty
-  list kind _ items = Blocks (Seq.singleton . (Nothing,) $ (List (listKind kind) (map (ListItem Nothing . blocks) items))) (foldMap markersOf items)
+  list kind _ items = Blocks (Seq.singleton . (Nothing,) $ (List (listKind kind) (map (ListItem Nothing . blocks) items))) (foldMap markersOf items) Nothing
 
 instance CME.HasMath Inlines where
   inlineMath = inline . Math InlineMath
@@ -1117,13 +1157,19 @@ instance CME.HasPipeTable Inlines Blocks where
         CME.DefaultAlignedCol -> AlignDefault
 
 instance CME.HasTaskList Inlines Blocks where
-  taskList kind _ items = Blocks (Seq.singleton . (Nothing,) $ (List (listKind kind) [ListItem (Just done) (blocks b) | (done, b) <- items])) (foldMap (markersOf . snd) items)
+  -- Each item's box, before the boxes of the tasks under it: the order
+  -- of the tree ('parseWithTasks').
+  taskList kind _ items =
+    Blocks
+      (Seq.singleton . (Nothing,) $ (List (listKind kind) [ListItem (Just done) (blocks b) | (done, b) <- items]))
+      (foldMap (\(_, b) -> Markers [] [] [TaskBox line column | Just (line, column) <- [startOf b]] <> markersOf b) items)
+      Nothing
 
 instance CME.HasFootnote Inlines Blocks where
   footnote number label = around (Footnotes . pure . Footnote number label)
   footnoteList notes =
     let all' = mconcat notes
-     in Blocks (Seq.singleton . (Nothing,) $ (Footnotes (concat [ns | Footnotes ns <- blocks all']))) (markersOf all')
+     in Blocks (Seq.singleton . (Nothing,) $ (Footnotes (concat [ns | Footnotes ns <- blocks all']))) (markersOf all') Nothing
 
   -- The note's contents come along for formats that show a note where it
   -- is referenced; here they are shown once, in 'Footnotes'.
@@ -1194,7 +1240,7 @@ alertBlockSpec =
         written <- if null titleToks then pure Nothing else Just <$> CM.runInlineParser titleToks
         inside <- mconcat <$> CM.renderChildren node
         let title = inlines <$> written
-        pure (Blocks (Seq.singleton . (Nothing,) $ (Alert marker.boxKind BoxHead {title, numbered = marker.boxNumbered, id = Nothing} (blocks inside))) (Markers [marker] (foldMap barsOf written) <> markersOf inside))
+        pure (Blocks (Seq.singleton . (Nothing,) $ (Alert marker.boxKind BoxHead {title, numbered = marker.boxNumbered, id = Nothing} (blocks inside))) (Markers [marker] (foldMap barsOf written) [] <> markersOf inside) Nothing)
     , CM.blockFinalize = CM.defaultFinalizer
     }
 
@@ -1579,20 +1625,22 @@ markerBlockSpec =
             parsedDescription <- CM.runInlineParser o.openDescriptionToks
             let name = fromMaybe "" o.openName
                 h = SpoilerHead {name, description = inlines parsedDescription, marker = o.openMarker, line = o.openLine, problem = NotClosed <$ guard (isNothing o.ended), kind = BetweenMarkers}
-                found = Markers [] ([MarkerLine o.openLine o.openColumn (Starts name o.openDescription)] <> [MarkerLine l c (Ends o.openLine) | Just (l, c) <- [o.ended]] <> barsOf parsedDescription)
-            pure (Blocks (Seq.singleton (Nothing, Spoiler h (blocks inside))) (found <> markersOf inside))
+                found = Markers [] ([MarkerLine o.openLine o.openColumn (Starts name o.openDescription)] <> [MarkerLine l c (Ends o.openLine) | Just (l, c) <- [o.ended]] <> barsOf parsedDescription) []
+            pure (Blocks (Seq.singleton (Nothing, Spoiler h (blocks inside))) (found <> markersOf inside) Nothing)
           Just o -> pure $ case o.ended of
             Just (l, c) ->
               Blocks
                 (Seq.singleton (Nothing, Div o.openAttributes (blocks inside)))
-                (Markers [] [MarkerLine o.openLine o.openColumn (Opens o.openAttributes), MarkerLine l c (Ends o.openLine)] <> markersOf inside)
+                (Markers [] [MarkerLine o.openLine o.openColumn (Opens o.openAttributes), MarkerLine l c (Ends o.openLine)] [] <> markersOf inside)
+                Nothing
             -- Shown as an unclosed spoiler is: the marker and the reason
             -- in red, then the blocks in red.
             Nothing ->
               let why = notClosed o.openKind
                in Blocks
                     (Seq.fromList [(Nothing, MarkerError o.openMarker why), (Nothing, Div [("class", "spoiler-unclosed")] (blocks inside))])
-                    (Markers [] [MarkerLine o.openLine o.openColumn (Faulty o.openMarker why)] <> markersOf inside)
+                    (Markers [] [MarkerLine o.openLine o.openColumn (Faulty o.openMarker why)] [] <> markersOf inside)
+                    Nothing
     , CM.blockFinalize = CM.defaultFinalizer
     }
   where
@@ -1661,7 +1709,7 @@ markerLineSpec =
     , CM.blockParagraph = False
     , CM.blockContinue = const mzero
     , CM.blockConstructor = \node -> pure $ case fromDynamic (CM.blockData (rootLabel node)) of
-        Just (b, m) -> Blocks (Seq.singleton (Nothing, b)) (Markers [] [m :: MarkerLine])
+        Just (b, m) -> Blocks (Seq.singleton (Nothing, b)) (Markers [] [m :: MarkerLine] []) Nothing
         Nothing -> mempty
     , CM.blockFinalize = CM.defaultFinalizer
     }
@@ -1743,8 +1791,32 @@ spoilerHeadingBlockSpec =
             let line = Parsec.sourceLine m.markerPos
                 h = SpoilerHead {name = fromMaybe "" m.markerName, description = [], marker = m.markerWritten, line, problem = Nothing, kind = OnHeading}
                 found = MarkerLine line (Parsec.sourceColumn m.markerPos) (HeadingMarker (Parsec.sourceColumn m.textAt))
-            pure (Blocks (Seq.singleton (Nothing, Spoiler h [Heading level [] (inlines text)])) (Markers [] (found : barsOf text)))
+            pure (Blocks (Seq.singleton (Nothing, Spoiler h [Heading level [] (inlines text)])) (Markers [] (found : barsOf text) []) Nothing)
           Nothing -> CM.heading level <$> CM.runInlineParser toks
+    }
+
+-- | Lines of attributes in braces alone, @{.sorted}@, which the block
+-- after them takes: commonmark's own reader of them (@attributeSpec@),
+-- whose node is made this spec's once it has read a line, so that each
+-- line it reads is listed as a 'MarkerLine' of the role 'SetsAttributes'.
+-- The attributes reach the next block as before.
+attributeLineSpec :: CM.SyntaxSpec Identity Inlines Blocks
+attributeLineSpec = mempty {CM.syntaxBlockSpecs = [attributeLineBlockSpec]}
+
+attributeLineBlockSpec :: CM.BlockSpec Identity Inlines Blocks
+attributeLineBlockSpec =
+  CM.attributeSpec
+    { CM.blockStart = try $ do
+        started <- CM.blockStart CM.attributeSpec
+        st <- getState
+        case CM.nodeStack st of
+          top : rest
+            | CM.blockType (CM.blockSpec (rootLabel top)) == "Attribute" -> do
+                Parsec.putState st {CM.nodeStack = top {rootLabel = (rootLabel top) {CM.blockSpec = attributeLineBlockSpec}} : rest}
+                pure started
+          _ -> mzero
+    , CM.blockConstructor = \node ->
+        pure (Blocks Seq.empty (Markers [] [MarkerLine (Parsec.sourceLine p) (Parsec.sourceColumn p) SetsAttributes | p <- CM.blockStartPos (rootLabel node)] []) Nothing)
     }
 
 listKind :: CM.ListType -> ListKind
