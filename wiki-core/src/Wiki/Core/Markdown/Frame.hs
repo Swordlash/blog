@@ -95,8 +95,12 @@
 --   pages may frame the interactive form.
 -- * Opened by itself in a tab, the same address runs under the same
 --   policy, its @sandbox@ included: an opaque origin, no cookie, no
---   storage, no request, no tab, no dialog. It can navigate its own tab
---   away, which carries nothing of the wiki's.
+--   storage, no request, no new tab, no dialog. One thing is left, which
+--   no policy stops: like any page, it can send its own tab to another
+--   address, and take along what its script holds. That is the SVG's own
+--   content and whatever the reader types into it, never anything of the
+--   wiki's, which it cannot read. So the interactive form opened alone is
+--   a page of the SVG's author shown at the wiki's address.
 --
 -- The frame is loaded by the page, so the browser sends the session's
 -- cookie with that first request, and an SVG of a private space loads for
@@ -123,6 +127,7 @@ module Wiki.Core.Markdown.Frame
   )
 where
 
+import Data.Text qualified as T
 import Protolude
 import Wiki.Core.Attachment (MimeType (..), mimeEssence)
 
@@ -173,7 +178,10 @@ interactiveClass = "interactive"
 -- two never disagree. An @.svg@ file stored under another type is not
 -- one: the server serves the type it stored.
 framesInteractively :: Text -> Bool
-framesInteractively mediaType = mimeEssence (MimeType mediaType) == "image/svg+xml"
+framesInteractively mediaType =
+  -- Printable ASCII only, as the server writes a type into its header: one
+  -- it cannot write there it sends as @application\/octet-stream@.
+  T.all (\c -> isAscii c && isPrint c) mediaType && mimeEssence (MimeType mediaType) == "image/svg+xml"
 
 -- | The height, in pixels, of an interactive SVG's frame when the embed
 -- gives none: about a flame graph's of thirty levels. The page cannot

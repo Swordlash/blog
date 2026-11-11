@@ -30,7 +30,7 @@ spec = describe "Markdown.Frame" $ do
       framesInteractively "Image/SVG+XML" `shouldBe` True
       framesInteractively "image/svg+xml; charset=utf-8" `shouldBe` True
     it "is no attachment of another type, an SVG's name notwithstanding" $
-      for_ ["image/png", "text/html", "application/xml", "image/svg", "image/svg+xml-compressed", "application/octet-stream", ""] $ \t ->
+      for_ ["image/png", "text/html", "application/xml", "image/svg", "image/svg+xml-compressed", "image/svg+xml; name=\"é\"", "application/octet-stream", ""] $ \t ->
         (t, framesInteractively t) `shouldBe` (t, False)
 
   describe "the frame's document" $ do

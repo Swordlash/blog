@@ -5,7 +5,8 @@
 // The text an anchor is taken from is the page's rendered text as
 // Wiki.Core.Anchor.renderedText reads it: the text nodes of the article,
 // in order, joined with nothing between them, without what the islands
-// draw (formulas, code, diagrams, pictures, times, html fences' frames),
+// draw (formulas, code, diagrams, pictures, times, html fences' frames,
+// interactive SVGs' frames),
 // whose elements are the islands' own (Wiki.App.Islands) and hold a
 // library's output or another document rather than the page's text. The article's text nodes are made by the same
 // renderer as the text Haskell reads, so the two agree character for
@@ -13,7 +14,7 @@
 
 // The page's byline (who wrote it), which the page view puts after the
 // article's own title, is no part of the page's text either.
-const WIKI_ISLANDS = ".wiki-math, .wiki-code, .wiki-mermaid, .wiki-tikz, .wiki-html, .wiki-time, .page-byline";
+const WIKI_ISLANDS = ".wiki-math, .wiki-code, .wiki-mermaid, .wiki-tikz, .wiki-html, .wiki-svg, .wiki-time, .page-byline";
 
 // How many characters of context an anchor keeps on each side
 // (Wiki.Core.Anchor.contextLength).

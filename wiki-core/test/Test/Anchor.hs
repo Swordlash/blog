@@ -14,7 +14,8 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Gen, choose, elements, forAll, (===))
 import Wiki.Core.Anchor
-import Wiki.Core.Markdown (Options (..), defaultOptions, renderMarkdown)
+import Wiki.Core.Markdown (AttachmentRef (..), LinkTarget (..), Options (..), defaultOptions, renderMarkdown)
+import Wiki.Core.Markdown.Frame (SvgFrame (..))
 
 -- | The anchor of the first occurrence of a phrase in a text.
 quoting :: Text -> Text -> Anchor
@@ -166,6 +167,16 @@ spec = describe "Anchor" $ do
           doc = renderedBlocks (either (panic . show) identity (renderMarkdown framed "Before it\n\n```html\n<p>inside</p>\n```\n\nafter it"))
       doc.text `shouldBe` "Before itafter it"
       textFragment doc (quoting "it" doc.text) `shouldBe` ":~:text=Before-,it"
+    it "reads nothing of an interactive SVG's frame or its empty link, and takes the frame as a break" $ do
+      let svg = AttachmentRef {name = "flame.svg", url = "/f/flame.svg", mediaType = Just "image/svg+xml", frameUrl = Just "/f/flame.svg?interactive"}
+          framed =
+            defaultOptions
+              { resolveLink = const (Attachment svg)
+              , svgFrame = Just (\_ frame -> HH.iframe [HP.src frame.url, HP.title frame.title])
+              }
+          doc = renderedBlocks (either (panic . show) identity (renderMarkdown framed "See ![flame](attachment:flame.svg){.interactive} here"))
+      doc.text `shouldBe` "See  here"
+      textFragment doc (quoting "See  here" doc.text) `shouldBe` ":~:text=See,here"
     it "takes a task's checkbox as a break" $ do
       let doc = blocksOf "- [x] done it"
       doc.text `shouldBe` " done it"
