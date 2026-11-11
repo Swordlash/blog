@@ -1289,7 +1289,16 @@ confirms it against reality and the plan is amended if it does not hold.
     any loading from a URL; (6) a plugin sees only the page being edited,
     and only while its editor is open, and anything more is a permission of
     its own, which may be as fine as a contribution needs. The packages are
-    under "Open work".
+    under "Open work". **The interface is also how the code is cut into
+    modules (the owner, 2026-11-11: "I would like to modularise the code
+    a little through these plugins").** A built-in plugin imports the
+    plugins' interface and nothing of the application's inside, kept by a
+    test of the imports at first (`Wiki.App.Plugin.*`) and by packages of
+    their own once the interface has settled. After the assistant and the
+    errors, the features that go behind it, one a package and none
+    changing what it does: the emoji picker, the islands (Mermaid, TikZ,
+    the `html` frame), presentations, table views (#190); the calendar of
+    #204 is the first plugin written as one from the start.
 70. **A permanent link is a page by its id, pinned to a version (WP5.81,
     #194, #235; the owner, 2026-11-10).** The owner's meaning of the issue:
     a link to the page as it was when the link was made ("link +
