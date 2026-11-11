@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The export reads a fence's language as the page's parser does, the first
+class other than `numbered` and `norender` (WP5.89, #196): a `latex`
+fence is display math, an `html` fence is read through the page's
+allowlist as raw HTML is, without its styles, and `norender` keeps a
+listing. The HTML it gives pandoc is written by wiki-core's `renderHtml`.
+
 Every login is ASCII (WP5.87). Step 15 of the schema, a `CodeStep`
 (`Step0015`), renames each login that breaks the rule of 2026-11-06, a
 copy of `parseLogin` frozen in the step, to `user-` and the first eight
