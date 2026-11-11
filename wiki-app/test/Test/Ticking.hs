@@ -11,7 +11,7 @@ import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Protolude
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
-import Test.QuickCheck (Gen, Property, arbitrary, chooseInt, counterexample, elements, forAll, frequency, listOf, (.&&.), (===))
+import Test.QuickCheck (Gen, Property, arbitrary, chooseInt, counterexample, elements, forAllBlind, frequency, listOf, (.&&.), (===), (==>))
 import Wiki.App.View.Ticking
 import Wiki.Core.Id (PageId (..), SpaceId (..))
 import Wiki.Core.Markdown.Tasks (applyTicks)
@@ -56,26 +56,44 @@ versions =
   , pageOf "q" tasksText 5
   ]
 
-genEvent :: Gen Event
+-- | An event, given the staging it comes to: an answer to a save is for
+-- the current save or for another, either way.
+genEvent :: Gen (Staging -> Event)
 genEvent =
   frequency
-    [ (6, Clicked <$> chooseInt (0, 4) <*> arbitrary)
-    , (1, Refused <$> chooseInt (0, 4))
-    , (1, pure Saving)
-    , (1, pure Conflicted)
-    , (1, SaveFailed <$> elements ["The ticks could not be saved."])
-    , (1, Saved <$> elements versions)
-    , (4, Offered <$> elements versions)
-    , (2, Problem <$> elements ["The page could not be read again.", "The ticks could not be saved."])
-    , (1, Clear <$> elements [minBound .. maxBound])
-    , (1, pure Dismissed)
+    [ (6, const <$> (Clicked <$> chooseInt (0, 4) <*> arbitrary))
+    , (1, const . Refused <$> chooseInt (0, 4))
+    , (2, pure (const Saving))
+    , (2, (\token -> Conflicted . token) <$> genToken)
+    , (2, (\token -> \s -> SaveFailed (token s) "The ticks could not be saved.") <$> genToken)
+    , (2, (\token p -> \s -> Saved (token s) p) <$> genToken <*> elements versions)
+    , (4, const . Offered <$> elements versions)
+    , (2, const . Problem <$> elements ["The page could not be read again.", "The ticks could not be saved."])
+    , (1, const . Clear <$> elements [minBound .. maxBound])
+    , (1, pure (const Dismissed))
     ]
+  where
+    -- The current save's number, or another.
+    genToken = frequency [(2, pure (\s -> s.save)), (1, (\n _ -> n) <$> chooseInt (0, 6))]
+
+-- | The staging after some events.
+after' :: [Staging -> Event] -> Staging
+after' = foldl' (\s e -> step (e s) s) (step (Offered (pageOf "p" tasksText 0)) unstaged)
+
+-- | Whether an event answers a save other than the current one under
+-- way.
+stale :: Staging -> Event -> Bool
+stale s = \case
+  Saved n _ -> not (answers n s)
+  Conflicted n -> not (answers n s)
+  SaveFailed n _ -> not (answers n s)
+  _ -> False
 
 -- | Whether an event may take ticks away: a save, a reason of
 -- 'Clearing', or the reader's own click.
 mayTakeTicks :: Event -> Bool
 mayTakeTicks = \case
-  Saved _ -> True
+  Saved _ _ -> True
   Clear _ -> True
   Clicked _ _ -> True
   _ -> False
@@ -89,12 +107,28 @@ consistent s = case s.page of
 spec :: Spec
 spec = describe "Wiki.App.View.Ticking" $ do
   prop "keeps every tick through any event but a save, a reason to clear and a click, and shows the page with them" $
-    forAll (listOf genEvent) $ \events -> forAll genEvent $ \event ->
-      let s = foldl' (flip step) (step (Offered (pageOf "p" tasksText 0)) unstaged) events
+    forAllBlind (listOf genEvent) $ \events -> forAllBlind genEvent $ \made ->
+      let s = after' events
+          event = made s
           next = step event s
           kept = and [boxState next i == Just v | (i, v) <- Map.toList s.ticks]
        in counterexample (show (s, event, next)) $
             consistent next .&&. (mayTakeTicks event || kept)
+
+  prop "takes no answer for a save other than the current one: the ticks and the saving stay" $
+    forAllBlind (listOf genEvent) $ \events -> forAllBlind genEvent $ \made ->
+      let s = after' events
+          event = made s
+          next = step event s
+       in stale s event ==> counterexample (show (s, event, next)) ((next.ticks, next.saving) === (s.ticks, s.saving))
+
+  it "takes no answer to a save made before the ticks were dropped and made again" $ do
+    let first' = step Saving (step (Clicked 3 True) (step (Offered (pageOf "p" tasksText 0)) unstaged))
+        token = first'.save
+        again = step (Clicked 0 True) (step (Clear MayNoLongerEdit) first')
+    for_ [Saved token (pageOf "p" tasksText 7), Conflicted token, SaveFailed token "No."] $ \answer ->
+      ((step answer again).ticks, (step answer again).saving) `shouldBe` (again.ticks, again.saving)
+    again.ticks `shouldSatisfy` (not . Map.null)
 
   it "keeps the ticks on the page shown when a fetch brings other tasks, and says so" $ do
     let s = step (Clicked 3 True) (step (Offered (pageOf "p" tasksText 0)) unstaged)
@@ -134,7 +168,8 @@ spec = describe "Wiki.App.View.Ticking" $ do
     for_ [minBound .. maxBound] $ \why -> (step (Clear why) s).ticks `shouldBe` mempty
     (step (Clear MayNoLongerEdit) s).note `shouldBe` Just (Dropped "You may no longer edit this page, so your tick was dropped.")
     (step (Clear LeftConfirmed) s).page `shouldBe` Nothing
-    (step (Saved (pageOf "p" tasksText 6)) s).ticks `shouldBe` mempty
+    let saving = step Saving s
+    (step (Saved saving.save (pageOf "p" tasksText 6)) saving).ticks `shouldBe` mempty
 
   it "draws a box anew after a click it does not take" $ do
     let s = step (Offered (pageOf "p" tasksText 0)) unstaged

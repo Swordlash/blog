@@ -982,17 +982,20 @@ component =
         st <- get
         for_ st.staging.page $ \base -> when (boxesEnabled st && unsaved st) $ do
           stage Ticking.Saving
+          token <- gets (\now -> now.staging.save)
           result <- savePage base.id base.updatedAt base.title st.staging.shown
-          -- An answer to a save of an earlier visit (the reader left and
-          -- maybe came back) is not about the page shown: it keeps its own
-          -- state, and the shell reloads what changed, which shows the
-          -- save if the page is shown again ('adopt').
-          current <- gets (\now -> now.visit == st.visit)
+          -- The answer is taken only if this save is still the current
+          -- one ('Ticking.answers'): not when the ticks were dropped,
+          -- discarded or left meanwhile, though the page shown be the same
+          -- again. Then the page shown keeps its own state, and the shell
+          -- reloads what changed, which shows the save if the page is shown
+          -- ('adopt').
+          current <- gets (\now -> Ticking.answers token now.staging)
           if not current
             then when (isRight result) (H.raise (Changed Nothing))
             else case result of
               Right saved -> do
-                stage (Ticking.Saved saved)
+                stage (Ticking.Saved token saved)
                 -- The Save button that had the focus is gone with the
                 -- ticks: the focus goes back to the box set last.
                 focusLastBox
@@ -1008,8 +1011,8 @@ component =
               -- Saved elsewhere meanwhile: the page as it is now, with the
               -- ticks on it if it has the same tasks; otherwise the ticks
               -- stay on the page shown, and the bar says so.
-              Left (Conflict _) -> stage Ticking.Conflicted >> catchUp
-              Left e -> stage (Ticking.SaveFailed ("The ticks could not be saved: " <> errorMessage e))
+              Left (Conflict _) -> stage (Ticking.Conflicted token) >> catchUp
+              Left e -> stage (Ticking.SaveFailed token ("The ticks could not be saved: " <> errorMessage e))
       -- The Discard button that had the focus is gone with the ticks: the
       -- focus goes back to the box set last.
       DiscardTicks -> do

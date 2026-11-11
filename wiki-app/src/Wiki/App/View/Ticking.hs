@@ -31,6 +31,7 @@ module Wiki.App.View.Ticking
   , Clearing (..)
   , Event (..)
   , unstaged
+  , answers
   , step
   , boxState
   )
@@ -58,6 +59,12 @@ data Staging = Staging
   -- what "Save" saves.
   , saving :: Bool
   -- ^ Whether a save of the ticks is under way.
+  , save :: Int
+  -- ^ Which save of the ticks is the current one: one more each time a
+  -- save starts, and each time the ticks leave the staging. An answer is
+  -- taken only for the current save, which is under way ('answers'), so
+  -- that the answer to a save the staging has moved past (the ticks were
+  -- dropped and made again meanwhile) changes nothing.
   , note :: Maybe TickNote
   -- ^ What the bar says happened to the ticks, if anything did.
   , drawn :: Map Int Int
@@ -104,15 +111,17 @@ data Event
   | -- | The reader clicked a task's box the view does not take now: the
     -- box is drawn anew with the state it has.
     Refused Int
-  | -- | A save of the ticks began.
+  | -- | A save of the ticks began: it is the save numbered one more than
+    -- the staging's 'save'.
     Saving
-  | -- | This visit's save of the ticks succeeded: the page as saved.
-    Saved Page
-  | -- | This visit's save met a newer version of the page: nothing was
-    -- saved, and the page as it is now is fetched next.
-    Conflicted
-  | -- | This visit's save failed otherwise: why. Nothing was saved.
-    SaveFailed Text
+  | -- | The save with this number succeeded: the page as saved.
+    Saved Int Page
+  | -- | The save with this number met a newer version of the page:
+    -- nothing was saved, and the page as it is now is fetched next.
+    Conflicted Int
+  | -- | The save with this number failed otherwise: why. Nothing was
+    -- saved.
+    SaveFailed Int Text
   | -- | The page as fetched now, for this visit of it.
     Offered Page
   | -- | Something else failed (a fetch): what.
@@ -125,7 +134,12 @@ data Event
 
 -- | No page and no ticks: a view that has not shown its page yet.
 unstaged :: Staging
-unstaged = Staging {page = Nothing, tasks = [], ticks = mempty, shown = "", saving = False, note = Nothing, drawn = mempty}
+unstaged = Staging {page = Nothing, tasks = [], ticks = mempty, shown = "", saving = False, save = 0, note = Nothing, drawn = mempty}
+
+-- | Whether an answer to the save with this number is taken: it is the
+-- current save, and under way.
+answers :: Int -> Staging -> Bool
+answers n s = s.saving && n == s.save
 
 -- | The staging after an event.
 step :: Event -> Staging -> Staging
@@ -136,10 +150,16 @@ step event s = case event of
       Right shown -> s {ticks = tick s.tasks s.ticks i v, shown, note = mfilter (not . problem) s.note}
       Left e -> s {note = Just (TickProblem (tickErrorText e))}
   Refused i -> s {drawn = Map.insertWith (+) i 1 s.drawn}
-  Saving -> s {saving = True, note = Nothing}
-  Saved p -> cleared Nothing s {page = Just p, tasks = tasksIn p.body}
-  Conflicted -> s {saving = False}
-  SaveFailed why -> s {saving = False, note = Just (TickProblem why)}
+  Saving -> s {saving = True, save = s.save + 1, note = Nothing}
+  Saved n p
+    | answers n s -> cleared Nothing s {page = Just p, tasks = tasksIn p.body}
+    | otherwise -> s
+  Conflicted n
+    | answers n s -> s {saving = False}
+    | otherwise -> s
+  SaveFailed n why
+    | answers n s -> s {saving = False, note = Just (TickProblem why)}
+    | otherwise -> s
   Offered p
     | Map.null s.ticks -> shownAs p s
     | Just old <- s.page, old == p -> s
@@ -170,12 +190,12 @@ step event s = case event of
 -- forgets the page too; the others keep it, with its text as it is.
 cleared :: Maybe Clearing -> Staging -> Staging
 cleared why s = case why of
-  Just LeftConfirmed -> unstaged
+  Just LeftConfirmed -> unstaged {save = s.save + 1}
   Just MayNoLongerEdit
     | not (Map.null s.ticks) -> plain {note = Just (Dropped ("You may no longer edit this page, so " <> were <> " dropped."))}
   _ -> plain {note = Nothing}
   where
-    plain = s {ticks = mempty, shown = maybe "" (\p -> p.body) s.page, saving = False}
+    plain = s {ticks = mempty, shown = maybe "" (\p -> p.body) s.page, saving = False, save = s.save + 1}
     count = Map.size s.ticks
     were = if count == 1 then "your tick was" else "your " <> show count <> " ticks were"
 
