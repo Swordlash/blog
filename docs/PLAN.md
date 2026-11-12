@@ -1649,6 +1649,24 @@ which the wiki pins since #227.
   another page is a viewer of its slides with first, previous, next and
   last, drawn in the page, not a frame. Pages written in the old syntax
   get no migration (the owner: nobody has presentations).
+- **WP5.98 The smoke tests wait on the program, and run slowed down
+  (the owner, 2026-11-12: "mamy bardzo dużo timing issues w testach
+  dymnych"; after #251 and #253).** Two days of red runs fell into two
+  kinds. Real faults of the application that a slow machine only showed
+  (task boxes disabled and enabled again at adoption, #243; a slide's
+  controls replaced under a click, #253; the history entry's number lost
+  in a race, #240): there the tests did their work. And tests racing the
+  page or the system: a comparison after a fixed 300 ms, a click on
+  `.sign-in-toggle` right after `goto`, a check for dead processes half a
+  second after the kill. The second kind has one mechanism: a test waits
+  on time, or on nothing, where the program has a signal. So: one place
+  where both smoke tests wait after every navigation, until the program
+  says it has started and settled, before anything is clicked or
+  compared; every fixed pause in them replaced by a condition; and a run
+  of the smoke tests with the processor throttled (Playwright's CDP
+  session can slow it four times), as a job of its own or weekly, so that
+  races are found on purpose and not by chance on someone's pull
+  request. The throttled run is the part that also finds the first kind.
 - **WP5.95 No view takes an older answer over a newer one (found by
   Codex on #243, rounds 12 and 13; left there on purpose).** The page view
   drops a fetched page older than the one it shows (`takesPage`, by
