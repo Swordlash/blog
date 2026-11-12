@@ -24,5 +24,6 @@ title: The editor folds spoilers
 
   Folding only changes what the editor shows: the preview, your draft and
   the saved page keep the whole text. Typing before the mark leaves the
-  fold closed; anything that would change the hidden lines opens it first.
+  fold closed; a new line in the folded line, or anything that would
+  change the hidden lines, opens it first.
   Folds are not kept when the page is opened again.

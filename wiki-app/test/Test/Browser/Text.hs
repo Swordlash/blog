@@ -50,7 +50,7 @@ $( browserJS
      , ("js_watch", "wiki_test_editor_watch", Safe, [t|IO ()|])
      , ("js_inputs", "wiki_test_editor_inputs", Safe, [t|IO Int|])
      , ("js_folds_told", "wiki_test_editor_folds_told", Safe, [t|IO JSText|])
-     , ("js_propose", "wiki_test_editor_propose", Safe, [t|Int -> JSText -> IO ()|])
+     , ("js_propose", "wiki_test_editor_propose", Safe, [t|Int -> Int -> JSText -> IO ()|])
      ]
  )
 
@@ -180,11 +180,11 @@ foldsTold ui = do
   told <- unsafeIOToPageM (fromJSText <$> js_folds_told)
   pure (fromMaybe [] (decodeStrict (encodeUtf8 told)))
 
--- | Put text into the editor's text at a position (in UTF-16 units) as the
--- writing assistant's tracked change, which leaves the selection where it
--- is.
-proposeText :: Mounted s q o m -> Int -> Text -> PageM s ()
-proposeText ui at text = do
+-- | Replace the editor's text from one position to another (in UTF-16
+-- units) with this, as the writing assistant's tracked change, which
+-- leaves the selection where it is.
+proposeText :: Mounted s q o m -> Int -> Int -> Text -> PageM s ()
+proposeText ui start end text = do
   _ <- editorText ui
-  unsafeIOToPageM (js_propose at (toJSText text))
+  unsafeIOToPageM (js_propose start end (toJSText text))
   settle

@@ -161,10 +161,43 @@ spec m = do
     -- opening is told.
     unsafeIOToPageM (foldLines host [(13, 19)])
     watchEditor ui
-    proposeText ui (lineEnd page 15) " Really."
+    proposeText ui (lineEnd page 15) (lineEnd page 15) " Really."
     unsafeIOToPageM (foldedLines host) `shouldReturn` []
     foldsTold ui `shouldReturn` [[]]
     markdown ui `shouldReturn` T.replace "Hidden answer.\n" "Hidden answer. Really.\n" page
+
+  it "opens a fold whose first line an edit makes another line, wherever the line break goes, and keeps it for other edits of that line" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    host <- editorHost ui
+    let heading = lineStart page 13
+        middle = heading + T.length "## [[!spoiler]] Quest"
+        -- The page with this edit made, the heading folded before it, and
+        -- the folds after it.
+        foldedAfter edit = do
+          setMarkdown ui page
+          unsafeIOToPageM (foldLines host [(13, 19)])
+          unsafeIOToPageM (foldedLines host) `shouldReturn` [(13, 19)]
+          edit
+          unsafeIOToPageM (foldedLines host)
+        replaced start end new = T.take start page <> new <> T.drop end page
+    -- Enter in the middle of the heading.
+    foldedAfter (selectText ui middle middle >> press "Enter") `shouldReturn` []
+    markdown ui `shouldReturn` replaced middle middle "\n"
+    -- A line break put in its middle, at its start and at its end, by an
+    -- edit that moves no cursor (the assistant's).
+    foldedAfter (proposeText ui middle middle "\n") `shouldReturn` []
+    foldedAfter (proposeText ui heading heading "\n") `shouldReturn` []
+    foldedAfter (proposeText ui (lineEnd page 13) (lineEnd page 13) "\n") `shouldReturn` []
+    -- A replacement from its middle over its end.
+    foldedAfter (proposeText ui middle (lineEnd page 13 + 1) "ion") `shouldReturn` []
+    markdown ui `shouldReturn` replaced middle (lineEnd page 13 + 1) "ion"
+    -- The line joined to the one above.
+    foldedAfter (proposeText ui (heading - 1) heading "") `shouldReturn` []
+    -- Text replaced within the line, with no line break, keeps the fold on
+    -- it, and a line break above moves the fold down with its line.
+    foldedAfter (proposeText ui (heading + T.length "## [[!spoiler]] ") (lineEnd page 13) "Q") `shouldReturn` [(13, 19)]
+    markdown ui `shouldReturn` T.replace "Question\n" "Q\n" page
+    foldedAfter (proposeText ui (lineEnd page 11) (lineEnd page 11) "\n") `shouldReturn` [(14, 20)]
 
   it "folds and unfolds a heading's section and a spoiler from the component, reports the folds, and tells nothing of them" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
@@ -188,6 +221,21 @@ spec m = do
     -- Lines the text does not have, and a range of one line, fold nothing.
     unsafeIOToPageM (foldLines host [(22, 40), (3, 3)])
     unsafeIOToPageM (foldedLines host) `shouldReturn` []
+    -- Ranges in any order fold in the order of the text, and unfold so.
+    unsafeIOToPageM (foldLines host [(21, 23), (13, 19), (5, 11)])
+    unsafeIOToPageM (foldedLines host) `shouldReturn` [(5, 11), (13, 19), (21, 23)]
+    unsafeIOToPageM (unfoldLines host [(21, 23), (5, 11), (13, 19), (13, 19)])
+    unsafeIOToPageM (foldedLines host) `shouldReturn` []
+    -- The same range twice folds once; of two that nest, the outer one
+    -- folds; of two that overlap, the first in the text; and a range that
+    -- overlaps a fold made before does not.
+    unsafeIOToPageM (foldLines host [(13, 19), (13, 19)])
+    unsafeIOToPageM (foldedLines host) `shouldReturn` [(13, 19)]
+    unsafeIOToPageM (foldLines host [(5, 15), (3, 11)])
+    unsafeIOToPageM (foldedLines host) `shouldReturn` [(3, 11), (13, 19)]
+    unsafeIOToPageM (unfoldLines host [(3, 11), (13, 19)])
+    unsafeIOToPageM (foldLines host [(15, 19), (13, 23)])
+    unsafeIOToPageM (foldedLines host) `shouldReturn` [(13, 23)]
     -- What the component folds it knows: no event, and no input.
     foldsTold ui `shouldReturn` []
     inputsSeen ui `shouldReturn` 0

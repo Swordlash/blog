@@ -116,10 +116,10 @@ function wiki_test_editor_folds_told() {
   return JSON.stringify(wiki_test_editor_host()?.wikiTestFolds ?? []);
 }
 
-// Put text into the open editor's text at a position (UTF-16 units) as the
-// writing assistant's tracked change, which moves no selection.
-function wiki_test_editor_propose(at, text) {
-  wikiTestEditor()?.propose(at, at, text, 9999, []);
+// Replace from..to (UTF-16 units) in the open editor's text with `text`, as
+// the writing assistant's tracked change, which moves no selection.
+function wiki_test_editor_propose(from, to, text) {
+  wikiTestEditor()?.propose(from, to, text, 9999, []);
 }
 
 // Select from..to (UTF-16 units) in the open editor and give it the focus,

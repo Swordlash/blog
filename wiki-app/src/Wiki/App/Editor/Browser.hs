@@ -478,18 +478,21 @@ offerFolds host text found =
   liftIO (js_offer_folds host (toJSText text) (jsonText [object ["from" .= f.from, "to" .= f.to] | f <- found]))
 
 -- | Fold ranges of the editor's lines, each its first and last line (from
--- 1, both included, as "Wiki.Core.Markdown.Folds" counts them): the first
--- stays in sight, with a mark that unfolds the rest. Any ranges, offered
--- in the gutter or not: a heading's section, say. A range the text does
--- not have, or of one line, folds nothing. Folding changes what is shown,
+-- 1, both included, as "Wiki.Core.Markdown.Folds" counts them), in any
+-- order: the first stays in sight, with a mark that unfolds the rest. Any
+-- ranges, offered in the gutter or not: a heading's section, say. A range
+-- the text does not have, or of one line, folds nothing. The ranges are
+-- taken in the order of the text, the longer first of two that start on
+-- one line; one that overlaps or lies inside a fold made before it, by
+-- this call or already, is left out, and so is the same range twice. Folding changes what is shown,
 -- never the text: no input event comes of it. No @wiki-folds@ event
 -- either ('reportedFolds'): the component knows what it folded.
 foldLines :: (MonadIO m) => Element -> [(Int, Int)] -> m ()
 foldLines host ranges = liftIO $ codeMirror host >>= traverse_ (\cm -> cm.fold (encodeRanges ranges))
 
 -- | Unfold the editor's folds that start on the first line of one of these
--- ranges (the last line is not compared, so a range read before is
--- enough), with no @wiki-folds@ event.
+-- ranges, in any order (the last line is not compared, so a range read
+-- before is enough), with no @wiki-folds@ event.
 unfoldLines :: (MonadIO m) => Element -> [(Int, Int)] -> m ()
 unfoldLines host ranges = liftIO $ codeMirror host >>= traverse_ (\cm -> cm.unfold (encodeRanges ranges))
 

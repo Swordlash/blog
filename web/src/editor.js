@@ -442,8 +442,9 @@ const wikiMarkdown = new Language(markdownLanguage.data, markdownLanguage.parser
 // follow each change of the text until the next ones come: text typed at
 // the end of a first line stays before its fold, and text typed inside a
 // spoiler's lines stays inside its range, so that its marker stays while
-// the author types there. A line break put at the end of a first line
-// drops its range until then: the marker would be on the new line.
+// the author types there. A change that makes a range's first line another
+// (breaksLine, below) drops the range until then: its marker would be on
+// another line.
 const offerFolds = StateEffect.define();
 
 const offered = StateField.define({
@@ -452,7 +453,7 @@ const offered = StateField.define({
     for (const effect of tr.effects) if (effect.is(offerFolds)) return effect.value;
     if (!tr.docChanged) return ranges;
     return ranges
-      .filter((range) => !breaksAt(tr.changes, range.from))
+      .filter((range) => !breaksLine(tr.changes, tr.startState.doc.lineAt(range.from).from, range.from))
       .map((range) => ({ from: tr.changes.mapPos(range.from, 1), to: tr.changes.mapPos(range.to, -1) }))
       .filter((range) => range.to > range.from);
   },
@@ -521,33 +522,36 @@ const foldMarker = (open) => {
   return marker;
 };
 
-// Whether a change of the text puts a line break at `at`, a fold's start
-// (the end of its first line): the fold would then start on the new line,
-// not on the line it was made on.
-const breaksAt = (changes, at) => {
+// A fold belongs to its first line, the line it was made on, which runs
+// from `lineStart` to `from` (the fold's start). Whether a change of the
+// text makes that line another: a line break put anywhere in it, at its
+// start and its end too, or one taken away before it (the line joined to
+// the one above). The fold would then start on another line than the one
+// it was made on. Text typed or deleted in the line without a line break
+// leaves it the same line.
+const breaksLine = (changes, lineStart, from) => {
   let broken = false;
   changes.iterChanges((changedFrom, changedTo, _from, _to, inserted) => {
-    if (changedFrom === at && changedTo === at && inserted.lines > 1) broken = true;
+    if (changedFrom <= from && changedTo >= lineStart && (inserted.lines > 1 || changedFrom < lineStart)) broken = true;
   });
   return broken;
 };
 
-// Whether a change of the text touches a fold's range {from, to}: its
-// hidden part, its end, or a line break put at its start. Other text typed
-// or deleted at the end of the first line, before the mark, is in sight,
-// and does not touch it.
-const touches = (changes, from, to) => {
+// Whether a change of the text touches a fold's range {from, to} in `doc`,
+// the text before the change: its hidden part, its end, or its first line
+// as breaksLine says.
+const touches = (changes, doc, from, to) => {
   let touched = false;
   changes.iterChangedRanges((changedFrom, changedTo) => {
     if (changedFrom <= to && changedTo > from) touched = true;
   });
-  return touched || breaksAt(changes, from);
+  return touched || breaksLine(changes, doc.lineAt(from).from, from);
 };
 
 // A change of the text that touches a fold opens it, so that no hidden text
 // changes unseen and no fold is left on lines other than the ones it was
-// made on: whatever made the change, typing, a toolbar command, the
-// assistant, an undo. CodeMirror itself opens a fold whose inside a
+// made on: whatever made the change, typing, a paste, a toolbar command,
+// the assistant, an undo. CodeMirror itself opens a fold whose inside a
 // deletion touches, or the cursor enters. This also opens one at its end:
 // text typed after the mark (where End puts the cursor on a folded line)
 // would go on the fold's last line, which is hidden, and Backspace at the
@@ -557,7 +561,7 @@ const openTouchedFolds = EditorState.transactionExtender.of((tr) => {
   if (!tr.docChanged) return null;
   const effects = [];
   foldedRanges(tr.startState).between(0, tr.startState.doc.length, (from, to) => {
-    if (!touches(tr.changes, from, to)) return;
+    if (!touches(tr.changes, tr.startState.doc, from, to)) return;
     const range = { from: tr.changes.mapPos(from, 1), to: tr.changes.mapPos(to, -1) };
     if (range.to > range.from) effects.push(unfoldEffect.of(range));
   });
@@ -1478,30 +1482,43 @@ export function attach(textarea, host, original, codeTokens) {
       const ranges = (Array.isArray(list) ? list : []).map((fold) => linesRange(doc, fold.from, fold.to)).filter((range) => range !== null);
       view.dispatch({ effects: offerFolds.of(ranges) });
     },
-    // Fold each range of `ranges`, JSON [[first, last]], lines from 1,
-    // `first` staying in sight: any range, offered or not. A range the
-    // text does not have, or of one line, folds nothing. Not reported by
-    // a "wiki-folds" event.
+    // Fold each range of `ranges`, JSON [[first, last]], lines from 1, in
+    // any order, `first` staying in sight: any range, offered or not. A
+    // range the text does not have, or of one line, folds nothing. The
+    // ranges are taken in the order of the text, the longer first of two
+    // that start on one line; a range that overlaps or lies inside one
+    // folded before it (by this call or already) is left out, and so is the
+    // same range given twice. Not reported by a "wiki-folds" event.
     fold: (ranges) => {
       const { doc } = view.state;
-      const effects = parsedRanges(ranges)
+      const taken = [];
+      foldedRanges(view.state).between(0, doc.length, (from, to) => {
+        taken.push({ from, to });
+      });
+      const effects = [];
+      const wanted = parsedRanges(ranges)
         .map(([first, last]) => linesRange(doc, first, last))
         .filter((range) => range !== null)
-        .map((range) => foldEffect.of(range));
+        .sort((a, b) => a.from - b.from || b.to - a.to);
+      for (const range of wanted) {
+        // Folds overlap when one starts before the other ends, at the end of
+        // a first line, the place the earlier one's mark is at.
+        if (taken.some((other) => range.from <= other.to && other.from <= range.to)) continue;
+        taken.push(range);
+        effects.push(foldEffect.of(range));
+      }
       if (effects.length > 0) view.dispatch({ effects, annotations: byProgram.of(true) });
     },
     // Unfold the folds that start on the first line of a range of
-    // `ranges`, JSON [[first, last]]. Not reported by a "wiki-folds" event.
+    // `ranges`, JSON [[first, last]], in any order, a line given twice
+    // unfolding once. Not reported by a "wiki-folds" event.
     unfold: (ranges) => {
       const { doc } = view.state;
+      const firsts = new Set(parsedRanges(ranges).map(([first]) => first));
       const effects = [];
-      for (const [first] of parsedRanges(ranges)) {
-        if (!Number.isInteger(first) || first < 1 || first > doc.lines) continue;
-        const line = doc.line(first);
-        foldedRanges(view.state).between(line.from, line.to, (from, to) => {
-          if (from >= line.from && from <= line.to) effects.push(unfoldEffect.of({ from, to }));
-        });
-      }
+      foldedRanges(view.state).between(0, doc.length, (from, to) => {
+        if (firsts.has(doc.lineAt(from).number)) effects.push(unfoldEffect.of({ from, to }));
+      });
       if (effects.length > 0) view.dispatch({ effects, annotations: byProgram.of(true) });
     },
     // The folds, as JSON [[first, last]], lines from 1, in the order of the
