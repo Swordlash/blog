@@ -1730,6 +1730,12 @@ which the wiki pins since #227.
   session can slow it four times), as a job of its own or weekly, so that
   races are found on purpose and not by chance on someone's pull
   request. The throttled run is the part that also finds the first kind.
+  **Waits for the owner (2026-11-12):** he has a haskell-halogen package
+  in progress that integrates Playwright, and it should help here, with
+  waiting for the page above all; he says when it has landed. The
+  package is briefed then, on that integration rather than on helpers
+  of the wiki's own (libraries over hand-rolled code), with the bump of
+  the haskell-halogen pin as its own commit.
 - **WP5.95 No view takes an older answer over a newer one (found by
   Codex on #243, rounds 12 and 13; left there on purpose).** The page view
   drops a fetched page older than the one it shows (`takesPage`, by
