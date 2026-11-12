@@ -285,10 +285,12 @@ applyEdits edits source = go 0 edits
 -- when a row comes after it, and, when an opener would not stay an opener
 -- after the row now above it, a blank line before each row whose title is
 -- a setext heading and that follows another row than before. So the text
--- is 'moveSlide''s wherever 'moveSlide' moves. 'moveSlide' also refuses a
--- move after which a block left open would take in other slides; a row
--- moves all the same, and 'swallowed' says what the presentation does
--- with it.
+-- is 'moveSlide''s wherever 'moveSlide' moves, but for one case: a
+-- preamble that is not a slide (blank lines, a look, a pause) is not one
+-- of 'moveSlide''s slides, and 'moveSlide' puts no blank line after it,
+-- where a move of rows does. 'moveSlide' also refuses a move after which a
+-- block left open would take in other slides; a row moves all the same,
+-- and 'swallowed' says what the presentation does with it.
 moveRow :: Int -> Int -> Rows -> Maybe (Rows, [Edit])
 moveRow i j r
   | i == j || i < fixed || j < fixed || i >= count || j >= count = Nothing

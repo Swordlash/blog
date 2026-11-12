@@ -173,6 +173,11 @@ spec = describe "SlideRows" $ do
       map (keysOf . fst) (moveRow 1 0 r) `shouldBe` Just [RowKey 1, RowKey 0]
       map (assemble . fst) (moveRow 0 1 (cut "## A\n\nOne.\n\n## B\nTwo.")) `shouldBe` Just "## B\nTwo.\n## A\n\nOne.\n\n"
 
+    it "put a blank line after a preamble that is not a slide, where 'moveSlide' puts none" $ do
+      let source = "[[!pause]]\nS\n---\n## A\nM\n---\nbar\n## B\n"
+      moveSlide 2 0 source `shouldBe` "[[!pause]]\nM\n---\nbar\n\nS\n---\n## A\n## B\n"
+      map (assemble . fst) (moveRow 3 1 (cut source)) `shouldBe` Just "[[!pause]]\n\nM\n---\nbar\n\nS\n---\n## A\n## B\n"
+
     it "move a row whose block is left open, where 'moveSlide' does not" $ do
       let source = "## A\n\nOne.\n\n## B\n\n```\nopen"
       moveSlide 1 0 source `shouldBe` source
@@ -219,7 +224,7 @@ spec = describe "SlideRows" $ do
                               .&&. map rowHeading (take 1 (drop at' r'.rows)) === [Just (2, title)]
                       ]
 
-    prop "move as 'moveSlide' moves, wherever it moves" $
+    prop "move as 'moveSlide' moves, wherever it moves, but for a blank line after a preamble that is not a slide" $
       checkCoverage $
         forAll aMove $ \(source, i, j) ->
           let r = cut source
@@ -227,9 +232,13 @@ spec = describe "SlideRows" $ do
               -- A preamble that is not a slide is a row all the same.
               offset = fromEnum (any (isNothing . rowHeading) (take 1 r.rows)) - fromEnum (any (isNothing . (.level)) spans)
               moved = moveSlide i j source
+              afterPreamble = rowStarts r `nth` 1
+              apart = T.take afterPreamble moved <> "\n" <> T.drop afterPreamble moved
+              expected = if offset == 1 then [Just moved, Just apart] else [Just moved]
+              got = map (assemble . fst) (moveRow (i + offset) (j + offset) r)
            in cover 30 (moved /= source) "moveSlide moves" $
                 fixedRows r === fixedSlides spans + offset
-                  .&&. if moved == source then property True else map (assemble . fst) (moveRow (i + offset) (j + offset) r) === Just moved
+                  .&&. counterexample (show got) (moved == source || got `elem` expected)
 
     prop "never move or delete the rows that stay first, and put nothing before them" $
       forAll anyDeck $ \source ->
