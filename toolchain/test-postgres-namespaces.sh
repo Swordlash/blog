@@ -108,6 +108,18 @@ until listing | grep -vxF -f "$work/known" | grep -q .; do
 done
 kill -9 "-$killed"
 wait "$killed" 2>/dev/null || true
+# The program is reaped by the wait, but the processes it started (the
+# docker exec clients of its pg_dump and psql) are not this shell's
+# children: killed, each is a zombie until whoever adopts it reaps it, and
+# kill -0 finds a zombie. So the group is given up to five seconds to be
+# gone, as the sessions are given thirty below. Without the wait the check
+# raced the reaping: on CI it failed half a second after the kill, before
+# any wait for the sessions began.
+tries=0
+while group_alive "$killed" && [ "$tries" -lt 50 ]; do
+  tries=$((tries + 1))
+  sleep 0.1
+done
 # Dead: no process of the run is left, and, once the commands it ran in the
 # container (which docker exec does not stop with its client) have ended,
 # PostgreSQL has no session on its databases.
