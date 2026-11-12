@@ -62,10 +62,11 @@ import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State qualified as M
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Demo (demoNow, demoState)
+import Wiki.App.Encrypted (keepSeen, seenOf)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route qualified as R
 import Wiki.Core.Anchor (Anchor (..))
-import Wiki.Core.Encrypted (ChainProblem (..))
+import Wiki.Core.Encrypted (ChainProblem (..), Kept (..), Seen (..))
 import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..))
@@ -92,6 +93,7 @@ $( browserJS
      , ("js_roll_back", "wiki_test_encrypted_roll_back", Safe, [t|JSText -> IO ()|])
      , ("js_drop_version", "wiki_test_encrypted_drop_version", Safe, [t|JSText -> Int -> IO ()|])
      , ("js_seen_at", "wiki_test_encrypted_seen_at", Safe, [t|JSText -> JSText -> Int -> IO ()|])
+     , ("js_history_without_latest", "wiki_test_encrypted_history_without_latest", Safe, [t|Bool -> IO ()|])
      ]
  )
 
@@ -358,6 +360,66 @@ spec m = do
     map (\v -> v.number) <$> (ok =<< run history (listVersions made.id (VersionsQuery Nothing 50))) `shouldReturn` [3, 2, 1]
     run history (chainProblem made.id) `shouldReturn` Just (Gap 2)
 
+  it "refuses a later version that the history does not join, from that very version, to the one this browser read" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Plans" "First.")
+    -- The reader writes a second version, after the first the admin read.
+    unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
+    void (ok =<< run env (listPages secret.id))
+    readerTab <- as "user-reader"
+    first' <- ok =<< run readerTab (getPage secret.id [made.slug])
+    void (ok =<< run readerTab (savePage made.id first'.updatedAt "Plans" "The reader's second."))
+    -- The history the server sends leaves the second version out, though
+    -- it ends at the version the admin read.
+    unsafeIOToPageM (js_history_without_latest True)
+    admin <- as "user-admin"
+    void (ok =<< run admin (getPage secret.id [made.slug]))
+    unsafeIOToPageM (js_history_without_latest False)
+    run admin (chainProblem made.id) `shouldReturn` Just (Unlinked 1 2)
+    -- The second version is not remembered: a tab reading the page now,
+    -- with the whole history, joins it to the first.
+    honest <- as "user-admin"
+    void (ok =<< run honest (getPage secret.id [made.slug]))
+    run honest (chainProblem made.id) `shouldReturn` Nothing
+
+  it "joins each page of a history to the one before it, and the history view says when they do not join" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Plans" "Version 1.")
+    -- 52 versions, the second left out by the server: the first page of
+    -- the history (50) ends at the third, and the next has the first alone.
+    foldM_ (\p i -> ok =<< run env (savePage made.id p.updatedAt "Plans" ("Version " <> show (i :: Int) <> "."))) made [2 .. 52]
+    unsafeIOToPageM (js_drop_version (toJSText made.id.text) 1)
+    paged <- as "user-admin"
+    void (ok =<< run paged (getPage secret.id [made.slug]))
+    latest <- ok =<< run paged (listVersions made.id (VersionsQuery Nothing 50))
+    run paged (chainProblem made.id) `shouldReturn` Nothing
+    oldest <- maybe (panic "no versions") pure (lastMay latest)
+    void (ok =<< run paged (listVersions made.id (VersionsQuery (Just oldest.updatedAt) 50)))
+    run paged (chainProblem made.id) `shouldReturn` Just (Gap 1)
+    -- The history view, after "Older…".
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    ui <- startServer m (R.PageHistory [secretSlug] [made.slug] Nothing R.AgainstPrevious)
+    _ <- eventually (find ui ".versions-older")
+    length <$> findAll ui ".encrypted-rollback" `shouldReturn` 0
+    find ui ".versions-older" >>= click
+    eventually (find ui ".history-view .encrypted-rollback" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "version missing"))
+    unmount ui
+
+  it "remembers a version seen only forward, whatever another tab remembered meanwhile, and a fork not at all" $ runPage $ do
+    let u = UserId "user-admin"
+        pid = PageId "page-remembered"
+    seenAt' u pid (Seen 3 "t3") `shouldReturn` KeptNow
+    -- A tab that checked version 2 while another remembered 3.
+    seenAt' u pid (Seen 2 "t2") `shouldReturn` KeptLater
+    unsafeIOToPageM (seenOf u pid) `shouldReturn` Just (Seen 3 "t3")
+    seenAt' u pid (Seen 3 "x3") `shouldReturn` KeptFork
+    unsafeIOToPageM (seenOf u pid) `shouldReturn` Just (Seen 3 "t3")
+    seenAt' u pid (Seen 4 "t4") `shouldReturn` KeptNow
+    unsafeIOToPageM (seenOf u pid) `shouldReturn` Just (Seen 4 "t4")
+
   it "offers no comments, attachments or kept draft in an encrypted space's page and editor" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
@@ -397,6 +459,11 @@ spec m = do
 -- an index below 0.
 seenAt :: Text -> PageId -> Int -> PageM s ()
 seenAt user pid index = unsafeIOToPageM (js_seen_at (toJSText user) (toJSText pid.text) index)
+
+-- | Remember a version seen, as a tab does ("Wiki.App.Encrypted"'s
+-- 'keepSeen').
+seenAt' :: UserId -> PageId -> Seen -> PageM s Kept
+seenAt' u pid seen = unsafeIOToPageM (keepSeen u pid seen)
 
 -- | A new tab of a user's, over the server, as the user asking.
 as :: Text -> PageM s HttpEnv

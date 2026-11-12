@@ -72,7 +72,7 @@ $( browserJS
      , ("js_open_manyPromise", "wiki_enc_open_many", Safe, [t|Int -> JSText -> IO (Promise JSText)|])
      , ("js_forget", "wiki_enc_forget", Safe, [t|Int -> IO ()|])
      , ("js_seen", "wiki_enc_seen", Safe, [t|JSText -> JSText -> IO JSText|])
-     , ("js_keep_seen", "wiki_enc_keep_seen", Safe, [t|JSText -> JSText -> JSText -> IO ()|])
+     , ("js_keep_seen", "wiki_enc_keep_seen", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
      ]
  )
 
@@ -293,6 +293,14 @@ seenOf u pid
   | otherwise = pure Nothing
 
 -- | Remember the latest version of a page this browser has read and
--- checked for the user.
-keepSeen :: UserId -> PageId -> Seen -> IO ()
-keepSeen u pid seen = when inBrowser (js_keep_seen (toJSText u.text) (toJSText pid.text) (json seen))
+-- checked for the user, only forward ("Wiki.Core.Encrypted"'s 'keepIn'),
+-- against what is remembered at this moment, which another tab may have
+-- moved on since this one read it.
+keepSeen :: UserId -> PageId -> Seen -> IO Kept
+keepSeen u pid seen
+  | inBrowser =
+      js_keep_seen (toJSText u.text) (toJSText pid.text) (json seen) <&> \answer -> case fromJSText answer of
+        "later" -> KeptLater
+        "fork" -> KeptFork
+        _ -> KeptNow
+  | otherwise = pure KeptNow

@@ -52,19 +52,43 @@ spec = describe "Wiki.Core.Encrypted" $ do
       judgeHead (Just seen) "old" Nothing `shouldBe` Left (Older 5 0)
       judgeHead (Just seen) "x5" (Just (Chain 5 (Just "t4"))) `shouldBe` Left (Forked 5)
 
-    it "follows a run of versions down to the one seen, and finds a missing, reordered or forked one" $ do
+    it "takes a later version only when the history starts at it and joins it, version by version, to the one seen" $ do
       let v n = (VersionTag ("t" <> show n), Just (Chain n (Just (VersionTag ("t" <> show (n - 1 :: Int))))))
-      linkedDown seen [v 7, v 6, v 5, v 4] `shouldBe` Right True
-      -- The run ends before the version seen: every link holds, unchecked
-      -- below.
-      linkedDown seen [v 9, v 8, v 7] `shouldBe` Right False
-      -- Version 6 is missing.
-      linkedDown seen [v 7, v 5] `shouldBe` Left (Gap 5)
-      -- Reordered.
-      linkedDown seen [v 6, v 7, v 5] `shouldBe` Left (Gap 7)
-      -- Another version 5 than the one seen.
-      linkedDown seen [v 6, ("x5", Just (Chain 5 (Just "t4")))] `shouldBe` Left (Gap 5)
-      linkedDown seen [("t6", Just (Chain 6 (Just "x5"))), ("x5", Just (Chain 5 (Just "t4")))] `shouldBe` Left (Forked 5)
+      linkedFrom seen (v 7) [v 7, v 6, v 5, v 4] `shouldBe` Right ()
+      -- Over two pages of the history, in order: the join between them is
+      -- checked as any other.
+      linkedFrom seen (v 7) ([v 7, v 6] <> [v 5, v 4]) `shouldBe` Right ()
+      linkedFrom seen (v 7) ([v 7, v 6] <> [v 4]) `shouldBe` Left (Gap 4)
+      -- Version 6 is missing, or out of order.
+      linkedFrom seen (v 7) [v 7, v 5] `shouldBe` Left (Gap 5)
+      linkedFrom seen (v 7) [v 7, v 5, v 6] `shouldBe` Left (Gap 5)
+
+    it "refuses a later version that the history does not join to the version seen" $ do
+      let v n = (VersionTag ("t" <> show n), Just (Chain n (Just (VersionTag ("t" <> show (n - 1 :: Int))))))
+          forked6 = ("f6", Just (Chain 6 (Just "t5")))
+      -- The review's case: a forked version 6 shown, a history of the
+      -- authentic version 5 alone.
+      linkedFrom seen forked6 [v 5] `shouldBe` Left (Unlinked 5 6)
+      -- The history without the version shown at its top.
+      linkedFrom seen forked6 [v 6, v 5] `shouldBe` Left (Unlinked 5 6)
+      linkedFrom seen (v 7) [v 6, v 5] `shouldBe` Left (Unlinked 5 7)
+      linkedFrom seen (v 7) [] `shouldBe` Left (Unlinked 5 7)
+      -- A history that stops above the version seen.
+      linkedFrom seen (v 9) [v 9, v 8, v 7] `shouldBe` Left (Unlinked 5 9)
+      -- One that reaches its number with another version: not where the
+      -- version above it names, or, named by it, not the one seen.
+      linkedFrom seen (v 6) [v 6, ("x5", Just (Chain 5 (Just "t4")))] `shouldBe` Left (Gap 5)
+      linkedFrom seen ("t6", Just (Chain 6 (Just "x5"))) [("t6", Just (Chain 6 (Just "x5"))), ("x5", Just (Chain 5 (Just "t4")))] `shouldBe` Left (Forked 5)
+      -- A forked 6 that names the version seen joins it: a version this
+      -- browser has not read, after the one it read, is no fork.
+      linkedFrom seen forked6 [forked6, v 5] `shouldBe` Right ()
+
+    it "remembers a version only forward, and a fork not at all" $ do
+      keepIn Nothing seen `shouldBe` (KeptNow, seen)
+      keepIn (Just seen) Seen {number = 6, tag = "t6"} `shouldBe` (KeptNow, Seen {number = 6, tag = "t6"})
+      keepIn (Just seen) seen `shouldBe` (KeptNow, seen)
+      keepIn (Just seen) Seen {number = 4, tag = "t4"} `shouldBe` (KeptLater, seen)
+      keepIn (Just seen) Seen {number = 5, tag = "x5"} `shouldBe` (KeptFork, seen)
 
     it "finds the first break in a page of the history, across the versions of format 1 too" $ do
       let v n = (VersionTag ("t" <> show n), Just (Chain n (Just (VersionTag ("t" <> show (n - 1 :: Int))))))

@@ -274,13 +274,24 @@ function wiki_enc_seen(user, page) {
   return seen === undefined ? "" : JSON.stringify(seen);
 }
 
-// Remember the version seen of a page (JSON {number, tag}).
+// Remember the version seen of a page (JSON {number, tag}), only forward,
+// as Wiki.Core.Encrypted's keepIn: compared with what is stored at this
+// moment, and written in the same turn (local storage is synchronous, so
+// another tab cannot write between the two). "now" when it is remembered,
+// "later" when a later version was remembered already and stays, "fork"
+// when another version under the same number was, which stays too.
 function wiki_enc_keep_seen(user, page, seen) {
   try {
     const all = wikiEncSeenAll(user);
-    all[page] = JSON.parse(seen);
+    const next = JSON.parse(seen);
+    const before = all[page];
+    if (before !== undefined && before.number > next.number) return "later";
+    if (before !== undefined && before.number === next.number) return before.tag === next.tag ? "now" : "fork";
+    all[page] = next;
     localStorage.setItem("wiki-chain:" + user, JSON.stringify(all));
+    return "now";
   } catch {
     // No local storage: nothing is remembered.
+    return "now";
   }
 }

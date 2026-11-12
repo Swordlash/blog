@@ -10,7 +10,7 @@
 // and never reads it, as the real server.
 // The user asking is the one the test names (wiki_test_encrypted_as).
 
-const wikiTestEncrypted = { as: null, spaces: new Map(), directory: new Map(), pages: new Map(), next: 0, created: [] };
+const wikiTestEncrypted = { as: null, spaces: new Map(), directory: new Map(), pages: new Map(), next: 0, created: [], historyWithoutLatest: false };
 
 function wikiTestEncJson(status, body, headers) {
   return { status, body: JSON.stringify(body), headers: headers ?? {} };
@@ -183,12 +183,17 @@ function wikiTestEncServer(request) {
       const sealed = wikiTestEncSealed(p);
       return wikiTestEncJson(200, sealed, { ETag: wikiTestEncTag(sealed.updatedAt) });
     }
+    // A page of the history, the latest first: at most limit versions (50
+    // if not given), of those before the version before (all if not given),
+    // as the server's. The latest is left out while the test says so.
     if (rest === "/versions" && request.method === "GET") {
+      const query = new URLSearchParams(url.split("?")[1] ?? "");
+      const limit = Number(query.get("limit") ?? 50);
+      const before = query.get("before");
       const n = p.versions.length;
-      return wikiTestEncJson(
-        200,
-        [...p.versions].reverse().map((v, i) => ({ page: p.id, updatedAt: v.updatedAt, heading: wikiTestEncHeading(v.content), author: null, number: n - i })),
-      );
+      const all = [...p.versions].reverse().map((v, i) => ({ page: p.id, updatedAt: v.updatedAt, heading: wikiTestEncHeading(v.content), author: null, number: n - i }));
+      const listed = all.filter((v, i) => !(i === 0 && wikiTestEncrypted.historyWithoutLatest) && (before === null || Date.parse(v.updatedAt) < Date.parse(before)));
+      return wikiTestEncJson(200, listed.slice(0, limit));
     }
     const v = rest.match(/^\/versions\/(.+)$/);
     if (v && request.method === "GET") {
@@ -205,7 +210,7 @@ function wikiTestEncServer(request) {
 // as JSON) and its readers (user ids).
 function wiki_test_encrypted_start(space, readers) {
   const s = JSON.parse(space);
-  Object.assign(wikiTestEncrypted, { as: null, spaces: new Map([[s.id, { space: s, readers: JSON.parse(readers), grants: [] }]]), directory: new Map(), pages: new Map(), next: 0, created: [] });
+  Object.assign(wikiTestEncrypted, { as: null, spaces: new Map([[s.id, { space: s, readers: JSON.parse(readers), grants: [] }]]), directory: new Map(), pages: new Map(), next: 0, created: [], historyWithoutLatest: false });
   globalThis.wikiTestHandlers = [wikiTestEncServer, ...(globalThis.wikiTestHandlers ?? []).filter((h) => h !== wikiTestEncServer)];
 }
 
@@ -359,4 +364,9 @@ function wiki_test_encrypted_seen_at(user, page, index) {
     all[page] = { number: content.chain.number, tag: content.tag };
   }
   localStorage.setItem(key, JSON.stringify(all));
+}
+
+// The server's history leaves out a page's latest version, or no longer.
+function wiki_test_encrypted_history_without_latest(leave) {
+  wikiTestEncrypted.historyWithoutLatest = leave;
 }

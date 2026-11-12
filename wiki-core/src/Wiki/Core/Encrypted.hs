@@ -39,7 +39,8 @@
 -- noticing. A browser remembers the latest version of each page it has
 -- read ('Seen'), and finds out when the server later sends an older one,
 -- one forked from it, or a history with a version missing ('judgeHead',
--- 'linkedDown', 'gapIn'). A version of format 1, written before, has no
+-- 'linkedFrom', 'gapIn'). What it remembers only moves forward
+-- ('keepIn'). A version of format 1, written before, has no
 -- chain: its order is the server's word.
 --
 -- The server stores the rest of a page as for any page (its place in the
@@ -63,8 +64,10 @@ module Wiki.Core.Encrypted
   , chainProblemText
   , Judged (..)
   , judgeHead
-  , linkedDown
+  , linkedFrom
   , gapIn
+  , Kept (..)
+  , keepIn
 
     -- * Keys
   , KeyGrant (..)
@@ -172,6 +175,11 @@ data ChainProblem
     -- the next of the chain: a version is missing, or out of order. 0 for a
     -- version of format 1.
     Gap {after :: Int}
+  | -- | The latest version sent (numbered so) is not joined, version by
+    -- version, to the one this browser read before (numbered so): the
+    -- history the server sent does not hold it, or stops before the
+    -- version read.
+    Unlinked {seen :: Int, served :: Int}
   deriving stock (Eq, Show)
 
 -- | What a reader is told of a problem, in a banner over the page.
@@ -189,11 +197,17 @@ chainProblemText = \case
     "This page's history has a version missing, or out of order, after "
       <> (if after == 0 then "the versions from before versions were numbered" else "version " <> show after)
       <> ": the server may have removed one. The page cannot be edited here until it is reloaded."
+  Unlinked seen served ->
+    "The server sent a version "
+      <> show served
+      <> " of this page that its history does not join to the version "
+      <> show seen
+      <> " this browser has read before: its history may have been changed. The page cannot be edited here until it is reloaded."
 
 -- | 'Judged': how the latest version the server sent stands against the
 -- latest this browser saw, when nothing is wrong with it: the same one, or
 -- so many versions later, whose links down to the one seen are still to
--- be checked ('linkedDown').
+-- be checked ('linkedFrom').
 data Judged = Agrees | Advanced Int
   deriving stock (Eq, Show)
 
@@ -224,21 +238,51 @@ follows (_, newer) (olderTag, older) = case (newer, older) of
 numberOf :: Maybe Chain -> Int
 numberOf = maybe 0 (\c -> c.number)
 
--- | A run of a page's versions, the latest first, checked down to the
--- version this browser saw: 'Right' 'True' when each follows on the next
--- and the run reaches the version seen, 'Right' 'False' when every link
--- holds but the run ends before it, and the problem otherwise.
-linkedDown :: Seen -> [(VersionTag, Maybe Chain)] -> Either ChainProblem Bool
-linkedDown seen = go
+-- | The latest version of a page the server sent, which is later than the
+-- one this browser read before ('judgeHead''s 'Advanced'), checked against
+-- the page's history: 'Right' only when the history starts at that very
+-- version (its tag and chain as its own decryption gave them) and joins
+-- it, version by version, to the version read. A history that does not
+-- start there, has a break, stops above the version read, or reaches its
+-- number with another version, is the problem it is. The history is the
+-- latest first, its titles decrypted, so that its tags and chains are the
+-- browser's; it may be several pages of the history, in order.
+linkedFrom :: Seen -> (VersionTag, Maybe Chain) -> [(VersionTag, Maybe Chain)] -> Either ChainProblem ()
+linkedFrom seen latest = \case
+  top : rest | top == latest -> go (top : rest)
+  _ -> Left unlinked
   where
+    unlinked = Unlinked seen.number (numberOf (snd latest))
     go = \case
-      [] -> Right False
+      [] -> Left unlinked
       v@(tag, chain) : rest
-        | numberOf chain == seen.number -> if tag == seen.tag then Right True else Left (Forked seen.number)
-        | numberOf chain < seen.number -> Left (Older seen.number (numberOf chain))
+        | numberOf chain == seen.number -> if tag == seen.tag then Right () else Left (Forked seen.number)
+        | numberOf chain < seen.number -> Left unlinked
         | otherwise -> case rest of
             older : _ | not (v `follows` older) -> Left (Gap (numberOf (snd older)))
             _ -> go rest
+
+-- | 'Kept': what remembering a version seen did, against what was
+-- remembered at that moment ('keepIn').
+data Kept
+  = -- | It is remembered now.
+    KeptNow
+  | -- | A later version was remembered already: nothing changed, since what
+    -- is remembered only moves forward.
+    KeptLater
+  | -- | Another version under the same number was remembered: a fork, which
+    -- is not remembered over.
+    KeptFork
+  deriving stock (Eq, Show)
+
+-- | Remember a version seen over what is remembered, only forward: the
+-- outcome, and what is remembered after.
+keepIn :: Maybe Seen -> Seen -> (Kept, Seen)
+keepIn remembered new = case remembered of
+  Just r
+    | r.number > new.number -> (KeptLater, r)
+    | r.number == new.number -> if r.tag == new.tag then (KeptNow, r) else (KeptFork, r)
+  _ -> (KeptNow, new)
 
 -- | The first break in a run of a page's versions, the latest first: a
 -- version that does not follow on the next one.

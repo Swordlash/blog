@@ -151,7 +151,7 @@ import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.Vault (identitySlot)
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Comment (Thread (..))
-import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), KeyGrant (..), PageKey (..), SealedContent (..), SealedHeading (..), Seen (..), VersionTag, chainAfter, chainProblemText, firstChain, gapIn, headingOf, judgeHead, linkedDown)
+import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), Kept (..), KeyGrant (..), PageKey (..), SealedContent (..), SealedHeading (..), Seen (..), VersionTag, chainAfter, chainProblemText, firstChain, gapIn, headingOf, judgeHead, linkedFrom)
 import Wiki.Core.Id (PageId (..), SpaceId)
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..))
@@ -1367,10 +1367,14 @@ data Held = Held
   -- ^ What this tab found wrong with the versions the server sent of a
   -- page ('checkHead', "Wiki.Core.Encrypted"'s chain of versions). A page
   -- with a problem is not saved from this tab, until a reload.
+  , heldLowest :: Map PageId (UTCTime, (VersionTag, Maybe Chain))
+  -- ^ The oldest version, checked by its decryption, of the last page of a
+  -- page's history listed here: the next page, asked for before it, must
+  -- join it ('sealedVersions').
   }
 
 noneHeld :: Held
-noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty}
+noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldLowest = mempty}
 
 -- | Let go of what is held of encrypted spaces for the user who was signed
 -- in: the keys the page holds are forgotten, and the pages decrypted with
@@ -1379,7 +1383,7 @@ noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, hel
 -- encrypted (or not at all), never as plain text.
 forgetHeldOf :: HttpEnv -> IO ()
 forgetHeldOf env = do
-  was <- atomicModifyIORef' env.held (\h -> (h {heldKeys = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty}, h))
+  was <- atomicModifyIORef' env.held (\h -> (h {heldKeys = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldLowest = mempty}, h))
   traverse_ (forgetSpaceKey . snd) (Map.elems was.heldKeys)
 
 modifyHeld :: (MonadIO m) => (Held -> Held) -> HttpWiki m ()
@@ -1623,39 +1627,63 @@ foundProblem pid problem = modifyHeld (\h -> h {heldProblems = Map.insert pid pr
 savedHead :: (MonadIO m) => PageId -> UTCTime -> SealedContent -> HttpWiki m ()
 savedHead pid at content = do
   rememberHeads [(pid, (at, content.tag, content.chain))]
-  for_ content.chain $ \c -> withUser (\u -> liftIO (keepSeen u.id pid Seen {number = c.number, tag = content.tag}))
+  for_ content.chain $ \c -> rememberSeen pid Seen {number = c.number, tag = content.tag}
+
+-- | Remember the version seen of a page, only forward ('keepSeen'): a
+-- fork of what another tab remembered meanwhile is the problem it is.
+rememberSeen :: (MonadIO m) => PageId -> Seen -> HttpWiki m ()
+rememberSeen pid seen =
+  withUser $ \u ->
+    liftIO (keepSeen u.id pid seen) >>= \case
+      KeptFork -> foundProblem pid (Forked seen.number)
+      _ -> pass
 
 -- | A step with the signed-in user, if any.
 withUser :: (MonadIO m) => (User -> HttpWiki m ()) -> HttpWiki m ()
 withUser step = ((\s -> s.user) <$> session) >>= traverse_ step
 
 -- | Check the latest version of a page the server sent (its tag and chain,
--- which its decryption checked) against the latest one this browser read
--- before ("Wiki.Core.Encrypted"'s 'judgeHead'). A later one is linked down
--- to the one seen through the page's history, a page of it at most; past
--- that, the versions in between are not checked. Then the latest is the
--- one seen, unless something was wrong, which is recorded instead.
+-- as the decryption of the page's own ciphertext gave them) against the
+-- latest one this browser read before ("Wiki.Core.Encrypted"'s
+-- 'judgeHead'). A later one must be joined to the one read by the page's
+-- history, from that very version down, version by version
+-- ('linkedFrom'): the history is read a page at a time until it reaches
+-- the version read, or ends. Then the latest is the version seen, unless
+-- something was wrong, which is recorded instead.
 checkHead :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> PageKey -> VersionTag -> Maybe Chain -> HttpWiki m ()
 checkHead key sid pid k tag chain = withUser $ \u -> do
   seen <- liftIO (seenOf u.id pid)
-  verdict <- case judgeHead seen tag chain of
-    Left problem -> pure (Left problem)
-    Right Agrees -> pure (Right ())
-    Right (Advanced n) -> case seen of
-      Nothing -> pure (Right ())
-      Just s ->
-        send (endpoints.encrypted.versions pid Nothing (Just (min maxVersionsPageSize (n + 1)))) >>= \case
-          -- The history could not be read: nothing more is checked now.
-          Left _ -> pure (Right ())
-          Right listed -> do
-            titles <- liftIO (openVersionTitles key sid pid k [v.heading | v <- listed])
-            pure $ case [v | (v, Nothing) <- zip listed titles] of
-              -- A version whose title does not open is not the browser's.
-              v : _ -> Left (Gap (maybe 0 (\c -> c.number) v.heading.chain))
-              [] -> void (linkedDown s [(v.heading.tag, v.heading.chain) | v <- listed])
+  verdict <- case (judgeHead seen tag chain, seen) of
+    (Left problem, _) -> pure (Left problem)
+    (Right (Advanced n), Just s) ->
+      historyDown key sid pid k s.number (min maxVersionsPageSize (n + 1)) Nothing [] <&> \case
+        Left problem -> Left problem
+        Right run -> linkedFrom s (tag, chain) run
+    _ -> pure (Right ())
   case verdict of
     Left problem -> foundProblem pid problem
-    Right () -> for_ chain $ \c -> liftIO (keepSeen u.id pid Seen {number = c.number, tag})
+    Right () -> for_ chain $ \c -> rememberSeen pid Seen {number = c.number, tag}
+
+-- | A page's history, the latest first, read a page at a time from a
+-- version on (all of it for 'Nothing'), each page's titles decrypted,
+-- until it reaches a version numbered so or below, or ends: the versions,
+-- their tags and chains checked by the decryption. A version whose title
+-- does not open is not the browser's, and is a problem; a history that
+-- cannot be read is read no further.
+historyDown :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> PageKey -> Int -> Int -> Maybe UTCTime -> [(VersionTag, Maybe Chain)] -> HttpWiki m (Either ChainProblem [(VersionTag, Maybe Chain)])
+historyDown key sid pid k down size before got =
+  send (endpoints.encrypted.versions pid (VersionTime <$> before) (Just size)) >>= \case
+    Left _ -> pure (Right got)
+    Right listed -> do
+      titles <- liftIO (openVersionTitles key sid pid k [v.heading | v <- listed])
+      case [v | (v, Nothing) <- zip listed titles] of
+        v : _ -> pure (Left (Gap (maybe 0 (\c -> c.number) v.heading.chain)))
+        [] -> do
+          let run = got <> [(v.heading.tag, v.heading.chain) | v <- listed]
+              reached = any (\v -> maybe 0 (\c -> c.number) v.heading.chain <= down) listed
+          case lastMay listed of
+            Just oldest | not reached, length listed == size -> historyDown key sid pid k down maxVersionsPageSize (Just oldest.updatedAt) run
+            _ -> pure (Right run)
 
 -- | The tag and chain of the version a save is made on top of: the one
 -- read here, or else that version fetched, and checked by the decryption
@@ -1766,8 +1794,14 @@ sealedVersions sid pid k q =
       withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> do
         opened <- liftIO (for listed (\v -> rightToMaybe <$> openTitle pk sid pid v.heading))
         -- The versions whose titles opened are those whose tags and chains
-        -- are the browser's: each must follow on the next one.
-        for_ (gapIn [(v.heading.tag, v.heading.chain) | (v, Just _) <- zip listed opened]) (foundProblem pid)
+        -- are the browser's: each must follow on the next one, and the
+        -- latest of them on the oldest of the page of the history listed
+        -- before, when this page is the one after it.
+        lowest <- Map.lookup pid . (\h -> h.heldLowest) <$> readHeld
+        let checked = [(v.updatedAt, (v.heading.tag, v.heading.chain)) | (v, Just _) <- zip listed opened]
+            joined = [above | Just (at, above) <- [lowest], q.before == Just at]
+        for_ (gapIn (joined <> map snd checked)) (foundProblem pid)
+        modifyHeld (\h -> h {heldLowest = maybe (Map.delete pid h.heldLowest) (\x -> Map.insert pid x h.heldLowest) (lastMay checked)})
         pure (Right [VersionInfo {page = pid, updatedAt = v.updatedAt, title = fromMaybe unreadable title, author = v.author, number = v.number} | (v, title) <- zip listed opened])
 
 sealedVersion :: (MonadIO m) => SpaceId -> PageId -> PageKey -> UTCTime -> HttpWiki m (Either WikiError Version)

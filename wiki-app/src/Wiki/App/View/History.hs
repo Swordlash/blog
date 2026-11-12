@@ -304,7 +304,7 @@ component =
             , n > 1 ->
                 listVersions shown.page.id VersionsQuery {before = Just oldest.updatedAt, limit = versionsPageSize} >>= \case
                   Left e -> modify (\st -> st {olderProblem = Just e})
-                  Right more ->
+                  Right more -> do
                     -- Only if the same history is still shown, with the
                     -- same oldest version: another load may have
                     -- overtaken this one.
@@ -314,6 +314,8 @@ component =
                         , fmap fst (lastMay now.versions) == Just n ->
                             st {loaded = Ready now {versions = now.versions <> numbered more}, olderProblem = Nothing}
                       _ -> st
+                    -- What the backend found in this part of the history.
+                    checkChain
           _ -> pass
       Restore ->
         get >>= \st -> case st.loaded of

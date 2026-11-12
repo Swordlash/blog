@@ -805,17 +805,21 @@ How it works:
   the title.
 - Each version of a page names its number and the version before it, in
   what its encryption binds, so the server cannot change either. Your
-  browser remembers the latest version it read of each page. When the
-  server later sends an older one, a different one under the same number,
-  or a history with a version missing or out of order, the page is shown
-  under a banner that says so, and cannot be edited in that tab until it
-  is reloaded. What this catches, and no more: a version missing from, or
-  reordered in, a part of the history your browser reads, and a latest
-  version older than (or forked from) one your browser read before. A
-  browser that never read a page cannot tell an older version from the
-  latest; neither can one that cleared its site data. Versions written
-  before this check came (WP5.74b3) are not numbered; their order is the
-  server's word.
+  browser remembers the latest version it read of each page, only ever
+  moving forward. When the server later sends an older one, a different
+  one under the same number, a later one that its history does not join,
+  version by version, to the one your browser read, or a history with a
+  version missing or out of order (within a page of the history or
+  between two pages of it), the page is shown under a banner that says
+  so, and cannot be edited in that tab until it is reloaded. What this
+  does not catch: an older version sent to a browser that never read the
+  page; a page the server hides or deletes altogether; and comments or
+  attachments sent as they were before. What your browser remembers is
+  in its storage for this site, and nothing in it is secret: clearing the
+  browser's data for the wiki forgets it, and with it the protection
+  against an older version on that device. Versions written before this
+  check came (WP5.74b3) are not numbered; their order is the server's
+  word.
 - Search runs in your browser: the first search after the page opens
   fetches every page of each encrypted space whose key you hold and
   decrypts it in memory, until a change: one you make, a save the page
