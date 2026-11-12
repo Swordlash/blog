@@ -104,6 +104,8 @@ A video on the web is embedded the same way, by its extension: `![Talk](https://
 
 Width and height in pixels can follow an image or a video in braces: `![Logo](attachment:logo.png){width=120}`.
 
+A presentation embedded with the class `presentation`, `![Quarterly review](/s/team/p/review/){.presentation}` (any form of a page's address: a path, a relative one, its permanent address), is shown in the page one slide at a time ([Presentations](#presentations)). Without the class, in a link's text, for a page that is a document, or for one the reader may not read, it is the link to the page, as any embedded page is.
+
 An SVG attachment is an image, in which nothing runs. With the class `interactive` it is shown in a frame that runs its scripts, for an SVG that needs them, such as a flame graph that zooms on a click and searches:
 
 ```
@@ -389,15 +391,15 @@ A start marker with the class in braces, the content, an end marker.
 The wiki's own blocks are written between two lines of their own: a start marker, `[[!name]]`, then the blocks, then an end marker, `[[/name]]`. The exclamation mark keeps a marker apart from a link to a page: a page's address cannot hold one.
 
 - `[[!spoiler]]{name}(Description)` … `[[/spoiler]]`: a block spoiler ([Spoilers](#spoilers)).
-- `[[!notes]]` … `[[/notes]]`: a deck's speaker notes ([Presentations](#presentations)).
-- `[[!incremental]]` … `[[/incremental]]`: lists a deck shows item by item.
+- `[[!notes]]` … `[[/notes]]`: a presentation's speaker notes ([Presentations](#presentations)).
+- `[[!incremental]]` … `[[/incremental]]`: lists a presentation shows item by item.
 - `[[!div]]{.class}` … `[[/div]]`: a box with the classes its braces give.
 
-Three are one line each, with no end marker: `[[!slides]]{theme=dark aspect=4:3}`, the deck's look; `[[!pause]]`, the next step of a slide; and `[[!toc]]`, the page's contents ([Headings](#headings)).
+Three are one line each, with no end marker: `[[!style]]{theme=dark aspect=4:3}`, a presentation's look; `[[!pause]]`, the next step of a slide; and `[[!toc]]`, the page's contents ([Headings](#headings)). Every page reads them alike; in a document, where nothing is presented, the editor marks `[[!notes]]`, `[[!incremental]]`, `[[!style]]` and `[[!pause]]` in yellow, as doing nothing more than a document shows of them.
 
 Braces after the name hold attributes, as after a code fence or a heading: `#id`, `.class` and `key=value`, as in `[[!div]]{#summary .wide}`. Only a spoiler takes a description in parentheses. A marker is a marker only at the start of a line; in the middle of one, `[[!notes]]` is a link that leads nowhere. Between the markers goes any Markdown, without a prefix on its lines, other blocks of the wiki's own among it, so blocks nest. An end marker ends the innermost open block when it has the block's name. Where no block of its name is open, `[[/notes]]` is the text it is, a wiki link to a page `/notes`.
 
-What is wrong shows in red where it is, in the page and in the editor's preview, with the reason under it: a start marker of a name the wiki does not have (names are in lower case), parentheses or text after a marker that takes none, braces that hold no attributes, an end marker that crosses another block open inside its own, a block never closed (its blocks follow in red, as they are), and a pause in a quotation or a footnote.
+What is wrong shows in red where it is, in the page and in the editor's preview, with the reason under it: a start marker of a name the wiki does not have (names are in lower case), parentheses or text after a marker that takes none, braces that hold no attributes, an end marker that crosses another block open inside its own, a block never closed (its blocks follow in red, as they are), and a pause in a footnote, or among the words of a heading, a table, emphasis or a link.
 
 ## Spoilers
 
@@ -447,26 +449,27 @@ What is wrong shows in red where it is, in the page and in the editor's preview 
 
 A spoiler starts closed. Whether a reader left it open is kept in their browser, for each page and each name, and it opens again when they come back; a reader not signed in is one reader. Two spoilers with one name on one page open and close together. The state is kept in that browser only: on another device the spoilers start closed again.
 
-Exported, a document cannot hide anything: a block spoiler is a box titled with its description, its content shown, a heading spoiler is its heading (without the marker) and its section as they are, with no box, and an inline spoiler is its text. A blog's feed shows a heading spoiler's section the same way, and a deck shows it on its slide as written. A spoiler shown in red is exported as its marker line and the reason as text, then its blocks.
+Exported, a document cannot hide anything: a block spoiler is a box titled with its description, its content shown, a heading spoiler is its heading (without the marker) and its section as they are, with no box, and an inline spoiler is its text. A blog's feed shows a heading spoiler's section the same way, and a presentation shows it as its slide, as written. A spoiler shown in red is exported as its marker line and the reason as text, then its blocks.
 
 ## Presentations
 
-Any page can be shown as slides: "Present", above a page written as a deck, opens it full screen, one slide at a time. A deck is an ordinary page; how it is cut into slides is written in it:
+A presentation is a kind of page: "New page" offers a document or a presentation, a presentation starting blank or from the starter deck, and "Presentation", among a page's actions, makes a page one or a document again (not a space's home page, which is a document). "Present", above a presentation, opens it full screen, one slide at a time; a document is not presented, and its address of slides says so. The page of a presentation shows it in a viewer, one slide at a time, and under it the page as a document, where comments, the contents and the headings' links work as on any page. The kind decides how a page is shown, not what its Markdown means: a presentation's text read as a document is the same page. How a presentation is cut into slides is written in it:
 
-- A thematic break, `---` on a line of its own after a blank line, starts the next slide. (Under a line of text, with no blank line between, `---` makes that line a heading instead, as anywhere in Markdown.) A break inside a list, a quotation or a box stays a rule on its slide.
-- The first heading on a slide is its title, shown in the slide's title bar. A slide titled with a level-one heading (`#`) is a title slide: the title large in the middle, the rest under it, as for a talk's first slide or a section's.
+- Each `##` heading at the page's top level starts a slide and is its title, shown in the slide's title bar; so does a setext heading of level two (a line underlined with `---`). Each `#` heading starts a title slide: the title large in the middle, the rest under it, as for a talk's first slide or a section's. The page's own title line, `# Title`, is the first, and the lines under it, up to the first `##`, are its subtitle. Anything before the first such heading is a slide without a title.
+- A `###` heading or deeper is a heading on its slide, and so is a heading of any level inside a list, a quotation or a box; the editor marks a `#` or `##` heading there in yellow, as opening no slide. A thematic break, `---` after a blank line, is a rule on its slide.
+- A heading spoiler, `## [[!spoiler]] Question`, is its slide as written: its heading is the slide's title, and the slide shows its section.
 - `[[!notes]]` … `[[/notes]]` holds the speaker's notes for its slide. They are not on the slide: "Notes" (or the key **n**) shows them under it. On the page they show as a box marked "Speaker notes".
 - A footnote is shown at the foot of the first slide that refers to it.
-- `[[!slides]]` with attributes, a line of its own at the top level of the page, says how the deck looks; it shows nothing. The theme is `beamer` (the default: a title bar, and a footer with the page's title and the slide's number), `light` or `dark`; the aspect `16:9` (the default) or `4:3`. Without braces it marks the page as a deck with the default look:
+- `[[!style]]` with attributes, a line of its own at the top level of the page, says how the deck looks; it shows nothing. The theme is `beamer` (the default: a title bar, and a footer with the page's title and the slide's number), `light` or `dark`; the aspect `16:9` (the default) or `4:3`. The look is a line with attributes, as every one-line block of the wiki's own is, not a block with its settings inside. Only the first one at the top level counts; the editor marks any other in yellow.
 
 ```markdown
-[[!slides]]{theme=dark aspect=4:3}
+[[!style]]{theme=dark aspect=4:3}
 ```
 
 A slide can show its content in steps:
 
-- `[[!pause]]`, a line of its own, is a pause: what follows it on the slide is shown one step later. A pause is read on the slide itself, in a box, a spoiler and a list item; in a quotation or a footnote it shows in red, since a deck shows those whole. Three dots, `. . .`, are text.
-- `[[!incremental]]` … `[[/incremental]]` shows the items of the lists in it one at a time: the first with what comes before the list, each further one a step later, nested lists' items in their turn. What follows the list without a pause shows with its first item, as in Beamer; a pause after the list waits for its last item.
+- `[[!pause]]`, a line of its own, is a pause: what follows it on the slide is shown one step later. A pause is read on the slide itself, in a box, a spoiler, a quotation and a list item, and what comes after the box, the quotation or the list waits for it too, as after Beamer's `\pause` in an environment. It is read among the words of a paragraph or of a list item's text too, `First [[!pause]] then`, as Beamer's `\pause` is in running text: the rest of the paragraph, and what follows it, waits. A line that starts with `[[!pause]]` and has words after it is such a paragraph, not a pause on a line of its own. The export puts the pause exactly where the marker was, adding no space around it. In a footnote, a table, a heading, a box's title, emphasis or a link's text it shows in red, with the reason. Beamer's manual allows `\pause` almost anywhere in a frame (not in amsmath's environments such as `align`); not reading it in those places is the wiki's own rule: each of them is an argument of a command in the Beamer export, where Beamer's pause does not work, and the wiki shows a table and a footnote whole, so that the steps the Beamer export makes are the steps "Present" shows. Three dots, `. . .`, are text.
+- `[[!incremental]]` … `[[/incremental]]`, or a line `{.incremental}` just before a list, shows the items of the lists in it one at a time: the first with what comes before the list, each further one a step later, nested lists' items in their turn. What follows the list without a pause shows with its first item, as in Beamer; a pause after the list waits for its last item.
 
 ```markdown
 ## Plan
@@ -477,21 +480,34 @@ First this.
 
 Then this.
 
-[[!incremental]]
+{.incremental}
 - one
 - two
-[[/incremental]]
 ```
 
 On the page, where nothing is presented, a pause shows nothing and an `incremental` box is an ordinary box.
 
 Everything a page shows a slide shows: formulas set with the macros defined on the slides before them, diagrams, pictures, code, tables, images and the HTML a page may hold.
 
+### Embedding a presentation
+
+`![Caption](page){.presentation}` shows a presentation in another page: the slide, as a card of the deck's shape and look, with buttons to the first slide, the step before, the step after and the last slide, the slide's number out of the deck's, and "Present", which opens the slides view at that slide. With the focus in the viewer (a click on it, or Tab), the left and right arrows go through the steps and Home and End to the first and the last slide; with the focus elsewhere these keys are the page's. Printed, the viewer is the slide shown, whole. The viewer starts as the embed's link, which is what a reader sees first and what the page is without its script, and becomes the viewer once the page has been read, as the reader may read it: for a document, a page of a space the reader cannot see, or one the server refuses, it stays the link, with nothing of that page's text in the page. In an encrypted space the page is read with the reader's key, as any page is. Inside a viewer, and in a feed, an export or the slides view, an embedded presentation is its link, so a presentation that embeds itself shows one viewer, with the link in it.
+
+### Editing a presentation
+
+The editor shows a presentation slide by slide: each slide folded to its first line, but the one the cursor is on. Each slide's first line starts with a button that opens or closes it; opening one closes the others, and with Ctrl (Cmd on a Mac) held the others stay open. Each slide but the title slide (and what comes before the first heading) has a handle beside its button: dragged onto another slide's lines, the slide goes there, its whole text, blank lines included, as one edit that one undo takes back. Alt+Up and Alt+Down move the slide the cursor is on one place up or down. "New slide" adds a `##` heading at the end, its title selected, to be typed over. A move adds nothing to the text but line breaks where two slides would run together: after a last slide that does not end with one, and before a slide whose title is underlined with `---`, which the line above would otherwise take as its own. A move that would put other slides inside a fence or a box left open at the end of a slide is not made.
+
+"Raw" shows the Markdown as it is, unfolded; "Slides" goes back. The browser remembers the choice. Neither changes a byte of the text: folding is how the text is shown. A text with carriage returns (`\r`) has no slides to fold or move in the editor, which says so; it is edited as written.
+
+The preview shows the slide the cursor is on, as a card of the deck's shape and look, with its notes under it and every step shown; with "Raw", the whole deck, or the cursor's slide alone with "One slide". The deck is rendered whole either way, as "Present" renders it, so a slide shows what earlier slides give it: a formula's macros, a footnote's number. A formula, a diagram or a picture that cannot be drawn on any slide is marked in the text, as in a document, whether the preview is shown or not.
+
+The editor also says whether each slide's content fits on it. Every slide is laid out 1024 pixels wide at the deck's aspect, the smallest a deck is promised to be shown at without cutting it (an image's width in pixels, a frame's height take more of a smaller slide), and measured: a dot beside the slide's handle, and on its card in the preview, is green when half a line or more is to spare, yellow when less, or up to a line goes beyond the slide's foot ("may be cut slightly"), red when more than a line does ("cut"), and grey until the slide is measured, or after a change of it not measured yet. A yellow slide is a warning among the page's problems, a red one an error, over the slide's lines. The measure is taken again when an image loads, a diagram or a formula is drawn, or a font arrives. A slide shown on a screen narrower than 1024 pixels can cut more than the mark says. An `html` frame on a slide is as tall as the slide's body allows, not as the window does, so that it scales with the slide.
+
 Presenting, the right arrow, Space and PageDown show the next step of the slide and then the next slide; the left arrow and PageUp hide the last step shown, or go back to the slide before, whole. Home and End go to the first slide and the last, **f** fills the screen (Escape leaves it), **n** shows the notes and **o** every slide, whole, to pick one; on a touch screen, swipe. A step appears in place, with a short fade (none where the system asks for reduced motion): the content shown already does not move. The slide and the step shown are in the address (`?slide=3&step=2`), so a reload or a link comes back to them. "Print" puts one slide on each page, whole, the page the slide's shape, so that the browser's "Save as PDF" keeps the deck as a file; with "with notes" ticked, each slide is printed on its own A4 page above its notes, and with "each step on its own page" ticked, a slide with steps takes a page for each step.
 
 ### Exported as documents
 
-On a wiki served by its server, "Export" above a page downloads it as a Word document, a web page, an e-book or (where the server has a TeX engine) a PDF; a deck also as PowerPoint and as a Beamer presentation, its LaTeX or its PDF; and a space's "Export" makes one document of all its pages. A document holds what the page shows as far as its format can: the images attached, the formulas (as Word's equations in a Word document, with the macros expanded into them), tables, code, footnotes, and the HTML a page may hold. A Mermaid diagram needs a browser to be drawn, so a document says so and gives its source; a TikZ picture is drawn in the PDFs and the Beamer source, and given the same way elsewhere. Links to other pages lead to them on the wiki. A deck's slides are cut as "Present" cuts them; its first slide, when it is a title slide, is the presentation's title page; its theme and aspect carry over to Beamer (`beamer` is Beamer's Madrid, `light` its plain look, `dark` light on dark), while PowerPoint gets 16:9 and its own plain look. A deck's steps are Beamer's overlays: a pause is `\pause` and an `incremental` box's lists are `[<+->]`, so a Beamer PDF has a page for each step, the same steps "Present" shows. That page per step is what a transition is in a PDF: PDF viewers show no animated transitions, and the wiki writes none. PowerPoint shows an incremental list one item at a time; it has no pauses, so a pause there is left out and the slide is shown at once. Every other document shows a deck's content once, without the pauses, and an `incremental` box as an ordinary one.
+On a wiki served by its server, "Export" above a page downloads it as a Word document, a web page, an e-book or (where the server has a TeX engine) a PDF; a presentation also as PowerPoint and as a Beamer presentation, its LaTeX or its PDF; and a space's "Export" makes one document of all its pages. A document holds what the page shows as far as its format can: the images attached, the formulas (as Word's equations in a Word document, with the macros expanded into them), tables, code, footnotes, and the HTML a page may hold. A Mermaid diagram needs a browser to be drawn, so a document says so and gives its source; a TikZ picture is drawn in the PDFs and the Beamer source, and given the same way elsewhere. Links to other pages lead to them on the wiki. A presentation's slides are cut as "Present" cuts them, and a rule stays on its slide (PowerPoint leaves it out); its first slide, when it is a title slide, is the presentation's title page; its theme and aspect carry over to Beamer (`beamer` is Beamer's Madrid, `light` its plain look, `dark` light on dark), while PowerPoint gets 16:9 and its own plain look. A deck's steps are Beamer's overlays: a pause is `\pause` and an `incremental` box's lists are `[<+->]`, so a Beamer PDF has a page for each step, the same steps "Present" shows. That page per step is what a transition is in a PDF: PDF viewers show no animated transitions, and the wiki writes none. PowerPoint shows an incremental list one item at a time; it has no pauses, so a pause there is left out and the slide is shown at once. Every other document shows a deck's content once, without the pauses, and an `incremental` box as an ordinary one.
 
 ## HTML
 

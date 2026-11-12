@@ -111,6 +111,7 @@ library
       Wiki.App.Route
       Wiki.App.Security
       Wiki.App.Shell
+      Wiki.App.SlideFit
       Wiki.App.Editor.Browser
       Wiki.App.Editor.Problems
       Wiki.App.Vault
@@ -126,6 +127,7 @@ library
       Wiki.App.View.BoxKindForm
       Wiki.App.View.Comments
       Wiki.App.View.Common
+      Wiki.App.View.DeckViewer
       Wiki.App.View.Diff
       Wiki.App.View.Directory
       Wiki.App.View.Editor
@@ -398,6 +400,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Comments
       Test.Browser.Contents
       Test.Browser.CopyCode
+      Test.Browser.DeckViewer
       Test.Browser.Editor
       Test.Browser.Emoji
       Test.Browser.Entries
@@ -431,6 +434,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Server
       Test.Browser.EditorSettings
       Test.Browser.Shell
+      Test.Browser.SlideEditor
       Test.Browser.Slides
       Test.Browser.Source
       Test.Browser.Spaces

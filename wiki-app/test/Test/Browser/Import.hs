@@ -37,6 +37,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Route qualified as R
 import Wiki.Core.Export (Archive (..), readArchive, withoutHomeDocument)
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Space qualified as S
 
 $( browserJS
@@ -57,7 +58,7 @@ spec m = do
   fromTheDemo m
 
 -- | What the server answers a preview with: Docs is on both sides, with
--- Tour in conflict, More under it new and the Markdown guide the same on
+-- Tour in conflict (a document here, a presentation in the archive), More under it new and the Markdown guide the same on
 -- both; Notes, under Docs, is new, with a page.
 plan :: ImportPlan
 plan =
@@ -67,9 +68,9 @@ plan =
         , name = "Docs"
         , status = SpaceMerged
         , pages =
-            [ PagePlan {path = slugs ["tour"], title = "Tour", attachments = 1, conflict = Just (conflict False)}
+            [ PagePlan {path = slugs ["tour"], title = "Tour", attachments = 1, conflict = Just (conflict False Kind.Presentation)}
             , PagePlan {path = slugs ["tour", "more"], title = "More", attachments = 0, conflict = Nothing}
-            , PagePlan {path = slugs ["markdown-guide"], title = "Markdown guide", attachments = 0, conflict = Just (conflict True)}
+            , PagePlan {path = slugs ["markdown-guide"], title = "Markdown guide", attachments = 0, conflict = Just (conflict True Kind.Document)}
             ]
         }
     , SpacePlan
@@ -80,7 +81,7 @@ plan =
         }
     ]
   where
-    conflict same = PageConflict {title = "Tour", updatedAt = UTCTime (fromGregorian 2026 10 1) 0, sameContent = same}
+    conflict same imported = PageConflict {title = "Tour", updatedAt = UTCTime (fromGregorian 2026 10 1) 0, sameContent = same, kind = Kind.Document, importedKind = imported}
 
 summary :: ImportSummary
 summary = ImportSummary {spacesCreated = 0, spacesMerged = 1, pagesCreated = 1, pagesReplaced = 1, pagesKept = 1, pagesSkipped = 1, attachments = 1}
@@ -110,6 +111,8 @@ fromAFile m = it "imports a zip file chosen as the dialog's boxes and choices sa
   length <$> findAll ui ".import-dialog input.import-check:checked" `shouldReturn` 6
   length <$> findAll ui ".import-choice" `shouldReturn` 1
   length <$> findAll ui (page "tour" <> " input.import-keep:checked") `shouldReturn` 1
+  -- The two pages differ in kind too, which the choice says in words.
+  find ui (page "tour" <> " .import-theirs") >>= textContent >>= (`shouldSatisfy` T.isSuffixOf "It is a document here, a presentation in the archive.")
   -- A space unchecked unchecks its pages, which cannot be checked while it
   -- is not.
   find ui (space "docs/notes" <> " > .import-row input") >>= click

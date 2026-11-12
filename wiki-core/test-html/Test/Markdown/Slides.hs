@@ -14,10 +14,48 @@ import Wiki.Core.Slides
 rendered :: Options page w i -> Text -> [RenderedSlide w i]
 rendered opts source = either (panic . show) (renderDeck opts . deckOf) (parseMarkdown source)
 
+-- | A deck with every writer of ids and of links to a place in itself:
+-- headings, footnotes, the contents, raw HTML's ids and a label's for,
+-- and links to them in Markdown and in raw HTML. (The page's HTML keeps no
+-- anchor's name.)
+everyId :: Text
+everyId =
+  T.intercalate
+    "\n\n"
+    [ "# Deck"
+    , "[[!toc]]"
+    , "## Details"
+    , "A claim[^n] and [the target](#target) and [the details](#details)."
+    , "<span id=\"target\">Here</span> <a href=\"#details\">back</a> <label for=\"field\">Name</label> <input id=\"field\">"
+    , "## More"
+    , "[Another page's place](/s/docs/p/x/#y)."
+    , "[^n]: The note."
+    ]
+
+-- | The ids and the local links' targets of a rendered deck's HTML.
+idsAndTargets :: Text -> ([Text], [Text])
+idsAndTargets html = (valuesOf " id=\"" <> valuesOf " name=\"", [T.drop 1 h | h <- valuesOf " href=\"", "#" `T.isPrefixOf` h] <> concatMap T.words (valuesOf " for=\""))
+  where
+    valuesOf key = [T.takeWhile (/= '"') chunk | chunk <- drop 1 (T.splitOn key html)]
+
 spec :: Spec
 spec = describe "Slides.renderDeck" $ do
+  it "gives every id and every link to a place of the deck the prefix, whatever wrote it, and the page none" $ do
+    let deck = either (panic . show) deckOf (parseMarkdown everyId)
+        htmlOf slides = T.concat <$> traverse (\s -> (<>) <$> renderHtml s.title <*> renderHtml s.body) slides
+    prefixed <- htmlOf (renderDeckWithIds "v1-" defaultOptions deck)
+    plain <- htmlOf (renderDeck defaultOptions deck)
+    let (ids, targets) = idsAndTargets prefixed
+    ids `shouldSatisfy` (not . null)
+    filter (not . T.isPrefixOf "v1-") ids `shouldBe` []
+    filter (`notElem` ids) targets `shouldBe` []
+    prefixed `shouldSatisfy` T.isInfixOf "href=\"/s/docs/p/x/#y\""
+    plain `shouldSatisfy` (not . T.isInfixOf "v1-")
+    let (plainIds, plainTargets) = idsAndTargets plain
+    filter (`notElem` plainIds) plainTargets `shouldBe` []
+
   it "renders each slide's title as its heading, its body and its notes apart" $ do
-    let slides = rendered defaultOptions "## One\n\nFirst.\n\n[[!notes]]\nSay it.\n[[/notes]]\n\n---\n\n# Two\n\nSecond."
+    let slides = rendered defaultOptions "## One\n\nFirst.\n\n[[!notes]]\nSay it.\n[[/notes]]\n\n# Two\n\nSecond."
     length slides `shouldBe` 2
     for slides (\s -> (,,) <$> renderHtml s.title <*> renderHtml s.body <*> renderHtml s.notes)
       `shouldReturn` [ ("<h2 id=\"one\">One<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#one\"></a></h2>", "<p>First.</p>", "<p>Say it.</p>")
@@ -27,7 +65,7 @@ spec = describe "Slides.renderDeck" $ do
   it "gives the islands of every slide keys unique in the deck" $ do
     let keyed k = HH.i_ [HH.text (T.strip k.source <> show k.occurrence)]
         opts = defaultOptions {codeBlock = \k _ _ _ _ -> keyed k, mathInline = \k _ _ -> keyed k}
-        slides = rendered opts "$x$\n\n```\ncode\n```\n\n---\n\n$x$ and $x$\n\n[[!notes]]\n```\ncode\n```\n[[/notes]]"
+        slides = rendered opts "$x$\n\n```\ncode\n```\n\n## Two\n\n$x$ and $x$\n\n[[!notes]]\n```\ncode\n```\n[[/notes]]"
     for slides (\s -> (,) <$> renderHtml s.body <*> renderHtml s.notes)
       `shouldReturn` [ ("<p><i>x0</i></p><i>code0</i>", "")
                      , ("<p><i>x1</i> and <i>x2</i></p>", "<i>code1</i>")
@@ -37,7 +75,7 @@ spec = describe "Slides.renderDeck" $ do
     -- The document the frame would show, as its text.
     let opts = defaultOptions {htmlBlock = \_ _ _ document -> HH.text document}
         fence = "```html\n<p>x</p>\n```"
-        deck theme = "[[!slides]]{theme=" <> theme <> "}\n\n" <> fence <> "\n\n[[!notes]]\n" <> fence <> "\n[[/notes]]"
+        deck theme = "[[!style]]{theme=" <> theme <> "}\n\n" <> fence <> "\n\n[[!notes]]\n" <> fence <> "\n[[/notes]]"
         schemes theme = for (rendered opts (deck theme)) $ \s -> do
           body <- renderHtml s.body
           notes <- renderHtml s.notes
@@ -50,12 +88,12 @@ spec = describe "Slides.renderDeck" $ do
 
   it "sets a formula with the macros defined on the slides before it" $ do
     let opts = defaultOptions {mathInline = \_ (Macros ms) tex -> HH.text (tex <> ":" <> show (length ms))}
-        slides = rendered opts "$\\newcommand{\\R}{\\mathbb{R}}$\n\n---\n\n$\\R$"
+        slides = rendered opts "$\\newcommand{\\R}{\\mathbb{R}}$\n\n## Two\n\n$\\R$"
     traverse (\s -> renderHtml s.body) slides
       `shouldReturn` ["<p>\\newcommand{\\R}{\\mathbb{R}}:0</p>", "<p>\\R:1</p>"]
 
   it "numbers footnotes across the deck and shows each on its slide" $ do
-    let slides = rendered defaultOptions "A[^a].\n\n---\n\nB[^b].\n\n[^a]: Note a.\n\n[^b]: Note b.\n"
+    let slides = rendered defaultOptions "A[^a].\n\n## B\n\nB[^b].\n\n[^a]: Note a.\n\n[^b]: Note b.\n"
     bodies <- traverse (\s -> renderHtml s.body) slides
     bodies
       `shouldBe` [ "<p>A<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\" title=\"Note a.\">1</a></sup>.</p>"

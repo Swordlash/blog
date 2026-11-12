@@ -2,6 +2,7 @@ module Main (main) where
 
 import Protolude
 import Test.Hspec (hspec, parallel)
+import Test.Markdown.DeckEmbed qualified as DeckEmbed
 import Test.Markdown.Document qualified as Document
 import Test.Markdown.Highlight qualified as Highlight
 import Test.Markdown.HtmlBlock qualified as HtmlBlock
@@ -16,6 +17,7 @@ main = hspec . parallel $ do
   RawHtml.spec
   HtmlBlock.spec
   InteractiveSvg.spec
+  DeckEmbed.spec
   Document.spec
   Slides.spec
   Highlight.spec

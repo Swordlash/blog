@@ -63,6 +63,15 @@
 -- Otherwise it is the image, as without the class; so is an interactive
 -- embed in a link's text, where a frame and its link cannot go.
 --
+-- An embedded page with the class @presentation@
+-- (@![Talk](/s/docs/p/talk/){.presentation}@) is what the caller draws
+-- for it ('deckEmbed'), an island: the application's page draws a viewer
+-- of the presentation (WP5.97 of docs/PLAN.md), which starts as the link
+-- and stays it for a document or a page the reader may not read. With no
+-- 'deckEmbed' (a feed, an export, the slides, a viewer itself), in a
+-- link's text, or for anything but a page, it is what it is without the
+-- class.
+--
 -- __Layout.__ Headings carry their @id@, and end with an empty link to
 -- it, @\<a class=\"heading-anchor\">@, which the stylesheet shows as a @#@
 -- on hover. @[[!toc]]@ is the document's table of contents
@@ -174,6 +183,7 @@ module Wiki.Core.Markdown.Render
   , IslandKey (..)
   , defaultOptions
   , defaultResolveLink
+  , presentationClass
   , renderBlocks
   , renderLines
   , renderSections
@@ -199,6 +209,7 @@ import Wiki.Core.Markdown.Box (BoxCounter, BoxIcon (..), BoxKind (..), Numbering
 import Wiki.Core.Markdown.Frame (FrameScheme (..), SvgFrame (..), frameDocument, interactiveClass, svgFrameHeight)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
+import Wiki.Core.Markdown.LocalIds (localAttribute, prefixLocalIds)
 import Wiki.Core.Markdown.Tasks (taskLabel)
 import Wiki.Core.Markdown.Toc (contentsNav, tableOfContents)
 import Wiki.Core.Math (Macros (..), definesMacros, onlyDefinitions)
@@ -241,6 +252,11 @@ data Options page w i = Options
   -- draws it. 'Nothing' by default: the embed is then an image, as a feed
   -- or an export shows it, since neither has the wiki's server behind it
   -- to answer the frame.
+  , deckEmbed :: Maybe (IslandKey -> page -> Text -> HH.HTML w i)
+  -- ^ How a page embedded with the class @presentation@ is drawn, given
+  -- the page and the caption (or else the destination), as an island:
+  -- the application's page draws a viewer. 'Nothing' by default: the
+  -- embed is then the link to the page, as without the class.
   , frameScheme :: FrameScheme
   -- ^ The colours an @html@ fence's frame is drawn in: the system's on a
   -- page, by default, and a slide's theme's on a slide ("Wiki.Core.Slides").
@@ -322,6 +338,7 @@ defaultOptions =
     , tikz = \_ src -> HH.pre [HP.class_ (HH.ClassName "tikz")] [HH.text src]
     , htmlBlock = \_ src _ _ -> HH.pre_ [HH.code [HP.class_ (HH.ClassName "language-html")] [HH.text src]]
     , svgFrame = Nothing
+    , deckEmbed = Nothing
     , frameScheme = SystemScheme
     , resolveLink = defaultResolveLink
     , pageHref = identity
@@ -381,8 +398,8 @@ renderSections opts = renderSectionsWithIds opts . map ("",)
 -- footnotes, and a link in one leads to its own heading. A section with
 -- the prefix @""@ is rendered as 'renderSections' renders it.
 --
--- Raw HTML is left as written, and @[[!toc]]@ lists the ids without their
--- prefixes: neither is in a changelog's entry.
+-- Raw HTML's ids and links, and the links @[[!toc]]@ writes, take the
+-- prefix too ("Wiki.Core.Markdown.LocalIds").
 renderSectionsWithIds :: forall page w i. Options page w i -> [(Text, [Block])] -> [[HH.HTML w i]]
 renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Counts M.empty M.empty [] M.empty (startCounting opts.numbering) "" 0 False)
   where
@@ -493,8 +510,11 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
       -- first ("Wiki.Core.Slides").
       Footnotes notes ->
         single . HH.section [classesProp ["footnotes"]] . single . listOf (OrderedList (firstNote notes)) <$> traverse renderNote notes
-      RawHtmlBlock raw -> pure (renderRawHtml opts raw)
-      TableOfContents -> pure (contentsNav contents)
+      -- Raw HTML and the contents write ids and links the renderer does
+      -- not make itself: they take the section's prefix by the same rule
+      -- ("Wiki.Core.Markdown.LocalIds").
+      RawHtmlBlock raw -> gets (\c -> c.idPrefix) <&> \p -> renderParsedHtml opts (map (localNode p) (Html.parseHtml raw))
+      TableOfContents -> gets (\c -> c.idPrefix) <&> \p -> map (prefixLocalIds p) (contentsNav contents)
 
     -- The table of contents a @[[!toc]]@ shows: of the whole document, every
     -- section of it.
@@ -585,7 +605,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
     -- its end tag ("Wiki.Core.Markdown.Html").
     inlinePieces :: Bool -> [Inline] -> R [Piece w i]
     inlinePieces inLink xs
-      | any isRawHtml xs = htmlPieces inLink (Html.parseFragments context (map fragment xs))
+      | any isRawHtml xs = gets (\c -> c.idPrefix) >>= \p -> htmlPieces inLink (map (localNode p) (Html.parseFragments context (map fragment xs)))
       | otherwise = concat <$> traverse (renderInline inLink) xs
       where
         context = if inLink then Html.PhrasingInLink else Html.Phrasing
@@ -646,12 +666,22 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
       Emoji keyword emoji -> pure [PNode (emojiSpan ["emoji"] keyword emoji)]
       -- Raw HTML is read with its neighbours, by 'inlinePieces', and does
       -- not get here; on its own it would be read the same way.
-      RawHtml raw -> htmlPieces inLink (Html.parseFragments (if inLink then Html.PhrasingInLink else Html.Phrasing) [Html.Markup raw])
+      RawHtml raw -> gets (\c -> c.idPrefix) >>= \p -> htmlPieces inLink (map (localNode p) (Html.parseFragments (if inLink then Html.PhrasingInLink else Html.Phrasing) [Html.Markup raw]))
       Mention login -> pure $ case opts.resolveMention login of
         Just target
           | not inLink ->
               [PNode (HH.a [HP.href target.href, classesProp ["mention"], HP.title target.name] [HH.text ("@" <> login)])]
         _ -> [PText ("@" <> login)]
+      -- A pause matters only on a slide ("Wiki.Core.Slides"), which has
+      -- marked what follows it; a page shows nothing for it.
+      InlinePause _ _ -> pure []
+      -- One where none is read: in red, with the reason, as a marker
+      -- line that is wrong.
+      MisplacedPause _ _ why ->
+        pure [PNode (HH.span [classesProp ["spoiler-error"], HP.title why] [HH.text (openingMarker PauseName), HH.span [classesProp ["spoiler-error-reason"]] [HH.text why]])]
+      Marked written xs -> do
+        attrs <- ownAttrs written
+        node (HH.span (idAndClasses attrs [])) . fromPieces <$> inlinePieces inLink xs
 
     renderLink :: Attributes -> Text -> Text -> [Inline] -> R [Piece w i]
     renderLink attrs dest title xs = do
@@ -698,7 +728,13 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
               ]
         | safeSrc ref.url -> pure [PNode (media (maybe (mediaKindOfPath ref.name) mediaKindOfType ref.mediaType) ref.url ref.downloadUrl (Just ref.name))]
         | otherwise -> pure [PText caption]
-      Page page -> pure [PNode (HH.a [HP.href (opts.pageHref page)] [HH.text (nonEmptyOr dest caption)])]
+      Page page
+        | not inLink
+        , presentationClass `elem` classes attrs
+        , Just draw <- opts.deckEmbed -> do
+            k <- island ("presentation " <> dest)
+            pure [PNode (draw k page (nonEmptyOr dest caption))]
+        | otherwise -> pure [PNode (HH.a [HP.href (opts.pageHref page)] [HH.text (nonEmptyOr dest caption)])]
       Unresolved -> pure [PNode (HH.span [classesProp ["embed-unresolved"], HP.title dest] [HH.text (nonEmptyOr dest caption)])]
       where
         common :: (HasType "title" Text r, HasType "id" Text r, HasType "class" Text r) => [HP.IProp r i]
@@ -996,7 +1032,11 @@ titleProp title = [HP.title title | not (T.null title)]
 -- ("Wiki.Core.Markdown.Html"), with links and sources resolved through
 -- the options, as the Markdown's are. An HTML comment renders as nothing.
 renderRawHtml :: forall page w i. Options page w i -> Text -> [HH.HTML w i]
-renderRawHtml opts raw = fromPieces (concatMap pieces (Html.parseHtml raw))
+renderRawHtml opts raw = renderParsedHtml opts (Html.parseHtml raw)
+
+-- | 'renderRawHtml' of HTML parsed already.
+renderParsedHtml :: forall page w i. Options page w i -> [Html.Node Void] -> [HH.HTML w i]
+renderParsedHtml opts parsed = fromPieces (concatMap pieces parsed)
   where
     pieces :: Html.Node Void -> [Piece w i]
     pieces = \case
@@ -1077,6 +1117,9 @@ linkDestinations = concatMap block
       FootnoteRef _ _ -> []
       Emoji _ _ -> []
       Mention _ -> []
+      InlinePause _ _ -> []
+      MisplacedPause {} -> []
+      Marked _ xs -> inlines inLink xs
     htmlContext inLink = if inLink then Html.PhrasingInLink else Html.Phrasing
     -- Every @a@ with an @href@ ('htmlElement' makes each a link), and the
     -- Markdown among the elements, which inside an @a@ is a link's text.
@@ -1168,3 +1211,15 @@ frameContent opts = Html.renderHtml . map resolve . Html.parseFrameHtml
               kept = [(k, v) | (k, v) <- resolvedAttributes opts written, k `notElem` ["rel", "download"], not (k == "href" && inPage)]
            in kept <> (if any ((== "href") . fst) kept then [("target", "_blank"), ("rel", "noopener noreferrer")] else [])
       | otherwise = resolvedAttributes opts written
+
+-- | The class that makes an embedded page a viewer of the presentation
+-- ('deckEmbed'): @![Talk](/s/docs/p/talk/){.presentation}@.
+presentationClass :: Text
+presentationClass = "presentation"
+
+-- | Raw HTML's element with a section's prefix on its ids and its links to
+-- a place in the document ('localAttribute').
+localNode :: Text -> Html.Node a -> Html.Node a
+localNode p = \case
+  Html.Element name attrs children -> Html.Element name [(k, localAttribute p name k v) | (k, v) <- attrs] (map (localNode p) children)
+  other -> other

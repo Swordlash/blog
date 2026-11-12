@@ -1,6 +1,6 @@
 -- | The wiki's own blocks between marker lines (WP5.77 of docs/PLAN.md):
 -- @[[!notes]]@, @[[!incremental]]@ and @[[!div]]@ … @[[/name]]@, and the
--- lines @[[!slides]]@, @[[!pause]]@ and @[[!toc]]@, as the parser reads
+-- lines @[[!style]]@, @[[!pause]]@ and @[[!toc]]@, as the parser reads
 -- them; the lines it shows in red; and @:::@, @. . .@ and the forms
 -- without the exclamation mark, which are text and links now. Spoilers,
 -- which share the markers, have "Test.Markdown.Spoiler". These run on
@@ -98,20 +98,35 @@ spec = describe "the wiki's own blocks, [[!name]] … [[/name]]" $ do
         `shouldBe` [Div [("id", "intro")] [Para [Str "x"]], Heading 1 [("id", "intro-2")] [Str "Intro"]]
 
   describe "markers of one line" $ do
-    it "reads the deck's options, with braces or without" $ do
-      "[[!slides]]{theme=dark aspect=4:3}" `parses` [Div [("class", "slides"), ("theme", "dark"), ("aspect", "4:3")] []]
-      "[[!slides]]" `parses` [Div [("class", "slides")] []]
-    it "reads a pause at the top level, in boxes, spoilers and list items" $ do
+    it "reads a presentation's look, with braces or without, and no longer the old name" $ do
+      "[[!style]]{theme=dark aspect=4:3}" `parses` [Div [("class", styleClass), ("theme", "dark"), ("aspect", "4:3")] []]
+      "[[!style]]" `parses` [Div [("class", styleClass)] []]
+      [why | MarkerError _ why <- blocksOf "[[!slides]]"] `shouldBe` ["“slides” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, style, pause, toc, in lower case"]
+    it "reads a pause at the top level, in boxes, spoilers, quotations and list items" $ do
+      "> a\n>\n> [[!pause]]" `parses` [BlockQuote [Para [Str "a"], Pause]]
       "a\n\n[[!pause]]\n\nb" `parses` [Para [Str "a"], Pause, Para [Str "b"]]
       "a\n[[!pause]]\nb" `parses` [Para [Str "a"], Pause, Para [Str "b"]]
       "[[!incremental]]\n[[!pause]]\n[[/incremental]]" `parses` [Div [("class", "incremental")] [Pause]]
       [() | Alert _ _ [Pause] <- blocksOf "> [!TIP]\n> [[!pause]]"] `shouldBe` [()]
       "- a\n\n  [[!pause]]\n" `parses` [List BulletList [ListItem Nothing [Para [Str "a"], Pause]]]
       [() | Spoiler _ [Pause] <- blocksOf "[[!spoiler]]{s}(S)\n[[!pause]]\n[[/spoiler]]"] `shouldBe` [()]
-    it "shows a pause in a quotation or a footnote in red" $ do
-      errors (blocksOf "> [[!pause]]") `shouldBe` [("[[!pause]]", "a pause is not read in a quotation or a footnote, which a deck shows whole")]
+    it "reads a pause among a paragraph's words, or a list item's, at its place" $ do
+      "First [[!pause]] then" `parses` [Para [Str "First ", InlinePause 1 7, Str " then"]]
+      -- At the start of a line with words after it, a pause starts the
+      -- paragraph's words: it is no marker line.
+      "[[!pause]] then" `parses` [Para [InlinePause 1 1, Str " then"]]
+      "- a [[!pause]] b" `parses` [List BulletList [ListItem Nothing [Plain [Str "a ", InlinePause 1 5, Str " b"]]]]
+      "> x [[!pause]] y" `parses` [BlockQuote [Para [Str "x ", InlinePause 1 5, Str " y"]]]
+    it "shows a pause among words where none is read in red: in emphasis, a link, a heading, a table, a footnote" $ do
+      let why = "a pause is read only between the words of a paragraph or of a list item's text, not inside emphasis, a link, a heading, a table, a box's title or a footnote"
+      "*a [[!pause]] b*" `parses` [Para [Emph [Str "a ", MisplacedPause 1 4 why, Str " b"]]]
+      "[a [[!pause]] b](x)" `parses` [Para [Link [] "x" "" [Str "a ", MisplacedPause 1 4 why, Str " b"]]]
+      [xs | Heading 2 _ xs <- blocksOf "## A [[!pause]] B"] `shouldBe` [[Str "A ", MisplacedPause 1 6 why, Str " B"]]
+      [rows | Table _ _ rows <- blocksOf "| a |\n| - |\n| x [[!pause]] |\n"] `shouldBe` [[[[Str "x ", MisplacedPause 3 5 why]]]]
+      [bs | Footnotes [Footnote _ _ bs] <- blocksOf "A[^1].\n\n[^1]: b [[!pause]] c\n"] `shouldBe` [[Para [Str "b ", MisplacedPause 3 9 why, Str " c"]]]
+    it "shows a pause in a footnote in red" $
       [why | Footnotes [Footnote _ _ [MarkerError _ why]] <- blocksOf "A[^1].\n\n[^1]: [[!pause]]\n"]
-        `shouldBe` ["a pause is not read in a quotation or a footnote, which a deck shows whole"]
+        `shouldBe` ["a pause is not read in a footnote, which a presentation shows whole"]
     it "reads the table of contents' place" $ do
       "[[!toc]]" `parses` [TableOfContents]
       "> [[!toc]]" `parses` [BlockQuote [TableOfContents]]
@@ -135,15 +150,14 @@ spec = describe "the wiki's own blocks, [[!name]] … [[/name]]" $ do
   describe "lines shown in red" $ do
     let reasons source = map snd (errors (blocksOf source))
     it "shows a name the wiki does not have, and one not in lower case" $ do
-      reasons "[[!unknown]]" `shouldBe` ["“unknown” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, slides, pause, toc, in lower case"]
-      reasons "[[!Notes]]\nx\n[[/notes]]" `shouldBe` ["“Notes” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, slides, pause, toc, in lower case"]
+      reasons "[[!unknown]]" `shouldBe` ["“unknown” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, style, pause, toc, in lower case"]
+      reasons "[[!Notes]]\nx\n[[/notes]]" `shouldBe` ["“Notes” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, style, pause, toc, in lower case"]
     it "shows parentheses on a name that takes none, braces that are no attributes, and text after a marker" $ do
       reasons "[[!div]]{.a}(Title)" `shouldBe` ["only a spoiler takes a description in parentheses, as in [[!spoiler]]{name}(Description)"]
       reasons "[[!div]]{summary}" `shouldBe` ["the braces after [[!div]] hold attributes, #id, .class or key=value, as in [[!div]]{.summary}"]
       reasons "[[!notes]] more" `shouldBe` ["nothing may follow [[!notes]] and its braces on its line"]
-      reasons "[[!pause]] now" `shouldBe` ["nothing may follow [[!pause]] on its line"]
       reasons "[[!toc]]{.x}" `shouldBe` ["nothing may follow [[!toc]] on its line"]
-      reasons "[[!slides]]{dark}" `shouldBe` ["the braces after [[!slides]] hold the deck's options, as in [[!slides]]{theme=dark aspect=4:3}"]
+      reasons "[[!style]]{dark}" `shouldBe` ["the braces after [[!style]] hold a presentation's look, as in [[!style]]{theme=dark aspect=4:3}"]
       reasons "[[!div]]\nx\n[[/div]] more" `shouldBe` ["the [[!div]] block is not closed: add [[/div]] after its last line", "nothing may follow [[/div]] on its line"]
     it "shows an end marker that crosses another open block, which ends nothing" $ do
       let doc = blocksOf "[[!notes]]\n[[!div]]\nx\n[[/notes]]\n[[/div]]\n[[/notes]]"
@@ -163,12 +177,12 @@ spec = describe "the wiki's own blocks, [[!name]] … [[/name]]" $ do
 
   describe "the markers the export reads"
     $ it "gives each marker line, with what it is"
-    $ (\(_, _, ms, _) -> ms) <$> parseWithAllMarkers "[[!slides]]\n[[!div]]{.a}\n[[!pause]]\n[[/div]]\n[[!toc]]\n[[!oops]]\n"
+    $ (\(_, _, ms, _) -> ms) <$> parseWithAllMarkers "[[!style]]\n[[!div]]{.a}\n[[!pause]]\n[[/div]]\n[[!toc]]\n[[!oops]]\n"
       `shouldBe` Right
-        [ MarkerLine 1 1 SetsSlides
+        [ MarkerLine 1 1 SetsStyle
         , MarkerLine 2 1 (Opens [("class", "a")])
         , MarkerLine 3 1 Pauses
         , MarkerLine 4 1 (Ends 2)
         , MarkerLine 5 1 PlacesContents
-        , MarkerLine 6 1 (Faulty "[[!oops]]" "“oops” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, slides, pause, toc, in lower case")
+        , MarkerLine 6 1 (Faulty "[[!oops]]" "“oops” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, style, pause, toc, in lower case")
         ]

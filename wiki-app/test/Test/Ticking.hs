@@ -19,6 +19,7 @@ import Wiki.App.View.Ticking
 import Wiki.Core.Id (PageId (..), SpaceId (..))
 import Wiki.Core.Markdown.Tasks (applyTicks)
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Slug (mkSlug)
 
 -- | The page, saved at some minute, with this text.
@@ -36,6 +37,7 @@ pageOf ident body minute =
     , updatedAt = addUTCTime (fromIntegral (60 * minute)) epoch
     , position = 0
     , template = False
+    , kind = Kind.Document
     , createdBy = Nothing
     , updatedBy = Nothing
     }

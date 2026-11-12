@@ -605,6 +605,9 @@ data PageRead = PageRead
   , page :: Text
   , title :: Text
   , body :: Text
+  , kind :: Text
+  -- ^ The page's kind by its name ("Wiki.Core.PageKind"): @document@ for
+  -- a program from before kinds, which answers none.
   }
   deriving stock (Eq, Show)
 
@@ -618,7 +621,8 @@ data PagesRead = PagesRead
   deriving stock (Eq, Show)
 
 -- | The pages check: every page of every space reads the same after the
--- migration, its title and its source. The guide's space is left out: its
+-- migration, its title, its source and its kind (a document or a
+-- presentation; a program from before kinds has documents only). The guide's space is left out: its
 -- pages are the program's own, and change with its version. The only page
 -- the migration may add is the home page step 12 of the schema gives a
 -- space that had none ("Wiki.Server.Storage.Migrate.Code.Step0012").
@@ -658,7 +662,7 @@ readPages manager server = runExceptT $ do
         let url = pageUrl server spaceId (fromMaybe [] (pathAsBuilt rooted home at p.page))
         read' <- ExceptT (getJson manager url)
         case (,) <$> field "title" read' <*> field "body" read' of
-          Just (title, body) -> pure PageRead {space = spaceId, page = p.page, title, body}
+          Just (title, body) -> pure PageRead {space = spaceId, page = p.page, title, body, kind = fromMaybe "document" (field "kind" read')}
           Nothing -> throwError ("GET " <> url <> " gave no title and source")
 
 -- | A JSON list's items, or why not.
@@ -760,7 +764,7 @@ comparePages was now = listProblems problems
         <> [ "page " <> p.page <> " (" <> p.title <> ") " <> what
            | (k, p) <- Map.toList before'
            , Just q <- [Map.lookup k after']
-           , what <- ["has another title: " <> q.title | q.title /= p.title] <> ["has another source" | q.body /= p.body]
+           , what <- ["has another title: " <> q.title | q.title /= p.title] <> ["has another source" | q.body /= p.body] <> ["is a " <> q.kind <> ", not a " <> p.kind | q.kind /= p.kind]
            ]
         <> ["page " <> q.page <> " (" <> q.title <> ") is new" | (k, q) <- Map.toList after', not (Map.member k before'), not (givenHome q)]
 

@@ -44,6 +44,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (markerAt)
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.Url (Url (..))
@@ -59,17 +60,17 @@ data Tour = DemoTour | ServerTour
 -- tour's page, for the space's home page.
 insertGuide :: Tour -> SpaceId -> (NominalDiffTime -> UTCTime) -> State MemState PageId
 insertGuide which sid ago = do
-  tourPage <- page Nothing "Tour" 1 (case which of DemoTour -> demoTour; ServerTour -> serverTour)
-  guide <- page Nothing "Markdown guide" 2 markdownGuide
+  tourPage <- page Document Nothing "Tour" 1 (case which of DemoTour -> demoTour; ServerTour -> serverTour)
+  guide <- page Document Nothing "Markdown guide" 2 markdownGuide
   modify (fst . attachBytes guide (FileName "tree.png") (MimeType "image/png") treePng)
   modify (fst . attachUrl guide (FileName "earth.jpg") (MimeType "image/jpeg") 267290 (Url earthUrl))
-  _ <- page (Just guide) "Diagrams" 3 diagrams
-  _ <- page (Just guide) "Mathematics" 3 mathematics
-  _ <- page (Just guide) "Presentations" 2 presentations
+  _ <- page Document (Just guide) "Diagrams" 3 diagrams
+  _ <- page Document (Just guide) "Mathematics" 3 mathematics
+  _ <- page Presentation (Just guide) "Presentations" 2 presentations
   pure tourPage
   where
-    page parent title daysAgo body = state $ \st ->
-      let (st', p) = insertPage sid parent title (T.unlines (unwrapped body)) (ago daysAgo) st in (p.id, st')
+    page kind parent title daysAgo body = state $ \st ->
+      let (st', p) = insertPageOf kind sid parent title (T.unlines (unwrapped body)) (ago daysAgo) st in (p.id, st')
 
 -- | The name of the space a server keeps the guide in.
 guideSpaceName :: Text
@@ -230,8 +231,8 @@ demoTour =
   , "it for the reason. The count beside **Save**, such as *2 problems*,"
   , "goes to the next one at each click."
   , ""
-  , "A space's **New page**, and a page's **New subpage**, start a page from"
-  , "nothing."
+  , "A space's **New page**, and a page's **New subpage**, make a document or"
+  , "a presentation, blank or from a template."
   , ""
   , "## Being told"
   , ""
@@ -709,7 +710,7 @@ markdownGuide =
   , "[[/div]]"
   , ""
   , "The names are `spoiler` (below), `notes` and `incremental` (on"
-  , "[Presentations](markdown-guide/presentations)) and `div`; `slides`,"
+  , "[Presentations](markdown-guide/presentations)) and `div`; `style`,"
   , "`pause` and `toc` are one line each, with no end marker. Blocks nest, and"
   , "an end marker ends the innermost open block when it has its name. A"
   , "marker that is wrong, a name the wiki does not have, or a block never"
@@ -857,42 +858,50 @@ markdownGuide =
   , "file with the rules that keep its scripts in, and a secure address"
   , "(HTTPS, or localhost): elsewhere, and in the demo, it is the image."
   , ""
+  , "A presentation embedded with `{.presentation}` is shown one slide at a"
+  , "time, with buttons and the arrow keys to go through it and **Present** to"
+  , "show it full screen. Without the class, or for a page that is not a"
+  , "presentation, it is a link:"
+  , ""
+  , "```"
+  , "![Presentations](markdown-guide/presentations){.presentation}"
+  , "```"
+  , ""
+  , "![Presentations](markdown-guide/presentations){.presentation}"
+  , ""
   , "[^paths]: A path without a leading slash is read from this page's own"
   , "    address, as a browser reads a relative link."
   ]
 
--- | A page written as slides ("Wiki.Core.Slides"), which says how.
+-- | A presentation ("Wiki.Core.PageKind"), presented as slides
+-- ("Wiki.Core.Slides"), which says how.
 presentations :: [Text]
 presentations =
   [ "# Presentations"
   , ""
-  , "[[!slides]]{theme=beamer aspect=16:9}"
+  , "[[!style]]{theme=beamer aspect=16:9}"
   , ""
-  , "Any page can be a slide deck. Press **Present** above the page: this one is"
-  , "a deck, and its slides tell you how it is written."
+  , "A presentation is a kind of page: **New page** offers it beside a document."
+  , "Press **Present** above the page: this one is a presentation, and its slides"
+  , "tell you how it is written."
   , ""
   , "[[!notes]]"
   , "These are the speaker's notes: on the page they are a box like this one;"
   , "on the slides they are hidden until you press **n**."
   , "[[/notes]]"
   , ""
-  , "---"
-  , ""
   , "## Slides"
   , ""
-  , "- A line with `---` alone on it, after a blank line, starts the next slide."
-  , "- The first heading on a slide is its title; a `#` heading makes a title"
-  , "  slide, like this deck's first."
+  , "- A `##` heading starts the next slide, and is its title; a `#` heading"
+  , "  makes a title slide, like this deck's first."
+  , "- A `###` heading is a heading on its slide, and `---` a rule."
   , "- `[[!notes]]`, the notes, then `[[/notes]]` hold what only the speaker"
   , "  sees."
   , "- Everything a page shows, a slide shows: tables, code, formulas, diagrams."
   , ""
   , "[[!notes]]"
-  , "Mention that a page with no `---` is one slide, and is not offered as a"
-  , "deck."
+  , "Mention that a presentation with no `##` heading is one slide."
   , "[[/notes]]"
-  , ""
-  , "---"
   , ""
   , "## Formulas"
   , ""
@@ -906,27 +915,21 @@ presentations =
   , "The macros a page defines hold on every slide after the one that defines them."
   , "[[/notes]]"
   , ""
-  , "---"
-  , ""
   , "## A diagram"
   , ""
   , "```mermaid"
   , "flowchart LR"
-  , "  page[A page] -->|---| slides[Slides]"
+  , "  page[A presentation] -->|## headings| slides[Slides]"
   , "  slides --> screen[Full screen]"
   , "  slides --> paper[Print to PDF]"
   , "```"
   , ""
-  , "---"
-  , ""
   , "## Code"
   , ""
   , "```haskell"
-  , "-- A deck is a page's Markdown, cut at its breaks."
+  , "-- A deck is a presentation's Markdown, cut at its headings."
   , "deckOf :: [Block] -> Deck"
   , "```"
-  , ""
-  , "---"
   , ""
   , "## Presenting"
   , ""
@@ -941,8 +944,6 @@ presentations =
   , ""
   , "On a touch screen, swipe. **Print** puts one slide on each page: choose"
   , "\"Save as PDF\" to keep the deck as a file."
-  , ""
-  , "---"
   , ""
   , "## Steps"
   , ""
@@ -963,12 +964,10 @@ presentations =
   , "A pause is pandoc's in an export, so the Beamer export shows the same steps."
   , "[[/notes]]"
   , ""
-  , "---"
-  , ""
   , "## One item at a time"
   , ""
-  , "A list between `[[!incremental]]` and `[[/incremental]]` shows its items"
-  , "one by one:"
+  , "A list between `[[!incremental]]` and `[[/incremental]]`, or after a line"
+  , "`{.incremental}`, shows its items one by one:"
   , ""
   , "[[!incremental]]"
   , "- each press of → or Space shows the next item;"
@@ -976,14 +975,12 @@ presentations =
   , "- off the slides, it is an ordinary list."
   , "[[/incremental]]"
   , ""
-  , "---"
-  , ""
   , "## Themes"
   , ""
-  , "A `[[!slides]]` line at the top level of the page says how the slides look:"
+  , "A `[[!style]]` line at the top level of the page says how the slides look:"
   , ""
   , "```markdown"
-  , "[[!slides]]{theme=dark aspect=4:3}"
+  , "[[!style]]{theme=dark aspect=4:3}"
   , "```"
   , ""
   , "Themes are `beamer` (the default), `light` and `dark`; slides are `16:9`"

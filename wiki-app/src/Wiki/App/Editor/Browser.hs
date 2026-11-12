@@ -82,6 +82,18 @@ module Wiki.App.Editor.Browser
   , unfoldLines
   , foldedLines
   , reportedFolds
+  , FoldsChange (..)
+  , foldsChange
+
+    -- * Slides
+  , markSlides
+  , cursorLine
+  , cursorLineOf
+  , SlideToggle (..)
+  , slideToggled
+  , slideDropped
+  , moveSlideIn
+  , appendSlide
 
     -- * Mentions
   , mentionAsked
@@ -101,7 +113,7 @@ import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, eitherDecodeStrict,
 import Data.ByteString.Lazy qualified as BSL
 import Data.Coerce (coerce)
 import Data.Foreign (foreignToInt)
-import Data.List (lookup)
+import Data.List (elemIndex, lookup)
 import Data.Text qualified as T
 import Halogen.JSBits (Callback, Inert (..), JSText, JSVal, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, isNull, jsValText, mkSyncCallback, toJSText)
 import Halogen.JSBits.Fields (Member (..), jsFields)
@@ -133,6 +145,7 @@ import Wiki.Core.Assistant.Edit (Change (..), Decision (..), Edit, Refusal, Repl
 import Wiki.Core.Assistant.Prompt (Span (..))
 import Wiki.Core.Markdown.Edit (Command (..), Selection (..), apply, cursor)
 import Wiki.Core.Markdown.Folds (Fold (..))
+import Wiki.Core.Slides qualified as Slides
 import Wiki.Core.User (Login (..), User (..))
 
 -- What works on the text as CodeMirror and the textarea count it, in
@@ -203,6 +216,11 @@ $( jsFields
        Method "unfold" [t|Text -> IO ()|]
      , -- The folds, as JSON: [[first, last]], lines from 1.
        Method "foldedLines" [t|IO Text|]
+     , -- A presentation's slides found in a text, as JSON: [[first line,
+       -- movable, fit]].
+       Method "slides" [t|Text -> Text -> IO ()|]
+     , -- The cursor's line, from 1.
+       Method "cursorLine" [t|IO Int|]
      ]
  )
 
@@ -213,6 +231,44 @@ newtype SelectionDetail = SelectionDetail JSVal
 -- | The detail of a @wiki-decide@ event: a decision on a change.
 newtype DecisionDetail = DecisionDetail JSVal
   deriving newtype (Inert)
+
+-- | The detail of a @wiki-open-slide@ event: a slide's button clicked.
+newtype ToggleDetail = ToggleDetail JSVal
+  deriving newtype (Inert)
+
+-- | The detail of a @wiki-move-slide@ event: a slide dropped on another.
+newtype MoveDetail = MoveDetail JSVal
+  deriving newtype (Inert)
+
+$( jsFields
+     ''ToggleDetail
+     [ Fixed "line" ''Int
+     , Fixed "open" ''Bool
+     , Fixed "more" ''Bool
+     ]
+ )
+
+$( jsFields
+     ''MoveDetail
+     [ Fixed "from" ''Int
+     , Fixed "to" ''Int
+     , Fixed "after" ''Bool
+     ]
+ )
+
+-- | A @wiki-folds@ event, with what CodeMirror adds to it: whether an
+-- edit changed the folds, whether Ctrl or Cmd was held on the click on a
+-- fold's mark, and the folds the change opened.
+newtype FoldsEvent = FoldsEvent JSVal
+  deriving newtype (Inert)
+
+$( jsFields
+     ''FoldsEvent
+     [ Fixed "wikiByEdit" ''Bool
+     , Fixed "wikiMore" ''Bool
+     , Fixed "wikiOpened" ''Text
+     ]
+ )
 
 -- | The detail of a @wiki-mention@ or @wiki-emoji@ event: a question
 -- about the letters typed of a mention or of an emoji's name.
@@ -512,6 +568,116 @@ foldedLines host = liftIO $ do
 reportedFolds :: Event -> [(Int, Int)]
 reportedFolds = fromMaybe [] . (decodeRanges . jsValText <=< detailOf)
 
+-- | Mark a presentation's slides found in a text
+-- ("Wiki.Core.Slides.slideSpans") in the editor (WP5.97 of
+-- docs/PLAN.md): each slide's first line gets a button that opens or
+-- closes it ('slideToggled'), when it can move a handle to drag it by
+-- ('slideDropped'), and a mark of whether it fits
+-- ('Wiki.Core.Slides.fitName'). The marks replace those made before; none takes
+-- them away (a document, or a presentation's raw Markdown). CodeMirror
+-- takes them only while it holds that text. Before CodeMirror has loaded
+-- nothing is marked: its @wiki-ready@ event says when to mark them.
+markSlides :: (MonadIO m) => Element -> Text -> [(Int, Bool, Text)] -> m ()
+markSlides host text marks = liftIO $ codeMirror host >>= traverse_ (\cm -> cm.slides text (decodeUtf8 (BSL.toStrict (encode marks))))
+
+-- | The line the editor's cursor is on, from 1: the first line before
+-- CodeMirror has loaded.
+cursorLine :: (MonadIO m) => Element -> m Int
+cursorLine host = liftIO $ maybe (pure 1) (.cursorLine) =<< codeMirror host
+
+-- | The line a @wiki-cursor-line@ event says the cursor is now on.
+cursorLineOf :: Event -> Maybe Int
+cursorLineOf = fmap foreignToInt . detailOf
+
+-- | 'SlideToggle' is a click on a slide's button in the editor: which
+-- slide (its first line, from 1, in the text as it is now), whether to
+-- open or close it, and whether Ctrl or Cmd was held, which keeps the
+-- other slides open.
+data SlideToggle = SlideToggle
+  { line :: Int
+  , open :: Bool
+  , more :: Bool
+  }
+  deriving stock (Eq, Show)
+
+-- | The click a @wiki-open-slide@ event reports.
+slideToggled :: Event -> Maybe SlideToggle
+slideToggled event = do
+  detail <- ToggleDetail <$> detailOf event
+  Just SlideToggle {line = detail.line, open = detail.open, more = detail.more}
+
+-- | The drop a @wiki-move-slide@ event reports: the first line of the
+-- slide dragged, that of the slide it was dropped on, and whether it goes
+-- after that slide (dropped below its first line) or before it.
+slideDropped :: Event -> Maybe (Int, Int, Bool)
+slideDropped event = do
+  detail <- MoveDetail <$> detailOf event
+  Just (detail.from, detail.to, detail.after)
+
+-- | Move a slide of the editor's presentation to another place
+-- ("Wiki.Core.Slides.moveSlide"), as one edit that undo reverts. The
+-- cursor goes with the slide: where it was in it, or at its start when it
+-- was elsewhere. The slides folded before are folded after, at their new
+-- places; the moved slide is open, the cursor being in it. A move that is
+-- none (the title slide, an index out of range) changes nothing. Run it in
+-- 'Halogen.liftEffect'.
+moveSlideIn :: (MonadIO m) => Element -> Int -> Int -> m ()
+moveSlideIn host i j = liftIO $ do
+  old <- currentText host
+  let spans = Slides.slideSpans old
+      new = Slides.moveSlide i j old
+  unless (new == old) $ do
+    folded <- foldedLines host
+    let firsts = map fst folded
+        closed = [k | (k, sp) <- zip [0 ..] spans, sp.from `elem` firsts]
+        newSpans = Slides.slideSpans new
+        -- The new index of the slide at an old one.
+        order = take j rest <> [i] <> drop j rest
+        rest = filter (/= i) [0 .. length spans - 1]
+        placed k = fromMaybe k (elemIndex k order)
+    s <- js_selection_start host
+    let startOf text sp = lineOffset text sp.from
+        within = case atMay spans i of
+          Just sp | s >= startOf old sp && maybe True (\next -> s < startOf old next) (atMay spans (i + 1)) -> s - startOf old sp
+          _ -> 0
+        at = maybe 0 (\sp -> startOf new sp + within) (atMay newSpans j)
+    js_write host (toJSText new) at at
+    foldLines host [(sp.from, sp.to) | k <- closed, k /= i, Just sp <- [atMay newSpans (placed k)]]
+  where
+    lineOffset text n = sum (map ((+ 1) . T.length) (take (n - 1) (T.splitOn "\n" text)))
+
+-- | Put a new slide at the end of the editor's presentation: a heading of
+-- level two with the given title, apart from what comes before it by a
+-- blank line, as one edit that undo reverts, with the title selected so
+-- that typing replaces it. Only line breaks and the slide are added. Run
+-- it in 'Halogen.liftEffect'.
+appendSlide :: (MonadIO m) => Element -> Text -> m ()
+appendSlide host title = edit host $ \old _ ->
+  let gap
+        | T.null old || "\n\n" `T.isSuffixOf` old = ""
+        | "\n" `T.isSuffixOf` old = "\n"
+        | otherwise = "\n\n"
+      start = T.length old + T.length gap + 3
+   in (old <> gap <> "## " <> title <> "\n", Selection start (start + T.length title))
+
+-- | 'FoldsChange' is how the folds changed, as a @wiki-folds@ event tells
+-- it beside the folds ('reportedFolds'): whether an edit changed them
+-- (typing into a fold, an undo), whether Ctrl or Cmd was held on the click
+-- on a fold's mark, and, when no edit did, the first lines of the folds
+-- the author opened (by the mark, the keys or the gutter).
+data FoldsChange = FoldsChange
+  { byEdit :: Bool
+  , more :: Bool
+  , opened :: [Int]
+  }
+  deriving stock (Eq, Show)
+
+-- | The change a @wiki-folds@ event tells. Pure, as 'reportedFolds' is.
+foldsChange :: Event -> FoldsChange
+foldsChange (Event v) =
+  let e = FoldsEvent v
+   in FoldsChange {byEdit = e.wikiByEdit, more = e.wikiMore, opened = fromMaybe [] (decodeStrict (encodeUtf8 e.wikiOpened))}
+
 -- | Ranges of lines as CodeMirror's side reads and writes them: JSON,
 -- @[[first, last]]@.
 encodeRanges :: [(Int, Int)] -> Text
@@ -536,6 +702,9 @@ data EditorKey
   | -- | Ctrl+Shift+K (Cmd+Shift+K) in the text: "Link to a page", which
     -- opens a dialog rather than running a command.
     LinkPageKey
+  | -- | Alt+Up (-1) or Alt+Down (1) in the text: move a presentation's
+    -- slide, the cursor's, one place up or down.
+    MoveSlideKey Int
   deriving stock (Eq, Show)
 
 -- | Which of the editor's keys a keydown is, if any. Pure, so that a
@@ -561,6 +730,7 @@ editorKey event
   | command && not pressed.altKey && not pressed.shiftKey = CommandKey <$> lookup key [("b", Bold), ("i", Italic), ("k", Link), ("e", InlineCode)]
   | command && not pressed.altKey && pressed.shiftKey && pressed.code == "KeyK" = Just LinkPageKey
   | command && not pressed.altKey && pressed.shiftKey = CommandKey <$> lookup pressed.code [("Digit7", NumberedList), ("Digit8", BulletList)]
+  | pressed.altKey && not command && not pressed.shiftKey = MoveSlideKey <$> lookup pressed.key [("ArrowUp", -1), ("ArrowDown", 1)]
   | otherwise = Nothing
   where
     pressed = KeyboardEvent event

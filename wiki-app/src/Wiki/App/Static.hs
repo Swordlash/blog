@@ -85,10 +85,9 @@ import Wiki.App.Route (Against (..), Route (..), route)
 import Wiki.App.Security (MonadSecurity)
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.HomePage qualified as Home
-import Wiki.Core.Markdown (parseMarkdown)
-import Wiki.Core.Page (Page (body, id, space))
+import Wiki.Core.Page (Page (id, kind, space))
+import Wiki.Core.PageKind (isPresentation)
 import Wiki.Core.Path (pathOf)
-import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Space (Space (id), pagePath)
 
 -- | A route's page: the application's HTML, for the mount point, the
@@ -115,8 +114,8 @@ renderRoute wiki base at = do
 -- pages; every page of the wiki, with its source and its history (at its
 -- latest version: another version's address is the history's with a
 -- query, for which a static host serves the same page, and the program
--- then shows the version asked for); and every page written as slides
--- ("Wiki.Core.Slides"), as slides, at the first slide (another slide's
+-- then shows the version asked for); and every presentation
+-- ("Wiki.Core.PageKind"), as slides, at the first slide (another slide's
 -- address is the same with a query, likewise). Every other address gets
 -- the page for 'Unknown'.
 prerenderedRoutes :: MemState -> [Route]
@@ -125,7 +124,7 @@ prerenderedRoutes st =
     : Search Nothing Nothing True
     : HomeSource
     : HomeHistory Nothing AgainstPrevious
-    : [HomeSlides 1 1 | any (\p -> Home.isHomePage st.server.homePage p.id && deck p.body) (Map.elems st.pages)]
+    : [HomeSlides 1 1 | any (\p -> Home.isHomePage st.server.homePage p.id && deck p) (Map.elems st.pages)]
       <> [r | s <- Map.elems st.spaces, not (Home.isHomeSpace st.server.homePage s.id), Just path <- [spacePath s.id], r <- [Space path, SpacePages path]]
       -- A space's home page is at the space's own address, written above:
       -- its path is empty, and only its other routes are here.
@@ -135,11 +134,11 @@ prerenderedRoutes st =
          , Just sp <- [spacePath p.space]
          , Just s <- [Map.lookup p.space st.spaces]
          , Just pp <- [pagePath s (`Map.lookup` st.pages) p.id]
-         , r <- [Page sp pp | not (null pp)] <> [PageSource sp pp, PageHistory sp pp Nothing AgainstPrevious] <> [PageSlides sp pp 1 1 | deck p.body]
+         , r <- [Page sp pp | not (null pp)] <> [PageSource sp pp, PageHistory sp pp Nothing AgainstPrevious] <> [PageSlides sp pp 1 1 | deck p]
          ]
   where
     spacePath = pathOf (`Map.lookup` st.spaces)
-    deck = either (const False) isDeck . parseMarkdown
+    deck p = isPresentation p.kind
 
 -- | How the application starts in its container: building its HTML there,
 -- as the prerender does, or adopting the HTML already there, as the

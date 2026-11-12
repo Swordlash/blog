@@ -161,6 +161,8 @@ import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThre
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
+import Wiki.Core.PageKind (PageKind)
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Path (ancestry, pathOf)
 import Wiki.Core.Permission (canAdministerSpace)
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), searchPlain)
@@ -632,8 +634,9 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- answers it for a page of an encrypted space too, empty, since it
   -- cannot read the text of the pages there.
   pageBacklinks pid = pageContent (\c -> Map.lookup pid c.backlinks) (endpoints.pages.backlinks pid) (withBacklinks pid)
-  createPage sid parent title body =
-    encryptedFetched sid (write (getResponse <$> endpoints.spaces.createPage sid NewPage {parent, title, body})) (\current -> renewingThen sid (freshKey sid current >>= sealedCreatePage sid parent title body))
+  createPage = createPageOf Kind.Document
+  createPageOf kind sid parent title body =
+    encryptedFetched sid (write (getResponse <$> endpoints.spaces.createPage sid NewPage {parent, title, body, kind})) (\current -> renewingThen sid (freshKey sid current >>= sealedCreatePage kind sid parent title body))
       >>= keepingSpaces (\p -> [(p.id, p.space)])
   savePage pid base title body =
     sealedPage pid >>= \case
@@ -643,6 +646,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
       Just (sid, _) -> renewingThen sid (sealedPage pid >>= maybe (pure (Left (Conflict inEncryptedSpace))) (\(_, k) -> sealedSavePage sid pid k base title body))
   movePage pid space parent = write (endpoints.pages.move pid PageMove {space, parent})
   setPageTemplate pid template = write (endpoints.pages.template pid PageTemplate {template})
+  setPageKind pid kind = write (endpoints.pages.kind pid PageKindChange {kind})
   deletePage pid = write_ (endpoints.pages.delete pid)
 
   -- An attachment of a page of an encrypted space is encrypted here, its
@@ -1758,7 +1762,8 @@ sealedHomeOf key sid name k = liftIO . runExceptT $ do
   (pk, pageKey) <- ExceptT (first Invalid <$> newPageKey key k sid pid)
   content <- ExceptT (first Invalid <$> sealContent pk sid pid pageKey.keyId firstChain homeTitle (homeBody name))
   lift (forgetPageKey pk)
-  pure NewSealedPage {id = pid, parent = Nothing, pageKey, content}
+  -- A home page is always a document ("Wiki.Core.PageKind").
+  pure NewSealedPage {id = pid, parent = Nothing, pageKey, content, kind = Kind.Document}
 
 -- | A space's name, as the list of spaces has it; empty if not listed.
 spaceNameOf :: (MonadIO m) => SpaceId -> HttpWiki m Text
@@ -2068,13 +2073,14 @@ pageWith p attachments title body =
     , updatedAt = p.updatedAt
     , position = p.position
     , template = False
+    , kind = p.kind
     , createdBy = p.createdBy
     , updatedBy = p.updatedBy
     }
 
 -- | A page of an encrypted space in a list, its title decrypted.
 summaryFrom :: SealedSummary -> Text -> PageSummary
-summaryFrom p title = PageSummary {id = p.id, space = p.space, parent = p.parent, title, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, template = False}
+summaryFrom p title = PageSummary {id = p.id, space = p.space, parent = p.parent, title, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, template = False, kind = p.kind}
 
 -- | The order a space lists its pages in.
 pageOrderOf :: (MonadIO m) => SpaceId -> HttpWiki m ChildOrder
@@ -2164,15 +2170,15 @@ reopenIfChanged sid =
               pure (Just key)
             _ -> pure Nothing
 
-sealedCreatePage :: (MonadIO m) => SpaceId -> Maybe PageId -> Text -> Text -> KeyId -> HttpWiki m (Either WikiError Page)
-sealedCreatePage sid parent title body current =
+sealedCreatePage :: (MonadIO m) => PageKind -> SpaceId -> Maybe PageId -> Text -> Text -> KeyId -> HttpWiki m (Either WikiError Page)
+sealedCreatePage kind sid parent title body current =
   withSpaceKey NoRefresh sid current $ \key -> runExceptT $ do
     when (T.null (T.strip title)) $ throwError (Invalid "A page's title cannot be blank.")
     pid <- ExceptT (first Invalid <$> liftIO newPageId)
     (pk, pageKey) <- ExceptT (first Invalid <$> liftIO (newPageKey key current sid pid))
     content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid pageKey.keyId firstChain (T.strip title) body))
     liftIO (forgetPageKey pk)
-    made <- ExceptT (write (getResponse <$> endpoints.encrypted.createPage sid NewSealedPage {id = pid, parent, pageKey, content}))
+    made <- ExceptT (write (getResponse <$> endpoints.encrypted.createPage sid NewSealedPage {id = pid, parent, pageKey, content, kind}))
     lift (rememberPages sid [(pid, pageKey)])
     lift (savedHead pid made.updatedAt content)
     pure (pageFrom made (T.strip title) body)
@@ -2513,7 +2519,7 @@ foundIn sid current =
                 if Map.size first' == length listed
                   then pure first'
                   else reopenIfChanged sid >>= maybe (pure first') (\space -> send (endpoints.encrypted.contents sid) >>= either (const (pure first')) (decrypted space))
-              let pages = [(PageSummary {id = p.id, space = p.space, parent = p.parent, title, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, template = False}, body) | p <- listed, Just (title, body) <- [Map.lookup p.id opened]]
+              let pages = [(PageSummary {id = p.id, space = p.space, parent = p.parent, title, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, template = False, kind = p.kind}, body) | p <- listed, Just (title, body) <- [Map.lookup p.id opened]]
               modifyHeld (\h -> h {heldFound = Map.insert sid pages h.heldFound})
               pure pages
         _ -> pure []

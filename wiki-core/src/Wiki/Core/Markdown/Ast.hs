@@ -22,9 +22,9 @@
 --   deck's speaker notes and its lists shown item by item, @[[!notes]]@
 --   and @[[!incremental]]@; and a box styled by its classes,
 --   @[[!div]]{.summary}@ (each a 'Div'). Three markers are one line with
---   no end marker: @[[!slides]]{theme=dark aspect=4:3}@, the deck's look
---   (an empty 'Div' of the class @slides@), @[[!pause]]@, which cuts a
---   slide into steps ('Pause'), and @[[!toc]]@, where the table of
+--   no end marker: @[[!style]]{theme=dark aspect=4:3}@, a presentation's
+--   look (an empty 'Div' of the class 'styleClass'), @[[!pause]]@, which
+--   cuts a slide into steps ('Pause'), and @[[!toc]]@, where the table of
 --   contents goes ('TableOfContents');
 -- * spoilers: @||hidden||@ inline, read as the strikethrough's @~~@ is
 --   read ('Hidden'), and heading spoilers, @## [[!spoiler]] Question@ or
@@ -99,6 +99,8 @@ module Wiki.Core.Markdown.Ast
   , MarkerStart (..)
   , markerNameText
   , openingMarker
+  , styleClass
+  , allInlines
   , closingMarker
   , markerAt
   , parseWithMarkers
@@ -106,6 +108,8 @@ module Wiki.Core.Markdown.Ast
   , parseWithLines
   , parseWithLinesAndMarkers
   , parseWithSpans
+  , parseDeckSpans
+  , parseWithLinesMarkersAndDeck
 
     -- * Reading the tree
   , plainText
@@ -166,12 +170,13 @@ data Block
     -- text.
     Heading Int Attributes [Inline]
   | ThematicBreak
-  | -- | A pause, @[[!pause]]@ on a line of its own. A deck
+  | -- | A pause, @[[!pause]]@ on a line of its own. A presentation
     -- ("Wiki.Core.Slides") shows a slide in steps, and a pause starts the
-    -- next step; a page shows nothing for it. It is read at the top level
-    -- of the page, in boxes, in alerts, in spoilers and in list items. In
-    -- a quotation or a footnote the line is a 'MarkerError': a deck shows
-    -- a quotation and a footnote whole.
+    -- next step; a document shows nothing for it. It is read at the top
+    -- level of the page, in boxes, in alerts, in spoilers, in quotations
+    -- and in list items. In a footnote the line is a 'MarkerError': a
+    -- presentation shows a footnote whole, as Beamer cannot pause inside
+    -- the argument of @\\footnote@.
     Pause
   | BlockQuote [Block]
   | -- | Fenced or indented code: attributes, the language (the first word
@@ -200,8 +205,8 @@ data Block
     -- @[[/div]]@ gives the attributes in its braces; @[[!notes]]@ and
     -- @[[!incremental]]@ give their name as a class too (@notes@,
     -- @incremental@), which a deck reads ("Wiki.Core.Slides"). The one
-    -- line @[[!slides]]{theme=dark}@ is an empty 'Div' of the class
-    -- @slides@: the deck's look. A block of these three names that is not
+    -- line @[[!style]]{theme=dark}@ is an empty 'Div' of the class
+    -- 'styleClass': a presentation's look. A block of these three names that is not
     -- closed is a 'MarkerError' line, then a 'Div' of the class
     -- @spoiler-unclosed@ that holds its blocks, which the page shows in
     -- red as it shows an unclosed spoiler's.
@@ -289,6 +294,21 @@ data Inline
     -- asks whether it belongs to a user; one that does not, and one in a
     -- link, is shown as written.
     Mention Text
+  | -- | A pause between the words of a paragraph or of a list item's text,
+    -- @First [[!pause]] then@, at its line and column: a presentation
+    -- ("Wiki.Core.Slides") shows what follows it one step later, as
+    -- Beamer's @\\pause@ in running text; a document shows nothing for
+    -- it. It is read only at a paragraph's own level ('placedPauses').
+    InlinePause Int Int
+  | -- | A pause written where none is read (inside emphasis, a link's
+    -- text, a heading, a table, a box's title, a spoiler's description, a
+    -- footnote), at its line and column, with the reason. The page shows
+    -- it in red, as a marker line that is wrong.
+    MisplacedPause Int Int Text
+  | -- | Inlines a presentation shows from a later step, marked with their
+    -- step ("Wiki.Core.Slides"): rendered as a @\<span>@ of these
+    -- attributes. The parser never makes one.
+    Marked Attributes [Inline]
   deriving stock (Eq, Show)
 
 data MathKind = InlineMath | DisplayMath
@@ -569,8 +589,120 @@ finished = map snd . finishedWith . map ((),)
 -- the spoiler keeps what its heading carried.
 finishedWith :: [(a, Block)] -> [(a, Block)]
 finishedWith located =
-  let grouped = withHeadingSections (map (second withMentions) located)
+  let grouped = withHeadingSections (map (second (placedPauses . withMentions)) located)
    in zip (map fst grouped) (withHeadingIds (withSpoilerSections (map snd grouped)))
+
+-- | 'finishedWith' with the page's own heading spoilers left as their
+-- headings alone, their sections' blocks after them in the page, each
+-- with what it carries (its lines): the page as a presentation reads its
+-- top level ("Wiki.Core.Slides"), where a section is a slide. The blocks
+-- inside a quotation, a list, a box or a block spoiler are gathered as
+-- 'finishedWith' gathers them, and every heading has the identifier it
+-- has there.
+finishedFlatWith :: [(a, Block)] -> [(a, Block)]
+finishedFlatWith located =
+  let flat = map (second (withinSections . placedPauses . withMentions)) located
+   in zip (map fst flat) (withHeadingIds (withSpoilerSections (map snd flat)))
+
+-- | Parse a page's Markdown as 'parseWithSpans' does, with each heading
+-- spoiler of the page's own level its heading alone and its section's
+-- blocks after it, each with its own lines ('finishedFlatWith'): what a
+-- presentation's slides, the editor's view of them and its warnings of
+-- a presentation are all read from ("Wiki.Core.Slides").
+parseDeckSpans :: Text -> Either ParseError [(Maybe (Int, Int), Block)]
+parseDeckSpans source = (\(Blocks bs _ _) -> finishedFlatWith (toList bs)) <$> parsed source
+
+-- | 'parseWithLinesAndMarkers', with 'parseDeckSpans'' blocks too, each
+-- with the line it starts on: one parse for the editor's check of a
+-- text, which reads both.
+parseWithLinesMarkersAndDeck :: Text -> Either ParseError ([(Maybe Int, Block)], [MarkerLine], [(Maybe Int, Block)])
+parseWithLinesMarkersAndDeck source =
+  ( \(Blocks bs (Markers _ ss _) _) ->
+      let located = toList bs
+       in (map (first (fmap fst)) (finishedWith located), sortOn (\s -> (s.lineAt, s.columnAt)) (ordNub ss), map (first (fmap fst)) (finishedFlatWith located))
+  )
+    <$> parsed source
+
+-- | A block with each pause among its words kept where one is read, at
+-- the own level of a paragraph or of a list item's text, wherever such a
+-- block is (in a box, an alert, a spoiler, a quotation, a list), and made
+-- a 'MisplacedPause' anywhere else: inside emphasis, a link's or an
+-- embed's text, an inline spoiler, a heading, a table's cell, a box's
+-- title, a spoiler's description and a footnote. Beamer's @\\pause@ does
+-- not work inside a command's argument, which each of these is in the
+-- Beamer export; a table and a footnote are shown whole by the wiki's own
+-- rule, as for a pause on a line of its own.
+placedPauses :: Block -> Block
+placedPauses = \case
+  Para xs -> Para (map atTop xs)
+  Plain xs -> Plain (map atTop xs)
+  Heading l attrs xs -> Heading l attrs (map misplace xs)
+  BlockQuote bs -> BlockQuote (map placedPauses bs)
+  List kind items -> List kind [ListItem task (map placedPauses bs) | ListItem task bs <- items]
+  Table aligns header rows -> Table aligns (map (map misplace) header) (map (map (map misplace)) rows)
+  Div attrs bs -> Div attrs (map placedPauses bs)
+  Alert kind box bs -> Alert kind box {title = map misplace <$> box.title} (map placedPauses bs)
+  Spoiler h bs -> Spoiler h {description = map misplace h.description} (map placedPauses bs)
+  Footnotes notes -> Footnotes [Footnote n label (map misplaceAll bs) | Footnote n label bs <- notes]
+  other -> other
+  where
+    atTop = \case
+      InlinePause l c -> InlinePause l c
+      x -> misplace x
+    -- In a footnote, no pause is read, at any level.
+    misplaceAll = \case
+      Para xs -> Para (map misplace xs)
+      Plain xs -> Plain (map misplace xs)
+      Heading l attrs xs -> Heading l attrs (map misplace xs)
+      BlockQuote bs -> BlockQuote (map misplaceAll bs)
+      List kind items -> List kind [ListItem task (map misplaceAll bs) | ListItem task bs <- items]
+      Table aligns header rows -> Table aligns (map (map misplace) header) (map (map (map misplace)) rows)
+      Div attrs bs -> Div attrs (map misplaceAll bs)
+      Alert kind box bs -> Alert kind box {title = map misplace <$> box.title} (map misplaceAll bs)
+      Spoiler h bs -> Spoiler h {description = map misplace h.description} (map misplaceAll bs)
+      other -> other
+
+-- | Every inline of some blocks, in the order of the source, those inside
+-- others too: of paragraphs, headings, tables' cells, boxes' titles and
+-- spoilers' descriptions, in every block, the footnotes' included.
+allInlines :: [Block] -> [Inline]
+allInlines = concatMap ofBlock
+  where
+    ofBlock = \case
+      Para xs -> deep xs
+      Plain xs -> deep xs
+      Heading _ _ xs -> deep xs
+      Table _ header rows -> concatMap deep header <> concatMap (concatMap deep) rows
+      BlockQuote bs -> allInlines bs
+      List _ items -> concat [allInlines bs | ListItem _ bs <- items]
+      Div _ bs -> allInlines bs
+      Alert _ box bs -> maybe [] deep box.title <> allInlines bs
+      Spoiler h bs -> deep h.description <> allInlines bs
+      Footnotes notes -> concat [allInlines bs | Footnote _ _ bs <- notes]
+      _ -> []
+    deep = concatMap $ \x ->
+      x : case x of
+        Emph xs -> deep xs
+        Strong xs -> deep xs
+        Strikeout xs -> deep xs
+        Hidden xs -> deep xs
+        Link _ _ _ xs -> deep xs
+        Image _ _ _ xs -> deep xs
+        Marked _ xs -> deep xs
+        _ -> []
+
+-- | An inline with every pause in it made a 'MisplacedPause'.
+misplace :: Inline -> Inline
+misplace = \case
+  InlinePause l c -> MisplacedPause l c "a pause is read only between the words of a paragraph or of a list item's text, not inside emphasis, a link, a heading, a table, a box's title or a footnote"
+  Emph xs -> Emph (map misplace xs)
+  Strong xs -> Strong (map misplace xs)
+  Strikeout xs -> Strikeout (map misplace xs)
+  Hidden xs -> Hidden (map misplace xs)
+  Link attrs d t xs -> Link attrs d t (map misplace xs)
+  Image attrs d t xs -> Image attrs d t (map misplace xs)
+  Marked attrs xs -> Marked attrs (map misplace xs)
+  other -> other
 
 -- | 'BoxMarker' is where a box's marker, @[!KIND]@, is in a page's source:
 -- its line and column (from 1; a tab counts to the next multiple of four
@@ -622,8 +754,8 @@ data MarkerRole
     Ends Int
   | -- | A pause, @[[!pause]]@, read as one ('Pause').
     Pauses
-  | -- | The deck's look, @[[!slides]]{…}@.
-    SetsSlides
+  | -- | A presentation's look, @[[!style]]{…}@.
+    SetsStyle
   | -- | Where the table of contents goes, @[[!toc]]@.
     PlacesContents
   | -- | A line the page shows in red ('MarkerError'): the line as
@@ -644,10 +776,11 @@ data MarkerRole
     -- block after it takes (a list is put in a 'Div' with them). Pandoc's
     -- reader would read it as text, so the export leaves it out.
     SetsAttributes
-  | -- | A fence starts here that took the attributes of the line of
-    -- attributes alone before it ('SetsAttributes'): these. Pandoc's
-    -- reader reads a fence's attributes only after its fence, where the
-    -- export puts them. Only the parser knows which block a line of
+  | -- | A fence or a list starts here that took the attributes of the
+    -- line of attributes alone before it ('SetsAttributes'): these.
+    -- Pandoc's reader reads a fence's attributes only after its fence,
+    -- where the export puts them, and none for a list, which the export
+    -- puts in a box of them. Only the parser knows which block a line of
     -- attributes went to (a quotation that starts with a fence takes them,
     -- not the fence), so the export asks it rather than read the text.
     TakesAttributes Attributes
@@ -747,6 +880,9 @@ plainText = foldMap $ \case
   Emoji _ t -> t
   RawHtml _ -> ""
   Mention login -> "@" <> login
+  InlinePause _ _ -> ""
+  MisplacedPause {} -> ""
+  Marked _ xs -> plainText xs
 
 -- | The value of the first attribute with this name.
 attribute :: Text -> Attributes -> Maybe Text
@@ -964,16 +1100,22 @@ withHeadingSections = \case
               Footnotes _ -> True
               b -> maybe False (<= level) (leadingHeading b)
          in (at, Spoiler h (heading : sectionsIn (own <> map snd inside))) : withHeadingSections after
-  (at, b) : rest -> (at, within b) : withHeadingSections rest
+  (at, b) : rest -> (at, withinSections b) : withHeadingSections rest
   where
-    within = \case
-      BlockQuote bs -> BlockQuote (sectionsIn bs)
-      List kind items -> List kind [ListItem task (sectionsIn bs) | ListItem task bs <- items]
-      Div attrs bs -> Div attrs (sectionsIn bs)
-      Alert kind box bs -> Alert kind box (sectionsIn bs)
-      Spoiler h bs -> Spoiler h (sectionsIn bs)
-      Footnotes notes -> Footnotes [Footnote n label (sectionsIn bs) | Footnote n label bs <- notes]
-      other -> other
+    sectionsIn = map snd . withHeadingSections . map ((),)
+
+-- | A block with the heading spoilers inside it given their sections
+-- ('withHeadingSections'), and those inside them.
+withinSections :: Block -> Block
+withinSections = \case
+  BlockQuote bs -> BlockQuote (sectionsIn bs)
+  List kind items -> List kind [ListItem task (sectionsIn bs) | ListItem task bs <- items]
+  Div attrs bs -> Div attrs (sectionsIn bs)
+  Alert kind box bs -> Alert kind box (sectionsIn bs)
+  Spoiler h bs -> Spoiler h (sectionsIn bs)
+  Footnotes notes -> Footnotes [Footnote n label (sectionsIn bs) | Footnote n label bs <- notes]
+  other -> other
+  where
     sectionsIn = map snd . withHeadingSections . map ((),)
 
 -- | The level of the heading a block starts a section with: a heading's,
@@ -1000,21 +1142,27 @@ sectionLevels = concatMap $ \case
 -- of the inline spoilers among them are in the source ('InlineBars'), for
 -- the export, and whether they are an inline spoiler just made, whose
 -- place the parser gives next ('CM.Rangeable').
-data Inlines = Inlines (Seq Inline) [MarkerLine] Bool
+data Inlines = Inlines (Seq Inline) [MarkerLine] Fresh
   deriving stock (Show)
+
+-- | 'Fresh' says whether some inlines are one just made whose place the
+-- parser gives next ('CM.Rangeable'), and which: an inline spoiler, whose
+-- bars' place is kept, or a pause, which takes its place.
+data Fresh = NotFresh | FreshBars | FreshPause
+  deriving stock (Eq, Show)
 
 instance Semigroup Inlines where
   Inlines xs bs _ <> Inlines ys cs _ = case (Seq.viewr xs, Seq.viewl ys) of
-    (xs' Seq.:> Str a, Str b Seq.:< ys') -> Inlines ((xs' Seq.|> Str (a <> b)) <> ys') (bs <> cs) False
-    _ -> Inlines (xs <> ys) (bs <> cs) False
+    (xs' Seq.:> Str a, Str b Seq.:< ys') -> Inlines ((xs' Seq.|> Str (a <> b)) <> ys') (bs <> cs) NotFresh
+    _ -> Inlines (xs <> ys) (bs <> cs) NotFresh
 
 instance Monoid Inlines where
-  mempty = Inlines Seq.empty [] False
+  mempty = Inlines Seq.empty [] NotFresh
 
 -- | One inline made of others, with the bars of the inline spoilers in
 -- them.
 wrapping :: ([Inline] -> Inline) -> Inlines -> Inlines
-wrapping make xs = Inlines (Seq.singleton (make (inlines xs))) (barsOf xs) False
+wrapping make xs = Inlines (Seq.singleton (make (inlines xs))) (barsOf xs) NotFresh
 
 -- | Where the bars of the inline spoilers among some inlines are.
 barsOf :: Inlines -> [MarkerLine]
@@ -1059,7 +1207,7 @@ instance Monoid Blocks where
   mempty = Blocks Seq.empty mempty Nothing
 
 inline :: Inline -> Inlines
-inline x = Inlines (Seq.singleton x) [] False
+inline x = Inlines (Seq.singleton x) [] NotFresh
 
 block :: Block -> Blocks
 block b = Blocks (Seq.singleton (Nothing, b)) mempty Nothing
@@ -1082,11 +1230,17 @@ blocks (Blocks xs _ _) = map snd (toList xs)
 -- bars to the end of its last two, says where its bars are.
 instance CM.Rangeable Inlines where
   ranged (CM.SourceRange ranges) = \case
-    Inlines xs bs True
+    Inlines xs bs FreshBars
       | Just (start, _) <- head ranges
       , Just (_, end) <- lastMay ranges ->
-          Inlines xs (bs <> [MarkerLine (Parsec.sourceLine start) (Parsec.sourceColumn start) (InlineBars (Parsec.sourceLine end) (Parsec.sourceColumn end - 2))]) False
-    Inlines xs bs _ -> Inlines xs bs False
+          Inlines xs (bs <> [MarkerLine (Parsec.sourceLine start) (Parsec.sourceColumn start) (InlineBars (Parsec.sourceLine end) (Parsec.sourceColumn end - 2))]) NotFresh
+    Inlines xs bs FreshPause
+      | Just (start, _) <- head ranges ->
+          let placed = \case
+                InlinePause _ _ -> InlinePause (Parsec.sourceLine start) (Parsec.sourceColumn start)
+                other -> other
+           in Inlines (placed <$> xs) bs NotFresh
+    Inlines xs bs _ -> Inlines xs bs NotFresh
 
 -- | The parser says where each block is once it has made it, innermost
 -- first: a block without lines yet is written on the lines this range
@@ -1122,10 +1276,15 @@ instance CM.HasAttributes Blocks where
       -- Blocks the parser has placed ('startOf') take the attributes of a
       -- line before them; a fence's own, after its info word, come before
       -- it is placed. A fence that takes those of a line says so, at its
-      -- start ('TakesAttributes').
+      -- start ('TakesAttributes'), and so does a list, which the export
+      -- then puts in a box of those attributes, as the page does
+      -- (@{.incremental}@ on the line before a list).
       taken = case (at, toList xs) of
-        (Just (line, column), [(_, b)]) | not (null new), fence b -> Markers [] [MarkerLine line column (TakesAttributes new)] []
+        (Just (line, column), [(_, b)]) | not (null new), fence b || isList b -> Markers [] [MarkerLine line column (TakesAttributes new)] []
         _ -> mempty
+      isList = \case
+        List _ _ -> True
+        _ -> False
       fence = \case
         CodeBlock {} -> True
         HtmlBlock {} -> True
@@ -1199,8 +1358,13 @@ instance CME.HasStrikethrough Inlines where
 instance CME.HasEmoji Inlines where
   emoji keyword = inline . Emoji keyword
 
+-- | A wiki link, and @[[!pause]]@ among a line's words, which is a pause
+-- ('InlinePause'), placed once the parser says where it is. A page's
+-- address cannot hold an exclamation mark, so no link is lost to it.
 instance CME.HasWikilinks Inlines where
-  wikilink destination = wrapping (Link [("class", "wikilink")] destination "")
+  wikilink destination description
+    | destination == "!" <> markerNameText PauseName = Inlines (Seq.singleton (InlinePause 0 0)) [] FreshPause
+    | otherwise = wrapping (Link [("class", "wikilink")] destination "") description
 
 instance CME.HasPipeTable Inlines Blocks where
   pipeTable aligns header rows =
@@ -1311,7 +1475,7 @@ hiddenSpec = mempty {CM.syntaxFormattingSpecs = [CMI.FormattingSpec '|' True Tru
   where
     -- Marked as just made, so that its place, which the parser gives
     -- next, is kept as its bars'.
-    hidden xs = let Inlines made bs _ = wrapping Hidden xs in Inlines made bs True
+    hidden xs = let Inlines made bs _ = wrapping Hidden xs in Inlines made bs FreshBars
 
 -- | The wiki's own blocks, each written between two marker lines of its
 -- own, @[[!name]]{attributes}(Title)@ and @[[/name]]@, indented by at most
@@ -1324,7 +1488,7 @@ hiddenSpec = mempty {CM.syntaxFormattingSpecs = [CMI.FormattingSpec '|' True Tru
 -- * @[[!notes]]@, @[[!incremental]]@ and @[[!div]]@, with attributes in
 --   braces or none, start a 'Div' with those attributes, the first two
 --   with their name as a class too.
--- * @[[!slides]]@, with the deck's options in braces or none,
+-- * @[[!style]]@, with a presentation's look in braces or none,
 --   @[[!pause]]@ and @[[!toc]]@ are one line each, with no end marker.
 --
 -- The braces hold pandoc's attributes, @#id@, @.class@ and @key=value@,
@@ -1350,7 +1514,7 @@ hiddenSpec = mempty {CM.syntaxFormattingSpecs = [CMI.FormattingSpec '|' True Tru
 -- block is open inside it, the names differ, something follows the
 -- marker), the line is a 'MarkerError', which ends nothing. So is a line
 -- that starts as a start marker and is not a whole one, and a pause in a
--- quotation or a footnote. A block whose container (the document, a
+-- footnote. A block whose container (the document, a
 -- quotation, a list item) ends before its end marker is not closed: a
 -- spoiler is 'NotClosed', and any other block is a 'MarkerError' line
 -- followed by its blocks. An end marker in code, in a block of HTML or in
@@ -1369,13 +1533,20 @@ data MarkerName
     IncrementalName
   | -- | A box styled by its classes.
     DivName
-  | -- | The deck's look, one line.
-    SlidesName
+  | -- | A presentation's look, one line.
+    StyleName
   | -- | The next step of a slide, one line.
     PauseName
   | -- | Where the page's table of contents goes, one line.
     TocName
   deriving stock (Eq, Show, Enum, Bounded)
+
+-- | 'styleClass' is the class of the empty box the line
+-- @[[!style]]{theme=dark aspect=4:3}@ makes, a presentation's look
+-- ("Wiki.Core.Slides"): one no author would give a box of their own, so
+-- that no @[[!div]]@ is read as the look.
+styleClass :: Text
+styleClass = "wiki-deck-style"
 
 -- | A marker's name as its markers write it.
 markerNameText :: MarkerName -> Text
@@ -1384,7 +1555,7 @@ markerNameText = \case
   NotesName -> "notes"
   IncrementalName -> "incremental"
   DivName -> "div"
-  SlidesName -> "slides"
+  StyleName -> "style"
   PauseName -> "pause"
   TocName -> "toc"
 
@@ -1457,7 +1628,7 @@ data MarkerText
     EndText MarkerName (Maybe Text)
   | -- | An end marker that is not a whole one: why.
     BrokenEnd MarkerName Text
-  | -- | A marker of one line, and the block it makes: @[[!slides]]@ and
+  | -- | A marker of one line, and the block it makes: @[[!style]]@ and
     -- its attributes, @[[!pause]]@ or @[[!toc]]@.
     LineText MarkerName Block
   | -- | A line that starts as a start marker and is not a whole one: why.
@@ -1512,6 +1683,9 @@ spaceTok t = CM.hasType CM.Spaces t || CM.hasType CM.UnicodeSpace t
 readMarker :: [CM.Tok] -> Maybe MarkerText
 readMarker toks = do
   (marker, rest) <- markerOpening toks
+  -- A pause with words after it on its line is a pause among a
+  -- paragraph's words ('InlinePause'), the first of them: no marker line.
+  guard (marker /= Opening PauseName || blankToks rest)
   pure $ case marker of
     Opening name -> start name (dropWhile spaceTok rest)
     Closing name -> end name (dropWhile spaceTok rest)
@@ -1526,11 +1700,11 @@ readMarker toks = do
   where
     start name rest = case name of
       SpoilerName -> spoiler rest
-      SlidesName -> case bracedAt rest of
-        Nothing | blankToks rest -> LineText SlidesName (Div [("class", "slides")] [])
-        Just (Attributed attrs, after) | blankToks after -> LineText SlidesName (Div (("class", "slides") : attrs) [])
+      StyleName -> case bracedAt rest of
+        Nothing | blankToks rest -> LineText StyleName (Div [("class", styleClass)] [])
+        Just (Attributed attrs, after) | blankToks after -> LineText StyleName (Div (("class", styleClass) : attrs) [])
         Just (Attributed _, _) -> BrokenText (nothingAfter name)
-        _ -> BrokenText ("the braces after " <> openingMarker SlidesName <> " hold the deck's options, as in " <> openingMarker SlidesName <> "{theme=dark aspect=4:3}")
+        _ -> BrokenText ("the braces after " <> openingMarker StyleName <> " hold a presentation's look, as in " <> openingMarker StyleName <> "{theme=dark aspect=4:3}")
       PauseName -> alone name Pause rest
       TocName -> alone name TableOfContents rest
       _ -> case bracedAt rest of
@@ -1657,7 +1831,7 @@ markerBlockSpec =
           Just (EndText kind named) -> ending kind (endProblem kind named open)
           Just (BrokenEnd kind why) -> ending kind why
           Just (LineText PauseName _)
-            | any ((`elem` ["BlockQuote", "Footnote"]) . specOf) stack -> broken "a pause is not read in a quotation or a footnote, which a deck shows whole"
+            | any ((== "Footnote") . specOf) stack -> broken "a pause is not read in a footnote, which a presentation shows whole"
           Just (LineText name b) -> oneLine b (lineRole name)
           Just (BrokenText why) -> broken why
         pure CM.BlockStartMatch
@@ -1702,7 +1876,7 @@ markerBlockSpec =
   where
     lineRole = \case
       PauseName -> Pauses
-      SlidesName -> SetsSlides
+      StyleName -> SetsStyle
       _ -> PlacesContents
     -- The line is the end marker of this block: it has the block's name,
     -- the block is the innermost open one on this line, and the line is

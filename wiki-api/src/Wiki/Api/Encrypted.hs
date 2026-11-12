@@ -54,6 +54,7 @@ import Protolude
 import Wiki.Api.Version (PageVersion (..))
 import Wiki.Core.Encrypted (Encapsulated, KeyGrant, PageKey, SealedAnchor, SealedComment, SealedContent, SealedHeading, SealedMeta)
 import Wiki.Core.Id (AttachmentId, CommentId, CommentThreadId, PageId, SpaceId, UserId)
+import Wiki.Core.PageKind (PageKind)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Vault (Ciphertext, KeyId, PublicKey)
 import Wiki.Core.Version (Author)
@@ -299,6 +300,10 @@ data SealedSummary = SealedSummary
   -- ^ Every key the page has had, its current one ('pageKey') first: its
   -- latest version is encrypted with an older one when nothing was saved
   -- since its space's key was renewed.
+  , kind :: PageKind
+  -- ^ A document or a presentation ("Wiki.Core.PageKind"), in the clear,
+  -- as the page's place in the tree is. Missing, from an older server, it
+  -- is a document.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -323,6 +328,8 @@ data SealedPage = SealedPage
   -- with older ones.
   , attachments :: [SealedAttachment]
   -- ^ Its attachments, in their order.
+  , kind :: PageKind
+  -- ^ A document or a presentation, in the clear.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -336,6 +343,9 @@ data NewSealedPage = NewSealedPage
   , parent :: Maybe PageId
   , pageKey :: PageKey
   , content :: SealedContent
+  , kind :: PageKind
+  -- ^ A document or a presentation, in the clear. Missing, from an older
+  -- client, it is a document.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

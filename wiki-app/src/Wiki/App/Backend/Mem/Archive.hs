@@ -26,6 +26,7 @@ import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Page qualified as P
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..))
 import Wiki.Core.Space qualified as S
@@ -148,7 +149,7 @@ replaceFromArchive time old a = do
     previous = maybe createdPage snd oldRoot
     source = fromMaybe previous archived
     content = if isJust a.homePage then source {P.title = maybe incoming.title (\p -> p.title) archived, P.body = maybe incoming.body (\p -> p.body) archived} else source
-    root = content {P.id = freePage, P.space = freeSpace, P.parent = Nothing, P.slug = previous.slug, P.template = False, P.body = content.body}
+    root = content {P.id = freePage, P.space = freeSpace, P.parent = Nothing, P.slug = previous.slug, P.template = False, P.kind = Document, P.body = content.body}
     sourceBlobs = if isJust archived then a.blobs else old.blobs
     -- Reassign attachment and blob IDs, keeping the imported user's IDs free.
     attach (items, bytes, n) attachment =

@@ -65,6 +65,8 @@ module Wiki.App.View.Body
   , commentBodies
   , startsWithHeading
   , slides
+  , slidesReporting
+  , slidesWithIds
   , followingLinks
   , followingLinksIn
   , islandOptions
@@ -326,23 +328,26 @@ rendered
   => Place
   -> Text
   -> Either Md.ParseError [H.ComponentHTML action slots m]
-rendered = renderedTicking Nothing (const 0)
+rendered = renderedTicking Nothing (const 0) Nothing
 
 -- | 'rendered', with the page's task boxes enabled when @onTick@ is given:
 -- a change of a box gives it the task's index and whether the box is now
 -- ticked ("Wiki.Core.Markdown.Tasks"). Only the page view does, for a
 -- reader who may edit the page; anywhere else the boxes are disabled.
 -- @drawn@ says how many times each box was drawn anew (the renderer's
--- 'Md.taskDrawn').
+-- 'Md.taskDrawn'). @deck@ draws a page embedded with the class
+-- @presentation@ ('Md.deckEmbed'): the page view draws a viewer
+-- ("Wiki.App.View.DeckViewer"); without it the embed is its link.
 renderedTicking
   :: forall action slots m
    . (MonadIslands m, MonadUUID m, HasIslands slots)
   => Maybe (Int -> Bool -> action)
   -> (Int -> Int)
+  -> Maybe (Md.IslandKey -> PageLink -> Text -> H.ComponentHTML action slots m)
   -> Place
   -> Text
   -> Either Md.ParseError [H.ComponentHTML action slots m]
-renderedTicking onTick drawn place = Md.renderMarkdown (options place) {Md.taskBoxes = onTick, Md.taskDrawn = drawn}
+renderedTicking onTick drawn deck place = Md.renderMarkdown (options place) {Md.taskBoxes = onTick, Md.taskDrawn = drawn, Md.deckEmbed = deck}
 
 -- | 'article', from the result of 'rendered' (and the source, shown if it
 -- could not be parsed).
@@ -410,6 +415,32 @@ slides
   -> [Slides.RenderedSlide (H.ComponentSlot slots m action) action]
 slides place = Slides.renderDeck (options place)
 
+-- | 'slides', every id they write and every link to a place in them
+-- starting with a prefix ('Slides.renderDeckWithIds'): a viewer of a
+-- presentation in a page, whose ids stay apart from the page's.
+slidesWithIds
+  :: forall action slots m
+   . (MonadIslands m, MonadUUID m, HasIslands slots)
+  => Text
+  -> Place
+  -> Slides.Deck
+  -> [Slides.RenderedSlide (H.ComponentSlot slots m action) action]
+slidesWithIds prefix place = Slides.renderDeckWithIds prefix (options place)
+
+-- | 'slides', with each island reporting how it drew, as 'articleLines'
+-- does: the editor's preview of a presentation, whose islands' failures
+-- the editor marks in the text.
+slidesReporting
+  :: forall action slots m
+   . (MonadIslands m, MonadUUID m, HasIslands slots)
+  => (Md.IslandKey -> Islands.Output -> action)
+  -> Place
+  -> Slides.Deck
+  -> [Slides.RenderedSlide (H.ComponentSlot slots m action) action]
+slidesReporting onIsland place = Slides.renderDeck (optionsWith reported place)
+  where
+    reported key input = HH.slot "island" key Islands.reporting input (onIsland key)
+
 options :: (MonadIslands m, MonadUUID m, HasIslands slots) => Place -> Md.Options PageLink (H.ComponentSlot slots m action) action
 options = optionsWith quietIsland
 
@@ -452,6 +483,8 @@ islandOptionsWith island ctx spaceOwn =
     , Md.tikz = \k source -> island k (Islands.Tikz source)
     , Md.htmlBlock = \k _ height document -> island k (Islands.HtmlFrame height document)
     , Md.svgFrame = Just (\k frame -> island k (Islands.SvgFrame frame))
+    , -- Only the page view draws a presentation's viewer ('renderedTicking').
+      Md.deckEmbed = Nothing
     , Md.resolveLink = const Md.Unresolved
     , Md.pageHref = \(PageLink route fragment) -> Router.href ctx.router route <> fragment
     , Md.boxes = ctx.session.boxes

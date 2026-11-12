@@ -12,7 +12,8 @@ import Wiki.Api.Account (Credentials (..), NewAccount (..), NewPassword (..), Pa
 import Wiki.Api.Admin (TexStatus)
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetToken (..), TotpEnrolment (..), UnsubscribeToken (..), VerificationToken (..))
-import Wiki.Api.Types (SessionInfo (..), SpaceName (..))
+import Wiki.Api.Types (NewPage (..), PageKindChange (..), SessionInfo (..), SpaceName (..))
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.User (Password (..))
 
 -- | A property that values of a type, as the generator makes them, come
@@ -43,6 +44,7 @@ spec = describe "JSON" $ do
   roundTrips "SpaceOrder" genSpaceOrder
   roundTrips "SpaceMove" genSpaceMove
   roundTrips "NewPage" genNewPage
+  roundTrips "PageKindChange" (PageKindChange <$> elements [Document, Presentation])
   roundTrips "PageEdit" genPageEdit
   roundTrips "PageMove" genPageMove
   roundTrips "ShiftBy" genShiftBy
@@ -54,6 +56,9 @@ spec = describe "JSON" $ do
   roundTrips "ImportChoices" genImportChoices
   roundTrips "ImportSummary" genImportSummary
   roundTrips "TexStatus" (arbitraryBoundedEnum :: Gen TexStatus)
+
+  it "reads a new page without a kind, as an older client sends it, as a document" $
+    decode "{\"parent\":null,\"title\":\"T\",\"body\":\"\"}" `shouldBe` Just NewPage {parent = Nothing, title = "T", body = "", kind = Document}
 
   it "writes a body of one field as an object, not as the bare value" $
     toJSON (SpaceName "Team") `shouldBe` object ["name" .= ("Team" :: Text)]

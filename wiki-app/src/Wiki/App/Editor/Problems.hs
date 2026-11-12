@@ -20,21 +20,24 @@ import Data.Aeson (ToJSON (..), object, (.=))
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Protolude
-import Wiki.Core.Markdown.Problems (Problem (..), kindName)
+import Wiki.Core.Markdown.Problems (Problem (..), Severity (..), kindName)
 
 -- | 'ProblemRange' is a problem as the editor shows it: the characters it
 -- underlines, from (included) to (excluded), counted from 0 in the text,
--- the kind's name, and the message.
+-- the kind's name, how much it matters, and the message.
 data ProblemRange = ProblemRange
   { from :: Int
   , to :: Int
   , kind :: Text
+  , severity :: Text
+  -- ^ @error@ or @warning@, as CodeMirror names them
+  -- ('Wiki.Core.Markdown.Problems.Severity').
   , message :: Text
   }
   deriving stock (Eq, Show)
 
 instance ToJSON ProblemRange where
-  toJSON r = object ["from" .= r.from, "to" .= r.to, "kind" .= r.kind, "message" .= r.message]
+  toJSON r = object ["from" .= r.from, "to" .= r.to, "kind" .= r.kind, "severity" .= r.severity, "message" .= r.message]
 
 -- | The ranges of some problems in a text, in the problems' order.
 problemRanges :: Text -> [Problem] -> [ProblemRange]
@@ -51,4 +54,7 @@ problemRanges text = map range
     range p =
       let opening = min p.from p.to
           closing = max p.from p.to
-       in ProblemRange {from = startOf opening, to = endOf closing, kind = kindName p.kind, message = p.message}
+       in ProblemRange {from = startOf opening, to = endOf closing, kind = kindName p.kind, severity = severityName p.severity, message = p.message}
+    severityName = \case
+      Error -> "error"
+      Warning -> "warning"

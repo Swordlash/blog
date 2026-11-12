@@ -76,7 +76,8 @@
 --   changing who is granted what on it ('spaceAccess', 'setSpaceGrant')
 --   need 'AdministerSpace' on it;
 -- * creating, saving, moving and deleting pages, making a page a template
---   or not ('setPageTemplate'), and uploading and deleting attachments,
+--   or not ('setPageTemplate'), giving it a kind ('setPageKind'), and
+--   uploading and deleting attachments,
 --   need 'Edit' on the page's space (on both spaces, for a page moved from
 --   one to another);
 -- * moving a child up or down its list by hand needs 'Edit' on the space
@@ -212,6 +213,7 @@ import Wiki.Core.Markdown.Box (BoxKind)
 import Wiki.Core.Notification (PageLocation)
 import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Page (Page, PageSummary)
+import Wiki.Core.PageKind (PageKind)
 import Wiki.Core.Permission (Grants (..), Principal (..), SpaceAccess, SpacePermission, Subject)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
@@ -683,6 +685,13 @@ class (Monad m) => MonadWiki m where
   default createPage :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Maybe PageId -> Text -> Text -> m (Either WikiError Page)
   createPage s p t = lift . createPage s p t
 
+  -- | 'createPage' for a page of a kind ("Wiki.Core.PageKind"): what "New
+  -- page" makes, a document or a presentation. 'createPage' makes a
+  -- document. A kind this program does not know is 'Invalid'.
+  createPageOf :: PageKind -> SpaceId -> Maybe PageId -> Text -> Text -> m (Either WikiError Page)
+  default createPageOf :: (MonadTrans t, m ~ t n, MonadWiki n) => PageKind -> SpaceId -> Maybe PageId -> Text -> Text -> m (Either WikiError Page)
+  createPageOf k s p t = lift . createPageOf k s p t
+
   -- | Save a page's title and body. The time is the 'Wiki.Core.Page.Page'
   -- @updatedAt@ of the version the edit started from: if the page has been
   -- saved since, the save is a 'Conflict' rather than a silent overwrite of
@@ -711,6 +720,16 @@ class (Monad m) => MonadWiki m where
   setPageTemplate :: PageId -> Bool -> m (Either WikiError Page)
   default setPageTemplate :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> Bool -> m (Either WikiError Page)
   setPageTemplate p = lift . setPageTemplate p
+
+  -- | Make a page a document or a presentation ("Wiki.Core.PageKind"). It
+  -- needs 'Edit' on its space, as 'setPageTemplate' does, and like it is
+  -- not a save: the page keeps its title, its body, its history and its
+  -- @updatedAt@. Giving a page the kind it has changes nothing and
+  -- succeeds. A space's home page is a document ('Invalid' otherwise), and
+  -- a kind this program does not know is 'Invalid'.
+  setPageKind :: PageId -> PageKind -> m (Either WikiError Page)
+  default setPageKind :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> PageKind -> m (Either WikiError Page)
+  setPageKind p = lift . setPageKind p
 
   -- | Delete a page with the pages under it and their attachments.
   deletePage :: PageId -> m (Either WikiError ())

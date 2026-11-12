@@ -26,6 +26,7 @@ import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..))
@@ -86,6 +87,7 @@ pageOf i s parent sl body =
     , updatedAt = at 2
     , position = 0
     , template = False
+    , kind = Document
     , createdBy = Nothing
     , updatedBy = Nothing
     }
@@ -140,10 +142,10 @@ wiki =
                 , kept "x6" "100%"
                 ]
             }
-        , pageOf "p2" "s1" (Just "p1") "prn" "Under the intro."
+        , (pageOf "p2" "s1" (Just "p1") "prn" "Under the intro.") {kind = Presentation}
         , (pageOf "p3" "s1" (Just "p2") "deep" "") {position = 3, template = True}
         , pageOf "p4" "s4" Nothing "page" "In a space three deep."
-        , pageOf "p5" "s2" Nothing "pages" "A page called pages."
+        , (pageOf "p5" "s2" Nothing "pages" "A page called pages.") {kind = OtherKind "calendar"}
         ]
     , threads =
         Map.fromList
@@ -264,6 +266,12 @@ spec = describe "Wiki.Core.Export" $ do
       Map.lookup "spaces/docs/pages/intro/pages/prn_/pages/deep/page.md" files `shouldBe` Just ""
       let record = objectAt "spaces/docs/pages/intro/pages/prn_/page.json" files
       [KeyMap.member field <$> record | field <- ["space", "parent", "body"]] `shouldBe` [Just False, Just False, Just False]
+
+    it "writes a page's kind only when it is not a document" $ do
+      let kindOf path = (\o -> KeyMap.lookup "kind" o) <$> objectAt path files
+      kindOf "spaces/docs/pages/intro/page.json" `shouldBe` Just Nothing
+      kindOf "spaces/docs/pages/intro/pages/prn_/page.json" `shouldBe` Just (Just (String "presentation"))
+      kindOf "spaces/docs/spaces/con_/pages/pages/page.json" `shouldBe` Just (Just (String "calendar"))
 
     it "writes each attachment's bytes under a file name a file system takes, and a web one only in the record" $ do
       let dir = "spaces/docs/pages/intro/attachments/"

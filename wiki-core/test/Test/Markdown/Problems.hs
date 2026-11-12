@@ -8,9 +8,12 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Protolude
 import Test.Hspec
+import Wiki.Core.Markdown.Ast (parseMarkdown)
 import Wiki.Core.Markdown.Folds (Fold (..), spoilerFolds)
 import Wiki.Core.Markdown.Problems
 import Wiki.Core.Markdown.Render (IslandKey (..))
+import Wiki.Core.PageKind (PageKind (..))
+import Wiki.Core.Slides (Deck (..), DeckOptions (..), Theme (..), deckOf)
 
 -- | The parser's problems of a text, without their messages.
 placed :: Text -> [(Int, Int, ProblemKind)]
@@ -68,14 +71,15 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
 
     it "finds, from the same parse, the problems and islands the parser and the islands' places find apart, and the spoilers' folds" $ do
       let source = "# T\n\n> [!]\n\n[[!spoiler]]{a}(A)\n$x$\n[[/spoiler]]{a}\n\n## [[!spoiler]] Q\n\nAnswer $y$.\n\n[[!pause]] x\n"
-          checked = checkText source
-      checked.problems `shouldBe` parserProblems source
+          checked = checkText Document source
+      checked.problems `shouldBe` sort (parserProblems source <> kindProblems Document source)
+      (checkText Presentation source).problems `shouldBe` sort (parserProblems source <> kindProblems Presentation source)
       checked.islands `shouldBe` islandPlaces source
       checked.folds `shouldBe` spoilerFolds source
       map (\f -> (f.from, f.to)) checked.folds `shouldBe` [(5, 7), (9, 13)]
 
     it "lists the problems in the order of their lines" $
-      placed "> [!]\n\n[[!pause]] x\n\n[[!spoiler]]{b}(B)\nText." `shouldBe` [(1, 1, Box), (3, 3, Marker), (5, 5, Spoiler)]
+      placed "> [!]\n\n[[!toc]] x\n\n[[!spoiler]]{b}(B)\nText." `shouldBe` [(1, 1, Box), (3, 3, Marker), (5, 5, Spoiler)]
 
   describe "the islands' places" $ do
     it "places a fence of the page at its lines, the fences included" $ do
@@ -146,8 +150,35 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
       places "$$\\newcommand{\\R}{\\mathbb{R}}$$\n\nThen $\\R$ and $\\R$." `shouldBe` [(("\\R", 0), (3, 3, Formula)), (("\\R", 1), (3, 3, Formula))]
 
     it "turns an island's failure into a problem at its place, and drops one no longer in the text" $ do
-      let checked = checkText "# T\n\n```mermaid\nbad\n```\n\n[[!spoiler]]{a}(A)"
+      let checked = checkText Document "# T\n\n```mermaid\nbad\n```\n\n[[!spoiler]]{a}(A)"
           gone = IslandKey "old\n" 0
           failed = Map.fromList [(IslandKey "bad\n" 0, "Parse error on line 1"), (gone, "Parse error")]
       [(p.from, p.to, p.kind, p.message) | p <- allProblems checked failed]
         `shouldBe` [(3, 5, Diagram, "Parse error on line 1"), (7, 7, Spoiler, "Spoiler “a” is not closed: add [[/spoiler]]{a}")]
+
+  describe "the warnings of a page's kind" $ do
+    let warned kind source = [(p.from, p.severity, p.message) | p <- kindProblems kind source]
+        deck = "# Talk\n\n[[!style]]{theme=dark}\n\n## One\n\n[[!pause]]\n\nMore.\n\n[[!notes]]\nSay so.\n[[/notes]]\n\n{.incremental}\n- a\n- b\n"
+    it "warns of each marker of presentations in a document, and in a presentation of none" $ do
+      map (\(l, sev, _) -> (l, sev)) (warned Document deck) `shouldBe` [(3, Warning), (7, Warning), (11, Warning), (16, Warning)]
+      warned Presentation deck `shouldBe` []
+      -- A page of a kind this program does not know is read as a document.
+      length (warned (OtherKind "calendar") deck) `shouldBe` 4
+    it "warns in a presentation of a heading that opens no slide, below the top level" $ do
+      map (\(l, _, m) -> (l, T.take 33 m)) (warned Presentation "# T\n\n## One\n\n> ## Quoted\n\n- ## In a list\n\n### Deeper is fine\n")
+        `shouldBe` [(5, "A heading of level one or two ope"), (7, "A heading of level one or two ope")]
+      -- A heading spoiler's section is the top level, as a deck reads it.
+      warned Presentation "# T\n\n## [[!spoiler]] Q\n\nA.\n\n## Next\n" `shouldBe` []
+    it "warns in a presentation of a look after the first, and of one not at the top level" $
+      map (\(l, _, m) -> (l, T.take 17 m)) (warned Presentation "[[!style]]{theme=dark}\n\n[[!style]]{theme=light}\n\n> [[!style]]\n")
+        `shouldBe` [(3, "Only the first [["), (5, "[[!style]] is rea")]
+    it "reads the look after a heading spoiler as the slides read it: applied, so not warned of" $ do
+      let source = "# [[!spoiler]] Title\n\n[[!style]]{theme=dark}\n\n## One\n"
+      warned Presentation source `shouldBe` []
+      (deckOf (either (panic . show) identity (parseMarkdown source))).options.theme `shouldBe` Dark
+    it "warns of a pause among a document's words, and marks one where none is read as an error" $ do
+      map (\(l, sev, _) -> (l, sev)) (warned Document "Text [[!pause]] more.\n") `shouldBe` [(1, Warning)]
+      warned Presentation "Text [[!pause]] more.\n" `shouldBe` []
+      [(p.from, p.severity) | p <- parserProblems "# T\n\n*a [[!pause]] b*\n"] `shouldBe` [(3, Error)]
+    it "puts the warnings beside the parser's errors when the editor checks a text" $
+      [(p.from, p.severity) | p <- (checkText Document "[[!pause]]\n\n[[!oops]]\n").problems] `shouldBe` [(1, Warning), (3, Error)]

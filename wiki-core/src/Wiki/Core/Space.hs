@@ -77,6 +77,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..), Sibling (..), childrenInOrder, treeOrder)
 import Wiki.Core.Page qualified as Page
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Path (PathError, TreeNode (..), findChild, pathUnder, resolveFromRoot, resolveUnder)
 import Wiki.Core.Slug
 import Wiki.Core.User (Avatar (..))
@@ -627,6 +628,7 @@ defaultHomePage pid time siblings space =
     , updatedAt = time
     , position = maybe 0 (subtract 1) (minimumMay (map snd siblings))
     , template = False
+    , kind = Document
     , createdBy = Nothing
     , updatedBy = Nothing
     }

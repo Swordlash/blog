@@ -1,8 +1,10 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
--- | The slides view: a page presented as slides ("Wiki.Core.Slides"), for
--- anyone who may read the page. It shows one slide at a time over the
+-- | The slides view: a presentation ("Wiki.Core.PageKind") presented as
+-- slides ("Wiki.Core.Slides"), for anyone who may read the page. A
+-- document's address here shows a note that it is a document, with a
+-- link to it: the kind decides how a page is shown. It shows one slide at a time over the
 -- whole window, or full screen, with the speaker's notes below it on
 -- request, an overview of every slide, and a print stylesheet that puts
 -- each slide on its own page, so that the browser's "Save as PDF" turns
@@ -55,6 +57,11 @@ module Wiki.App.View.Slides
   ( Input (..)
   , Slots
   , component
+
+    -- * Slides as cards
+  , slideCard
+  , fitTitle
+  , deckClasses
   )
 where
 
@@ -94,8 +101,9 @@ import Wiki.App.Route (Route (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.Core.Markdown (parseMarkdown)
-import Wiki.Core.Page (Page (attachments, body, title), PageSummary)
-import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), RenderedSlide (..), Slide (..), SlideTitle (..), deckOf, showingStep, themeName)
+import Wiki.Core.Page (Page (attachments, body, kind, title), PageSummary)
+import Wiki.Core.PageKind (isPresentation)
+import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), Fit (..), RenderedSlide (..), Slide (..), SlideTitle (..), deckOf, fitName, showingStep, themeName)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.Version (Author)
@@ -117,6 +125,9 @@ type Slots = Body.IslandSlots
 data Loaded
   = Loading
   | Failed WikiError
+  | -- | The page is a document, which is not presented
+    -- ("Wiki.Core.PageKind"): the view says so, with a link to it.
+    NotPresentation Page
   | -- | The page, the URL of each of its attachments, the page as slides,
     -- and the people it mentions ("Wiki.App.View.Body").
     Ready Page Body.Addresses Deck (Map Text Author)
@@ -211,6 +222,13 @@ component =
     render st = case st.loaded of
       Loading -> [hh|<p class="loading">Loading…</p>|]
       Failed e -> failureView e Retry
+      NotPresentation page ->
+        [hh|
+          <div class="slides-not-presentation" role="note">
+            <p>“{{ page.title }}” is a document, not a presentation, so it is not shown as slides.</p>
+            {{ back st.input }}
+          </div>
+        |]
       Ready page addresses deck people ->
         let place = Body.Place {context = st.input.context, space = st.input.space, pages = st.input.pages, path = st.input.path, attachments = page.attachments, urls = addresses.urls, downloads = addresses.downloads, frames = addresses.frames, people}
             count = length deck.slides
@@ -251,22 +269,12 @@ component =
     slideFrame st page count n s html =
       [hh|
         <div class="slide-frame{% if n == st.current %} current{% end %}" data-slide={{ show n :: Text }} onClick={{ const (Picked n) }}>
-          <div class="slide-slot">
-            <section class="slide{% if titlePage %} slide-title-page{% end %}{% if isNothing s.title %} slide-untitled{% end %}" {{ [attr "aria-label" ("Slide " <> position n count)] }}>
-              {% if isJust s.title %}
-                <header class="slide-title">{{ html.title }}</header>
-              {% end %}
-              <div class="slide-body page-body">{{ html.body }}</div>
-              <footer class="slide-footer"><span class="slide-footer-title">{{ page.title }}</span><span class="slide-number">{{ position n count }}</span></footer>
-            </section>
-          </div>
+          <div class="slide-slot">{{ slideSection page.title count n ("Slide " <> position n count) s html }}</div>
           {% if not (null s.notes) %}
             <aside class="slide-notes page-body" aria-label="Notes">{{ html.notes }}</aside>
           {% end %}
         </div>
       |]
-      where
-        titlePage = maybe False (\t -> t.level == 1) s.title
 
     -- A copy of a slide at one of its steps before the last, for the print
     -- with each step on its own page: hidden on the screen, printed before
@@ -275,19 +283,9 @@ component =
     stepCopy page count n k s html =
       [hh|
         <div class="slide-frame slide-step-copy" data-slide={{ show n :: Text }} data-step={{ show k :: Text }}>
-          <div class="slide-slot">
-            <section class="slide{% if titlePage %} slide-title-page{% end %}{% if isNothing s.title %} slide-untitled{% end %}" {{ [attr "aria-label" ("Slide " <> position n count <> ", step " <> show k)] }}>
-              {% if isJust s.title %}
-                <header class="slide-title">{{ html.title }}</header>
-              {% end %}
-              <div class="slide-body page-body">{{ html.body }}</div>
-              <footer class="slide-footer"><span class="slide-footer-title">{{ page.title }}</span><span class="slide-number">{{ position n count }}</span></footer>
-            </section>
-          </div>
+          <div class="slide-slot">{{ slideSection page.title count n ("Slide " <> position n count <> ", step " <> show k) s html }}</div>
         </div>
       |]
-      where
-        titlePage = maybe False (\t -> t.level == 1) s.title
 
     progress :: State -> Int -> H.ComponentHTML Action Slots m
     progress st count =
@@ -537,12 +535,66 @@ fetch :: (MonadWiki n, MonadNotifications n) => UrlOwner -> Input -> n Loaded
 fetch owner input =
   getPage input.space.id input.path >>= \case
     Left e -> pure (Failed e)
+    Right page
+      | not (isPresentation page.kind) -> pure (NotPresentation page)
     Right page -> do
       addresses <- Body.attachmentAddresses owner page.attachments
       people <- Body.askPeople (Body.unasked Body.noPeople [page.body])
       pure (Ready page addresses (either unreadable deckOf (parseMarkdown page.body)) people)
   where
     unreadable _ = deckOf []
+
+-- | A slide as the page shows it: its title in a bar, its body, and a
+-- footer with the presentation's title and the slide's number out of the
+-- total, labelled for a screen reader.
+slideSection :: Text -> Int -> Int -> Text -> Slide -> RenderedSlide w i -> HH.HTML w i
+slideSection pageTitle count n label s html =
+  [hh|
+    <section class="slide{% if titlePage %} slide-title-page{% end %}{% if isNothing s.title %} slide-untitled{% end %}" {{ [attr "aria-label" label] }}>
+      {% if isJust s.title %}
+        <header class="slide-title">{{ html.title }}</header>
+      {% end %}
+      <div class="slide-body page-body">{{ html.body }}<span class="slide-end" aria-hidden="true"></span></div>
+      <footer class="slide-footer"><span class="slide-footer-title">{{ pageTitle }}</span><span class="slide-number">{{ position n count }}</span></footer>
+    </section>
+  |]
+  where
+    titlePage = maybe False (\t -> t.level == 1) s.title
+
+-- | 'slideCard' is a slide shown as a card, as the editor's preview shows
+-- it (WP5.97 of docs/PLAN.md): the slide laid out 1024 CSS pixels wide, of
+-- its shape and look, scaled to the card ('slide-scaled'), with whether
+-- its content fits ('Fit') and its notes under it. A card not shown is
+-- laid out all the same, off the pane, so that it is measured. Inside an
+-- element with the deck's classes ('deckClasses'), which set the shape and
+-- the colours.
+slideCard :: Text -> Int -> Int -> Bool -> Fit -> Slide -> RenderedSlide w i -> HH.HTML w i
+slideCard pageTitle count n shown fit s html =
+  [hh|
+    <div class="slide-frame slide-fit-{{ fitName fit }}{% if not shown %} slide-offstage{% end %}" data-slide={{ show n :: Text }}>
+      <span class="slide-fit" {{ [attr "title" (fitTitle fit)] }}></span>
+      <div class="slide-scaled"><div class="slide-slot">{{ slideSection pageTitle count n ("Slide " <> position n count) s html }}</div></div>
+      {% if not (null s.notes) %}
+        <aside class="slide-notes page-body" aria-label="Notes">{{ html.notes }}</aside>
+      {% end %}
+    </div>
+  |]
+
+-- | What a slide's mark of its fit says, on hover.
+fitTitle :: Fit -> Text
+fitTitle = \case
+  Unmeasured -> "Not measured yet"
+  Fits -> "Fits on the slide"
+  Tight -> "May be cut slightly: less than half a line to spare, or up to a line beyond the slide"
+  Overflowing -> "Cut: more than a line beyond the slide"
+
+-- | A deck's classes: its theme and its shape, which set the colours and
+-- the shape of its slides.
+deckClasses :: Deck -> Text
+deckClasses deck =
+  "slides-theme-" <> themeName deck.options.theme <> " " <> case deck.options.aspect of
+    Wide -> "slides-wide"
+    Standard -> "slides-standard"
 
 -- | A slide's number out of the total, as the footer and the controls
 -- write it.
@@ -586,16 +638,12 @@ backward st
 viewClasses :: State -> Deck -> Text
 viewClasses st deck =
   T.unwords
-    ( ["slides-theme-" <> themeName deck.options.theme, aspectClass deck.options.aspect]
+    ( [deckClasses deck]
         <> ["notes-open" | st.notesOpen]
         <> ["overview" | st.overview]
         <> ["print-notes" | st.printNotes]
         <> ["print-steps" | st.printSteps]
     )
-  where
-    aspectClass = \case
-      Wide -> "slides-wide"
-      Standard -> "slides-standard"
 
 -- | How far through the deck a slide is, as a width.
 percent :: Int -> Int -> Text

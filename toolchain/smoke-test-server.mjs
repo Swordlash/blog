@@ -110,7 +110,7 @@ import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, extname, join, normalize, resolve } from "node:path";
 import { chromium } from "playwright";
-import { adoptionMayChange, fittedFrame } from "./smoke-adoption.mjs";
+import { adoptionMayChange, fittedFrame, presentationsEmbedded, viewerAsks } from "./smoke-adoption.mjs";
 import { encryptedSpaces } from "./smoke-encrypted.mjs";
 
 const started = Date.now();
@@ -921,6 +921,13 @@ async function migrateTheDemo() {
   // server renders them: adopted with nothing to repair or ask, while the
   // section being read is marked by the script alone.
   const reader = await newPage();
+  // The guide embeds its presentation: the viewer's read of it, once the
+  // program has started, is not of what the page carries
+  // (toolchain/smoke-adoption.mjs).
+  const docs = await (await fetch(url("/api/v1/spaces/at/docs"))).json();
+  const guide = await (await fetch(url(`/api/v1/spaces/${docs.id}/pages/at/markdown-guide`))).json();
+  const embedded = presentationsEmbedded(guide.body, "markdown-guide");
+  assert.deepEqual(embedded, ["markdown-guide/presentations"], "the presentation the guide embeds");
   for (const [path, expected] of [
     ["/s/docs/p/markdown-guide/", "Contents"],
     ["/s/team/", "Before your first day"],
@@ -929,7 +936,18 @@ async function migrateTheDemo() {
     assert.equal(loaded.status, 200, `${path}: the status`);
     assert.ok(loaded.shown.includes(expected), `${path}: "${expected}" is not there before app.wasm`);
     assert.deepEqual(loaded.repairs, [], `${path}: adopting it repaired it`);
-    assert.deepEqual(loaded.asked, [], `${path}: the program asked the API for what the page carries`);
+    assert.deepEqual(
+      loaded.asked.filter((asked) => !viewerAsks(asked, embedded)),
+      [],
+      `${path}: the program asked the API for what the page carries`,
+    );
+    if (path === "/s/docs/p/markdown-guide/") {
+      // The embed, far down the page, is the link until it comes near the
+      // window; scrolled to, it is the viewer, which read its page once.
+      await reader.locator("#app article.page-body > p > a[href$='markdown-guide/presentations/']:only-child").scrollIntoViewIfNeeded();
+      await reader.locator("#app article.page-body .deck-embed .slide-title").first().waitFor({ timeout });
+      assert.equal(reader.apiAsked.filter((asked) => viewerAsks(asked, embedded)).length, 1, "the viewer read its page once");
+    }
   }
   assert.equal(await reader.locator("#app .page-body nav.toc").count(), 1, "the handbook's [[!toc]]");
   assert.equal(await reader.locator("#app .page-contents").count(), 0, "a panel beside a page with [[!toc]]");
@@ -1597,7 +1615,8 @@ try {
     ["/s/smoke-space/p/first-page/", 200, "Saved by someone else."],
     ["/s/smoke-space/p/first-page/source/", 200, "(attachment:notes.txt)"],
     ["/s/smoke-space/p/first-page/history/", 200, "Version 1"],
-    ["/s/smoke-space/p/first-page/slides/", 200, "1 / 1"],
+    // A document is not presented: its address of slides says so.
+    ["/s/smoke-space/p/first-page/slides/", 200, "is a document, not a presentation"],
     ["/s/smoke-space/p/first-page/edit/", 200, "Editing First page"],
     ["/s/smoke-space/new-page/", 200, "New page"],
     ["/new-space/", 200, "New space"],

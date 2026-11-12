@@ -27,6 +27,7 @@ import Wiki.Api.Links (links)
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Version (latestVersions)
@@ -34,7 +35,7 @@ import Wiki.Server.Guide
 import Wiki.Server.Options qualified as Options
 import Wiki.Server.Storage (Config (..), Storage, Who (..), defaultConfig, reading, runStoredWiki, withStorage, writing)
 import Wiki.Server.Storage.Audit (operator)
-import Wiki.Server.Storage.Rows (loadPages, loadSpaces, settingValue, storeSetting, updatePageText)
+import Wiki.Server.Storage.Rows (loadPages, loadSpaces, setPageKindRow, settingValue, storeSetting, updatePageText)
 
 spec :: Backing -> Spec
 spec backing = describe "the guide" $ do
@@ -153,7 +154,7 @@ updating backing = describe "updating it to this release" $ do
       -- page (nor its subpages): a later release adds them.
       for_ ["Diagrams", "Mathematics", "Presentations", "Markdown guide"] $ \t -> runStoredWiki st Administrator (deletePage (at t).id) >>= ok
       let tour = at "Tour"
-      writing st (storeSetting "guide-installed" (decodeUtf8 (BSL.toStrict (encode Installed {space = g.id, pages = Map.fromList [("tour", writtenHash tour.title tour.body)]}))))
+      writing st (storeSetting "guide-installed" (decodeUtf8 (BSL.toStrict (encode Installed {space = g.id, pages = Map.fromList [("tour", writtenHash tour.title tour.body)], kinds = mempty}))))
       added <- updateGuide' st
       added `shouldBe` GuideUpdated {updated = [], added = ["markdown-guide", "markdown-guide/diagrams", "markdown-guide/mathematics", "markdown-guide/presentations"], current = 1, leftAlone = [], attachmentsLeftOut = []}
       markdown <- runStoredWiki st Administrator (getPage g.id [slug "markdown-guide"]) >>= ok
@@ -197,7 +198,7 @@ updating backing = describe "updating it to this release" $ do
         updatePageText tour.id tour.title old tour.updatedAt
         record <- (>>= decodeStrict' . encodeUtf8) <$> settingValue "guide-installed"
         for_ record $ \(i :: Installed) ->
-          storeSetting "guide-installed" (decodeUtf8 (BSL.toStrict (encode Installed {space = i.space, pages = Map.insert "tour" (writtenHash tour.title old) (Map.delete "" i.pages)})))
+          storeSetting "guide-installed" (decodeUtf8 (BSL.toStrict (encode Installed {space = i.space, pages = Map.insert "tour" (writtenHash tour.title old) (Map.delete "" i.pages), kinds = i.kinds})))
       done <- updateGuide' st
       case done of
         GuideUpdated {updated, leftAlone} -> (updated, leftAlone) `shouldBe` (["home page"], [])
@@ -207,6 +208,40 @@ updating backing = describe "updating it to this release" $ do
       -- The record is written as it is now.
       record <- reading st ((>>= decodeStrict' . encodeUtf8) <$> settingValue "guide-installed")
       ((\(i :: Installed) -> (Map.member "" i.pages, Map.member "tour" i.pages)) <$> record) `shouldBe` Just (True, False)
+
+  it "gives a page from before kinds the release's kind, and leaves a kind an administrator chose alone" $
+    withStorageIn backing $ \_ st -> do
+      _ <- installGuide st operator "console" >>= ok
+      g <- guideOf st
+      pages <- reading st (loadPages g.id)
+      let at title = maybe (panic ("no page " <> title)) identity (find (\p -> p.title == title) pages)
+          slides = at "Presentations"
+          maths = at "Mathematics"
+          diagrams = at "Diagrams"
+      slides.kind `shouldBe` Kind.Presentation
+      -- As a guide installed before pages had kinds: every page a
+      -- document, and a record of no kinds.
+      writing st $ do
+        setPageKindRow slides.id Kind.Document
+        record <- (>>= decodeStrict' . encodeUtf8) <$> settingValue "guide-installed"
+        for_ record $ \(i :: Installed) -> storeSetting "guide-installed" (decodeUtf8 (BSL.toStrict (encode i {kinds = mempty})))
+      -- An administrator edits Mathematics and makes it a presentation,
+      -- and makes Diagrams one without touching its text.
+      edited <- runStoredWiki st Administrator (savePage maths.id maths.updatedAt maths.title (maths.body <> "\nOur note.\n")) >>= ok
+      _ <- runStoredWiki st Administrator (setPageKind edited.id Kind.Presentation) >>= ok
+      _ <- runStoredWiki st Administrator (setPageKind diagrams.id Kind.Presentation) >>= ok
+      _ <- updateGuide' st
+      let kindAt path = (\p -> p.kind) <$> (runStoredWiki st Administrator (getPage g.id (map slug path)) >>= ok)
+      kindAt ["markdown-guide", "presentations"] `shouldReturn` Kind.Presentation
+      kindAt ["markdown-guide", "mathematics"] `shouldReturn` Kind.Presentation
+      kindAt ["markdown-guide", "diagrams"] `shouldReturn` Kind.Presentation
+      -- No version for the kind: the deck's text was the release's.
+      runStoredWiki st Administrator (listVersions slides.id latestVersions) >>= ok >>= (`shouldSatisfy` ((== 1) . length))
+      -- The record now says which kind the guide gave each page, so an
+      -- administrator's later choice of kind is theirs too.
+      _ <- runStoredWiki st Administrator (setPageKind slides.id Kind.Document) >>= ok
+      _ <- updateGuide' st
+      kindAt ["markdown-guide", "presentations"] `shouldReturn` Kind.Document
 
   it "tells the live channel of each page it rewrites, as a save does" $
     withPlaceIn backing $ \at -> do
@@ -280,7 +315,7 @@ earlierRelease st p path title body = writing st $ do
   updatePageText p.id title body p.updatedAt
   record <- (>>= decodeStrict' . encodeUtf8) <$> settingValue "guide-installed"
   for_ record $ \(i :: Installed) ->
-    storeSetting "guide-installed" (decodeUtf8 (BSL.toStrict (encode Installed {space = i.space, pages = Map.insert path (writtenHash title body) i.pages})))
+    storeSetting "guide-installed" (decodeUtf8 (BSL.toStrict (encode Installed {space = i.space, pages = Map.insert path (writtenHash title body) i.pages, kinds = i.kinds})))
 
 -- | The guide's space, which must be there.
 guideOf :: Storage -> IO Space

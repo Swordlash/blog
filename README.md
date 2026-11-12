@@ -291,7 +291,7 @@ them again; another browser or device starts with them closed. The start
 marker's exclamation mark keeps it apart from a wiki link: `[[spoiler]]`
 without it is a link to a page named `spoiler`. The other blocks of the wiki's
 own are written the same way, `[[!notes]]`, `[[!incremental]]` and
-`[[!div]]{.summary}` … `[[/name]]`, with `[[!slides]]`, `[[!pause]]` and
+`[[!div]]{.summary}` … `[[/name]]`, with `[[!style]]`, `[[!pause]]` and
 `[[!toc]]` one line each (see [Presentations](#presentations) and
 [docs/markdown.md](docs/markdown.md)). The toolbar's **Inline
 spoiler** and **Block spoiler** buttons write both kinds. Exported, a document
@@ -393,35 +393,32 @@ full.
 
 ## Presentations
 
-Any page can be a slide deck, and is an ordinary page all the same. This is the
+A presentation is a kind of page, chosen under **New page** beside a
+document, and its text is Markdown all the same. This is the
 demo's [Presentations](https://swordlash.github.io/blog/s/docs/p/markdown-guide/presentations/),
 whole:
 
 ````markdown
 # Presentations
 
-[[!slides]]{theme=beamer aspect=16:9}
+[[!style]]{theme=beamer aspect=16:9}
 
-Any page can be a slide deck. Press **Present** above the page: this one is a deck, and its slides tell you how it is written.
+A presentation is a kind of page: **New page** offers it beside a document. Press **Present** above the page: this one is a presentation, and its slides tell you how it is written.
 
 [[!notes]]
 These are the speaker's notes: on the page they are a box like this one; on the slides they are hidden until you press **n**.
 [[/notes]]
 
----
-
 ## Slides
 
-- A line with `---` alone on it, after a blank line, starts the next slide.
-- The first heading on a slide is its title; a `#` heading makes a title slide, like this deck's first.
+- A `##` heading starts the next slide, and is its title; a `#` heading makes a title slide, like this deck's first.
+- A `###` heading is a heading on its slide, and `---` a rule.
 - `[[!notes]]`, the notes, then `[[/notes]]` hold what only the speaker sees.
 - Everything a page shows, a slide shows: tables, code, formulas, diagrams.
 
 [[!notes]]
-Mention that a page with no `---` is one slide, and is not offered as a deck.
+Mention that a presentation with no `##` heading is one slide.
 [[/notes]]
-
----
 
 ## Formulas
 
@@ -435,27 +432,21 @@ $$
 The macros a page defines hold on every slide after the one that defines them.
 [[/notes]]
 
----
-
 ## A diagram
 
 ```mermaid
 flowchart LR
-  page[A page] -->|---| slides[Slides]
+  page[A presentation] -->|## headings| slides[Slides]
   slides --> screen[Full screen]
   slides --> paper[Print to PDF]
 ```
 
----
-
 ## Code
 
 ```haskell
--- A deck is a page's Markdown, cut at its breaks.
+-- A deck is a presentation's Markdown, cut at its headings.
 deckOf :: [Block] -> Deck
 ```
-
----
 
 ## Presenting
 
@@ -469,8 +460,6 @@ deckOf :: [Block] -> Deck
 | o | every slide, to pick one |
 
 On a touch screen, swipe. **Print** puts one slide on each page: choose "Save as PDF" to keep the deck as a file.
-
----
 
 ## Steps
 
@@ -488,11 +477,9 @@ On the page itself a pause shows nothing. Printed, each slide is whole, unless y
 A pause is pandoc's in an export, so the Beamer export shows the same steps.
 [[/notes]]
 
----
-
 ## One item at a time
 
-A list between `[[!incremental]]` and `[[/incremental]]` shows its items one by one:
+A list between `[[!incremental]]` and `[[/incremental]]`, or after a line `{.incremental}`, shows its items one by one:
 
 [[!incremental]]
 - each press of → or Space shows the next item;
@@ -500,14 +487,12 @@ A list between `[[!incremental]]` and `[[/incremental]]` shows its items one by 
 - off the slides, it is an ordinary list.
 [[/incremental]]
 
----
-
 ## Themes
 
-A `[[!slides]]` line at the top level of the page says how the slides look:
+A `[[!style]]` line at the top level of the page says how the slides look:
 
 ```markdown
-[[!slides]]{theme=dark aspect=4:3}
+[[!style]]{theme=dark aspect=4:3}
 ```
 
 Themes are `beamer` (the default), `light` and `dark`; slides are `16:9` (the default) or `4:3`.
@@ -516,25 +501,27 @@ Themes are `beamer` (the default), `light` and `dark`; slides are `16:9` (the de
 It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-guide/presentations/slides/)
 (`Wiki.Core.Slides` cuts them):
 
-- **What makes it a deck.** There is no front matter: a page with a `---` at
-  its top level is a deck, and so is one with a `[[!slides]]` line, which
-  says how the deck looks and shows nothing itself: `theme=beamer` (the
-  default: a title bar, and a footer with the page's title and the slide's
-  number), `light` or `dark`, and `aspect=16:9` (the default) or `4:3`.
-- **Slides.** A `---` on a line of its own, after a blank line, starts the next
-  slide (inside a list, a quotation or a box it stays a rule). The first heading
-  on a slide is its title; a slide titled with a `#` heading is a title slide.
-  Formulas, diagrams, pictures, code, tables and images are on a slide as on a
-  page, with the macros defined on the slides before.
+- **What makes it a deck.** Its kind: a presentation is made with **New
+  page**, or made one with **Presentation** among a page's actions, and
+  nothing in its text makes it one. A `[[!style]]` line says how the deck
+  looks and shows nothing itself: `theme=beamer` (the default: a title bar,
+  and a footer with the page's title and the slide's number), `light` or
+  `dark`, and `aspect=16:9` (the default) or `4:3`.
+- **Slides.** Each `##` heading of the page's top level starts a slide and is
+  its title, and each `#` heading a title slide; a heading inside a list, a
+  quotation or a box, and a `###` heading, is a heading on its slide, and a
+  `---` a rule. Formulas, diagrams, pictures, code, tables and images are on a
+  slide as on a page, with the macros defined on the slides before.
 - **Notes.** `[[!notes]]` … `[[/notes]]` holds the speaker's notes of its
   slide: a box on the page, hidden on the slide until **n** shows them under
   it.
 - **Steps.** `[[!pause]]`, a line of its own, is a pause: the slide shows what
   comes after it one press later. A list between `[[!incremental]]` and
-  `[[/incremental]]` shows one item at a time. On the page, a pause shows
+  `[[/incremental]]`, or after a line `{.incremental}`, shows one item at a
+  time. On the page, a pause shows
   nothing and the list is an ordinary one. The Beamer export makes the same
   steps, one PDF page each.
-- **Showing it.** "Present", above a page that is a deck, opens it full screen:
+- **Showing it.** "Present", above a presentation, opens it full screen:
   the arrow keys, Space, PageUp and PageDown move, Home and End go to the ends,
   **f** fills the screen, **o** shows every slide to pick one, and on a touch
   screen a swipe moves; the next key shows a slide's next step before the next
@@ -544,7 +531,7 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   "with notes" prints each slide on an A4 page above its notes, and "each step
   on its own page" prints a page for each step.
 - **Exporting it.** On a wiki served by `wiki-server` (the demo has no server,
-  so no "Export"), "Export" above a deck downloads it as PowerPoint, as Beamer
+  so no "Export"), "Export" above a presentation downloads it as PowerPoint, as Beamer
   LaTeX, or as a Beamer PDF where the server's `xelatex` works: its slides cut as
   "Present" cuts them, a first title slide made the title page, the notes as
   Beamer's notes or PowerPoint's speaker notes, `beamer` as Beamer's Madrid

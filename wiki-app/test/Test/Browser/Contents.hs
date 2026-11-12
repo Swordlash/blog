@@ -27,7 +27,8 @@ import Wiki.App.Backend.Mem (runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
-import Wiki.Core.Page (Page (body, template))
+import Wiki.Core.Page (Page (body, kind, template))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Space (Space (id))
 
 -- Where things are in the window (test/jsbits/test-layout.js).
@@ -178,6 +179,46 @@ spec m = do
     T.take 18 made.body `shouldBe` "# Pick a database\n"
     made.body `shouldSatisfy` T.isInfixOf "| **Written by** | Edgar Editor |"
     made.body `shouldSatisfy` (not . T.isInfixOf "{{")
+
+  it "makes a presentation, offering a presentation's templates only, and starts a document again blank" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-editor") (NewPage (slugs ["blog"]) Nothing)
+    kinds <- traverse textContent =<< findAll ui ".new-page-kind-choice"
+    map (T.takeWhile (/= ' ') . T.strip) kinds `shouldBe` ["Document", "Presentation"]
+    chooseKind ui "Presentation"
+    eventually $ (map (T.takeWhile (/= ' ') . T.strip) <$> (traverse textContent =<< findAll ui ".new-page-choice")) `shouldReturn` ["Blank", "Starter"]
+    chooseStart ui "Starter deck"
+    -- Back to a document: its templates, and blank again.
+    chooseKind ui "Document"
+    eventually $ (map (T.takeWhile (/= ' ') . T.strip) <$> (traverse textContent =<< findAll ui ".new-page-choice")) `shouldReturn` ["Blank", "Meeting", "Decision", "How-to"]
+    checked <- filterM (\c -> (== "true") <$> (findIn c "input" >>= (`getProperty` "checked"))) =<< findAll ui ".new-page-choice"
+    traverse (fmap (T.takeWhile (/= ' ') . T.strip) . textContent) checked `shouldReturn` ["Blank"]
+    chooseKind ui "Presentation"
+    find ui ".new-page-title" >>= (`typeText` "Quarterly review")
+    chooseStart ui "Starter deck"
+    find ui ".new-page-view button.primary" >>= click
+    find ui ".editor-heading" >>= (`shouldHaveText` "Editing Quarterly review")
+    made <- readPage wiki ["blog"] ["quarterly-review"]
+    made.kind `shouldBe` Kind.Presentation
+    T.take 19 made.body `shouldBe` "# Quarterly review\n"
+    made.body `shouldSatisfy` (not . T.isInfixOf "{{")
+
+  it "makes a page a presentation, which is offered to be presented, and a document again" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-admin") (Page (slugs ["docs"]) (slugs ["markdown-guide", "diagrams"]))
+    toggle <- find ui ".page-actions .page-kind"
+    getAttribute toggle "aria-pressed" `shouldReturn` Just "false"
+    length <$> findAll ui ".page-actions a.page-present" `shouldReturn` 0
+    click toggle
+    _ <- find ui ".page-actions a.page-present"
+    find ui ".page-actions .page-kind" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
+    (\p -> p.kind) <$> readPage wiki ["docs"] ["markdown-guide", "diagrams"] `shouldReturn` Kind.Presentation
+    find ui ".page-actions .page-kind" >>= click
+    eventually $ length <$> findAll ui ".page-actions a.page-present" `shouldReturn` 0
+    (\p -> p.kind) <$> readPage wiki ["docs"] ["markdown-guide", "diagrams"] `shouldReturn` Kind.Document
+
+  it "keeps a space's home page a document: it has no choice of kind" $ runPage $ do
+    ui <- start m (Just "user-admin") (Space (slugs ["docs"]))
+    _ <- find ui ".page-actions"
+    length <$> findAll ui ".page-actions .page-kind" `shouldReturn` 0
   where
     -- The links marked as the section being read, in every list of the
     -- page's headings.
@@ -193,6 +234,12 @@ spec m = do
       case mapMaybe (readMaybe . T.unpack) (T.words found) of
         [top, bottom, window] -> pure (top, bottom, window :: Double)
         _ -> expectationFailure "no footnote" >> pure (0, 0, 0)
+    chooseKind ui label = do
+      choices <- findAll ui ".new-page-kind-choice"
+      labelled <- filterM (fmap (T.isPrefixOf label . T.strip) . textContent) choices
+      case labelled of
+        c : _ -> findIn c "input" >>= click
+        [] -> expectationFailure ("no kind says " <> toS label)
     chooseStart ui label = do
       choices <- findAll ui ".new-page-choice"
       labelled <- filterM (fmap (T.isPrefixOf label . T.strip) . textContent) choices

@@ -387,6 +387,8 @@ postHtml base boxes spaces space pages p = case Md.parseMarkdown p.body of
     options =
       Md.defaultOptions
         { Md.resolveLink = resolve
+        , -- A feed reader shows an embedded presentation as its link.
+          Md.deckEmbed = Nothing
         , Md.pageHref = \(PageLink r fragment) -> addressOf base (Duplex.print route r) <> fragment
         , -- A feed reader has no stylesheet to show them on hover.
           Md.headingAnchors = False

@@ -228,7 +228,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
     let docsOf st = fromMaybe (panic "the demo has no Docs") (find (\s -> s.name == "Docs") (Map.elems st.spaces))
         titled t st = fromMaybe (panic ("no page " <> t)) (find (\p -> p.title == t) (Map.elems st.pages))
         guide = titled "Markdown guide" seed
-        unrooted = Page {id = guide.id, space = guide.space, parent = Nothing, title = guide.title, slug = guide.slug, body = guide.body, attachments = guide.attachments, createdAt = guide.createdAt, updatedAt = guide.updatedAt, position = guide.position, template = guide.template, createdBy = guide.createdBy, updatedBy = guide.updatedBy}
+        unrooted = Page {id = guide.id, space = guide.space, parent = Nothing, title = guide.title, slug = guide.slug, body = guide.body, attachments = guide.attachments, createdAt = guide.createdAt, updatedAt = guide.updatedAt, position = guide.position, template = guide.template, kind = guide.kind, createdBy = guide.createdBy, updatedBy = guide.updatedBy}
         older = seed {pages = Map.insert guide.id unrooted seed.pages}
     runMemDOM (IDB.writeMany db (changes mempty (records older)))
     upgraded <- open db

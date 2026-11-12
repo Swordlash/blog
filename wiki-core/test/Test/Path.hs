@@ -10,6 +10,7 @@ import Test.QuickCheck (forAll, (===))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Path
 import Wiki.Core.Slug
 import Wiki.Core.Space
@@ -51,6 +52,7 @@ page sp i s parent =
     , updatedAt = epoch
     , position = 0
     , template = False
+    , kind = Document
     , createdBy = Nothing
     , updatedBy = Nothing
     }

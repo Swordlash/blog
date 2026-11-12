@@ -65,6 +65,7 @@ import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Notification (..), PageLocation (..), WatchTarget (..), maxListed)
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..), rootPage)
@@ -273,6 +274,7 @@ crowd st users watches = do
           , updatedAt = now
           , position = 100 + i
           , template = False
+          , kind = Kind.Document
           , createdBy = Nothing
           , updatedBy = Nothing
           }
@@ -343,6 +345,7 @@ addPagesWith st space name body n = do
           , updatedAt = now
           , position = 1000 + i
           , template = False
+          , kind = Kind.Document
           , createdBy = Nothing
           , updatedBy = Nothing
           }

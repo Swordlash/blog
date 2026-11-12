@@ -8,6 +8,7 @@ import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Gen, arbitrary, chooseInt, elements, forAll, frequency, listOf, listOf1, vectorOf, (===))
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Search
 import Wiki.Core.Slug (Slug, foldLetter, mkSlug)
 
@@ -30,6 +31,7 @@ page spaceSlug title body path =
       , updatedAt = epoch
       , position = 0
       , template = False
+      , kind = Document
       , createdBy = Nothing
       , updatedBy = Nothing
       }

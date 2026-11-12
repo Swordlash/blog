@@ -1420,6 +1420,13 @@ select {
   border: 0;
 }
 
+/* On a slide, the slide's body caps the frame (wiki-app/jsbits/islands.js),
+   not the window: nothing in a slide's layout depends on the window, so
+   that the editor's measure of a slide is the slide as presented. */
+.slide .wiki-html {
+  max-height: none;
+}
+
 /* An interactive SVG (Wiki.Core.Markdown.Frame; Wiki.App.Islands'
    SvgFrame): a frame as wide as the text, at the height its height
    attribute gives, which the reader can drag taller or shorter by its
@@ -2478,11 +2485,20 @@ pre.numbered > code {
 
 /* ---- Slides ------------------------------------------------------------ */
 
+/* A document's address of slides: a note in the page, with a link back to
+   the document (Wiki.App.View.Slides). */
+.slides-not-presentation {
+  max-width: 40rem;
+  margin: 2rem auto;
+}
+
 /* A page presented as slides (Wiki.App.View.Slides) covers the whole window,
    over the frame, which stays where it was beneath. Each theme sets the
    slide's own colours; the dark frame around a slide, the notes and the
    controls are the page's. */
-.slides-view {
+.slides-view,
+.slides-preview,
+.deck-embed {
   --slide-ratio: 16 / 9;
   --slide-background: #ffffff;
   --slide-text: #1f2328;
@@ -2490,6 +2506,9 @@ pre.numbered > code {
   --slide-bar: #23376e;
   --slide-bar-text: #ffffff;
   --slide-muted: #59636e;
+}
+
+.slides-view {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -2503,8 +2522,188 @@ body:has(.slides-view) {
   overflow: hidden;
 }
 
-.slides-view.slides-standard {
+.slides-view.slides-standard,
+.slides-preview.slides-standard,
+.deck-embed.slides-standard {
   --slide-ratio: 4 / 3;
+}
+
+/* The editor's preview of a presentation (Wiki.App.View.Preview): its
+   slides as cards, one under the other, each with its notes under it,
+   every step shown. Each slide is laid out 1024px wide, where it is
+   measured (wiki-app/jsbits/slide-fit.js), and scaled to the pane by a
+   transform, which leaves the layout as it is; a card not shown is laid
+   out off the pane. */
+.slides-preview {
+  position: relative;
+}
+
+.slides-preview .slide-frame {
+  position: relative;
+  display: flex;
+  margin-bottom: 1.5rem;
+}
+
+.slides-preview .slide-frame.slide-offstage {
+  position: absolute;
+  top: 0;
+  left: -40000px;
+  width: 1024px;
+  visibility: hidden;
+}
+
+.slides-preview .slide-scaled {
+  height: calc(1024px / (var(--slide-ratio)) * var(--slide-scale, 1));
+  overflow: hidden;
+}
+
+.slides-preview .slide-slot {
+  flex: none;
+  width: 1024px;
+  aspect-ratio: var(--slide-ratio);
+  transform: scale(var(--slide-scale, 1));
+  transform-origin: 0 0;
+}
+
+/* A presentation's viewer in a page (Wiki.App.View.DeckViewer): the
+   slide shown as the preview's card, as wide as the viewer, with its
+   controls under it. It is sized as the slides view is, by the slide's
+   container alone (the slide's width and type are in container units):
+   no script sets its size, so the page the server renders is the page the
+   program shows. The other slides are not shown. The fit and the speaker
+   notes are the editor's, not shown here. Printed, the slide alone,
+   whole. */
+.deck-embed {
+  display: block;
+  max-width: 48rem;
+  margin: 1rem 0;
+  outline: none;
+}
+
+.deck-embed:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.page-deck .deck-embed {
+  max-width: none;
+}
+
+.deck-embed .slide-frame {
+  display: flex;
+  margin-bottom: 0.5rem;
+}
+
+.deck-embed .slide-frame.slide-offstage {
+  display: none;
+}
+
+.deck-embed .slide-slot {
+  flex: none;
+  width: 100%;
+  aspect-ratio: var(--slide-ratio);
+}
+
+.deck-embed .slide-fit,
+.deck-embed .slide-notes {
+  display: none;
+}
+
+.deck-embed-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.deck-embed-position {
+  min-width: 4rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.deck-embed-present {
+  margin-left: auto;
+}
+
+@media print {
+  .deck-embed-controls,
+  .deck-embed .slide-offstage {
+    display: none;
+  }
+}
+
+/* Whether a card's content fits: a dot at its corner, grey until
+   measured, green, yellow or red. */
+.slide-fit {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 1;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--fit-colour, #8c959f);
+  box-shadow: 0 0 0 2px var(--background);
+}
+
+.slide-fit-fits,
+.cm-wiki-fit-fits {
+  --fit-colour: #1a7f37;
+}
+
+.slide-fit-tight,
+.cm-wiki-fit-tight {
+  --fit-colour: #bf8700;
+}
+
+.slide-fit-overflowing,
+.cm-wiki-fit-overflowing {
+  --fit-colour: #cf222e;
+}
+
+/* A slide's body ends with an empty mark, which the measure finds its
+   content's end by. */
+.slide-end {
+  display: block;
+  height: 0;
+}
+
+/* A presentation's preview is always laid out, so that its slides are
+   measured: off the screen while it is not shown. */
+.editor-form.deck .editor-panes .editor-preview {
+  display: block;
+  position: fixed;
+  top: 0;
+  left: -40000px;
+  width: 1024px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@media (min-width: 961px) {
+  .editor-form.deck.side-by-side:not(.conflicting) .editor-panes .editor-preview {
+    position: static;
+    width: auto;
+    visibility: visible;
+    pointer-events: auto;
+  }
+}
+
+.editor-form.deck.previewing .editor-panes .editor-preview {
+  position: static;
+  width: auto;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.slides-preview .slide {
+  box-shadow: 0 0.25rem 1rem rgb(0 0 0 / 25%);
+}
+
+.slides-preview .slide-notes {
+  display: block;
+  max-height: none;
 }
 
 .slides-theme-light {
@@ -3396,6 +3595,72 @@ body:has(.slides-view) {
   gap: 0.4rem;
 }
 
+/* A presentation's controls in the editor's toolbar (WP5.97): the switch
+   between slide by slide and the raw Markdown, and the mode's button. */
+.editor-slides-mode {
+  display: inline-flex;
+}
+
+.editor-slides-mode button + button {
+  margin-left: -1px;
+}
+
+.editor-slides-note {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* A slide's controls at the start of its first line in the editor: the
+   handle it is dragged by, and the button that opens or closes it. Where
+   a dragged slide would go is marked by a line above the slide it would go
+   before, or below the last line. */
+.cm-wiki-slide-controls {
+  display: inline-flex;
+  gap: 0.15rem;
+  margin-right: 0.3rem;
+  user-select: none;
+  vertical-align: baseline;
+}
+
+.cm-wiki-slide-handle {
+  cursor: grab;
+  color: var(--muted);
+}
+
+.cm-wiki-slide-toggle {
+  padding: 0 0.2rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.cm-wiki-slide-toggle:hover,
+.cm-wiki-slide-handle:hover {
+  color: var(--accent);
+}
+
+.cm-wiki-slide-fit {
+  display: inline-block;
+  align-self: center;
+  width: 0.55em;
+  height: 0.55em;
+  margin: 0 0.2rem;
+  border-radius: 50%;
+  background: var(--fit-colour, #8c959f);
+}
+
+.cm-wiki-slide-drop {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.cm-wiki-slide-drop-end {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.editor-slides-mode [aria-pressed="true"],
+.editor-one-slide[aria-pressed="true"],
 .editor-side-by-side[aria-pressed="true"],
 .editor-macros-toggle[aria-pressed="true"] {
   border-color: var(--accent);
@@ -6983,7 +7248,8 @@ a.mention {
   font-size: 0.925rem;
 }
 
-.use-as-template[aria-pressed="true"] {
+.use-as-template[aria-pressed="true"],
+.page-kind[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -7009,7 +7275,9 @@ a.mention {
   padding: 0.12rem 0;
 }
 
-/* What a new page starts from: blank, or a template. */
+/* What a new page is, a document or a presentation, and what it starts
+   from: blank, or a template of that kind. */
+.new-page-kind,
 .new-page-start {
   display: flex;
   flex-basis: 100%;
@@ -7020,6 +7288,7 @@ a.mention {
   border: none;
 }
 
+.new-page-kind legend,
 .new-page-start legend {
   margin-bottom: 0.3rem;
   font-weight: 600;

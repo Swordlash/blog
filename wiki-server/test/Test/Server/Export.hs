@@ -47,6 +47,7 @@ import Wiki.Core.Markdown.Ast (Block (Div, Footnotes, Heading, List, Para, Pause
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..), BoxNumbering (..), Numbering (..), noNumbers)
 import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slides (Deck (..), Slide (..), deckOf)
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..), rootPage)
@@ -449,15 +450,16 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
         (output, divClasses bs) `shouldBe` (output, [])
         (output, query pauses bs) `shouldBe` (output, [])
         (output, filter (`elem` [":::", ":::", ". . ."]) (words' bs)) `shouldBe` (output, [":::", ":::", ". . .", ". . ."])
-    it "shows a block never closed, a name the wiki does not have and a pause in a quotation as their lines and reasons" $ do
+    it "shows a block never closed and a name the wiki does not have as their lines and reasons, and reads a pause in a quotation" $ do
       bs <- blocksOf ToOther place "[[!oops]]\n\n> [[!pause]]\n\n[[!notes]]\nx\n"
       divClasses bs `shouldBe` []
       paragraphs bs
-        `shouldBe` [ "[[!oops]] — “oops” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, slides, pause, toc, in lower case"
-                   , "[[!pause]] — a pause is not read in a quotation or a footnote, which a deck shows whole"
+        `shouldBe` [ "[[!oops]] — “oops” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, style, pause, toc, in lower case"
                    , "[[!notes]] — the [[!notes]] block is not closed: add [[/notes]] after its last line"
                    , "x"
                    ]
+      deck <- blocksOf ToBeamer place "## A\n\n> a\n>\n> [[!pause]]\n>\n> b\n"
+      length (query pauses deck) `shouldBe` 1
     it "finds a pause and a line in red that are a list's items" $ do
       bs <- blocksOf ToBeamer place "## A\n\n- one\n- [[!pause]]\n- [[!oops]]\n"
       length (query pauses bs) `shouldBe` 1
@@ -627,38 +629,81 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
 
 slides :: Spec
 slides = describe "a deck, as pandoc's slide writers read it" $ do
-  it "cuts at the breaks, titles each slide with its first heading, and keeps the notes" $ do
-    bs <- blocksOf ToTeX place "# The deck\n\nBy me.\n\n---\n\n### A small title\n\nText.\n\n## Not the title\n\n[[!notes]]\nSay this.\n[[/notes]]\n\n---\n\nNo title here.\n"
+  it "cuts at the headings of level one and two, each its slide's title, keeps the notes, and a rule on its slide" $ do
+    bs <- blocksOf ToTeX place "Before the first.\n\n# The deck\n\nBy me.\n\n## One\n\n### A small title\n\nText.\n\n---\n\n> ## Quoted\n\n[[!notes]]\nSay this.\n[[/notes]]\n\n## Two\n"
     let out = slideBlocks bs
-    [l | P.Header l _ _ <- out] `shouldBe` [1, 2, 2, 3, 2]
-    query (\case P.Header _ _ xs -> [xs]; _ -> []) out `shouldBe` [[P.Str "The", P.Space, P.Str "deck"], [], [P.Str "A", P.Space, P.Str "small", P.Space, P.Str "title"], [P.Str "Not", P.Space, P.Str "the", P.Space, P.Str "title"], []]
+        title = P.Str "The" : P.Space : [P.Str "deck"]
+    [l | P.Header l _ _ <- out] `shouldBe` [2, 1, 2, 2, 3, 2]
+    take 4 (query (\case P.Header _ _ xs -> [xs]; _ -> []) out) `shouldBe` [[], title, [], [P.Str "One"]]
     [cls | P.Div (_, cls, _) _ <- out] `shouldBe` [["notes"]]
+    -- No rule is left for a writer to start a slide at.
+    query (\case P.HorizontalRule -> [()]; _ -> []) out `shouldBe` []
+    [t | P.RawBlock (P.Format "latex") t <- out] `shouldBe` ["\\par\\noindent\\rule{\\linewidth}{0.4pt}\\par"]
+    -- The heading in the quotation is below the slide level.
+    query (\case P.Header l _ [P.Str "Quoted"] -> [l]; _ -> []) out `shouldBe` [3]
+
+  it "puts a list after a line {.incremental} in an incremental box, for Beamer and PowerPoint" $
+    for_ [ToBeamer, ToPowerPoint] $ \output -> do
+      bs <- blocksOf output place "## A\n\n{.incremental}\n- a\n- b\n\n> {.incremental}\n> - c\n"
+      [(cls, length items) | P.Div (_, cls, _) [P.BulletList items] <- query (\case b@P.Div {} -> [b]; _ -> []) bs] `shouldBe` [(["incremental"], 2), (["incremental"], 1)]
 
   it "keeps a deck's pauses and incremental boxes for Beamer, where the wiki reads them, and three dots as text" $ do
     bs <- blocksOf ToBeamer place stepsDeck
     let latex = [t | P.RawBlock (P.Format "latex") t <- query (\case b@P.RawBlock {} -> [b]; _ -> []) bs]
-    -- The pause after "One", and the one that starts slide B: after a
-    -- break, the count of items starts again.
-    length (query pauses bs) `shouldBe` 2
+    -- The pause after "One", the one in the quotation, and the one that
+    -- starts slide B: at a slide's heading, the count of items starts
+    -- again.
+    length (query pauses bs) `shouldBe` 3
     latex `shouldBe` ["\\pause[\\value{beamerpauses}]"]
+    -- The pause among the words of "Two and a half", where it is.
+    query (\case P.Para xs -> [[t | P.RawInline (P.Format "latex") t <- xs]]; _ -> []) bs `shouldSatisfy` elem ["\\pause{}"]
     divClasses bs `shouldSatisfy` elem ["incremental"]
     [inner | P.BlockQuote inner <- query (\case b@P.BlockQuote {} -> [b]; _ -> []) bs]
-      `shouldBe` [[P.Div ("", ["nonincremental"], []) [P.Para [P.Str ". . ."], P.BulletList [[P.Plain [P.Str "q"]]]]]]
+      `shouldBe` [[P.Div ("", ["nonincremental"], []) [P.Para [P.Str ". . ."], P.Para [P.Str ".", P.Space, P.Str ".", P.Space, P.Str "."], P.BulletList [[P.Plain [P.Str "q"]]]]]]
     [inner | P.Div (_, ["notes"], _) inner <- query (\case b@P.Div {} -> [b]; _ -> []) bs]
       `shouldBe` [[P.Para [P.Str "Say."], P.Para [P.Str "More."]]]
     query (\case P.Note inner -> [inner]; _ -> []) bs `shouldBe` [[P.Para [P.Str ". . ."]]]
     [() | P.Para [P.Str ". . ."] <- bs] `shouldBe` [()]
 
+  it "puts a pause among words where its marker was, adding nothing around it, for Beamer and PowerPoint" $ do
+    let cases =
+          [ ("Hello[[!pause]]!", "Hello<P>!")
+          , ("End[[!pause]]", "End<P>")
+          , ("[[!pause]]Start", "<P>Start")
+          , ("Two [[!pause]] words", "Two <P> words")
+          , ("a[[!pause]][[!pause]]b", "a<P><P>b")
+          , ("- x[[!pause]]y", "x<P>y")
+          , ("- [[!pause]]z", "<P>z")
+          ]
+        -- A paragraph's or an item's text, a pause written <P>.
+        shown pause = query $ \case
+          P.Para xs -> [foldMap (inline pause) xs]
+          P.Plain xs -> [foldMap (inline pause) xs]
+          _ -> []
+        inline pause = \case
+          P.Str t -> t
+          P.Space -> " "
+          P.RawInline (P.Format "latex") t | "\\pause" `T.isPrefixOf` t -> pause
+          _ -> "?"
+    for_ cases $ \(source, expected) -> do
+      beamer <- blocksOf ToBeamer place ("## A\n\n" <> source <> "\n")
+      shown "<P>" beamer `shouldBe` [expected]
+      powerPoint <- blocksOf ToPowerPoint place ("## A\n\n" <> source <> "\n")
+      shown "<P>" powerPoint `shouldBe` [T.replace "<P>" "" expected]
+
   it "leaves a deck's pauses out of PowerPoint, which has none, and keeps its incremental boxes" $ do
     bs <- blocksOf ToPowerPoint place stepsDeck
     length (query pauses bs) `shouldBe` 0
     raw bs `shouldBe` []
+    query (\case x@(P.Span _ _) -> [x]; _ -> []) bs `shouldBe` []
     divClasses bs `shouldSatisfy` elem ["incremental"]
 
   it "leaves the pauses out of any other document, where three dots are text" $
     for_ [ToTeX, ToOther] $ \output -> do
       bs <- blocksOf output place stepsDeck
       query pauses bs `shouldBe` []
+      query (\case x@(P.Span _ _) -> [x]; _ -> []) bs `shouldBe` []
+      show bs `shouldNotSatisfy` T.isInfixOf "wikibox"
       query (\case P.Note inner -> [inner]; _ -> []) bs `shouldBe` [[P.Para [P.Str ". . ."]]]
       [() | P.Para [P.Str ". . ."] <- bs] `shouldBe` [()]
       divClasses bs `shouldSatisfy` elem ["incremental"]
@@ -668,9 +713,11 @@ slides = describe "a deck, as pandoc's slide writers read it" $ do
     Map.lookup "aspectratio" meta `shouldBe` Just (P.MetaString "43")
     Map.lookup "title" meta `shouldBe` Just (P.MetaInlines [P.Str "Deck"])
 
--- | A deck with steps: pauses (one in the notes), an incremental box, and
--- three dots, which are text wherever they are (alone in a paragraph, a
--- quotation, a footnote).
+-- | A deck with steps: pauses (one in the notes, one in a quotation, one
+-- among a paragraph's words), an
+-- incremental box, three dots, which are text wherever they are (alone in
+-- a paragraph, a quotation, a footnote), and a rule, which is no slide's
+-- end.
 stepsDeck :: Text
 stepsDeck =
   T.unlines
@@ -680,7 +727,7 @@ stepsDeck =
     , ""
     , "[[!pause]]"
     , ""
-    , "Two"
+    , "Two [[!pause]] and a half"
     , ""
     , "[[!incremental]]"
     , "- a"
@@ -694,6 +741,8 @@ stepsDeck =
     , ". . ."
     , ""
     , "> . . ."
+    , ">"
+    , "> [[!pause]]"
     , ">"
     , "> - q"
     , ""
@@ -710,6 +759,8 @@ stepsDeck =
     , "[^1]: . . ."
     , ""
     , "---"
+    , ""
+    , "A rule, on its slide."
     , ""
     , "## B"
     , ""
@@ -857,7 +908,7 @@ overHttp backing = describe "over HTTP" $ do
     tex `shouldSatisfy` T.isInfixOf "\\int_{-\\infty}^{\\infty}"
 
   it "exports a deck's steps as Beamer's overlays and PowerPoint's animation, and leaves them out elsewhere" $ withDemoRunning backing identity $ \r -> do
-    pid <- newPage r "Steps" stepsDeck
+    pid <- newPageOf Presentation r "Steps" stepsDeck
     let export format = getUrl r (r.admin <> "/admin/" <> links.pages.export pid format) >>= (`exported` format)
     tex <- decodeUtf8 <$> export BeamerTex
     tex `shouldSatisfy` T.isInfixOf "\\pause\n"
@@ -865,7 +916,7 @@ overHttp backing = describe "over HTTP" $ do
     tex `shouldSatisfy` T.isInfixOf "\\begin{itemize}[<+->]"
     slideFiles <- Map.filterWithKey (\n _ -> "ppt/slides/slide" `T.isPrefixOf` n && ".xml" `T.isSuffixOf` n) <$> (zipped =<< export Pptx)
     -- The title slide, the deck's two and pandoc's slide of footnotes: a
-    -- pause makes no slide.
+    -- pause makes no slide, and neither does a rule.
     Map.size slideFiles `shouldBe` 4
     -- The incremental list is built item by item; no pause is written out,
     -- and the three dots, alone, in the quotation and in the footnote, are text.
@@ -904,7 +955,7 @@ overHttp backing = describe "over HTTP" $ do
 
   it "offers presentations only of a deck, and refuses a format it cannot make, saying why" $ withDemoRunning backing identity $ \r -> do
     (docs, pages) <- docsIds r
-    getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pptx) >>= jsonAs 400 >>= (`shouldBe` Invalid "Only a page written as slides exports as a presentation.")
+    getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pptx) >>= jsonAs 400 >>= (`shouldBe` Invalid "Only a presentation exports as slides.")
     getUrl r (r.public <> "/" <> links.spaces.export docs.id BeamerTex) >>= jsonAs 400 >>= (`shouldBe` Invalid "A space exports as a document, not a presentation.")
 
   it "exports a space as one DOCX: a title page, a table of contents and every page in order" $ withDemoRunning backing identity $ \r -> do
@@ -936,9 +987,13 @@ overHttp backing = describe "over HTTP" $ do
 -- | An export from the public listener, which must have been made.
 -- | A new page at the top of the Docs space, made by the operator.
 newPage :: (HasCallStack) => Running -> Text -> Text -> IO PageId
-newPage r title body = do
+newPage = newPageOf Document
+
+-- | 'newPage' of a kind: a presentation is what exports as slides.
+newPageOf :: (HasCallStack) => PageKind -> Running -> Text -> Text -> IO PageId
+newPageOf kind r title body = do
   docs <- spaceAt r "docs"
-  made <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) NewPage {parent = Nothing, title, body} >>= jsonAs 201
+  made <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) NewPage {parent = Nothing, title, body, kind} >>= jsonAs 201
   pure (made :: Page).id
 
 exported' :: (HasCallStack) => Running -> PageId -> ExportFormat -> IO ByteString
@@ -1016,7 +1071,7 @@ pdfs backing = describe "PDFs, typeset by xelatex" $ do
     tex <- texEngine
     when (isNothing tex) (pendingWith "xelatex is not on this machine: TeX's limits were not tested against it")
     docs <- spaceAt r "docs"
-    made <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) NewPage {parent = Nothing, title = "Prying", body = "Here: $\\input{/etc/passwd}$ and\n\n```tikz\n\\node {\\input{/etc/passwd}};\n```\n"} >>= jsonAs 201
+    made <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) NewPage {parent = Nothing, title = "Prying", body = "Here: $\\input{/etc/passwd}$ and\n\n```tikz\n\\node {\\input{/etc/passwd}};\n```\n", kind = Document} >>= jsonAs 201
     reply <- getUrl r (r.admin <> "/admin/" <> links.pages.export (made :: Page).id Pdf)
     -- Refused, as TeX cannot open the file; or made without it.
     BSL.toStrict reply.body `shouldSatisfy` (not . ("root:" `BS.isInfixOf`))
@@ -1170,7 +1225,7 @@ pdfs backing = describe "PDFs, typeset by xelatex" $ do
     BS.take 5 bytes `shouldBe` "%PDF-"
     -- A page for each step of the deck, after the title's page: the steps
     -- the browser shows.
-    pid <- newPage r "Steps" stepsDeck
+    pid <- newPageOf Presentation r "Steps" stepsDeck
     pdf <- getUrl r (r.admin <> "/admin/" <> links.pages.export pid BeamerPdf) >>= (`exported` BeamerPdf)
     pdfPages pdf `shouldReturn` (1 + sum (map (\s -> s.steps) (either (panic . show) deckOf (parseMarkdown stepsDeck)).slides))
     -- The headers say nothing a browser would act on but the download.

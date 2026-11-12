@@ -7,6 +7,7 @@ import Protolude
 import Test.Hspec
 import Wiki.Api.Import
 import Wiki.App.Import
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug)
 
@@ -17,7 +18,7 @@ ref :: Text -> Text -> PageRef
 ref s p = PageRef {space = slugs s, page = slugs p}
 
 conflict :: Bool -> Maybe PageConflict
-conflict same = Just PageConflict {title = "The server's", updatedAt = UTCTime (fromGregorian 2026 10 1) 0, sameContent = same}
+conflict same = Just PageConflict {title = "The server's", updatedAt = UTCTime (fromGregorian 2026 10 1) 0, sameContent = same, kind = Kind.Document, importedKind = Kind.Document}
 
 newPage :: Text -> Text -> PagePlan
 newPage p title = PagePlan {path = slugs p, title, attachments = 0, conflict = Nothing}

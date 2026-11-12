@@ -1,7 +1,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | A page presented as slides, in a browser, over the demo's wiki: offered
--- from a page written as a deck, one slide at a time, moved through by the
+-- | A presentation shown as slides, in a browser, over the demo's wiki:
+-- offered from the page, and not offered for a document, one slide at a time, moved through by the
 -- keys with the slide kept in the address, its islands drawn on the slide
 -- shown, its notes and its overview opened and closed, its steps shown and
 -- hidden in place, and left by its link back to the page.
@@ -51,11 +51,16 @@ spec m = do
     find ui ".page-body h1" >>= (`shouldHaveText` "Presentations")
     length <$> findAll ui ".slides-view" `shouldReturn` 0
 
-  it "does not offer a page that is not a deck, which still shows as one slide" $ runPage $ do
-    ui <- start m Nothing (PageSlides (slugs ["docs"]) (slugs ["tour"]) 1 1)
-    length <$> findAll ui ".slide-frame" `shouldReturn` 1
-    find ui ".slide-frame.current .slide-title" >>= (`shouldHaveText` "Tour")
-    find ui ".slides-position" >>= (`shouldHaveText` "1 / 1")
+  it "does not present a document: its address of slides says so, with a link to it" $ runPage $ do
+    ui <- start m Nothing (Page docs (slugs ["markdown-guide", "diagrams"]))
+    find ui ".page-body h1" >>= (`shouldHaveText` "Diagrams")
+    length <$> findAll ui ".page-view .actions a.page-present" `shouldReturn` 0
+    shown <- start m Nothing (PageSlides docs (slugs ["markdown-guide", "diagrams"]) 1 1)
+    find shown ".slides-not-presentation" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "is a document, not a presentation")
+    length <$> findAll shown ".slide-frame" `shouldReturn` 0
+    length <$> findAll shown ".slides-view" `shouldReturn` 0
+    find shown ".slides-not-presentation a.slides-back" >>= click
+    find shown ".page-body h1" >>= (`shouldHaveText` "Diagrams")
 
   it "moves with the keys and the buttons, keeping the slide in the address" $ runPage $ do
     ui <- start m Nothing (PageSlides docs presentations 1 1)
@@ -124,7 +129,7 @@ spec m = do
     press "n"
     find ui ".slides-view" >>= (`shouldHaveClass` "notes-open")
     shouldBeVisible notes
-    textContent notes >>= (`shouldSatisfy` T.isInfixOf "a page with no")
+    textContent notes >>= (`shouldSatisfy` T.isInfixOf "a presentation with no")
     find ui ".slides-view button.slides-notes-toggle" >>= (\b -> getAttribute b "aria-pressed") >>= (`shouldBe` Just "true")
     -- The next slide's notes, under it.
     press "ArrowRight"

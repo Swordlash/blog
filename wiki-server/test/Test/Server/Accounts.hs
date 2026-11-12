@@ -45,6 +45,7 @@ import Wiki.Api.Types (NewPage (..), NewSpace (..), PersonalSpaceSwitch (..), Se
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (SpaceId, UserId (..))
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
@@ -100,7 +101,7 @@ spaceIdAt :: Running -> [Header] -> Text -> IO SpaceId
 spaceIdAt r hs path = (\(s :: Space) -> s.id) <$> (spaceAt r hs path >>= jsonAs 200)
 
 newPage :: Running -> [Header] -> SpaceId -> IO Reply
-newPage r hs sid = send r methodPost (onPublic r (links.spaces.createPage sid)) ((hContentType, "application/json") : hs) (encode NewPage {parent = Nothing, title = "From a session", body = "Hello."})
+newPage r hs sid = send r methodPost (onPublic r (links.spaces.createPage sid)) ((hContentType, "application/json") : hs) (encode NewPage {parent = Nothing, title = "From a session", body = "Hello.", kind = Kind.Document})
 
 signingIn :: Backing -> Spec
 signingIn backing = describe "signing in" $ do

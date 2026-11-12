@@ -34,11 +34,13 @@
 module Wiki.Core.Markdown.Problems
   ( Problem (..)
   , ProblemKind (..)
+  , Severity (..)
   , kindName
   , IslandPlace (..)
   , Checked (..)
   , checkText
   , parserProblems
+  , kindProblems
   , islandPlaces
   , islandProblem
   , allProblems
@@ -56,6 +58,8 @@ import Wiki.Core.Markdown.Ast qualified as A
 import Wiki.Core.Markdown.Box (readAlertKind)
 import Wiki.Core.Markdown.Folds (Fold, foldsParsed, isSpoiler)
 import Wiki.Core.Markdown.Render (IslandKey (..), Options (..), defaultOptions, renderSections)
+import Wiki.Core.PageKind (PageKind (..))
+import Wiki.Core.Slides qualified as Slides
 
 -- | 'Problem' is a place in a page's source that does not render as
 -- written: its first and last line (from 1, the last one included), what
@@ -64,9 +68,22 @@ data Problem = Problem
   { from :: Int
   , to :: Int
   , kind :: ProblemKind
+  , severity :: Severity
   , message :: Text
   }
   deriving stock (Eq, Ord, Show)
+
+-- | 'Severity' is how much a 'Problem' matters, which the editor shows by
+-- its colour.
+data Severity
+  = -- | What is written does not render as meant: a marker shown in red,
+    -- a formula that cannot be typeset. Red.
+    Error
+  | -- | What is written renders, but not as its kind of page reads it: a
+    -- marker of presentations in a document, which shows nothing or a
+    -- plain box there, or a heading that opens no slide. Yellow.
+    Warning
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 -- | What a 'Problem' is in.
 data ProblemKind
@@ -84,6 +101,8 @@ data ProblemKind
     Marker
   | -- | A box's marker, @> [!KIND]@.
     Box
+  | -- | A presentation's slide whose content does not fit on it.
+    SlideFit
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 -- | The kind's name as the editor shows it beside a problem's message.
@@ -95,6 +114,7 @@ kindName = \case
   Spoiler -> "spoiler"
   Marker -> "block"
   Box -> "box"
+  SlideFit -> "slide"
 
 -- | 'IslandPlace' is where an island that can fail is written in the
 -- source: its first and last line, and its kind. Listings are not among
@@ -115,6 +135,9 @@ data Checked = Checked
   { problems :: [Problem]
   , islands :: Map IslandKey IslandPlace
   , folds :: [Fold]
+  , slides :: [Slides.SlideSpan]
+  -- ^ A presentation's slides, as its editor lists them
+  -- ('Slides.slideSpans'); none for a document.
   }
   deriving stock (Eq, Show)
 
@@ -123,24 +146,32 @@ data Checked = Checked
 -- loop.
 instance NFData Checked where
   rnf c =
-    rnf [(p.from, p.to, p.kind, p.message) | p <- c.problems]
+    rnf [(p.from, p.to, p.kind, p.severity, p.message) | p <- c.problems]
       `seq` rnf [(k.source, k.occurrence, p.from, p.to, p.kind) | (k, p) <- Map.toList c.islands]
       `seq` rnf c.folds
+      `seq` rnf c.slides
 
 instance NFData ProblemKind where
   rnf k = k `seq` ()
 
--- | The parser's problems in a text, the places of its islands, and its
--- spoilers' folds, from one parse of the text.
-checkText :: Text -> Checked
-checkText source =
+instance NFData Severity where
+  rnf k = k `seq` ()
+
+-- | The problems in a page's text, the parser's ('parserProblems') and
+-- those of its kind ('kindProblems'), the places of its islands, its
+-- spoilers' folds and a presentation's slides, from one parse of the
+-- text.
+checkText :: PageKind -> Text -> Checked
+checkText pageKind source =
   Checked
-    { problems = problemsParsed parsed
-    , islands = islandsIn source (fst parsed)
+    { problems = sort (problemsParsed parsed <> kindProblemsParsed pageKind (deck, markers))
+    , islands = islandsIn source located
     , folds = filter isSpoiler (foldsParsed source parsed)
+    , slides = if pageKind == Presentation then Slides.slideSpansParsed source deck else []
     }
   where
-    parsed = either (const ([], [])) identity (A.parseWithLinesAndMarkers source)
+    (located, markers, deck) = either (const ([], [], [])) identity (A.parseWithLinesMarkersAndDeck source)
+    parsed = (located, markers)
 
 -- | The problems the parser finds in a text, in the order of their lines:
 -- the broken marker lines of spoilers and of the other blocks of the
@@ -155,11 +186,11 @@ parserProblems source = problemsParsed (either (const ([], [])) identity (A.pars
 
 -- | 'parserProblems' of a text parsed already.
 problemsParsed :: ([(Maybe Int, A.Block)], [A.MarkerLine]) -> [Problem]
-problemsParsed (located, markers) = sort (markerLines <> spoilerHeads <> boxes)
+problemsParsed (located, markers) = sort (markerLines <> spoilerHeads <> boxes <> misplacedPauses)
   where
     tree = map snd located
     markerLines =
-      [ Problem {from = line, to = line, kind = if spoilerLine written then Spoiler else Marker, message = sentence why}
+      [ Problem {from = line, to = line, kind = if spoilerLine written then Spoiler else Marker, severity = Error, message = sentence why}
       | A.MarkerLine line _ (A.Faulty written why) <- markers
       ]
     spoilerLine written = case A.markerAt written of
@@ -167,16 +198,81 @@ problemsParsed (located, markers) = sort (markerLines <> spoilerHeads <> boxes)
       Just (A.Closing A.SpoilerName) -> True
       _ -> False
     spoilerHeads =
-      [ Problem {from = h.line, to = h.line, kind = Spoiler, message = A.spoilerProblemText h problem}
+      [ Problem {from = h.line, to = h.line, kind = Spoiler, severity = Error, message = A.spoilerProblemText h problem}
       | A.Spoiler h _ <- concatMap everyBlock tree
       , Just problem <- [h.problem]
+      ]
+    misplacedPauses =
+      [ Problem {from = line, to = line, kind = Marker, severity = Error, message = sentence why}
+      | A.MisplacedPause line _ why <- A.allInlines tree
       ]
     -- Only a quotation of the page itself has a line: the parser gives
     -- none to the blocks inside another.
     boxes =
-      [ Problem {from = line, to = line, kind = Box, message = why}
+      [ Problem {from = line, to = line, kind = Box, severity = Error, message = why}
       | (Just line, A.BlockQuote (opening : _)) <- located
       , Just why <- [boxMarkerProblem opening]
+      ]
+
+-- | The warnings of a page's kind ("Wiki.Core.PageKind") in its text, in
+-- the order of their lines. The parser reads every page alike, so what
+-- only a presentation reads is not an error in a document: it is shown
+-- there as a document shows it (a pause and the look as nothing, the
+-- speaker's notes and an incremental list as a box), and the editor
+-- warns that it does nothing more there.
+--
+-- * In a document, or a page of a kind this program does not know: each
+--   @[[!pause]]@, @[[!style]]@, @[[!notes]]@ and @[[!incremental]]@, and
+--   each list with the class @incremental@.
+-- * In a presentation: a heading of level one or two that is not at the
+--   page's top level, which is a heading on its slide and opens none (its
+--   line is that of the block of the top level it is in, since the parser
+--   gives no line to the blocks inside another); a @[[!style]]@ not at
+--   the top level, which is not read; and each @[[!style]]@ after the
+--   first, which is not read either.
+kindProblems :: PageKind -> Text -> [Problem]
+kindProblems pageKind source = kindProblemsParsed pageKind (either (const ([], [])) (\(_, ms, deck) -> (deck, ms)) (A.parseWithLinesMarkersAndDeck source))
+
+-- | 'kindProblems' of a text parsed already: the page's blocks as a
+-- presentation reads them, each with the line it starts on
+-- ('A.parseDeckSpans'), and its marker lines. What is at the top level
+-- is decided where the slides decide it ('Slides.deckLevel'): the
+-- warnings about a presentation and its slides never disagree.
+kindProblemsParsed :: PageKind -> ([(Maybe Int, A.Block)], [A.MarkerLine]) -> [Problem]
+kindProblemsParsed pageKind (deck, markers) = case pageKind of
+  Presentation -> sort (nestedOpeners <> laterStyles)
+  _ -> sort documentMarkers
+  where
+    warn line message = Problem {from = line, to = line, kind = Marker, severity = Warning, message}
+    documentMarkers =
+      [ warn line message
+      | A.MarkerLine line _ role <- markers
+      , Just message <- [presentationOnly role]
+      ]
+        <> [warn line (fromMaybe "" (presentationOnly A.Pauses)) | A.InlinePause line _ <- A.allInlines tree]
+    tree = map snd deck
+    located = Slides.deckLevel deck
+    presentationOnly = \case
+      A.Pauses -> Just "[[!pause]] makes steps of a slide in a presentation; a document shows nothing for it"
+      A.SetsStyle -> Just "[[!style]] sets a presentation's look; a document shows nothing for it"
+      A.Opens attrs
+        | "notes" `elem` A.classes attrs -> Just "[[!notes]] holds a presentation's speaker notes; a document shows them as a box"
+        | "incremental" `elem` A.classes attrs -> Just "An incremental list shows its items one at a time in a presentation; a document shows an ordinary box"
+      A.TakesAttributes attrs
+        | "incremental" `elem` A.classes attrs -> Just "An incremental list shows its items one at a time in a presentation; a document shows an ordinary list"
+      _ -> Nothing
+    -- The lines of the look's markers at the top level, in order, and
+    -- every look's marker line.
+    topStyles = [line | (Just line, b) <- located, Slides.isLook b]
+    styleLines = [line | A.MarkerLine line _ A.SetsStyle <- markers]
+    laterStyles =
+      [warn line "Only the first [[!style]] at the top level sets the presentation's look: this one is not read" | line <- drop 1 topStyles]
+        <> [warn line "[[!style]] is read only at the top level of the page, not inside another block" | line <- styleLines, line `notElem` topStyles]
+    nestedOpeners =
+      [ warn line "A heading of level one or two opens a slide only at the top level of the page: one inside this block is a heading on its slide"
+      | (Just line, b) <- located
+      , not (Slides.isOpener b)
+      , or [level <= 2 | A.Heading level _ _ <- drop 1 (everyBlock b)]
       ]
 
 -- | A block, and every block inside it, in the order of the source.
@@ -399,7 +495,7 @@ widgets (HTML v) = go v
 
 -- | An island's problem, at its place, with the library's message.
 islandProblem :: IslandPlace -> Text -> Problem
-islandProblem place message = Problem {from = place.from, to = place.to, kind = place.kind, message}
+islandProblem place message = Problem {from = place.from, to = place.to, kind = place.kind, severity = Error, message}
 
 -- | Every problem of a checked text: the parser's, and those of the
 -- islands that failed, by key with their messages, that are still in the

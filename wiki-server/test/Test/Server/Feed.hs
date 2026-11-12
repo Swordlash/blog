@@ -43,6 +43,7 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Sour
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (BoxNumbering (..), Space (..), SpaceProfile (..), profileOf)
 import Wiki.Core.Url (Url (..))
@@ -223,7 +224,7 @@ html :: Spec
 html = describe "a post's HTML" $ do
   it "is the wiki's render, through the allowlist, its links and attachments under the public address" $ do
     let blog = blogSpace
-        pageOf i t body attachments = Page {id = PageId i, space = blog.id, parent = Nothing, title = t, slug = slugOf i, body, attachments, createdAt = time 1, updatedAt = time 1, position = 0, template = False, createdBy = Nothing, updatedBy = Nothing}
+        pageOf i t body attachments = Page {id = PageId i, space = blog.id, parent = Nothing, title = t, slug = slugOf i, body, attachments, createdAt = time 1, updatedAt = time 1, position = 0, template = False, kind = Kind.Document, createdBy = Nothing, updatedBy = Nothing}
         tree = Attachment {id = AttachmentId "a1", name = FileName "tree.png", mediaType = MimeType "image/png", size = 3, source = SourceBlob (BlobId "b1")}
         post =
           pageOf
@@ -260,7 +261,7 @@ html = describe "a post's HTML" $ do
 
   it "holds an html fence's source as a listing, never its frame or its HTML: a feed reader has no sandbox" $ do
     let blog = blogSpace
-        post = Page {id = PageId "post", space = blog.id, parent = Nothing, title = "Post", slug = slugOf "post", body = "```html\n<style>p { color: red }</style>\n<p style=\"margin: 0\" onclick=\"steal()\">Framed</p>\n```\n", attachments = [], createdAt = time 1, updatedAt = time 1, position = 0, template = False, createdBy = Nothing, updatedBy = Nothing}
+        post = Page {id = PageId "post", space = blog.id, parent = Nothing, title = "Post", slug = slugOf "post", body = "```html\n<style>p { color: red }</style>\n<p style=\"margin: 0\" onclick=\"steal()\">Framed</p>\n```\n", attachments = [], createdAt = time 1, updatedAt = time 1, position = 0, template = False, kind = Kind.Document, createdBy = Nothing, updatedBy = Nothing}
     out <- postHtml "https://wiki.example/" [] [blog] blog [post] post
     out `shouldSatisfy` T.isInfixOf "<pre><code class=\"language-html\">&lt;style&gt;p { color: red }&lt;/style&gt;\n&lt;p style=\"margin: 0\" onclick=\"steal()\"&gt;Framed&lt;/p&gt;\n</code></pre>"
     out `shouldNotSatisfy` T.isInfixOf "<iframe"

@@ -27,6 +27,7 @@ import Data.Text qualified as T
 import Data.Time (Day)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Protolude
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Template.Embed (embedText)
 
 -- | 'BuiltinTemplate': a template built into the wiki, independent of its spaces.
@@ -37,16 +38,21 @@ data BuiltinTemplate = BuiltinTemplate
   -- ^ The title it is offered under.
   , body :: Text
   -- ^ Its Markdown, including the placeholders.
+  , kind :: PageKind
+  -- ^ The kind of page it starts ("Wiki.Core.PageKind"): "New page"
+  -- offers it after that kind is chosen.
   }
   deriving stock (Eq, Show)
 
--- | Meeting notes, a decision record and a how-to guide, in the order they
--- are offered.
+-- | Meeting notes, a decision record and a how-to guide, which are
+-- documents, and a starter deck, a presentation, in the order they are
+-- offered.
 builtinTemplates :: [BuiltinTemplate]
 builtinTemplates =
-  [ BuiltinTemplate {key = "meeting-notes", title = "Meeting notes", body = $(embedText "templates/meeting-notes.md")}
-  , BuiltinTemplate {key = "decision-record", title = "Decision record", body = $(embedText "templates/decision-record.md")}
-  , BuiltinTemplate {key = "how-to", title = "How-to guide", body = $(embedText "templates/how-to.md")}
+  [ BuiltinTemplate {key = "meeting-notes", title = "Meeting notes", body = $(embedText "templates/meeting-notes.md"), kind = Document}
+  , BuiltinTemplate {key = "decision-record", title = "Decision record", body = $(embedText "templates/decision-record.md"), kind = Document}
+  , BuiltinTemplate {key = "how-to", title = "How-to guide", body = $(embedText "templates/how-to.md"), kind = Document}
+  , BuiltinTemplate {key = "starter-deck", title = "Starter deck", body = $(embedText "templates/starter-deck.md"), kind = Presentation}
   ]
 
 -- | 'Placeholders': the values a template's placeholders are filled with

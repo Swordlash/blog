@@ -42,6 +42,7 @@ import Wiki.Core.Encrypted (Encapsulated (..), PageKey (..), SealedContent (..),
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Page qualified as P
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space qualified as S
@@ -182,7 +183,7 @@ anonymous backing = describe "for someone not signed in" $ do
             , "<style>p::after { content: \"</style><script>alert(4)</script>\" }</style>"
             , "</iframe><script>alert(5)</script>"
             ]
-    _ <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) Api.NewPage {parent = Nothing, title = "Framed", body = "Before.\n\n```html\n" <> hostile <> "\n```\n\nAfter.\n"} >>= (jsonAs 201 :: Reply -> IO P.Page)
+    _ <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) Api.NewPage {parent = Nothing, title = "Framed", body = "Before.\n\n```html\n" <> hostile <> "\n```\n\nAfter.\n", kind = Kind.Document} >>= (jsonAs 201 :: Reply -> IO P.Page)
     (status, html) <- page r r.public "/s/docs/p/framed/"
     status `shouldBe` 200
     let (ahead, rest) = T.breakOn "<iframe " (appIn html)
@@ -206,7 +207,7 @@ anonymous backing = describe "for someone not signed in" $ do
   it "renders an html fence's height as its frame's, which the program leaves as it is" $ withDemoRunning backing identity $ \r -> do
     docs <- ok200 (getUrl r (r.public <> "/" <> links.spaces.atPath (slugs "docs"))) :: IO S.Space
     let fences = "```html {height=300}\n<p>Sized.</p>\n```\n\n```html {height=tall}\n<p>Fitted.</p>\n```\n"
-    _ <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) Api.NewPage {parent = Nothing, title = "Sized", body = fences} >>= (jsonAs 201 :: Reply -> IO P.Page)
+    _ <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) Api.NewPage {parent = Nothing, title = "Sized", body = fences, kind = Kind.Document} >>= (jsonAs 201 :: Reply -> IO P.Page)
     (status, html) <- page r r.public "/s/docs/p/sized/"
     status `shouldBe` 200
     case map (fst . T.breakOn ">") (drop 1 (T.splitOn "<iframe " (appIn html))) of
@@ -331,6 +332,12 @@ preloads backing = describe "what a page carries for the program" $ do
     -- The list of pages has no bodies, so the page shown is carried by
     -- itself, once.
     map snd (Map.keys p.pageAt) `shouldBe` [slugs "markdown-guide"]
+    -- A presentation's page carries itself alone: its viewer is fed with
+    -- the page loaded, and the guide's page above carries no page it
+    -- embeds.
+    (_, deck) <- page r r.public "/s/docs/p/markdown-guide/presentations/"
+    deckLoad <- preloadIn deck
+    map snd (Map.keys deckLoad.pageAt) `shouldBe` [slugs "markdown-guide/presentations"]
     -- The home page at its old address is read at its address now, the
     -- space's.
     (_, home) <- page r r.public "/s/docs/p/tour/"
@@ -526,12 +533,12 @@ encrypted backing = describe "an encrypted space" $ do
     (.status) <$> as' methodPut "api/v1/assistant/vault" (encode VaultChange {vault, publicKey = Just NewPublicKey {keyId, publicKey = public}}) `shouldReturn` 200
     made :: S.Space <- as' methodPost "api/v1/spaces" (encode Api.NewSpace {parent = Nothing, name = "Vault room"}) >>= jsonAs 201
     let spaceKey = KeyId (bytesOf 16 6)
-    (.status) <$> as' methodPost ("api/v1/encrypted/spaces/" <> made.id.text) (encode EncryptSpace {keyId = spaceKey, grant = NewGrant {recipient = UserId "user-admin", recipientKeyId = keyId, enc = Encapsulated (bytesOf 32 7), sealed = Ciphertext (bytesOf 48 8)}, homePage = NewSealedPage {id = PageId "4c1a6d2f-3e5b-4f7c-9dae-1b2c3d4e5f60", parent = Nothing, pageKey = PageKey {keyId = KeyId (bytesOf 16 20), spaceKeyId = spaceKey, wrapped = WrappedKey (Nonce (bytesOf 12 21)) (Ciphertext (bytesOf 48 22))}, content = SealedContent {tag = VersionTag (bytesOf 16 23), keyId = KeyId (bytesOf 16 20), chain = Just firstChain, title = Sealed (Nonce (bytesOf 12 24)) (Ciphertext (bytesOf 40 25)), body = Sealed (Nonce (bytesOf 12 26)) (Ciphertext (bytesOf 60 27))}}}) `shouldReturn` 200
+    (.status) <$> as' methodPost ("api/v1/encrypted/spaces/" <> made.id.text) (encode EncryptSpace {keyId = spaceKey, grant = NewGrant {recipient = UserId "user-admin", recipientKeyId = keyId, enc = Encapsulated (bytesOf 32 7), sealed = Ciphertext (bytesOf 48 8)}, homePage = NewSealedPage {id = PageId "4c1a6d2f-3e5b-4f7c-9dae-1b2c3d4e5f60", parent = Nothing, pageKey = PageKey {keyId = KeyId (bytesOf 16 20), spaceKeyId = spaceKey, wrapped = WrappedKey (Nonce (bytesOf 12 21)) (Ciphertext (bytesOf 48 22))}, content = SealedContent {tag = VersionTag (bytesOf 16 23), keyId = KeyId (bytesOf 16 20), chain = Just firstChain, title = Sealed (Nonce (bytesOf 12 24)) (Ciphertext (bytesOf 40 25)), body = Sealed (Nonce (bytesOf 12 26)) (Ciphertext (bytesOf 60 27))}, kind = Kind.Document}}) `shouldReturn` 200
     let title = Ciphertext (bytesOf 40 9)
         body = Ciphertext (bytesOf 300 10)
         content = SealedContent {tag = VersionTag (bytesOf 16 11), keyId = KeyId (bytesOf 16 12), chain = Just firstChain, title = Sealed (Nonce (bytesOf 12 13)) title, body = Sealed (Nonce (bytesOf 12 14)) body}
         pageKey = PageKey {keyId = KeyId (bytesOf 16 12), spaceKeyId = spaceKey, wrapped = WrappedKey (Nonce (bytesOf 12 15)) (Ciphertext (bytesOf 48 16))}
-    sealedPage :: SealedPage <- as' methodPost ("api/v1/encrypted/spaces/" <> made.id.text <> "/pages") (encode NewSealedPage {id = PageId "3b0f5c1e-2d4a-4e6b-8c9d-0a1b2c3d4e5f", parent = Nothing, pageKey, content}) >>= jsonAs 201
+    sealedPage :: SealedPage <- as' methodPost ("api/v1/encrypted/spaces/" <> made.id.text <> "/pages") (encode NewSealedPage {id = PageId "3b0f5c1e-2d4a-4e6b-8c9d-0a1b2c3d4e5f", parent = Nothing, pageKey, content, kind = Kind.Document}) >>= jsonAs 201
     (_, html) <- pageAs r [session] r.public ("/s/" <> slugText made.slug <> "/p/" <> slugText sealedPage.slug <> "/")
     filter (`T.isInfixOf` html) [title.text, body.text, pageKey.wrapped.key.text] `shouldBe` []
     appIn html `shouldSatisfy` T.isInfixOf "decrypted in your browser"

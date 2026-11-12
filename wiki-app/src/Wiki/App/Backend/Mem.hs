@@ -102,6 +102,7 @@ import Wiki.Core.HomePage (HomeDocument (..), HomePage (document))
 import Wiki.Core.Id (BlobId (..), PageId, UserId)
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Space (Icon (..), Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), User (..))
@@ -245,10 +246,12 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
       refused -> pure refused
   pageLocation = query . pageLocationIn
   pageBacklinks = query . backlinksIn
-  createPage sid parent title body = writeAt (createPageIn sid parent title body) >>= withWritersRead
+  createPage = createPageOf Document
+  createPageOf kind sid parent title body = writeAt (createPageOfIn kind sid parent title body) >>= withWritersRead
   savePage pid base title body = needFirstVersion pid >> writeAt (savePageIn pid base title body) >>= withWritersRead
   movePage pid sid parent = write (movePageIn pid sid parent) >>= withWritersRead
   setPageTemplate pid template = write (setPageTemplateIn pid template) >>= withWritersRead
+  setPageKind pid kind = write (setPageKindIn pid kind) >>= withWritersRead
   deletePage = write . deletePageIn
   uploadAttachment pid name mediaType = write . uploadAttachmentIn pid name mediaType
   deleteAttachment aid = do

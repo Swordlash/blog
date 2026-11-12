@@ -93,6 +93,7 @@ import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Notification (Kind (..), MailMode (..), Notification (..), PageLocation (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
 import Wiki.Core.Slug (Slug, mkSlug)
@@ -188,6 +189,7 @@ page =
     , updatedAt = time
     , position = 2
     , template = False
+    , kind = Kind.Document
     , createdBy = Just author
     , updatedBy = Just Author {id = UserId "u1", name = "Ada", avatar = Nothing}
     }
@@ -305,7 +307,7 @@ importPlan =
                     { path = [slug "tour"]
                     , title = "Tour"
                     , attachments = 1
-                    , conflict = Just PageConflict {title = "Tour", updatedAt = time, sameContent = False}
+                    , conflict = Just PageConflict {title = "Tour", updatedAt = time, sameContent = False, kind = Kind.Document, importedKind = Kind.Document}
                     }
                 , PagePlan {path = [slug "tour", slug "more"], title = "More", attachments = 0, conflict = Nothing}
                 ]

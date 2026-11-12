@@ -14,6 +14,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (parseMarkdown)
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (PageSummary (..))
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (BoxNumbering (..), Space (..))
 
@@ -36,6 +37,7 @@ page i parent made =
     , updatedAt = day 100
     , position = 0
     , template = False
+    , kind = Document
     }
 
 blogSpace :: Maybe Text -> Space

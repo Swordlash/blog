@@ -33,6 +33,7 @@ import Wiki.Core.Id
 import Wiki.Core.Notification (PageLocation (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Path (parsePath, renderPath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery, snippetText)
@@ -85,6 +86,7 @@ spec _ withFixture = around withFixture $ describe "MonadWiki contract" $ do
   savingPages
   movingPages
   templates
+  kinds
   deletingPages
   attachments
   searching
@@ -1433,6 +1435,65 @@ templates = describe "setPageTemplate" $ do
     recounted <- run Anonymous pageCounts
     Map.lookup docs.id recounted `shouldBe` (subtract 1 <$> Map.lookup docs.id counted)
     Map.delete docs.id recounted `shouldBe` Map.delete docs.id counted
+
+--------------------------------------------------------------------------------
+-- Kinds of page
+
+kinds :: (MonadWiki m) => SpecWith (Fixture m)
+kinds = describe "page kinds" $ do
+  it "makes a page of the kind asked for, and a document by default" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    deck <- run editor (createPageOf Kind.Presentation blog.id Nothing "Talk" "# Talk") >>= ok
+    plain <- run editor (createPage blog.id Nothing "Notes" "# Notes") >>= ok
+    (deck.kind, plain.kind) `shouldBe` (Kind.Presentation, Kind.Document)
+    (\p -> p.kind) <$> pageAt run Anonymous "blog" "talk" `shouldReturn` Kind.Presentation
+    listed <- run Anonymous (listPages blog.id) >>= ok
+    [(p.title, p.kind) | p <- listed, p.title `elem` ["Talk", "Notes"]] `shouldMatchList` [("Talk", Kind.Presentation), ("Notes", Kind.Document)]
+
+  it "has the guide's deck a presentation, and its other pages documents" $ \(Fixture run) -> do
+    (\p -> p.kind) <$> pageAt run Anonymous "docs" "markdown-guide/presentations" `shouldReturn` Kind.Presentation
+    (\p -> p.kind) <$> pageAt run Anonymous "docs" "markdown-guide/diagrams" `shouldReturn` Kind.Document
+
+  it "makes a page a presentation and a document again, changing nothing else and keeping no version" $ \(Fixture run) -> do
+    diagrams <- pageAt run admin "docs" "markdown-guide/diagrams"
+    made <- run admin (setPageKind diagrams.id Kind.Presentation) >>= ok
+    (made.kind, made.title, made.body, made.updatedAt, made.slug, made.template) `shouldBe` (Kind.Presentation, diagrams.title, diagrams.body, diagrams.updatedAt, diagrams.slug, diagrams.template)
+    (\p -> p.kind) <$> pageAt run Anonymous "docs" "markdown-guide/diagrams" `shouldReturn` Kind.Presentation
+    docs <- spaceAt run admin "docs"
+    listed <- run Anonymous (listPages docs.id) >>= ok
+    [p.kind | p <- listed, p.id == diagrams.id] `shouldBe` [Kind.Presentation]
+    run admin (listVersions diagrams.id latestVersions) >>= ok >>= (`shouldSatisfy` ((== 1) . length))
+    again <- run admin (setPageKind diagrams.id Kind.Presentation) >>= ok
+    again.kind `shouldBe` Kind.Presentation
+    back <- run admin (setPageKind diagrams.id Kind.Document) >>= ok
+    (back.kind, back.updatedAt) `shouldBe` (Kind.Document, diagrams.updatedAt)
+
+  it "keeps a save from an editor open on it working, and the kind with it" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    p <- run editor (createPage blog.id Nothing "Pitch" "# Pitch") >>= ok
+    _ <- run editor (setPageKind p.id Kind.Presentation) >>= ok
+    saved <- run editor (savePage p.id p.updatedAt "Pitch" "# Pitch\n\n## One") >>= ok
+    saved.kind `shouldBe` Kind.Presentation
+
+  it "takes Edit on the page's space" $ \(Fixture run) -> do
+    hello <- pageAt run admin "blog" "hello-world"
+    run Anonymous (setPageKind hello.id Kind.Presentation) >>= (`shouldFailWith` Forbidden)
+    run reader (setPageKind hello.id Kind.Presentation) >>= (`shouldFailWith` Forbidden)
+    void (run editor (setPageKind hello.id Kind.Presentation) >>= ok)
+    run admin (setPageKind (PageId "no-such-page") Kind.Presentation) >>= (`shouldFailWith` NotFound)
+
+  it "keeps a space's home page a document" $ \(Fixture run) -> do
+    tour <- pageAt run admin "docs" "tour"
+    run admin (setPageKind tour.id Kind.Presentation) >>= shouldBeInvalid
+    (\p -> p.kind) <$> pageAt run admin "docs" "tour" `shouldReturn` Kind.Document
+    void (run admin (setPageKind tour.id Kind.Document) >>= ok)
+
+  it "refuses a kind it does not know" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    hello <- pageAt run admin "blog" "hello-world"
+    run editor (createPageOf (Kind.OtherKind "calendar") blog.id Nothing "Days" "") >>= shouldBeInvalid
+    run editor (setPageKind hello.id (Kind.OtherKind "calendar")) >>= shouldBeInvalid
+    (\p -> p.kind) <$> pageAt run admin "blog" "hello-world" `shouldReturn` Kind.Document
 
 --------------------------------------------------------------------------------
 -- Drafts

@@ -81,6 +81,7 @@ import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
@@ -175,6 +176,17 @@ spec m = do
     run env (saveDraft made.id saved.updatedAt "Secret plans" "a draft") >>= (`shouldSatisfy` isLeft)
     stored <- unsafeIOToPageM (fromJSText <$> js_stored)
     filter (`T.isInfixOf` stored) ["Secret plans", "Tuesday", "Wednesday", "a draft"] `shouldBe` []
+
+  it "makes a presentation in an encrypted space, its kind read back in its page and its space's list" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPageOf Kind.Presentation secret.id Nothing "Launch talk" "# Launch talk")
+    made.kind `shouldBe` Kind.Presentation
+    read' <- ok =<< run env (getPage secret.id [made.slug])
+    (read'.title, read'.kind) `shouldBe` ("Launch talk", Kind.Presentation)
+    listed <- ok =<< run env (listPages secret.id)
+    -- Beside the space's home page, a document.
+    [(p.title, p.kind) | p <- listed] `shouldBe` [("Home", Kind.Document), ("Launch talk", Kind.Presentation)]
 
   it "gives a second member the key through a pending grant, when a member opens the space" $ runPage $ do
     env <- encryptedSpace "user-admin"
@@ -415,7 +427,8 @@ spec m = do
     unsafeIOToPageM js_watch_blobs
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
-    made <- ok =<< run env (createPage secret.id Nothing "Deck" "First.")
+    -- A presentation: a document's address of slides shows no slides.
+    made <- ok =<< run env (createPageOf Kind.Presentation secret.id Nothing "Deck" "First.")
     void (ok =<< run env (getPage secret.id [made.slug]))
     a <- ok =<< run env (uploadAttachment made.id "a.svg" "image/svg+xml" (svgOf 3 "A"))
     b <- ok =<< run env (uploadAttachment made.id "b.svg" "image/svg+xml" (svgOf 4 "B"))
@@ -446,7 +459,8 @@ spec m = do
   it "leaves no owner of addresses behind a view that closes, on a plain page and an encrypted one" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
-    made <- ok =<< run env (createPage secret.id Nothing "Deck" "First.")
+    -- A presentation, so that its address of slides shows its slides.
+    made <- ok =<< run env (createPageOf Kind.Presentation secret.id Nothing "Deck" "First.")
     void (ok =<< run env (getPage secret.id [made.slug]))
     attached <- ok =<< run env (uploadAttachment made.id "a.svg" "image/svg+xml" (svgOf 3 "A"))
     again <- ok =<< run env (getPage secret.id [made.slug])
@@ -458,7 +472,7 @@ spec m = do
         docs = either (const (panic "not a slug")) identity . mkSlug
         -- Each view, and what shows it is open: on the encrypted page, its
         -- attachment decrypted, so that it holds an owner with addresses.
-        plain = [(R.Page [docs "docs"] [docs "tour"], ".page-view .page-body"), (R.EditPage [docs "docs"] [docs "tour"], ".editor"), (R.PageSlides [docs "docs"] [docs "tour"] 1 1, ".slides-view .slide"), (R.LivePreview [docs "docs"] [docs "tour"], ".live-preview-body")]
+        plain = [(R.Page [docs "docs"] [docs "tour"], ".page-view .page-body"), (R.EditPage [docs "docs"] [docs "tour"], ".editor"), (R.PageSlides [docs "docs"] [docs "tour"] 1 1, ".slides-not-presentation"), (R.LivePreview [docs "docs"] [docs "tour"], ".live-preview-body")]
         sealed = [(R.Page [secretSlug] [made.slug], ".page-view img[src^='blob:']"), (R.EditPage [secretSlug] [made.slug], ".editor-attachments a[href^='blob:']"), (R.PageSlides [secretSlug] [made.slug] 1 1, ".slides-view img[src^='blob:']"), (R.LivePreview [secretSlug] [made.slug], ".live-preview-body img[src^='blob:']")]
     before <- held
     -- Unmounting runs a view's finalizer on the component tree's loop, after
@@ -1036,6 +1050,7 @@ plainPage =
     , updatedAt = demoNow
     , position = 0
     , template = False
+    , kind = Kind.Document
     , createdBy = Nothing
     , updatedBy = Nothing
     }

@@ -149,6 +149,7 @@ module Wiki.Server.Storage.Rows
   , setPagePosition
   , movePages
   , setPageTemplateRow
+  , setPageKindRow
   , deletePageRow
   , insertVersion
   , insertAttachment
@@ -267,6 +268,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (numberingName, readNumbering)
 import Wiki.Core.Order (ChildOrder (..), Sibling (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
+import Wiki.Core.PageKind (PageKind, pageKindName, pageKindOf)
 import Wiki.Core.Path (TreeNode (..), ancestry)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (bodyText, foldText, searchVersion)
@@ -724,6 +726,7 @@ pageOf r attachments =
     , updatedAt = r.updated_at
     , position = fromIntegral r.position
     , template = r.template
+    , kind = pageKindOf r.kind
     , -- Read from the history where a page is answered with them
       -- ("Wiki.Server.Storage"'s 'pageWriters').
       createdBy = Nothing
@@ -778,10 +781,10 @@ loadPageSummaries :: (Backend be) => SpaceId -> Db be [PageSummary]
 loadPageSummaries sid = do
   rows <- runSelectReturningList . select $ do
     p <- filter_ (\p -> p.space_id ==. val_ sid.text) (all_ wikiDb.pages)
-    pure (S.nodeColumns p, p.updated_at)
+    pure (S.nodeColumns p, p.updated_at, p.kind)
   pure
-    [ PageSummary {id = n.id, space = n.space, parent = n.parent, title = n.title, slug = n.slug, createdAt = n.createdAt, updatedAt, position = n.position, template = n.template}
-    | (r, updatedAt) <- rows
+    [ PageSummary {id = n.id, space = n.space, parent = n.parent, title = n.title, slug = n.slug, createdAt = n.createdAt, updatedAt, position = n.position, template = n.template, kind = pageKindOf kind}
+    | (r, updatedAt, kind) <- rows
     , let n = nodeOf r
     ]
 
@@ -1731,6 +1734,7 @@ insertPage p = do
           , template = p.template
           , search_text = searchText
           , search_fold = searchFold p.title searchText
+          , kind = pageKindName p.kind
           }
       ]
   writeLinks p.id p.body
@@ -1805,6 +1809,10 @@ setPageSpace sid pids = for_ (chunksOf 500 pids) $ \chunk ->
 -- | Make a page one of its space's templates, or not.
 setPageTemplateRow :: (Backend be) => PageId -> Bool -> Db be ()
 setPageTemplateRow pid template = runUpdate (update wikiDb.pages (\p -> p.template <-. val_ template) (\p -> p.id ==. val_ pid.text))
+
+-- | Give a page a kind ("Wiki.Core.PageKind").
+setPageKindRow :: (Backend be) => PageId -> PageKind -> Db be ()
+setPageKindRow pid kind = runUpdate (update wikiDb.pages (\p -> p.kind <-. val_ (pageKindName kind)) (\p -> p.id ==. val_ pid.text))
 
 -- | Delete a page: the pages under it, and the versions, attachments and
 -- drafts of all of them, go with it, as the schema's foreign keys

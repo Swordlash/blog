@@ -13,6 +13,7 @@ import Test.QuickCheck (Gen, chooseInt, elements, forAll, listOf, shuffle, (===)
 import Wiki.Core.Id
 import Wiki.Core.Order
 import Wiki.Core.Page (Page (..), childPages, pageTreeOrder, positionPage)
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (BoxNumbering (..), Space (..), spaceTreeOrder, subspaceOrderOf, subspacesOf)
 
@@ -38,6 +39,7 @@ page i title parent made position =
     , updatedAt = day made
     , position
     , template = False
+    , kind = Document
     , createdBy = Nothing
     , updatedBy = Nothing
     }

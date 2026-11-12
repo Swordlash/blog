@@ -31,6 +31,7 @@ import Protolude
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Sibling (..), childrenInOrder, treeOrder)
+import Wiki.Core.PageKind (PageKind)
 import Wiki.Core.Path (TreeNode (..), findChild, resolveUnder)
 import Wiki.Core.Slug
 import Wiki.Core.Version (Author)
@@ -65,6 +66,10 @@ data Page = Page
   -- the space's permissions), but it is listed under the space's
   -- "Templates" rather than in its tree, left out of a search that does
   -- not ask for templates, and offered as the start of a new page.
+  , kind :: PageKind
+  -- ^ What the page is, a document or a presentation
+  -- ("Wiki.Core.PageKind"). A property of the page, not of a version.
+  -- In JSON the field may be absent, which means a document.
   , createdBy :: Maybe Author
   -- ^ Who wrote the page's first version, as the page view's byline says
   -- (WP5.55 of docs/PLAN.md): read by the backend from the history, as
@@ -106,6 +111,7 @@ data PageSummary = PageSummary
   , updatedAt :: UTCTime
   , position :: Int
   , template :: Bool
+  , kind :: PageKind
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -134,6 +140,7 @@ summaryOf p =
     , updatedAt = p.updatedAt
     , position = p.position
     , template = p.template
+    , kind = p.kind
     }
 
 -- | The pages a space's tree shows: all except its templates, which are
@@ -194,6 +201,7 @@ positionPage position p =
     , updatedAt = p.updatedAt
     , position
     , template = p.template
+    , kind = p.kind
     , createdBy = p.createdBy
     , updatedBy = p.updatedBy
     }
@@ -215,6 +223,7 @@ placedPage parent slug position p =
     , updatedAt = p.updatedAt
     , position
     , template = p.template
+    , kind = p.kind
     , createdBy = p.createdBy
     , updatedBy = p.updatedBy
     }
@@ -240,6 +249,7 @@ savedAs time title body p =
     , updatedAt = if time > p.updatedAt then time else addUTCTime 0.000001 p.updatedAt
     , position = p.position
     , template = p.template
+    , kind = p.kind
     , createdBy = p.createdBy
     , updatedBy = p.updatedBy
     }

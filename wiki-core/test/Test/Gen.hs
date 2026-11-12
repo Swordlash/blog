@@ -17,6 +17,7 @@ module Test.Gen
   , genSpace
   , genIcon
   , genPage
+  , genPageKind
   , genUser
   , genAvatar
   , genAuthor
@@ -45,6 +46,7 @@ import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (numberings)
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Permission
 import Wiki.Core.Search
 import Wiki.Core.Slug
@@ -158,9 +160,15 @@ genPage = do
   updatedAt <- genUtcTime
   position <- arbitrary
   template <- arbitrary
+  kind <- genPageKind
   createdBy <- oneof [pure Nothing, Just <$> genAuthor]
   updatedBy <- oneof [pure Nothing, Just <$> genAuthor]
-  pure Page {id, space, parent, title, slug, body, attachments, createdAt, updatedAt, position, template, createdBy, updatedBy}
+  pure Page {id, space, parent, title, slug, body, attachments, createdAt, updatedAt, position, template, kind, createdBy, updatedBy}
+
+-- | A page's kind: the two this program knows, and one it does not, which
+-- an archive keeps as written.
+genPageKind :: Gen PageKind
+genPageKind = elements [Document, Presentation, OtherKind "calendar"]
 
 genAvatar :: Gen Avatar
 genAvatar = Avatar <$> genBlobId <*> elements iconMediaTypes

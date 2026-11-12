@@ -20,6 +20,7 @@ import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (ByName))
 import Wiki.Core.Page (Page)
 import Wiki.Core.Page qualified as P
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space)
 import Wiki.Core.Space qualified as S
@@ -120,6 +121,7 @@ makeHomeDocument d slug time h =
       , P.updatedAt = time
       , P.position = 0
       , P.template = False
+      , P.kind = Document
       , P.createdBy = Nothing
       , P.updatedBy = Nothing
       }

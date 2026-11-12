@@ -32,6 +32,7 @@ module Wiki.Api.Types
   , PageEdit (..)
   , PageMove (..)
   , PageTemplate (..)
+  , PageKindChange (..)
 
     -- * Spaces and pages
   , ShiftBy (..)
@@ -49,6 +50,7 @@ import Wiki.Api.ServerSettings (AssistantService, HomePage, defaultHomePage)
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxKind)
 import Wiki.Core.Order (ChildOrder, Children, Shift)
+import Wiki.Core.PageKind (PageKind)
 import Wiki.Core.Permission (Grants, SpacePermission, Subject)
 import Wiki.Core.User (SignInProvider, Standing, User)
 
@@ -195,6 +197,10 @@ data NewPage = NewPage
   -- space's top level.
   , title :: Text
   , body :: Text
+  , kind :: PageKind
+  -- ^ A document or a presentation ("Wiki.Core.PageKind"). Optional: a
+  -- request without it, as an older client and the upgrade's rehearsal
+  -- send, makes a document.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -222,6 +228,12 @@ data PageMove = PageMove
 
 -- | 'PageTemplate': whether a page is one of its space's templates, @setPageTemplate@.
 newtype PageTemplate = PageTemplate {template :: Bool}
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'PageKindChange': the kind a page is to be, @setPageKind@
+-- (@{"kind": "presentation"}@).
+newtype PageKindChange = PageKindChange {kind :: PageKind}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 

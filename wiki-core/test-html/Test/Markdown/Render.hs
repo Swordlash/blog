@@ -564,7 +564,7 @@ spec = describe "Markdown.Render" $ do
       showsWith defaultOptions {headingAnchors = False, hiddenSections = False} "## [[!spoiler]]{a} A\n\nx\n\n### [[!spoiler]] B\n\ny" "<h2 id=\"a\">A</h2><p>x</p><h3 id=\"b\">B</h3><p>y</p>"
     it "writes a broken marker line in red, with the reason as its title" $
       "[[!nope]]"
-        `shows'` "<p class=\"spoiler-error\" title=\"“nope” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, slides, pause, toc, in lower case\">[[!nope]]<span class=\"spoiler-error-reason\">“nope” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, slides, pause, toc, in lower case</span></p>"
+        `shows'` "<p class=\"spoiler-error\" title=\"“nope” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, style, pause, toc, in lower case\">[[!nope]]<span class=\"spoiler-error-reason\">“nope” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, style, pause, toc, in lower case</span></p>"
     it "writes an unclosed block's marker in red, then its blocks as they are in the unclosed div, as an unclosed spoiler's" $
       "[[!notes]]\nSay it."
         `shows'` "<p class=\"spoiler-error\" title=\"the [[!notes]] block is not closed: add [[/notes]] after its last line\">[[!notes]]<span class=\"spoiler-error-reason\">the [[!notes]] block is not closed: add [[/notes]] after its last line</span></p><div class=\"spoiler-unclosed\"><p>Say it.</p></div>"

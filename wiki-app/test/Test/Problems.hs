@@ -7,11 +7,12 @@ import Data.Map.Strict qualified as Map
 import Protolude
 import Test.Hspec
 import Wiki.App.Editor.Problems (ProblemRange (..), problemRanges)
-import Wiki.Core.Markdown.Problems (Checked (..), Problem (..), ProblemKind (..), allProblems, checkText)
+import Wiki.Core.Markdown.Problems (Checked (..), Problem (..), ProblemKind (..), Severity (..), allProblems, checkText)
+import Wiki.Core.PageKind (PageKind (..))
 
 -- | The characters each problem underlines in a text.
 spans :: Text -> [(Int, Int)] -> [(Int, Int)]
-spans text ranges = [(r.from, r.to) | r <- problemRanges text [Problem {from = a, to = b, kind = Formula, message = "bad"} | (a, b) <- ranges]]
+spans text ranges = [(r.from, r.to) | r <- problemRanges text [Problem {from = a, to = b, kind = Formula, severity = Error, message = "bad"} | (a, b) <- ranges]]
 
 spec :: Spec
 spec = describe "Wiki.App.Editor.Problems.problemRanges" $ do
@@ -32,12 +33,12 @@ spec = describe "Wiki.App.Editor.Problems.problemRanges" $ do
     spans "é😀\nx" [(2, 2)] `shouldBe` [(3, 4)]
   it "takes a range written backwards as the same range" $
     spans text [(2, 1)] `shouldBe` [(0, 5)]
-  it "keeps the kind's name and the message" $
-    problemRanges text [Problem {from = 1, to = 1, kind = Diagram, message = "Parse error"}]
-      `shouldBe` [ProblemRange {from = 0, to = 2, kind = "diagram", message = "Parse error"}]
+  it "keeps the kind's name, the severity and the message" $
+    problemRanges text [Problem {from = 1, to = 1, kind = Diagram, severity = Error, message = "Parse error"}, Problem {from = 1, to = 1, kind = Marker, severity = Warning, message = "Only here"}]
+      `shouldBe` [ProblemRange {from = 0, to = 2, kind = "diagram", severity = "error", message = "Parse error"}, ProblemRange {from = 0, to = 2, kind = "block", severity = "warning", message = "Only here"}]
   it "marks an island's failure at the island's lines in the text checked, the parser's problems beside it" $ do
     let source = "# Title\n\n[[!spoiler]]{a}(A)\nText $x^$ here.\n"
-        checked = checkText source
+        checked = checkText Document source
         failed = Map.fromList [(key, "KaTeX parse error") | key <- Map.keys checked.islands]
     [(r.from, r.to, r.kind) | r <- problemRanges source (allProblems checked failed)]
       `shouldBe` [(9, 27, "spoiler"), (28, 43, "formula")]

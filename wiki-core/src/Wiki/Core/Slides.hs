@@ -1,41 +1,47 @@
--- | A page as a slide deck: the same Markdown, read as slides.
+-- | A presentation as a slide deck: its Markdown, read as slides.
 --
--- A page needs no special writing to be presented. Its parsed blocks
--- ("Wiki.Core.Markdown.Ast") are split into slides at each thematic break
--- (@---@) at the top level of the page; a break inside a list, a quotation
--- or a box stays a horizontal rule on its slide. On each slide:
+-- A page is presented when it is a presentation ("Wiki.Core.PageKind"),
+-- whatever its text says; the text says how the deck is cut. Its parsed
+-- blocks ("Wiki.Core.Markdown.Ast") are split into slides at each heading
+-- of level one or two at the top level of the page, its openers, as
+-- pandoc's slide writers split at slide level 2: a @##@ heading opens a
+-- slide and is its title, and a @#@ heading opens a title slide, which a
+-- theme lays out as Beamer lays out a title page or a section page. A
+-- heading of level three or more is a heading on its slide, and so is a
+-- heading of any level inside a list, a quotation or a box. A thematic
+-- break (@---@) is a horizontal rule on its slide. What comes before the
+-- first opener is a slide without a title, unless it shows nothing (a
+-- page's text starts with its title line, @# Title@, so there is usually
+-- nothing before it). On each slide:
 --
--- * the first heading at the slide's top level is its title, removed from
---   its body (a slide whose title is a level-one heading is a title slide,
---   which a theme lays out as Beamer lays out a title page or a section
---   page);
+-- * the opener is its title, removed from its body;
 -- * a box with the class @notes@ (@[[!notes]]@ … @[[/notes]]@) holds the
 --   speaker's notes, removed from the body and shown to the speaker only;
 -- * the footnotes the slide refers to are placed at its end, rather than
 --   all at the end of the last slide;
 -- * the slide is shown in steps ('steps'), as pandoc's slide writers show
---   it. A pause, @[[!pause]]@ on a line of its own ('Pause'), starts the
---   next step: the content after it is shown from that step on. A box
+--   it. A pause, @[[!pause]]@ on a line of its own ('Pause') or among the
+--   words of a paragraph ('InlinePause'), starts the next step: the
+--   content after it is shown from that step on. A box
 --   with the class @incremental@ (@[[!incremental]]@ … @[[/incremental]]@)
 --   shows the items of the lists
 --   in it one at a time: the first item with what comes before the list,
 --   each further item in a step of its own. A slide without either is one
 --   step.
 --
--- A heading spoiler at a slide's top level (@## [[!spoiler]] Question@)
--- is its heading and its section as written, in a deck: its section
--- would otherwise take in the breaks after it and the next slides'
--- titles, and a slide cannot show half a section.
+-- A heading spoiler at the page's top level (@## [[!spoiler]] Question@)
+-- is its heading and its section as written, in a deck: a section is a
+-- slide, and a slide cannot hide itself. So the heading of a heading
+-- spoiler of level one or two opens a slide as any such heading does,
+-- and the openers inside a level-one heading spoiler's section open
+-- theirs.
 --
--- The deck's look is set once, at the top level of the page, by a box
--- with the class @slides@ and attributes, written as the line
--- @[[!slides]]{theme=dark aspect=4:3}@ (themes: @beamer@, the default,
--- @light@ and @dark@; aspects: @16:9@, the default, and @4:3@). The box
--- shows nothing, on the page or on a slide. A @[[!div]]@ with the class
--- @slides@ is read the same, its blocks left out. A page with neither a
--- break nor such a box is one slide, and
--- not a deck ('isDeck'): it can still be presented, but no button offers
--- it.
+-- The deck's look is set once, at the top level of the page, by the line
+-- @[[!style]]{theme=dark aspect=4:3}@ (themes: @beamer@, the default,
+-- @light@ and @dark@; aspects: @16:9@, the default, and @4:3@), an empty
+-- box of the class 'styleClass'. It shows nothing, on the page or on a
+-- slide. The first one counts; the editor warns of any other
+-- ("Wiki.Core.Markdown.Problems").
 --
 -- Steps are counted as Beamer counts them, so that a Beamer PDF has one
 -- page for each step the browser shows. Each block is shown from the step
@@ -43,9 +49,10 @@
 -- next steps in document order, nested lists' items included, and content
 -- after the list without a pause is shown with the list's first item, as
 -- in Beamer. A pause after such items starts the step after the last
--- item. A pause is read only where the Markdown reader reads one ('Pause'),
--- and a quotation, a footnote, a table or code is shown whole, at the step
--- of the block it is.
+-- item. A pause is read only where the Markdown reader reads one ('Pause'):
+-- on the slide, in a box, an alert, a spoiler, a quotation and a list
+-- item. A footnote, a table or code is shown whole, at the step of the
+-- block it is.
 --
 -- A step changes nothing on a slide but what is visible: the slide's body
 -- holds all of its content, and each piece shown from a later step than
@@ -64,8 +71,13 @@ module Wiki.Core.Slides
   , Slide (..)
   , SlideTitle (..)
   , deckOf
-  , isDeck
   , titleBlock
+  , styleClass
+
+    -- * The page's top level, as a presentation reads it
+  , deckLevel
+  , isOpener
+  , isLook
 
     -- * Steps
   , atStep
@@ -84,6 +96,24 @@ module Wiki.Core.Slides
     -- * Rendering
   , RenderedSlide (..)
   , renderDeck
+  , renderDeckWithIds
+
+    -- * Slides in the source, for the editor
+  , SlideSpan (..)
+  , slideSpans
+  , slideSpansParsed
+  , fixedSlides
+  , slideAtLine
+  , moveSlide
+  , slideChunks
+
+    -- * Whether a slide's content fits
+  , Fit (..)
+  , fitOf
+  , fitName
+  , Measures
+  , measuresFor
+  , fitsNow
   )
 where
 
@@ -93,7 +123,7 @@ import Halogen.HTML qualified as HH
 import Protolude
 import Wiki.Core.Markdown.Ast
 import Wiki.Core.Markdown.Frame (FrameScheme (..))
-import Wiki.Core.Markdown.Render (Options (..), renderSections)
+import Wiki.Core.Markdown.Render (Options (..), renderSectionsWithIds)
 
 -- | 'Deck': a page as slides, with its display options. There is always at
 -- least one slide.
@@ -173,67 +203,80 @@ aspectName = \case
 deckOf :: [Block] -> Deck
 deckOf page =
   Deck
-    { options = maybe defaultDeckOptions optionsOf (head [attrs | Div attrs _ <- doc, isOptions attrs])
-    , slides = map cutSteps (withFootnotes notes (nonEmpty' (filter (not . emptySlide) (map slideOf (splitAtBreaks content)))))
+    { options = maybe defaultDeckOptions optionsOf (head [attrs | b@(Div attrs _) <- doc, isLook b])
+    , slides = map cutSteps (withFootnotes notes (nonEmpty' (filter (not . emptySlide) (map slideOf (splitAtOpeners content)))))
     }
   where
     notes = concat [ns | Footnotes ns <- doc]
     content = filter keep doc
     keep = \case
       Footnotes _ -> False
-      Div attrs _ -> not (isOptions attrs)
-      _ -> True
+      b -> not (isLook b)
     -- A page with nothing but breaks is still one slide, an empty one.
     nonEmpty' = \case
       [] -> [Slide Nothing [] [] 1]
       ss -> ss
-    doc = sectionsShown page
+    doc = map snd (deckLevel (map ((),) page))
 
--- | Blocks with each heading spoiler among them (not those inside a
--- quotation, a box or a list) as its heading and section, as written
--- ('Wiki.Core.Markdown.Ast.OnHeading'), and the heading spoilers in
--- those sections the same.
-sectionsShown :: [Block] -> [Block]
-sectionsShown = concatMap $ \case
-  Spoiler h bs | h.kind == OnHeading -> sectionsShown bs
-  b -> [b]
+-- | 'deckLevel' is the page's top level as a presentation reads it: its
+-- blocks, with each heading spoiler among them (not those inside a
+-- quotation, a box or a list) as its heading and then its section's
+-- blocks, as written ('Wiki.Core.Markdown.Ast.OnHeading'), and the
+-- heading spoilers in those sections the same. Each block keeps what it
+-- carries; a block of a section the parser gathered into its spoiler
+-- carries the spoiler's.
+--
+-- This is the one place the slides' top level is decided: 'deckOf' cuts
+-- the slides and reads the look from it, and the editor's warnings of a
+-- presentation ("Wiki.Core.Markdown.Problems") and its list of slides
+-- read the same blocks, with their own lines, from
+-- 'Wiki.Core.Markdown.Ast.parseDeckSpans', whose heading spoilers have
+-- no section gathered into them. An opener is a heading of level one or
+-- two among these blocks ('isOpener'), and the look is the first
+-- @[[!style]]@ among them ('isLook').
+deckLevel :: [(a, Block)] -> [(a, Block)]
+deckLevel = concatMap $ \(at, b) -> case b of
+  Spoiler h bs | h.kind == OnHeading -> deckLevel [(at, x) | x <- bs]
+  _ -> [(at, b)]
 
--- | Whether a page is written as a deck: split into slides, or setting its
--- slides' look. Any page can be shown as slides; this says whether the
--- page is meant to be.
-isDeck :: [Block] -> Bool
-isDeck page = any isBreak doc || or [isOptions attrs | Div attrs _ <- doc]
-  where
-    doc = sectionsShown page
-    isBreak = \case
-      ThematicBreak -> True
-      _ -> False
+-- | Whether a block of 'deckLevel' is the line @[[!style]]{…}@, which sets
+-- a presentation's look: the first one does.
+isLook :: Block -> Bool
+isLook = \case
+  Div attrs [] -> isOptions attrs
+  _ -> False
 
 -- | A slide's title as the heading it was written as, for rendering.
 titleBlock :: SlideTitle -> Block
 titleBlock t = Heading t.level t.attributes t.text
 
--- | The blocks between the top level's thematic breaks.
-splitAtBreaks :: [Block] -> [[Block]]
-splitAtBreaks bs = case break isBreak bs of
+-- | The blocks before the first opener, then each opener with the blocks
+-- up to the next: the slides' blocks ('isOpener').
+splitAtOpeners :: [Block] -> [[Block]]
+splitAtOpeners bs = case break isOpener bs of
   (before, []) -> [before]
-  (before, _ : after) -> before : splitAtBreaks after
+  (before, opener : after) -> before : go opener after
   where
-    isBreak = \case
-      ThematicBreak -> True
-      _ -> False
+    go opener rest = case break isOpener rest of
+      (inside, []) -> [opener : inside]
+      (inside, next : after) -> (opener : inside) : go next after
 
+-- | Whether a block of 'deckLevel' opens a slide: a heading of level one
+-- or two.
+isOpener :: Block -> Bool
+isOpener = \case
+  Heading level _ _ -> level <= 2
+  _ -> False
+
+-- | A slide of its blocks: its opener the title, and none for the blocks
+-- before the first opener.
 slideOf :: [Block] -> Slide
-slideOf bs = Slide {title, body = before <> drop 1 rest, notes = concat [inner | Div attrs inner <- bs, isNotes attrs], steps = 1}
+slideOf bs = Slide {title, body, notes = concat [inner | Div attrs inner <- bs, isNotes attrs], steps = 1}
   where
     shown = filter (not . notesDiv) bs
-    (before, rest) = break isHeading shown
-    title = case rest of
-      Heading level attributes text : _ -> Just SlideTitle {level, attributes, text}
-      _ -> Nothing
-    isHeading = \case
-      Heading {} -> True
-      _ -> False
+    (title, body) = case shown of
+      Heading level attributes text : rest | level <= 2 -> (Just SlideTitle {level, attributes, text}, rest)
+      _ -> (Nothing, shown)
     notesDiv = \case
       Div attrs _ -> isNotes attrs
       _ -> False
@@ -245,9 +288,9 @@ isNotes :: Attributes -> Bool
 isNotes attrs = "notes" `elem` classes attrs
 
 isOptions :: Attributes -> Bool
-isOptions attrs = "slides" `elem` classes attrs
+isOptions attrs = styleClass `elem` classes attrs
 
--- | The options a @slides@ div's attributes set. An option the attributes
+-- | The options the attributes of @[[!style]]@ set. An option the attributes
 -- leave out, or set to an unknown value, gets the default.
 optionsOf :: Attributes -> DeckOptions
 optionsOf attrs =
@@ -342,18 +385,42 @@ piecesOf incremental shownFrom bs = do
     marked = \case
       run@((at, _) : _) | at > shownFrom -> [stepMark at (map snd run)]
       run -> map snd run
-    -- A pause shows what follows after everything before it: one step
-    -- later, or after the last item of an incremental list, whichever is
-    -- later.
-    pause c = let at = max (c.shown + 1) c.next in c {shown = at, next = at}
+
+-- | A pause shows what follows after everything before it: one step
+-- later, or after the last item of an incremental list, whichever is
+-- later.
+pause :: Counter -> Counter
+pause c = let at = max (c.shown + 1) c.next in c {shown = at, next = at}
+
+-- | The inlines of a paragraph shown from the step @shownFrom@ on, with
+-- the pauses among them ('InlinePause'): each run of inlines shown from a
+-- later step is marked ('Marked', as 'stepMark' marks blocks), and the
+-- pauses are gone. The blocks after the paragraph go on from its last
+-- pause, as after a pause on a line of its own.
+inlineSteps :: Int -> [Inline] -> State Counter [Inline]
+inlineSteps shownFrom xs = do
+  read' <- for xs $ \case
+    InlinePause _ _ -> Nothing <$ modify pause
+    x -> do
+      at <- gets (\c -> c.shown)
+      reach at
+      pure (Just (at, x))
+  pure (concatMap marked (groupBy ((==) `on` fst) (catMaybes read')))
+  where
+    marked = \case
+      run@((at, _) : _) | at > shownFrom -> [Marked (stepAttributes at) (map snd run)]
+      run -> map snd run
 
 -- | A block shown from a step, with the steps inside it: in a box, in an
--- alert, and in a list's items.
+-- alert, in a spoiler, in a quotation, and in a list's items.
 blockSteps :: Bool -> Int -> Block -> State Counter Block
 blockSteps incremental at = \case
   Div attrs bs -> Div attrs <$> piecesOf (incrementalIn attrs) at bs
   Alert kind title bs -> Alert kind title <$> piecesOf incremental at bs
+  BlockQuote bs -> BlockQuote <$> piecesOf incremental at bs
   Spoiler h bs -> Spoiler h <$> piecesOf incremental at bs
+  Para xs | any isInlinePause xs -> Para <$> inlineSteps at xs
+  Plain xs | any isInlinePause xs -> Plain <$> inlineSteps at xs
   List kind items -> List kind <$> traverse item items
   other -> pure other
   where
@@ -381,7 +448,17 @@ reach at = modify (\c -> c {highest = max c.highest at})
 -- @slide-step@ and the step in @data-step@. It is rendered as a @div@
 -- around them ('showingStep').
 stepMark :: Int -> [Block] -> Block
-stepMark at = Div [("class", "slide-step"), ("data-step", show at)]
+stepMark at = Div (stepAttributes at)
+
+-- | The attributes of the mark of a piece shown from a step: the class
+-- @slide-step@ and the step.
+stepAttributes :: Int -> Attributes
+stepAttributes at = [("class", "slide-step"), ("data-step", show at)]
+
+isInlinePause :: Inline -> Bool
+isInlinePause = \case
+  InlinePause _ _ -> True
+  _ -> False
 
 -- | The mark of a list item shown from a step: an empty box with the class
 -- @slide-step-item@ and the step in @data-step@, last in the item. The
@@ -409,12 +486,18 @@ atStep k s = blocks s.body
       Div attrs bs | Just (item, at) <- markOf attrs -> if item || at > k then [] else blocks bs
       Div attrs bs -> [Div attrs (blocks bs)]
       Alert kind title bs -> [Alert kind title (blocks bs)]
+      BlockQuote bs -> [BlockQuote (blocks bs)]
       Spoiler h bs -> [Spoiler h (blocks bs)]
       List kind items -> case [ListItem task (blocks bs) | ListItem task bs <- items, shown bs] of
         [] -> []
         shownItems -> [List kind shownItems]
+      Para xs -> [Para (concatMap inline xs)]
+      Plain xs -> [Plain (concatMap inline xs)]
       other -> [other]
     shown bs = and [at <= k | Div attrs _ <- bs, Just (True, at) <- [markOf attrs]]
+    inline = \case
+      Marked attrs xs | Just (_, at) <- markOf attrs -> if at > k then [] else xs
+      x -> [x]
 
 -- | A slide as presented at a step: everything in it, the pieces shown
 -- from a later step given the class @slide-step-later@, which the
@@ -427,9 +510,15 @@ showingStep k s = Slide {title = s.title, body = map block s.body, notes = s.not
       Div attrs bs | Just (item, at) <- markOf attrs -> Div [("class", T.unwords ((if item then "slide-step-item" else "slide-step") : ["slide-step-later" | at > k])), ("data-step", show at)] (map block bs)
       Div attrs bs -> Div attrs (map block bs)
       Alert kind title bs -> Alert kind title (map block bs)
+      BlockQuote bs -> BlockQuote (map block bs)
       Spoiler h bs -> Spoiler h (map block bs)
       List kind items -> List kind [ListItem task (map block bs) | ListItem task bs <- items]
+      Para xs -> Para (map inline xs)
+      Plain xs -> Plain (map inline xs)
       other -> other
+    inline = \case
+      Marked attrs xs | Just (_, at) <- markOf attrs -> Marked [("class", T.unwords ("slide-step" : ["slide-step-later" | at > k])), ("data-step", show at)] xs
+      x -> x
 
 -- | 'RenderedSlide': a slide as HTML, its title (the heading), its body and
 -- its notes, each placed where the slide view shows it.
@@ -446,9 +535,17 @@ data RenderedSlide w i = RenderedSlide
 -- deck is rendered once for each, and each part taken from its own. The
 -- two renders are one document each, so their islands have the same keys.
 renderDeck :: Options page w i -> Deck -> [RenderedSlide w i]
-renderDeck opts deck = zipWith fromBoth (triples (render opts {frameScheme = slideScheme deck.options.theme})) (triples (render opts))
+renderDeck = renderDeckWithIds ""
+
+-- | 'renderDeck', every id the slides write (a heading's, a footnote's and
+-- its references') and every link to a place in them starting with a
+-- prefix ('Wiki.Core.Markdown.Render.renderSectionsWithIds'): a viewer of
+-- a presentation in a page keeps its ids apart from the page's and from
+-- another viewer's.
+renderDeckWithIds :: Text -> Options page w i -> Deck -> [RenderedSlide w i]
+renderDeckWithIds prefix opts deck = zipWith fromBoth (triples (render opts {frameScheme = slideScheme deck.options.theme})) (triples (render opts))
   where
-    render o = renderSections o (concat [[foldMap (pure . titleBlock) s.title, s.body, s.notes] | s <- deck.slides])
+    render o = renderSectionsWithIds o (map (prefix,) (concat [[foldMap (pure . titleBlock) s.title, s.body, s.notes] | s <- deck.slides]))
     fromBoth onSlide inPage = RenderedSlide {title = onSlide.title, body = onSlide.body, notes = inPage.notes}
     triples = \case
       title : body : notes : rest -> RenderedSlide {title, body, notes} : triples rest
@@ -462,3 +559,239 @@ slideScheme = \case
   Dark -> DarkScheme
   Beamer -> LightScheme
   Light -> LightScheme
+
+----------------------------------------------------------------------
+-- Slides in the source
+
+-- | 'SlideSpan' is a slide as the editor finds it in a presentation's
+-- source: its lines, from 1 and both included, as CodeMirror counts them
+-- (@\\n@ alone ends a line), the level of its opener ('Nothing' for what
+-- comes before the first opener), and its title's text. The last line is
+-- the last that is not blank before the next slide's first.
+data SlideSpan = SlideSpan
+  { from :: Int
+  , to :: Int
+  , level :: Maybe Int
+  , title :: Text
+  }
+  deriving stock (Eq, Show)
+
+-- | Forcing a 'SlideSpan' forces its lines, level and title, so that the
+-- editor can find the slides on a worker thread.
+instance NFData SlideSpan where
+  rnf sp = rnf (sp.from, sp.to, sp.level, sp.title)
+
+-- | The slides of a presentation's source, in order, as the editor lists
+-- and folds them: one for each opener among the blocks 'deckLevel' gives
+-- ('isOpener'), read from 'parseDeckSpans', so that the editor's slides
+-- are those 'deckOf' cuts; and, first, what comes before the first
+-- opener, when 'deckOf' makes a slide of it. A setext heading's slide
+-- starts at its title's first line. None for a text with a carriage
+-- return, whose lines the parser and CodeMirror count differently (a
+-- @\\r@ ends a line for the one and not for the other): the editor then
+-- has no slides to fold or move.
+slideSpans :: Text -> [SlideSpan]
+slideSpans source = slideSpansParsed source (either (const []) (map (first (fmap fst))) (parseDeckSpans source))
+
+-- | 'slideSpans' of a text the caller has parsed already, as
+-- 'parseDeckSpans' or 'Wiki.Core.Markdown.Ast.parseWithLinesMarkersAndDeck'
+-- gives its blocks, each with its first line: one parse serves the
+-- editor's check of the text and its slides.
+slideSpansParsed :: Text -> [(Maybe Int, Block)] -> [SlideSpan]
+slideSpansParsed source spans
+  | T.any (== '\r') source = []
+  | otherwise =
+      let openers = [(l, lvl, plainText xs) | (Just l, Heading lvl _ xs) <- deckLevel spans, lvl <= 2]
+          starts = [l | (l, _, _) <- openers]
+          ends = map (subtract 1) (drop 1 starts) <> [lineCount]
+          -- The slide of what comes before the first opener, when
+          -- 'deckOf' makes one: not of a look, footnotes or pauses alone.
+          untitled = case (deckOf (map snd spans)).slides of
+            s : _ -> isNothing s.title && not (null s.body && null s.notes)
+            [] -> False
+          preamble = [SlideSpan {from = 1, to = lastNonBlank 1 (maybe lineCount (subtract 1) (head starts)), level = Nothing, title = ""} | untitled]
+       in preamble <> [SlideSpan {from = l, to = lastNonBlank l e, level = Just lvl, title} | ((l, lvl, title), e) <- zip openers ends]
+  where
+    sourceLines = T.splitOn "\n" source
+    lineCount = length sourceLines
+    lineAt n = fromMaybe "" (atMay sourceLines (n - 1))
+    blank n = T.all isSpace (lineAt n)
+    lastNonBlank start n
+      | n > start && blank n = lastNonBlank start (n - 1)
+      | otherwise = n
+
+-- | How many of a presentation's first slides stay where they are when
+-- slides are moved: what comes before the first opener, and the title
+-- slide, a level-one opener that is the first.
+fixedSlides :: [SlideSpan] -> Int
+fixedSlides spans = length (takeWhile fixed (zip [0 :: Int ..] spans))
+  where
+    firstOpener = length (takeWhile (isNothing . (.level)) spans)
+    fixed (i, sp) = isNothing sp.level || (i == firstOpener && sp.level == Just 1)
+
+-- | The index of the slide a line is on, if any: the last slide that
+-- starts on or before it.
+slideAtLine :: [SlideSpan] -> Int -> Maybe Int
+slideAtLine spans line = lastMay [i | (i, sp) <- zip [0 ..] spans, sp.from <= line]
+
+-- | A presentation's source as its slides' chunks ('slideSpans'): the
+-- text before the first slide (blank lines, when no slide starts on the
+-- first line), then each slide's text from its first line up to the next
+-- slide's first, the blank lines between them included. Their
+-- concatenation is the text, byte for byte. A text without slides is one
+-- chunk.
+slideChunks :: Text -> (Text, [Text])
+slideChunks source = case slideSpans source of
+  [] -> (source, [])
+  spans ->
+    let offsets = map lineStart (map (.from) spans) <> [T.length source]
+        before = T.take (fromMaybe 0 (head offsets)) source
+        chunk a b = T.take (b - a) (T.drop a source)
+     in (before, zipWith chunk offsets (drop 1 offsets))
+  where
+    -- The character the line starts at.
+    lineStart n = sum (map ((+ 1) . T.length) (take (n - 1) (T.splitOn "\n" source)))
+
+-- | Move a presentation's slide, by its index in 'slideSpans', to be the
+-- slide at another index: its whole text, from its first line up to the
+-- next slide's, blank lines included, and nothing else, so that every
+-- slide's text is the same, only in another order. The slides that stay
+-- first ('fixedSlides') do not move, and none moves before them: a move
+-- that would is no move. A text with no slides, or an index out of range,
+-- is left as it is.
+--
+-- Line breaks are added where the slides would otherwise run together,
+-- and nowhere else. The last slide's text, which may end without one,
+-- gets a line break when another slide comes after it. A slide whose
+-- title is a setext heading (@Title@, then @---@) can still be read as the
+-- end of the paragraph or the list above it: when the moved text does not
+-- have the same slides in the new order, a blank line goes before each
+-- such slide that the move put after another and that has none
+-- ('joined'). When even that does not give the same slides (a last slide
+-- with a fence or a box left open, which would take in the slides moved
+-- after it), the move is no move.
+moveSlide :: Int -> Int -> Text -> Text
+moveSlide i j source
+  | i == j || i < fixed || j < fixed || i >= count || j >= count = source
+  | sameSlides plain = plain
+  | sameSlides apart = apart
+  | otherwise = source
+  where
+    spans = slideSpans source
+    count = length spans
+    fixed = fixedSlides spans
+    (before, chunks) = slideChunks source
+    order = reorder [0 .. count - 1]
+    placed = [(k, c) | k <- order, Just c <- [atMay chunks k]]
+    plain = before <> joined False placed
+    apart = before <> joined True placed
+    -- The same slides, in the new order: each with its level, its title
+    -- and its lines as they were.
+    sameSlides text = map (written text) (slideSpans text) == map (written source) (reorder spans)
+    written text sp = (sp.level, sp.title, take (sp.to - sp.from + 1) (drop (sp.from - 1) (T.splitOn "\n" text)))
+    reorder :: [a] -> [a]
+    reorder xs = case atMay xs i of
+      Nothing -> xs
+      Just x -> let rest = take i xs <> drop (i + 1) xs in take j rest <> [x] <> drop j rest
+
+-- | Slides' texts, each with its index in the text before the move, one
+-- after the other, each but the last ending with a line break and, when
+-- asked, with a blank line before a slide whose title is a setext
+-- heading, where the move put it after another slide than before
+-- ('moveSlide').
+joined :: Bool -> [(Int, Text)] -> Text
+joined apartSetext = \case
+  [] -> ""
+  [(_, c)] -> c
+  (k, c) : next@(k', c') : rest ->
+    let ended = if "\n" `T.isSuffixOf` c then c else c <> "\n"
+        moved = k' /= k + 1
+        apart = if apartSetext && moved && setext c' && not (endsBlank ended) then ended <> "\n" else ended
+     in apart <> joined apartSetext (next : rest)
+  where
+    -- A slide's text starts with its opener's first line: an ATX heading
+    -- starts with a hash after at most three spaces, a setext one not.
+    setext c = not ("#" `T.isPrefixOf` T.dropWhile (== ' ') (T.take 4 c))
+    -- Whether a text that ends with a line break has a blank line last.
+    endsBlank t = case reverse (T.splitOn "\n" t) of
+      _ : lastLine : _ : _ -> T.all isSpace lastLine
+      _ -> False
+
+----------------------------------------------------------------------
+-- Whether a slide's content fits
+
+-- | 'Fit' is whether a slide's content fits on it, as the editor's
+-- preview measures it on a card 1024 CSS pixels wide at the deck's aspect
+-- (WP5.97 of docs/PLAN.md): the smallest size a deck is promised to be
+-- shown at, where what is sized in pixels (an image's width, a frame's
+-- height) takes the largest share of the slide.
+data Fit
+  = -- | Not measured yet, or measured for a text that has changed since:
+    -- never taken for 'Fits'.
+    Unmeasured
+  | -- | Half a line or more to spare.
+    Fits
+  | -- | Less than half a line to spare, or up to one line cut: it may be
+    -- cut slightly.
+    Tight
+  | -- | More than a line cut.
+    Overflowing
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+-- | The fit of a slide from what the preview measured on its body: how far
+-- the bottom of its content is below the bottom of the body's room, and
+-- how far its content is wider than the body, both in lines of the body's
+-- text (negative when there is room to spare).
+fitOf :: Double -> Double -> Fit
+fitOf below wider
+  | below > 1 || wider > 1 = Overflowing
+  | below > -0.5 || wider > 0 = Tight
+  | otherwise = Fits
+
+-- | A fit's name, as the editor's marks and the preview's classes write
+-- it.
+fitName :: Fit -> Text
+fitName = \case
+  Unmeasured -> "unmeasured"
+  Fits -> "fits"
+  Tight -> "tight"
+  Overflowing -> "overflowing"
+
+-- | 'Measures' is whether each slide of a presentation fits, as the
+-- preview measured it for a text, kept with what each fit depends on in
+-- that text: the slide's own lines, and the lines that set the deck's
+-- look (@[[!style]]@), which set the shape and the type of every slide.
+data Measures = Measures
+  { look :: [Text]
+  , measured :: [([Text], Fit)]
+  }
+  deriving stock (Eq, Show)
+
+-- | The measures of a text: the fits by the slides' places in the deck.
+measuresFor :: Text -> [Fit] -> Measures
+measuresFor text fits =
+  Measures
+    { look = lookLines text
+    , measured = zip (map (slideLines text) (slideSpans text)) (fits <> repeat Unmeasured)
+    }
+
+-- | Whether each slide of a text (its 'slideSpans') fits, as far as the
+-- measures say: a slide's fit holds while its lines and the look are
+-- those it was measured with, at the same place in the deck; a slide
+-- changed since, or not measured, is 'Unmeasured'.
+fitsNow :: Maybe Measures -> Text -> [SlideSpan] -> [Fit]
+fitsNow measures text spans = case measures of
+  Just m | m.look == lookLines text -> [current (atMay m.measured i) sp | (i, sp) <- zip [0 ..] spans]
+  _ -> map (const Unmeasured) spans
+  where
+    current found sp = case found of
+      Just (written, fit) | written == slideLines text sp -> fit
+      _ -> Unmeasured
+
+-- | The lines of a text that set a deck's look.
+lookLines :: Text -> [Text]
+lookLines = filter ("[[!style]]" `T.isPrefixOf`) . map T.stripStart . T.splitOn "\n"
+
+-- | A slide's lines in a text.
+slideLines :: Text -> SlideSpan -> [Text]
+slideLines text sp = take (sp.to - sp.from + 1) (drop (sp.from - 1) (T.splitOn "\n" text))

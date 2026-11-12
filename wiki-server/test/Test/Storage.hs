@@ -565,6 +565,7 @@ byHash a =
         , updatedAt = p.updatedAt
         , position = p.position
         , template = p.template
+        , kind = p.kind
         , createdBy = Nothing
         , updatedBy = Nothing
         }

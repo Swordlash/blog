@@ -179,7 +179,7 @@ toPlan a matches =
                     , title = pm.archived.title
                     , attachments = length pm.archived.attachments
                     , conflict =
-                        (\theirs -> PageConflict {title = theirs.title, updatedAt = theirs.updatedAt, sameContent = sameContent a pm.archived theirs})
+                        (\theirs -> PageConflict {title = theirs.title, updatedAt = theirs.updatedAt, sameContent = sameContent a pm.archived theirs, kind = theirs.kind, importedKind = pm.archived.kind})
                           <$> pm.server
                     }
                 | pm <- m.pages
@@ -190,12 +190,14 @@ toPlan a matches =
     }
 
 -- | Whether an archive's page and a server's page have the same title,
--- body and attachments (by name, media type and content), so that either
--- choice gives the same page.
+-- body, attachments (by name, media type and content) and kind, so that
+-- either choice gives the same page. The kind is part of what a page is:
+-- a presentation is not the same page as a document with its text.
 sameContent :: Archive -> Page -> Page -> Bool
 sameContent a ours theirs =
   ours.title == theirs.title
     && ours.body == theirs.body
+    && ours.kind == theirs.kind
     && map (attachmentKey (\b -> blobOf <$> Map.lookup b a.blobs)) ours.attachments
       == map (attachmentKey Just) theirs.attachments
   where
@@ -440,6 +442,10 @@ importPage blobs a discussions choices spacePath target progress pm
           let replaced = savedAs time pm.archived.title pm.archived.body theirs
           updatePageText theirs.id replaced.title replaced.body replaced.updatedAt
           insertVersion replaced Nothing
+          -- The imported page's kind comes with its text, except on a
+          -- space's home page, which is a document.
+          home <- (>>= (\s -> s.homePage)) . Map.lookup target <$> loadSpaces
+          when (home /= Just theirs.id) (setPageKindRow theirs.id pm.archived.kind)
           deleteAttachmentsOf theirs.id
           n <- attach blobs a theirs.id pm.archived.attachments
           said <- discuss theirs.id (Map.findWithDefault [] pm.archived.id discussions)
@@ -467,6 +473,7 @@ importPage blobs a discussions choices spacePath target progress pm
               , updatedAt = pm.archived.updatedAt
               , position = maybe 0 ((+ 1) . maximum) (nonEmpty (map (\x -> x.position) siblings))
               , template = pm.archived.template
+              , kind = pm.archived.kind
               , createdBy = Nothing
               , updatedBy = Nothing
               }

@@ -65,6 +65,7 @@ import Wiki.Core.Attachment (MimeType (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxKind (..), themeColours)
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Permission (GlobalGrant (..), Grants (..), SpaceGrant (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Url (Url (..))
@@ -206,7 +207,7 @@ genSpaceMove :: Gen SpaceMove
 genSpaceMove = SpaceMove <$> genMaybe genSpaceId
 
 genNewPage :: Gen NewPage
-genNewPage = NewPage <$> genMaybe genPageId <*> genText <*> genText
+genNewPage = NewPage <$> genMaybe genPageId <*> genText <*> genText <*> elements [Document, Presentation]
 
 genPageEdit :: Gen PageEdit
 genPageEdit = PageEdit <$> genText <*> genText
@@ -236,7 +237,7 @@ genDraft :: Gen Draft
 genDraft = Draft <$> genPageId <*> genUserId <*> genText <*> genText <*> genUtcTime <*> genUtcTime
 
 genPageConflict :: Gen PageConflict
-genPageConflict = PageConflict <$> genText <*> genUtcTime <*> arbitrary
+genPageConflict = PageConflict <$> genText <*> genUtcTime <*> arbitrary <*> elements [Document, Presentation] <*> elements [Document, Presentation]
 
 genPagePlan :: Gen PagePlan
 genPagePlan = PagePlan <$> genSlugs <*> genText <*> chooseInt (0, 5) <*> genMaybe genPageConflict

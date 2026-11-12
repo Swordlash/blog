@@ -13,7 +13,7 @@ import Test.Hspec
 import Wiki.Core.Markdown.Ast
 import Wiki.Core.Markdown.Toc (anchors, tableOfContents)
 import Wiki.Core.Search (bodyText)
-import Wiki.Core.Slides (Deck (..), Slide (..), SlideTitle (..), deckOf, isDeck)
+import Wiki.Core.Slides (Deck (..), Slide (..), SlideTitle (..), deckOf)
 
 parses :: Text -> [Block] -> Expectation
 parses source expected = parseMarkdown source `shouldBe` Right expected
@@ -284,9 +284,8 @@ spec = describe "Markdown spoilers and listings" $ do
           ]
     it "starts the spoiler on its heading's line, for the editor's preview" $
       map fst <$> parseWithLines "## [[!spoiler]] Q\n\na\n\nb\n\n## B\n" `shouldBe` Right [Just 1, Just 7]
-    it "is its section as written on a slide, so the deck's breaks and titles stay" $ do
-      let deck = deckOf (blocksOf "## [[!spoiler]] Q\n\na\n\n---\n\n## [[!spoiler]]{r} R\n\nb\n")
-      isDeck (blocksOf "## [[!spoiler]] Q\n\na\n\n---\n\nb\n") `shouldBe` True
+    it "is its section as written on a slide, its heading the slide's title" $ do
+      let deck = deckOf (blocksOf "## [[!spoiler]] Q\n\na\n\n## [[!spoiler]]{r} R\n\nb\n")
       [(plainText . (.text) <$> s.title, shape s.body) | s <- deck.slides] `shouldBe` [(Just "Q", ["a"]), (Just "R", ["b"])]
 
   describe "listings that scroll, {rows=N}" $ do

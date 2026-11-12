@@ -276,16 +276,21 @@ import Wiki.App.Browser (replacingEntry)
 import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
+  , FoldsChange (..)
   , GridKey (..)
   , PickedFile (..)
+  , SlideToggle (..)
   , announceUpload
   , answerEmoji
   , answerMention
+  , appendSlide
   , applyCommand
   , attachEditor
   , changesLeft
   , chosenFiles
   , clickElement
+  , cursorLine
+  , cursorLineOf
   , decision
   , detachEditor
   , droppedFiles
@@ -294,13 +299,17 @@ import Wiki.App.Editor.Browser
   , focusElement
   , focusInView
   , focusText
+  , foldLines
+  , foldsChange
   , forgetPreviewEntry
   , goToTitleLine
   , gridKey
   , guardUnload
   , historyBack
   , insertAtCursor
+  , markSlides
   , mentionAsked
+  , moveSlideIn
   , nextProblem
   , offerFolds
   , onPreviewEntry
@@ -315,8 +324,11 @@ import Wiki.App.Editor.Browser
   , selectedSpan
   , settleChanges
   , showProblems
+  , slideDropped
+  , slideToggled
   , textShown
   , typedText
+  , unfoldLines
   )
 import Wiki.App.Editor.Problems (problemRanges)
 import Wiki.App.Islands (MonadIslands)
@@ -383,7 +395,9 @@ import Wiki.Core.Page (Page, PageSummary, titleLine, withTitleLine)
 -- Qualified, so that its fields (read with a dot) are not confused with
 -- the work's fields of the same names.
 import Wiki.Core.Page qualified as P
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (GlobalPermission (Administer), Grants (access), hasGlobalPermission)
+import Wiki.Core.Slides qualified as Slides
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (encryption, id))
 import Wiki.Core.User (User (id))
@@ -590,6 +604,21 @@ data State = State
   , hostElement :: Maybe Element
   -- ^ CodeMirror's host element, once the text is loaded: the panel edits
   -- through it.
+  , slidesMode :: Bool
+  -- ^ Whether a presentation is edited slide by slide (WP5.97 of
+  -- docs/PLAN.md): each slide folded but the open ones, with its controls
+  -- to open it and move it, and the preview showing the cursor's slide;
+  -- or as its raw Markdown. The browser keeps the choice. Either way the
+  -- text is the same: the mode changes what is shown, never a byte.
+  , cursorAt :: Int
+  -- ^ The line the cursor is on, from 1, as CodeMirror last reported:
+  -- the preview of a presentation shows the slide it is on.
+  , measures :: Maybe Slides.Measures
+  -- ^ Whether each slide of a presentation fits, as the preview last
+  -- measured it, for the text it showed.
+  , oneSlide :: Bool
+  -- ^ Whether the preview of a presentation's raw Markdown shows the
+  -- cursor's slide alone, rather than the whole deck.
   , selection :: Maybe Span
   -- ^ What is selected in the text, as CodeMirror last reported.
   , pendingChanges :: Int
@@ -678,11 +707,77 @@ data Action
   | EmojiFocus Int
   | FromPreview Preview.Output
   | NextProblem
+  | SlidesMode Bool
+  | OneSlide Bool
+  | CursorAt Int
+  | ToggleSlide SlideToggle
+  | DropSlide Int Int Bool
+  | FoldsChanged FoldsChange
+  | NewSlide
+  | EditorReady
 
 -- | The local storage key for whether the preview goes beside the
 -- Markdown.
 sideBySideKey :: Text
 sideBySideKey = "editor-side-by-side"
+
+-- | Whether a presentation is edited slide by slide: its slides folded
+-- but the open ones, with their controls, and the preview showing the
+-- cursor's slide.
+editingSlides :: State -> Bool
+editingSlides st =
+  st.slidesMode && case st.loaded of
+    Ready w -> w.page.kind == Kind.Presentation
+    _ -> False
+
+-- | Whether the page edited is a presentation: its preview is then
+-- always there, off the screen when it is not shown, measuring the slides.
+isDeck :: State -> Bool
+isDeck st = case st.loaded of
+  Ready w -> w.page.kind == Kind.Presentation
+  _ -> False
+
+-- | The problems of the slides that do not fit, as the preview measured
+-- them for the text last checked: a warning for a slide that may be cut
+-- slightly, an error for one that is cut, over the slide's lines.
+fitProblems :: State -> [Problems.Problem]
+fitProblems st =
+  [ Problems.Problem {from = sp.from, to = sp.to, kind = Problems.SlideFit, severity, message}
+  | isDeck st
+  , (sp, fit) <- zip st.checked.slides (Slides.fitsNow st.measures st.checkedText st.checked.slides)
+  , Just (severity, message) <- [fitProblem fit]
+  ]
+  where
+    fitProblem = \case
+      Slides.Tight -> Just (Problems.Warning, "This slide may be cut slightly when presented: less than half a line is left at its foot, or up to a line goes beyond it.")
+      Slides.Overflowing -> Just (Problems.Error, "This slide is cut when presented: more than a line goes beyond its foot. Move some of it to a slide of its own.")
+      _ -> Nothing
+
+-- | The toolbar's controls of a presentation, or none for a document.
+deckBar :: State -> Maybe DeckBar
+deckBar st = case st.loaded of
+  Ready w
+    | w.page.kind == Kind.Presentation ->
+        Just DeckBar {bySlide = st.slidesMode, oneShown = st.oneSlide, carriageReturns = T.any (== '\r') w.body}
+  _ -> Nothing
+
+-- | What the preview shows of a presentation: the cursor's slide, slide
+-- by slide or when asked in the raw Markdown, or else the whole deck;
+-- nothing of the kind for a document, which it shows as a page.
+previewSlides :: State -> Work -> Maybe Preview.Slides
+previewSlides st work
+  | work.page.kind /= Kind.Presentation = Nothing
+  | st.slidesMode || st.oneSlide = Just (Preview.SlideAt (fromMaybe 0 (Slides.slideAtLine st.checked.slides st.cursorAt)))
+  | otherwise = Just Preview.WholeDeck
+
+-- | The title a new slide gets, selected so that typing replaces it.
+newSlideTitle :: Text
+newSlideTitle = "New slide"
+
+-- | The browser's storage key of the way a presentation is edited: true
+-- for its raw Markdown, false (or nothing kept) for slide by slide.
+rawSlidesKey :: Text
+rawSlidesKey = "editor-presentation-raw"
 
 -- | The sizes the Markdown's font is offered in (WP5.36 of docs/PLAN.md),
 -- smallest first; 'defaultFontStep' is the one it starts at, the size it
@@ -752,7 +847,7 @@ component =
               , pending = Nothing
               , autosave = Nothing
               , checkWait = Nothing
-              , checked = Problems.checkText ""
+              , checked = Problems.checkText Kind.Document ""
               , checkedText = ""
               , failedIslands = mempty
               , problemCount = 0
@@ -791,6 +886,10 @@ component =
               , homeChoice = homeChoiceOf input.context.session.homePage
               , assistantMounted = False
               , hostElement = Nothing
+              , slidesMode = True
+              , cursorAt = 1
+              , oneSlide = False
+              , measures = Nothing
               , selection = Nothing
               , pendingChanges = 0
               , decisions = mempty
@@ -850,7 +949,7 @@ component =
     editing st work =
       [hh|
         <form
-          class="editor-form{% if st.mode == Previewing %} previewing{% end %}{% if st.sideBySide %} side-by-side{% end %}{% if isJust st.conflict %} conflicting{% end %}{% if st.assistantOpen %} assisting{% end %}"
+          class="editor-form{% if st.mode == Previewing %} previewing{% end %}{% if st.sideBySide %} side-by-side{% end %}{% if isJust st.conflict %} conflicting{% end %}{% if st.assistantOpen %} assisting{% end %}{% if isDeck st %} deck{% end %}"
           style={{ "--editor-font-size: " <> fontSize st.fontStep }}
           {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}
           {{ HE.preventingDefault (HE.handler' (EventType "keydown") (keyAction st)) }}
@@ -875,7 +974,7 @@ component =
               {% end %}
             </div>
           </div>
-          {{ toolbar st.menuHolder Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, emojiSearch = st.emojiQuery} }}
+          {{ toolbar st.menuHolder Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, emojiSearch = st.emojiQuery, deck = deckBar st} }}
           {{ cornerNotices st }}
           </div>
           <div class="editor-notices">
@@ -1122,6 +1221,9 @@ component =
     keyAction st ev = case editorKey ev of
       Just EscapeKey | isJust st.menu -> Just CloseMenu
       Just EscapeKey -> Nothing
+      -- Alt+Up and Alt+Down move a slide only where there are slides to
+      -- move; elsewhere they are the browser's.
+      Just (MoveSlideKey _) | not (editingSlides st) -> Nothing
       Just key -> Just (Key key)
       Nothing -> Nothing
 
@@ -1266,11 +1368,11 @@ component =
 
     previewPane :: State -> Work -> Maybe (H.ComponentHTML Action Slots m)
     previewPane st work
-      | st.previewMounted =
+      | st.previewMounted || isDeck st =
           Just
             [hh|
               <div class="editor-preview" aria-label="Preview">
-                {{ HH.slot "preview" () Preview.component Preview.Input {place = placeOf st.input work, title = work.shownTitle, body = work.shownBody} FromPreview }}
+                {{ HH.slot "preview" () Preview.component Preview.Input {place = placeOf st.input work, title = work.shownTitle, body = work.shownBody, slides = previewSlides st work} FromPreview }}
               </div>
             |]
       | otherwise = Nothing
@@ -1295,6 +1397,20 @@ component =
           <div class="toolbar-group">{{ map toolButton codeTools }}{{ linkPageButton }}{{ imageButton }}{{ toolButton tableTool }}</div>
           <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu holder bar }}{{ macrosButton bar }}{{ htmlMenu holder bar }}</div>
           <div class="toolbar-end">
+            {% for d in maybeToList bar.deck %}
+              <span class="editor-slides-mode" role="group" aria-label="How the presentation is edited">
+                <button type="button" aria-pressed={{ if d.bySlide then "true" else "false" :: Text }} title="Slide by slide: each slide folded but the open ones, to open and move" onClick={{ const (SlidesMode True) }}>Slides</button>
+                <button type="button" aria-pressed={{ if d.bySlide then "false" else "true" :: Text }} title="The presentation's Markdown as it is" onClick={{ const (SlidesMode False) }}>Raw</button>
+              </span>
+              {% if d.bySlide %}
+                <button type="button" class="editor-new-slide" title="A slide at the end of the presentation" onClick={{ const NewSlide }}>New slide</button>
+              {% else %}
+                <button type="button" class="editor-one-slide" aria-pressed={{ if d.oneShown then "true" else "false" :: Text }} title="The preview shows the cursor's slide alone, or the whole deck" onClick={{ const (OneSlide (not d.oneShown)) }}>One slide</button>
+              {% end %}
+              {% if d.bySlide && d.carriageReturns %}
+                <span class="editor-slides-note" role="note">This text has carriage returns, so its slides cannot be folded or moved here.</span>
+              {% end %}
+            {% end %}
             <button type="button" class="editor-side-by-side" aria-pressed={{ if bar.twoPanes then "true" else "false" :: Text }} title="The preview beside the text, on a wide screen" onClick={{ const (SideBySide (not bar.twoPanes)) }}>{{ icon sideBySideIcon }}<span>Side by side</span></button>
             <button type="button" class="editor-show-preview" title="The page alone, as it will look (Ctrl+Alt+P)" onClick={{ const ShowPreview }}>{{ icon previewIcon }}<span>Show preview</span></button>
             {% for href in maybeToList bar.detached %}
@@ -1483,6 +1599,11 @@ component =
                 {{ HE.handler' (EventType "wiki-decide") (\ev -> uncurry Decide <$> decision ev) }}
                 {{ HE.handler' (EventType "wiki-mention") (\ev -> uncurry MentionAsked <$> mentionAsked ev) }}
                 {{ HE.handler' (EventType "wiki-emoji") (\ev -> uncurry EmojiAsked <$> emojiAsked ev) }}
+                {{ HE.handler' (EventType "wiki-cursor-line") (fmap CursorAt . cursorLineOf) }}
+                {{ HE.handler' (EventType "wiki-open-slide") (fmap ToggleSlide . slideToggled) }}
+                {{ HE.handler' (EventType "wiki-move-slide") (fmap (\(i, j, after) -> DropSlide i j after) . slideDropped) }}
+                {{ HE.handler' (EventType "wiki-ready") (const (Just EditorReady)) }}
+                {{ HE.handler' (EventType "wiki-folds") (\ev -> Just $! FoldsChanged (foldsChange ev)) }}
               ></div>
             |]
           )
@@ -1570,6 +1691,9 @@ component =
       -- After the first render, so that render is the same whatever the
       -- browser has stored.
       Initialize -> do
+        H.liftEffect (Storage.getItem LocalStorage rawSlidesKey) >>= \case
+          Just (Right True) -> modify (\st -> st {slidesMode = False})
+          _ -> pass
         remembered <- H.liftEffect (Storage.getItem LocalStorage sideBySideKey)
         when (remembered == Just (Right True)) $
           modify (\st -> st {sideBySide = True, previewMounted = True})
@@ -1638,6 +1762,9 @@ component =
             Editing -> showPreview True
             Previewing -> backToEditing
         EscapeKey -> closeMenu
+        MoveSlideKey by -> withSlides $ \host spans -> do
+          line <- H.liftEffect (cursorLine host)
+          for_ (Slides.slideAtLine spans line) $ \i -> H.liftEffect (moveSlideIn host i (i + by))
       Submit -> save Stay
       SaveAndClose -> save Close
       -- The work is discarded, and so is its draft.
@@ -1887,6 +2014,12 @@ component =
       -- failure is kept even for a key the last check has not seen (the
       -- preview may have drawn a text the check has not read yet); only
       -- those in the checked text are marked.
+      -- Whether each slide fits, measured for the text the preview
+      -- shows: marked beside the slides' handles and among the problems.
+      FromPreview (Preview.SlidesMeasured text fits) -> do
+        modify (\st -> st {measures = Just (Slides.measuresFor text fits)})
+        showSlides
+        publishProblems
       FromPreview (Preview.IslandDrawn key out) -> do
         before <- gets (\st -> st.failedIslands)
         let after = case out of
@@ -1896,6 +2029,61 @@ component =
           modify (\st -> st {failedIslands = after})
           publishProblems
       NextProblem -> gets (\st -> st.hostElement) >>= traverse_ (H.liftEffect . nextProblem)
+      -- The mode changes the folds and the controls, never the text.
+      SlidesMode wanted -> do
+        modify (\st -> st {slidesMode = wanted})
+        H.liftEffect (Storage.setItem LocalStorage rawSlidesKey (not wanted))
+        if wanted
+          then showSlides >> foldAllBut []
+          else
+            gets (\st -> st.hostElement)
+              >>= traverse_
+                ( \host -> do
+                    spans <- currentSlides
+                    H.liftEffect (unfoldLines host [(sp.from, sp.to) | sp <- spans])
+                    showSlides
+                )
+      OneSlide wanted -> modify (\st -> st {oneSlide = wanted})
+      CursorAt line -> modify (\st -> st {cursorAt = line})
+      -- A slide's button: opening a slide closes the others, unless Ctrl
+      -- or Cmd was held.
+      ToggleSlide toggle -> withSlides $ \host spans -> for_ (startingAt spans toggle.line) $ \(i, sp) ->
+        if not toggle.open
+          then H.liftEffect (foldLines host [(sp.from, sp.to)])
+          else
+            if toggle.more
+              then H.liftEffect (unfoldLines host [(sp.from, sp.to)])
+              else foldAllBut [i]
+      -- A slide opened by CodeMirror's own gestures (its fold's mark, the
+      -- keys) is opened as by its button: the others close, unless Ctrl or
+      -- Cmd was held on the click. A fold an edit opened (typing into it,
+      -- an undo) is not the author choosing a slide: the others stay.
+      FoldsChanged change -> unless (change.byEdit || change.more) $
+        withSlides $ \_ spans ->
+          for_ (head [i | line <- change.opened, Just (i, _) <- [startingAt spans line]]) $ \i -> foldAllBut [i]
+      -- A slide dropped before or after another: where it goes once it is
+      -- taken out of the list.
+      DropSlide fromLine toLine after -> withSlides $ \host spans ->
+        for_ ((,) <$> startingAt spans fromLine <*> startingAt spans toLine) $ \((i, _), (k, _)) ->
+          let j
+                | after = if k > i then k else k + 1
+                | otherwise = if k < i then k else k - 1
+           in unless (k == i) $ H.liftEffect (moveSlideIn host i j)
+      -- A new slide at the end, its title selected to be typed over, and
+      -- the only one open.
+      NewSlide -> withSlides $ \host _ -> do
+        H.liftEffect (appendSlide host newSlideTitle)
+        spans <- currentSlides
+        foldAllBut [length spans - 1]
+      -- CodeMirror has taken the textarea's place: a presentation's slides
+      -- are marked and, slide by slide, folded now, which could not be
+      -- done before.
+      EditorReady -> do
+        -- The cursor's line from the start: CodeMirror tells it only when
+        -- it changes, and it may start below the title line.
+        gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (cursorLine host) >>= \line -> modify (\st -> st {cursorAt = line}))
+        showSlides
+        whenM (gets editingSlides) (foldAllBut [])
       DiscardOffered -> do
         withPage (void . discardDraft)
         modify (\st -> st {hasDraft = False, found = Nothing})
@@ -2145,7 +2333,8 @@ component =
       scheduleCheck previewDelay
       -- Only a preview visible beside the Markdown follows the typing; one
       -- shown on its own catches up when it is shown.
-      gets (\st -> st.sideBySide) >>= \case
+      -- A presentation's preview, which measures its slides, always does.
+      gets (\st -> st.sideBySide || isDeck st) >>= \case
         True -> schedulePreview
         False -> cancelPreview
 
@@ -2161,6 +2350,52 @@ component =
         modify keepDrawnFailures
       modify (\st -> st {pending = Just waiting})
 
+    -- A presentation's slides in the text as it is now: those the last
+    -- check found, when it checked this text, or found again.
+    currentSlides :: H.HalogenM State Action Slots ViewOutput m [Slides.SlideSpan]
+    currentSlides =
+      gets $ \st -> case st.loaded of
+        Ready w
+          | w.page.kind /= Kind.Presentation -> []
+          | st.checkedText == w.body -> st.checked.slides
+          | otherwise -> Slides.slideSpans w.body
+        _ -> []
+
+    -- Run an action of the slides with CodeMirror's host and the slides,
+    -- when a presentation is edited slide by slide.
+    withSlides :: (Element -> [Slides.SlideSpan] -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()
+    withSlides act = do
+      st <- get
+      when (editingSlides st) $ for_ st.hostElement $ \host -> currentSlides >>= act host
+
+    -- The slide that starts on a line, with its index.
+    startingAt :: [Slides.SlideSpan] -> Int -> Maybe (Int, Slides.SlideSpan)
+    startingAt spans line = head [(i, sp) | (i, sp) <- zip [0 ..] spans, sp.from == line]
+
+    -- Mark the slides in CodeMirror, with their controls, when a
+    -- presentation is edited slide by slide; take the marks away
+    -- otherwise. The slides before the first that can move have no handle.
+    showSlides :: H.HalogenM State Action Slots ViewOutput m ()
+    showSlides = do
+      st <- get
+      for_ st.hostElement $ \host -> case st.loaded of
+        Ready w -> do
+          spans <- if editingSlides st then currentSlides else pure []
+          let fixed = Slides.fixedSlides spans
+              fits = Slides.fitsNow st.measures w.body spans
+          H.liftEffect (markSlides host w.body [(sp.from, i >= fixed, Slides.fitName fit) | ((i, sp), fit) <- zip (zip [0 ..] spans) fits])
+        _ -> pass
+
+    -- Fold every slide but those given, by their indices, and the
+    -- cursor's when none is given; open those.
+    foldAllBut :: [Int] -> H.HalogenM State Action Slots ViewOutput m ()
+    foldAllBut keep = withSlides $ \host spans -> do
+      line <- H.liftEffect (cursorLine host)
+      let open = if null keep then maybeToList (Slides.slideAtLine spans line) else keep
+          ranges = [(i, (sp.from, sp.to)) | (i, sp) <- zip [0 ..] spans]
+      H.liftEffect (unfoldLines host [r | (i, r) <- ranges, i `elem` open])
+      H.liftEffect (foldLines host [r | (i, r) <- ranges, i `notElem` open])
+
     -- Check the text for problems once the typing has stopped for the
     -- given time (in microseconds), as the preview follows it: a wait of
     -- its own, which the next change kills. The check runs on a worker
@@ -2175,10 +2410,11 @@ component =
         when (delay > 0) $ liftIO (threadDelay delay)
         gets (\st -> st.loaded) >>= \case
           Ready w -> do
-            found <- liftIO (evaluate (force (Problems.checkText w.body)))
+            found <- liftIO (evaluate (force (Problems.checkText w.page.kind w.body)))
             modify $ \st -> keepDrawnFailures st {checkWait = Nothing, checked = found, checkedText = w.body}
             publishProblems
             gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (offerFolds host w.body found.folds))
+            showSlides
           _ -> modify (\st -> st {checkWait = Nothing})
       modify (\st -> st {checkWait = Just waiting})
 
@@ -2205,7 +2441,7 @@ component =
     publishProblems :: H.HalogenM State Action Slots ViewOutput m ()
     publishProblems = do
       st <- get
-      let problems = Problems.allProblems st.checked st.failedIslands
+      let problems = sort (Problems.allProblems st.checked st.failedIslands <> fitProblems st)
       traverse_ (\host -> H.liftEffect (showProblems host (problemRanges st.checkedText problems))) st.hostElement
       when (length problems /= st.problemCount) $ modify (\s -> s {problemCount = length problems})
 
@@ -2614,6 +2850,22 @@ data Bar = Bar
   -- ^ Whether the math macros' panel is shown.
   , emojiSearch :: Text
   -- ^ What is typed in the "Emoji" menu's field.
+  , deck :: Maybe DeckBar
+  -- ^ A presentation's controls ('deckBar'); none for a document.
+  }
+  deriving stock (Eq)
+
+-- | 'DeckBar' is what the toolbar shows of a presentation's controls
+-- (WP5.97 of docs/PLAN.md): the switch between editing slide by slide
+-- and the raw Markdown, and the button of each mode.
+data DeckBar = DeckBar
+  { bySlide :: Bool
+  -- ^ Whether the presentation is edited slide by slide.
+  , oneShown :: Bool
+  -- ^ Whether the preview of the raw Markdown shows one slide.
+  , carriageReturns :: Bool
+  -- ^ Whether the text has a carriage return, which leaves it without
+  -- slides to fold or move ('Wiki.Core.Slides.slideSpans').
   }
   deriving stock (Eq)
 
