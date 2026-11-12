@@ -104,6 +104,8 @@ module Wiki.Core.Markdown.Ast
   , parseWithMarkers
   , parseWithAllMarkers
   , parseWithLines
+  , parseWithLinesAndMarkers
+  , parseWithSpans
 
     -- * Reading the tree
   , plainText
@@ -115,6 +117,7 @@ module Wiki.Core.Markdown.Ast
   , listingLanguage
   , spoilerProblemText
   , validSpoilerName
+  , leadingHeading
   , formulasOf
   , attribute
   , classes
@@ -533,8 +536,27 @@ parseWithTasks source =
 -- editor's preview is scrolled by, to show the block being written
 -- ("Wiki.Core.Markdown.Render"'s 'Wiki.Core.Markdown.Render.renderLines').
 parseWithLines :: Text -> Either ParseError [(Maybe Int, Block)]
-parseWithLines source =
+parseWithLines = fmap (map (first (fmap fst))) . parseWithSpans
+
+-- | Parse a page's Markdown, each block of the page (not those inside
+-- another) with the lines of the source it is written on, from 1: its
+-- first line and its last, as the parser reads them. A heading written
+-- the setext way (its title on one line or more, @===@ or @---@ under it)
+-- runs from its title's first line to its underline; a heading written
+-- with @#@ is one line. A heading spoiler has its heading's lines. Where a
+-- heading's source begins and ends: what the editor's folds
+-- ("Wiki.Core.Markdown.Folds") and a deck's slides are cut by.
+parseWithSpans :: Text -> Either ParseError [(Maybe (Int, Int), Block)]
+parseWithSpans source =
   (\(Blocks bs _ _) -> finishedWith (toList bs)) <$> parsed source
+
+-- | Parse a page's Markdown into what 'parseWithLines' and
+-- 'parseWithAllMarkers' give apart: each block of the page with the line
+-- it starts on, and the marker lines. One parse, for a caller that needs
+-- both (the editor's check of its text, "Wiki.Core.Markdown.Problems").
+parseWithLinesAndMarkers :: Text -> Either ParseError ([(Maybe Int, Block)], [MarkerLine])
+parseWithLinesAndMarkers source =
+  (\(Blocks bs (Markers _ ss _) _) -> (map (first (fmap fst)) (finishedWith (toList bs)), sortOn (\s -> (s.lineAt, s.columnAt)) (ordNub ss))) <$> parsed source
 
 -- | What every block of a page goes through once parsed.
 finished :: [Block] -> [Block]
@@ -1002,15 +1024,16 @@ barsOf (Inlines _ bs _) = bs
 withBars :: Inlines -> Blocks -> Blocks
 withBars xs (Blocks bs ms at) = Blocks bs (ms <> Markers [] (barsOf xs) []) at
 
--- | Blocks as the parser builds them, each with the line of the source it
--- starts on once the parser has said ('parseWithLines'), and with the
+-- | Blocks as the parser builds them, each with the first and the last
+-- line of the source it is written on once the parser has said
+-- ('parseWithSpans'), and with the
 -- markers of the boxes among them, nested ones too ('boxMarkers'). Every
 -- block made of other blocks keeps their markers. The last field is where
 -- the parser last said these blocks start, as a line and a column
 -- ('CM.Rangeable'); blocks combined with others have none. The blocks of
 -- a list item are given their item's place just before the list is made,
 -- and a task list reads each task's place from there ('TaskBox').
-data Blocks = Blocks (Seq (Maybe Int, Block)) Markers (Maybe (Int, Int))
+data Blocks = Blocks (Seq (Maybe (Int, Int), Block)) Markers (Maybe (Int, Int))
   deriving stock (Show)
 
 -- | The markers of boxes and of spoilers among some blocks, nested ones
@@ -1066,13 +1089,22 @@ instance CM.Rangeable Inlines where
     Inlines xs bs _ -> Inlines xs bs False
 
 -- | The parser says where each block is once it has made it, innermost
--- first: a block without a line yet starts where this range does. A block
--- the parser made several of (a paragraph split around display math) has
--- them all start there. The range's start is kept as the blocks' place
--- ('startOf'), the outermost one said last.
+-- first: a block without lines yet is written on the lines this range
+-- covers. A block the parser made several of (a paragraph split around
+-- display math) has them all on those lines. The range's first part is
+-- kept as the blocks' place ('startOf'), the outermost one said last.
+--
+-- A range is one part for each run of lines, each part from the start of
+-- its first line to the start of the line after its last. The parts are
+-- not always in the order of the source: a setext heading's underline
+-- comes first, then its title's lines. So the block's lines run from the
+-- first line of any part to the last line of any part.
 instance CM.Rangeable Blocks where
   ranged (CM.SourceRange ranges) (Blocks xs ms at) = case ranges of
-    (start, _) : _ -> Blocks (first (<|> Just (CM.sourceLine start)) <$> xs) ms (Just (CM.sourceLine start, CM.sourceColumn start))
+    (start, _) : _ ->
+      let firstLine = foldl' min (CM.sourceLine start) [CM.sourceLine s | (s, _) <- ranges]
+          lastLine = foldl' max firstLine [if CM.sourceColumn e == 1 then CM.sourceLine e - 1 else CM.sourceLine e | (_, e) <- ranges]
+       in Blocks (first (<|> Just (firstLine, lastLine)) <$> xs) ms (Just (CM.sourceLine start, CM.sourceColumn start))
     [] -> Blocks xs ms at
 
 instance CM.HasAttributes Inlines where

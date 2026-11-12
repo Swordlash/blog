@@ -82,6 +82,7 @@ library
       Wiki.Core.Markdown.Box
       Wiki.Core.Markdown.Edit
       Wiki.Core.Markdown.Emoji
+      Wiki.Core.Markdown.Folds
       Wiki.Core.Markdown.Frame
       Wiki.Core.Markdown.Html
       Wiki.Core.Markdown.Link
@@ -168,6 +169,7 @@ test-suite wiki-core-test
       Test.Markdown.Comments
       Test.Markdown.Edit
       Test.Markdown.Emoji
+      Test.Markdown.Folds
       Test.Markdown.Frame
       Test.Markdown.HtmlCost
       Test.Markdown.Link

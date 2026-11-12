@@ -6,10 +6,10 @@
 -- text and selection, read and written as an edit the browser can undo;
 -- which of the editor's keys was pressed; the browser's warning before a
 -- reload or a close loses unsaved changes; the writing assistant's
--- edits, as changes the author accepts or rejects; and the questions
--- CodeMirror asks to complete a mention or an emoji, with their answers. The files,
--- the keys and the events CodeMirror sends are read through the Web
--- types' fields; what works on the text itself (CodeMirror, or the
+-- edits, as changes the author accepts or rejects; the questions
+-- CodeMirror asks to complete a mention or an emoji, with their answers;
+-- and the folds of its text. The files, the keys and the events
+-- CodeMirror sends are read through the Web types' fields; what works on the text itself (CodeMirror, or the
 -- textarea's selection in UTF-16 code units) is @jsbits/editor.js@, and
 -- CodeMirror is @web/src/editor.js@.
 --
@@ -76,6 +76,13 @@ module Wiki.App.Editor.Browser
   , showProblems
   , nextProblem
 
+    -- * Folds
+  , offerFolds
+  , foldLines
+  , unfoldLines
+  , foldedLines
+  , reportedFolds
+
     -- * Mentions
   , mentionAsked
   , answerMention
@@ -90,7 +97,7 @@ module Wiki.App.Editor.Browser
 where
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
-import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, encode, object, withObject, (.:), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, eitherDecodeStrict, encode, object, withObject, (.:), (.=))
 import Data.ByteString.Lazy qualified as BSL
 import Data.Coerce (coerce)
 import Data.Foreign (foreignToInt)
@@ -125,6 +132,7 @@ import Wiki.App.Editor.Problems (ProblemRange)
 import Wiki.Core.Assistant.Edit (Change (..), Decision (..), Edit, Refusal, Replacement (..), plan, propose, settle)
 import Wiki.Core.Assistant.Prompt (Span (..))
 import Wiki.Core.Markdown.Edit (Command (..), Selection (..), apply, cursor)
+import Wiki.Core.Markdown.Folds (Fold (..))
 import Wiki.Core.User (Login (..), User (..))
 
 -- What works on the text as CodeMirror and the textarea count it, in
@@ -148,6 +156,7 @@ $( browserJS
      , ("js_title_line", "wiki_editor_title_line", Safe, [t|Element -> IO ()|])
      , ("js_problems", "wiki_editor_problems", Safe, [t|Element -> JSText -> IO ()|])
      , ("js_next_problem", "wiki_editor_next_problem", Safe, [t|Element -> IO ()|])
+     , ("js_offer_folds", "wiki_editor_offer_folds", Safe, [t|Element -> JSText -> JSText -> IO ()|])
      ]
  )
 
@@ -187,6 +196,13 @@ $( jsFields
        Method "textShown" [t|IO ()|]
      , -- Tell the window of the page that a file was uploaded to it.
        Method "uploaded" [t|IO ()|]
+     , -- Fold ranges of lines, JSON [[first, last]] (from 1), each first
+       -- line staying in sight.
+       Method "fold" [t|Text -> IO ()|]
+     , -- Unfold the folds that start on these ranges' first lines.
+       Method "unfold" [t|Text -> IO ()|]
+     , -- The folds, as JSON: [[first, last]], lines from 1.
+       Method "foldedLines" [t|IO Text|]
      ]
  )
 
@@ -450,6 +466,59 @@ showProblems host ranges = liftIO (js_problems host (jsonText ranges))
 -- it in 'Halogen.liftEffect'.
 nextProblem :: (MonadIO m) => Element -> m ()
 nextProblem = liftIO . js_next_problem
+
+-- | Offer the spoilers' folds found in a text ("Wiki.Core.Markdown.Folds")
+-- in the editor's gutter and keys (WP5.96 of docs/PLAN.md), in place of
+-- the ones offered before. CodeMirror takes them only while it holds that
+-- text: folds of another text would fold the wrong lines. Before
+-- CodeMirror has loaded, they are kept on the host and offered once it
+-- has, if it holds that text. The textarea folds nothing.
+offerFolds :: (MonadIO m) => Element -> Text -> [Fold] -> m ()
+offerFolds host text found =
+  liftIO (js_offer_folds host (toJSText text) (jsonText [object ["from" .= f.from, "to" .= f.to] | f <- found]))
+
+-- | Fold ranges of the editor's lines, each its first and last line (from
+-- 1, both included, as "Wiki.Core.Markdown.Folds" counts them), in any
+-- order: the first stays in sight, with a mark that unfolds the rest. Any
+-- ranges, offered in the gutter or not: a heading's section, say. A range
+-- the text does not have, or of one line, folds nothing. The ranges are
+-- taken in the order of the text, the longer first of two that start on
+-- one line; one that overlaps or lies inside a fold made before it, by
+-- this call or already, is left out, and so is the same range twice. Folding changes what is shown,
+-- never the text: no input event comes of it. No @wiki-folds@ event
+-- either ('reportedFolds'): the component knows what it folded.
+foldLines :: (MonadIO m) => Element -> [(Int, Int)] -> m ()
+foldLines host ranges = liftIO $ codeMirror host >>= traverse_ (\cm -> cm.fold (encodeRanges ranges))
+
+-- | Unfold the editor's folds that start on the first line of one of these
+-- ranges, in any order (the last line is not compared, so a range read
+-- before is enough), with no @wiki-folds@ event.
+unfoldLines :: (MonadIO m) => Element -> [(Int, Int)] -> m ()
+unfoldLines host ranges = liftIO $ codeMirror host >>= traverse_ (\cm -> cm.unfold (encodeRanges ranges))
+
+-- | The editor's folds, as their first and last lines, in the order of the
+-- text: those made in the gutter, with the keys, by the mark or by
+-- 'foldLines'. None before CodeMirror has loaded.
+foldedLines :: (MonadIO m) => Element -> m [(Int, Int)]
+foldedLines host = liftIO $ do
+  found <- codeMirror host >>= traverse (.foldedLines)
+  pure (fromMaybe [] (found >>= decodeRanges))
+
+-- | The folds a @wiki-folds@ event on the host reports, as 'foldedLines'
+-- gives them: all the folds there are once the author folded or unfolded
+-- with CodeMirror's own controls (the gutter, the keys, the mark), or an
+-- edit moved a fold with its lines or opened one it touched. 'foldLines'
+-- and 'unfoldLines' make no such event. Pure, as 'typedText' is.
+reportedFolds :: Event -> [(Int, Int)]
+reportedFolds = fromMaybe [] . (decodeRanges . jsValText <=< detailOf)
+
+-- | Ranges of lines as CodeMirror's side reads and writes them: JSON,
+-- @[[first, last]]@.
+encodeRanges :: [(Int, Int)] -> Text
+encodeRanges = decodeUtf8 . BSL.toStrict . encode
+
+decodeRanges :: Text -> Maybe [(Int, Int)]
+decodeRanges = decodeStrict . encodeUtf8
 
 -- | The keys the editor handles itself.
 data EditorKey

@@ -283,3 +283,13 @@ function wiki_editor_problems(host, problems) {
 function wiki_editor_next_problem(host) {
   host.wikiEditor?.nextProblem();
 }
+
+// The spoilers' folds Haskell found in `text` (WP5.96), as JSON: [{from,
+// to}], lines from 1 (Wiki.Core.Markdown.Folds). They are kept on the host
+// with the text, so that a CodeMirror that loads later offers them if it
+// holds that text (web/src/editor.js), and given to the CodeMirror there
+// is, which takes them only for the text it holds.
+function wiki_editor_offer_folds(host, text, folds) {
+  host.wikiFolds = { text, folds: JSON.parse(folds) };
+  host.wikiEditor?.foldable(text, host.wikiFolds.folds);
+}
