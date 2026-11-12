@@ -209,6 +209,7 @@ import Wiki.Core.Markdown.Box (BoxCounter, BoxIcon (..), BoxKind (..), Numbering
 import Wiki.Core.Markdown.Frame (FrameScheme (..), SvgFrame (..), frameDocument, interactiveClass, svgFrameHeight)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
+import Wiki.Core.Markdown.LocalIds (localAttribute, prefixLocalIds)
 import Wiki.Core.Markdown.Tasks (taskLabel)
 import Wiki.Core.Markdown.Toc (contentsNav, tableOfContents)
 import Wiki.Core.Math (Macros (..), definesMacros, onlyDefinitions)
@@ -397,8 +398,8 @@ renderSections opts = renderSectionsWithIds opts . map ("",)
 -- footnotes, and a link in one leads to its own heading. A section with
 -- the prefix @""@ is rendered as 'renderSections' renders it.
 --
--- Raw HTML is left as written, and @[[!toc]]@ lists the ids without their
--- prefixes: neither is in a changelog's entry.
+-- Raw HTML's ids and links, and the links @[[!toc]]@ writes, take the
+-- prefix too ("Wiki.Core.Markdown.LocalIds").
 renderSectionsWithIds :: forall page w i. Options page w i -> [(Text, [Block])] -> [[HH.HTML w i]]
 renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Counts M.empty M.empty [] M.empty (startCounting opts.numbering) "" 0 False)
   where
@@ -509,8 +510,11 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
       -- first ("Wiki.Core.Slides").
       Footnotes notes ->
         single . HH.section [classesProp ["footnotes"]] . single . listOf (OrderedList (firstNote notes)) <$> traverse renderNote notes
-      RawHtmlBlock raw -> pure (renderRawHtml opts raw)
-      TableOfContents -> pure (contentsNav contents)
+      -- Raw HTML and the contents write ids and links the renderer does
+      -- not make itself: they take the section's prefix by the same rule
+      -- ("Wiki.Core.Markdown.LocalIds").
+      RawHtmlBlock raw -> gets (\c -> c.idPrefix) <&> \p -> renderParsedHtml opts (map (localNode p) (Html.parseHtml raw))
+      TableOfContents -> gets (\c -> c.idPrefix) <&> \p -> map (prefixLocalIds p) (contentsNav contents)
 
     -- The table of contents a @[[!toc]]@ shows: of the whole document, every
     -- section of it.
@@ -601,7 +605,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
     -- its end tag ("Wiki.Core.Markdown.Html").
     inlinePieces :: Bool -> [Inline] -> R [Piece w i]
     inlinePieces inLink xs
-      | any isRawHtml xs = htmlPieces inLink (Html.parseFragments context (map fragment xs))
+      | any isRawHtml xs = gets (\c -> c.idPrefix) >>= \p -> htmlPieces inLink (map (localNode p) (Html.parseFragments context (map fragment xs)))
       | otherwise = concat <$> traverse (renderInline inLink) xs
       where
         context = if inLink then Html.PhrasingInLink else Html.Phrasing
@@ -662,7 +666,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
       Emoji keyword emoji -> pure [PNode (emojiSpan ["emoji"] keyword emoji)]
       -- Raw HTML is read with its neighbours, by 'inlinePieces', and does
       -- not get here; on its own it would be read the same way.
-      RawHtml raw -> htmlPieces inLink (Html.parseFragments (if inLink then Html.PhrasingInLink else Html.Phrasing) [Html.Markup raw])
+      RawHtml raw -> gets (\c -> c.idPrefix) >>= \p -> htmlPieces inLink (map (localNode p) (Html.parseFragments (if inLink then Html.PhrasingInLink else Html.Phrasing) [Html.Markup raw]))
       Mention login -> pure $ case opts.resolveMention login of
         Just target
           | not inLink ->
@@ -1028,7 +1032,11 @@ titleProp title = [HP.title title | not (T.null title)]
 -- ("Wiki.Core.Markdown.Html"), with links and sources resolved through
 -- the options, as the Markdown's are. An HTML comment renders as nothing.
 renderRawHtml :: forall page w i. Options page w i -> Text -> [HH.HTML w i]
-renderRawHtml opts raw = fromPieces (concatMap pieces (Html.parseHtml raw))
+renderRawHtml opts raw = renderParsedHtml opts (Html.parseHtml raw)
+
+-- | 'renderRawHtml' of HTML parsed already.
+renderParsedHtml :: forall page w i. Options page w i -> [Html.Node Void] -> [HH.HTML w i]
+renderParsedHtml opts parsed = fromPieces (concatMap pieces parsed)
   where
     pieces :: Html.Node Void -> [Piece w i]
     pieces = \case
@@ -1208,3 +1216,10 @@ frameContent opts = Html.renderHtml . map resolve . Html.parseFrameHtml
 -- ('deckEmbed'): @![Talk](/s/docs/p/talk/){.presentation}@.
 presentationClass :: Text
 presentationClass = "presentation"
+
+-- | Raw HTML's element with a section's prefix on its ids and its links to
+-- a place in the document ('localAttribute').
+localNode :: Text -> Html.Node a -> Html.Node a
+localNode p = \case
+  Html.Element name attrs children -> Html.Element name [(k, localAttribute p name k v) | (k, v) <- attrs] (map (localNode p) children)
+  other -> other

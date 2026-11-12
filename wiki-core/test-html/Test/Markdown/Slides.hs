@@ -14,8 +14,46 @@ import Wiki.Core.Slides
 rendered :: Options page w i -> Text -> [RenderedSlide w i]
 rendered opts source = either (panic . show) (renderDeck opts . deckOf) (parseMarkdown source)
 
+-- | A deck with every writer of ids and of links to a place in itself:
+-- headings, footnotes, the contents, raw HTML's ids and a label's for,
+-- and links to them in Markdown and in raw HTML. (The page's HTML keeps no
+-- anchor's name.)
+everyId :: Text
+everyId =
+  T.intercalate
+    "\n\n"
+    [ "# Deck"
+    , "[[!toc]]"
+    , "## Details"
+    , "A claim[^n] and [the target](#target) and [the details](#details)."
+    , "<span id=\"target\">Here</span> <a href=\"#details\">back</a> <label for=\"field\">Name</label> <input id=\"field\">"
+    , "## More"
+    , "[Another page's place](/s/docs/p/x/#y)."
+    , "[^n]: The note."
+    ]
+
+-- | The ids and the local links' targets of a rendered deck's HTML.
+idsAndTargets :: Text -> ([Text], [Text])
+idsAndTargets html = (valuesOf " id=\"" <> valuesOf " name=\"", [T.drop 1 h | h <- valuesOf " href=\"", "#" `T.isPrefixOf` h] <> concatMap T.words (valuesOf " for=\""))
+  where
+    valuesOf key = [T.takeWhile (/= '"') chunk | chunk <- drop 1 (T.splitOn key html)]
+
 spec :: Spec
 spec = describe "Slides.renderDeck" $ do
+  it "gives every id and every link to a place of the deck the prefix, whatever wrote it, and the page none" $ do
+    let deck = either (panic . show) deckOf (parseMarkdown everyId)
+        htmlOf slides = T.concat <$> traverse (\s -> (<>) <$> renderHtml s.title <*> renderHtml s.body) slides
+    prefixed <- htmlOf (renderDeckWithIds "v1-" defaultOptions deck)
+    plain <- htmlOf (renderDeck defaultOptions deck)
+    let (ids, targets) = idsAndTargets prefixed
+    ids `shouldSatisfy` (not . null)
+    filter (not . T.isPrefixOf "v1-") ids `shouldBe` []
+    filter (`notElem` ids) targets `shouldBe` []
+    prefixed `shouldSatisfy` T.isInfixOf "href=\"/s/docs/p/x/#y\""
+    plain `shouldSatisfy` (not . T.isInfixOf "v1-")
+    let (plainIds, plainTargets) = idsAndTargets plain
+    filter (`notElem` plainIds) plainTargets `shouldBe` []
+
   it "renders each slide's title as its heading, its body and its notes apart" $ do
     let slides = rendered defaultOptions "## One\n\nFirst.\n\n[[!notes]]\nSay it.\n[[/notes]]\n\n# Two\n\nSecond."
     length slides `shouldBe` 2
