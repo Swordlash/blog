@@ -1584,6 +1584,25 @@ confirms it against reality and the plan is amended if it does not hold.
     session marks its own entry by that rule (`AGENTS.md`). The owner was
     offered leaving them out or showing them as one line marked
     technical; this leaves them out.
+79. **The server links the system's SQLite; its SHA-256 is crypton's; no
+    constraint holds network back (WP5.100, #256; the owner,
+    2026-11-12, after an audit of the transitive dependencies).**
+    `direct-sqlite` is built with `systemlib`: the copy it bundles was
+    SQLite 3.45.0 of January 2024, with no release since, and a
+    distribution keeps its SQLite patched. So each machine runs its own
+    SQLite, the machine that builds the server needs SQLite's
+    development files, and the server refuses, before opening any file,
+    a library older than 3.32.0 (upsert, `VACUUM INTO`, more than 999
+    parameters in a statement) or built without threads, the write-ahead
+    log or foreign keys (`Wiki.Server.Storage.SqliteLibrary`); it says
+    which SQLite it runs on at start and in `wiki-server check`. SHA-256
+    goes through one module, `Wiki.Server.Sha256`, over crypton; the
+    stored digests (a blob's id, a session id's hash, a vault key's id,
+    the guide's record) are pinned by constants the earlier library
+    computed. `constraints: network < 3.2.10` is gone and
+    `wiki-server.cabal` asks for warp 3.4.19, warp-tls 3.4.16 and
+    smtp-mail 0.5.0.2 or later: an HTTP/1.1 request without a `Host`
+    header, or any with two, is answered 400.
 
 ## Repository layout
 
@@ -2763,6 +2782,20 @@ needs. Each was true when its package merged; check before relying on one.
   written by hand over HTML5 drag and drop: the nodes are CodeMirror's
   and Halogen's, and what moves is a range of text only the component
   can compute. A text with `\r` has no slides in the editor.
+- **Dependencies to watch (the audit of 2026-11-12, WP5.100).** 391
+  packages over the native, wasm and maker builds; none deprecated, no
+  open advisory against a version in use. cborg and serialise,
+  postgresql-simple, webauthn and protolude build only through
+  `allow-newer` (21 entries are still needed), so every GHC bump depends
+  on them. tagsoup (2019) parses page HTML on the server and in the
+  browser; xml (2015) comes with pandoc and texmath and can see MathML
+  from a page during an export: both pure Haskell, so the risk is time
+  and memory. cryptohash-md5 and -sha1 remain through other packages.
+  Not tested after the bump: outbound TLS on tls 2.5.1 (SMTP with
+  STARTTLS, a real OIDC provider), the Docker image's build, the refusal
+  against a really old SQLite. cabal's "legacy fallback" lines come from
+  six packages (appar, byteorder, erf, xml; entropy, xml-conduit) and
+  mean only that each is built whole.
 
 ## Assumptions
 
