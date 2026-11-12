@@ -71,25 +71,28 @@
 --   a space's document a link to one of its pages goes to that page's
 --   section. An image on the web becomes a link to it: the server fetches
 --   nothing while it writes a document.
--- * __Slides__ ("Wiki.Core.Slides"): a deck is cut where the wiki cuts
---   it, at the top-level thematic breaks, and each slide is titled with its
---   first heading, as pandoc's slide writers expect. A level-one heading
---   becomes a section's title slide, any other a slide's title (a
---   level-two heading at pandoc's slide level 2), and a slide without one
---   gets an untitled one. The other headings on a slide are kept below the
---   slide level. The @notes@ divs (@[[!notes]]@) are what pandoc writes
---   as the speaker's notes (@\\note{}@ in Beamer). The deck's look,
---   @[[!slides]]{…}@, is read from the wiki's parse ("Wiki.Server.Export").
+-- * __Slides__ ("Wiki.Core.Slides"): a presentation is cut where the
+--   wiki cuts it, at the headings of level one and two of its top level,
+--   as pandoc's slide writers cut at slide level 2. A level-one heading
+--   is a section's title slide, a level-two one a slide's title, and what
+--   comes before the first is a slide with an empty title. The other
+--   headings on a slide are kept below the slide level. A thematic break
+--   is a rule on its slide, which pandoc's writers would take for the
+--   start of another. The @notes@ divs (@[[!notes]]@) are what pandoc
+--   writes as the speaker's notes (@\\note{}@ in Beamer). The deck's
+--   look, @[[!style]]{…}@, is read from the wiki's parse
+--   ("Wiki.Server.Export").
 -- * __Steps__ ("Wiki.Core.Slides"): a pause, @[[!pause]]@, becomes
 --   pandoc's own, a paragraph of three dots, and a box with the class
 --   @incremental@ is pandoc's own marker too, so its Beamer writer makes
 --   overlays of them (@\\pause@, and @[\<+->]@ on the lists), one PDF page
 --   for each step the wiki shows ('slideSteps'). Its PowerPoint writer
 --   animates an incremental list, but has no pauses. A pause is made only
---   where the wiki reads one; three dots an author wrote stay text
---   ('dotsAsText'), and a quotation's lists are never incremental, since
---   the wiki shows a quotation whole. In any other document a pause is
---   left out ('withoutPauses'), and an incremental box is an ordinary one.
+--   where the wiki reads one, a quotation included; three dots an author
+--   wrote stay text ('dotsAsText'). A line of attributes with the class
+--   @incremental@ before a list (@{.incremental}@) puts the list in such
+--   a box, as on the page. In any other document a pause is left out
+--   ('withoutPauses'), and an incremental box is an ordinary one.
 module Wiki.Server.Export.Document
   ( -- * Reading a page
     Place (..)
@@ -137,7 +140,8 @@ import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
 import Wiki.App.Route qualified as R
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MediaKind (..), attachmentKind, findAttachment)
 import Wiki.Core.Id (AttachmentId (..), PageId)
-import Wiki.Core.Markdown.Ast (Attributes, Block (..), BoxMarker (..), Footnote (..), ListItem (..), MarkerLine (..), MarkerName (..), MarkerRole (..), MarkerStart (..), ParseError, SpoilerHead (..), WrittenIds (..), languageOfClasses, listingLanguage, markerAt, norenderClass, parseWithAllMarkers, spoilerProblemText)
+import Wiki.Core.Markdown.Ast (Attributes, Block (..), BoxMarker (..), Footnote (..), ListItem (..), MarkerLine (..), MarkerName (..), MarkerRole (..), MarkerStart (..), ParseError, SpoilerHead (..), WrittenIds (..), languageOfClasses, listingLanguage, markerAt, norenderClass, parseWithAllMarkers, spoilerProblemText, styleClass)
+import Wiki.Core.Markdown.Ast qualified as Ast
 import Wiki.Core.Markdown.Box (AlertKind (..), BoxCounter, BoxKind, Numbering, alertKindName, boxCaption, countBox, countSection, definedKind, startCounting)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
@@ -436,7 +440,7 @@ markerEdits doc markers = Map.fromList [(m.lineAt, (m.columnAt, e)) | m <- marke
         _ | start `Set.member` divs -> CloseBox start
         _ -> DropLine
       Pauses -> Just PauseHere
-      SetsSlides -> Just DropLine
+      SetsStyle -> Just DropLine
       PlacesContents -> Just DropLine
       Faulty written why -> Just (ShowLine (written <> " — " <> why))
       HeadingMarker end -> Just (DropMarker end)
@@ -614,6 +618,10 @@ withBoxes source markers edits bars = case family of
                           DropAttributes -> [before]
                           TakeAttributes attrs
                             | opensFence (T.drop i text) -> [withFenceAttributes attrs before (T.drop i text)]
+                            -- A list with the class of steps: a
+                            -- placeholder before it, which puts it in a
+                            -- box of its attributes ('markedBlocks').
+                            | steppedList attrs -> around [before <> placeholder] <> [text]
                             | otherwise -> [text]
                           DropMarker end -> case indexAt text end of
                             Just j | markerAt (T.drop i text) == Just (Opening SpoilerName) -> [before <> T.drop j text]
@@ -660,6 +668,9 @@ withBoxes source markers edits bars = case family of
     -- line continues the same list item and quotation instead of starting
     -- another item.
     quoteOnly = T.stripEnd . T.map (\c -> if c == '>' || c == '\t' then c else ' ')
+    -- Whether a list's attributes make its items steps, or not, on a
+    -- slide: what a document of slides needs of them.
+    steppedList attrs = any (`elem` ["incremental", "nonincremental"]) (Ast.classes attrs)
     -- Where a box's marker starts in its line: at its column, as
     -- 'indexAt' counts it. It runs to the end of the line.
     markerStart m text = do
@@ -692,6 +703,14 @@ markedBlocks placeholders = go
         , Just (_, e) <- Map.lookup placeholder placeholders
         , Just made <- alone e ->
             made : go more
+      -- A list that took a line of attributes, in a box of them; the
+      -- placeholder is dropped if no list follows it.
+      b : more
+        | Just (placeholder, []) <- placed b
+        , Just (_, TakeAttributes attrs) <- Map.lookup placeholder placeholders ->
+            case more of
+              l : after | isList l -> P.Div (pandocAttributes attrs) [l] : go after
+              _ -> go more
       b : more -> b : go more
     -- A placeholder and what follows it on its line: a paragraph, or the
     -- text of a tight list's item, which pandoc reads as plain text.
@@ -699,6 +718,10 @@ markedBlocks placeholders = go
       P.Para (P.Str placeholder : rest) -> Just (placeholder, rest)
       P.Plain (P.Str placeholder : rest) -> Just (placeholder, rest)
       _ -> Nothing
+    isList = \case
+      P.BulletList _ -> True
+      P.OrderedList _ _ -> True
+      _ -> False
     opened e title = case e of
       OpenBox _ -> Just (P.Div ("", ["alert-spoiler"], []) . (P.Div ("", ["title"], []) [P.Para (dropWhile (== P.Space) title)] :))
       OpenDiv attrs | null title -> Just (P.Div (pandocAttributes attrs))
@@ -1024,13 +1047,13 @@ isHtml f = f == P.Format "html"
 ----------------------------------------------------------------------
 -- What the wiki adds
 
--- | Remove a div of the class @slides@, which a deck reads as how it
--- looks and does not show ("Wiki.Core.Slides"). The line
--- @[[!slides]]{…}@ is taken out before pandoc reads the page
--- ('withBoxes'); this is for a @[[!div]]@ with that class.
+-- | Remove a div of the class of a presentation's look, which shows
+-- nothing ("Wiki.Core.Slides"). The line @[[!style]]{…}@ is taken out
+-- before pandoc reads the page ('withBoxes'); this is for a box written
+-- with that class.
 dropOptions :: P.Block -> [P.Block]
 dropOptions = \case
-  P.Div (_, cls, _) _ | "slides" `elem` cls -> []
+  P.Div (_, cls, _) _ | styleClass `elem` cls -> []
   b -> [b]
 
 -- | Prefix every identifier of the page, and every link to one, so that
@@ -1162,32 +1185,42 @@ expandMacros (Macros spaceBlocks) bs = dropEmpty (evalState (walkM expand bs) in
 ----------------------------------------------------------------------
 -- Slides
 
--- | A deck's blocks as pandoc's slide writers read them at slide level 2:
--- cut at the top-level thematic breaks as "Wiki.Core.Slides" cuts them,
--- each slide's first heading as its title (a level-one heading as a
--- section's title slide, anything else as a level-two heading), an
--- untitled slide given an empty title, and the other headings below the
--- slide level.
+-- | A presentation's blocks as pandoc's slide writers read them at slide
+-- level 2: cut at the headings of level one and two of the top level, as
+-- "Wiki.Core.Slides" cuts them, each such heading the title of its slide
+-- (a level-one heading a section's title slide, followed by an untitled
+-- slide of what comes under it), the blocks before the first one a slide
+-- with an empty title, and the other headings below the slide level. A
+-- thematic break is a rule on its slide in Beamer ('ruleOnSlide'): both
+-- writers would otherwise start another slide at it, and PowerPoint's
+-- leaves the rule out.
 slideBlocks :: [P.Block] -> [P.Block]
-slideBlocks = concatMap slide . filter (not . null) . splitAtRules
+slideBlocks = concatMap slide . filter (not . null) . splitAtOpeners . walk ruleOnSlide
   where
-    splitAtRules bs = case break (== P.HorizontalRule) bs of
+    splitAtOpeners bs = case break isOpener bs of
       (before, []) -> [before]
-      (before, _ : after) -> before : splitAtRules after
-    slide bs =
-      let (before, rest) = break isHeader bs
-       in case rest of
-            P.Header 1 attr xs : after ->
-              P.Header 1 attr xs : (if null (before <> after) then [] else P.Header 2 nullAttr' [] : below (before <> after))
-            P.Header _ attr xs : after -> P.Header 2 attr xs : below (before <> after)
-            _ -> P.Header 2 nullAttr' [] : below bs
-    isHeader = \case
-      P.Header {} -> True
+      (before, opener : after) -> before : opening opener after
+    opening opener rest = case break isOpener rest of
+      (inside, []) -> [opener : inside]
+      (inside, next : after) -> (opener : inside) : opening next after
+    isOpener = \case
+      P.Header l _ _ -> l <= 2
       _ -> False
+    slide = \case
+      P.Header 1 attr xs : body -> P.Header 1 attr xs : (if null body then [] else P.Header 2 nullAttr' [] : below body)
+      P.Header _ attr xs : body -> P.Header 2 attr xs : below body
+      bs -> P.Header 2 nullAttr' [] : below bs
     below = walk $ \case
       P.Header l attr xs -> P.Header (max 3 l) attr xs
       b -> b
     nullAttr' = ("", [], [])
+
+-- | A thematic break as a rule on its slide: raw LaTeX, which Beamer draws
+-- and pandoc's other slide writers leave out.
+ruleOnSlide :: P.Block -> P.Block
+ruleOnSlide = \case
+  P.HorizontalRule -> P.RawBlock (P.Format "latex") "\\par\\noindent\\rule{\\linewidth}{0.4pt}\\par"
+  b -> b
 
 -- | Whether a block is a pause, as pandoc's slide writers recognise one:
 -- a paragraph of three dots and the spaces between them. Only the wiki's
@@ -1204,6 +1237,7 @@ withoutPauses :: [P.Block] -> [P.Block]
 withoutPauses = concatMap $ \case
   b | isPause b -> []
   P.Div attr bs -> [P.Div attr (withoutPauses bs)]
+  P.BlockQuote bs -> [P.BlockQuote (withoutPauses bs)]
   P.BulletList items -> [P.BulletList (map withoutPauses items)]
   P.OrderedList attrs items -> [P.OrderedList attrs (map withoutPauses items)]
   b -> [b]
@@ -1211,22 +1245,23 @@ withoutPauses = concatMap $ \case
 -- | A deck's steps as a slide writer reads them, Beamer's when the flag
 -- says so, PowerPoint's otherwise. The pauses the wiki reads are kept for
 -- Beamer and left out for PowerPoint, which has none, and those in the
--- speaker's notes are left out for both. A quotation's lists are made not
--- incremental, which pandoc would otherwise make them, so that both
--- writers show a quotation as the wiki does: whole. (The wiki reads no
--- pause in a quotation or a footnote, so none is there.)
+-- speaker's notes are left out for both. A quotation is stepped through
+-- as a box is, as the wiki does, and its lists are incremental as the
+-- lists around it are (pandoc's writers would turn them the other way). (The wiki reads no pause in a footnote,
+-- so none is there.)
 --
 -- Beamer counts a pause after the items of an incremental list from after
 -- the last item, and then one more: @\\pause@ would add a page that shows
 -- nothing new. Such a pause is written @\\pause[\\value{beamerpauses}]@,
 -- which starts the step right after the last item, as the wiki does. The
--- count starts again at each slide, at each top-level break.
+-- count starts again at each slide, at each heading of level one or two
+-- of the top level.
 slideSteps :: Bool -> [P.Block] -> [P.Block]
 slideSteps beamer = concat . (`evalState` False) . traverse topLevel
   where
     topLevel :: P.Block -> State Bool [P.Block]
     topLevel = \case
-      P.HorizontalRule -> [P.HorizontalRule] <$ put False
+      b@(P.Header l _ _) | l <= 2 -> [b] <$ put False
       b -> block False b
     blocks :: Bool -> [P.Block] -> State Bool [P.Block]
     blocks incremental = fmap concat . traverse (block incremental)
@@ -1247,7 +1282,10 @@ slideSteps beamer = concat . (`evalState` False) . traverse topLevel
         | otherwise -> pure . P.Div attr <$> blocks (incrementalIn cls incremental) bs
       P.BulletList items -> pure . P.BulletList <$> traverse (item incremental) items
       P.OrderedList attrs items -> pure . P.OrderedList attrs <$> traverse (item incremental) items
-      P.BlockQuote bs -> pure [P.BlockQuote [P.Div ("", ["nonincremental"], []) bs]]
+      -- Pandoc's slide writers turn a quotation's lists the other way
+      -- from the slide's; the box says which way they are, as the wiki
+      -- reads them: as around the quotation.
+      P.BlockQuote bs -> pure . P.BlockQuote . pure . P.Div ("", [if incremental then "incremental" else "nonincremental"], []) <$> blocks incremental bs
       b -> pure [b]
     item incremental bs = do
       when incremental (put True)

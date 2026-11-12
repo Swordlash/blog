@@ -176,7 +176,7 @@ spec m = describe "an html fence" $ do
   describe "on a slide, drawn in the slide's colours, whatever the system's" $ do
     let slides = PageSlides (slugs ["team", "projects"]) (slugs ["html-blocks"]) 1 1
         onSlide = ".slide-frame.current .slide iframe.wiki-html"
-        deck theme extra = "[[!slides]]{theme=" <> theme <> "}\n\n## A slide\n\n```html\n" <> extra <> "<p id=\"text\">Readable</p>\n```\n"
+        deck theme extra = "[[!style]]{theme=" <> theme <> "}\n\n## A slide\n\n```html\n" <> extra <> "<p id=\"text\">Readable</p>\n```\n"
     it "is light text on a dark slide under the system's light scheme" $ runPage $ do
       ui <- deckAt m (deck "dark" "") slides
       _ <- find ui onSlide

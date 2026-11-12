@@ -1,14 +1,20 @@
--- | A page as a slide deck: the same Markdown, read as slides.
+-- | A presentation as a slide deck: its Markdown, read as slides.
 --
--- A page needs no special writing to be presented. Its parsed blocks
--- ("Wiki.Core.Markdown.Ast") are split into slides at each thematic break
--- (@---@) at the top level of the page; a break inside a list, a quotation
--- or a box stays a horizontal rule on its slide. On each slide:
+-- A page is presented when it is a presentation ("Wiki.Core.PageKind"),
+-- whatever its text says; the text says how the deck is cut. Its parsed
+-- blocks ("Wiki.Core.Markdown.Ast") are split into slides at each heading
+-- of level one or two at the top level of the page, its openers, as
+-- pandoc's slide writers split at slide level 2: a @##@ heading opens a
+-- slide and is its title, and a @#@ heading opens a title slide, which a
+-- theme lays out as Beamer lays out a title page or a section page. A
+-- heading of level three or more is a heading on its slide, and so is a
+-- heading of any level inside a list, a quotation or a box. A thematic
+-- break (@---@) is a horizontal rule on its slide. What comes before the
+-- first opener is a slide without a title, unless it shows nothing (a
+-- page's text starts with its title line, @# Title@, so there is usually
+-- nothing before it). On each slide:
 --
--- * the first heading at the slide's top level is its title, removed from
---   its body (a slide whose title is a level-one heading is a title slide,
---   which a theme lays out as Beamer lays out a title page or a section
---   page);
+-- * the opener is its title, removed from its body;
 -- * a box with the class @notes@ (@[[!notes]]@ … @[[/notes]]@) holds the
 --   speaker's notes, removed from the body and shown to the speaker only;
 -- * the footnotes the slide refers to are placed at its end, rather than
@@ -22,20 +28,19 @@
 --   each further item in a step of its own. A slide without either is one
 --   step.
 --
--- A heading spoiler at a slide's top level (@## [[!spoiler]] Question@)
--- is its heading and its section as written, in a deck: its section
--- would otherwise take in the breaks after it and the next slides'
--- titles, and a slide cannot show half a section.
+-- A heading spoiler at the page's top level (@## [[!spoiler]] Question@)
+-- is its heading and its section as written, in a deck: a section is a
+-- slide, and a slide cannot hide itself. So the heading of a heading
+-- spoiler of level one or two opens a slide as any such heading does,
+-- and the openers inside a level-one heading spoiler's section open
+-- theirs.
 --
--- The deck's look is set once, at the top level of the page, by a box
--- with the class @slides@ and attributes, written as the line
--- @[[!slides]]{theme=dark aspect=4:3}@ (themes: @beamer@, the default,
--- @light@ and @dark@; aspects: @16:9@, the default, and @4:3@). The box
--- shows nothing, on the page or on a slide. A @[[!div]]@ with the class
--- @slides@ is read the same, its blocks left out. A page with neither a
--- break nor such a box is one slide, and
--- not a deck ('isDeck'): it can still be presented, but no button offers
--- it.
+-- The deck's look is set once, at the top level of the page, by the line
+-- @[[!style]]{theme=dark aspect=4:3}@ (themes: @beamer@, the default,
+-- @light@ and @dark@; aspects: @16:9@, the default, and @4:3@), an empty
+-- box of the class 'styleClass'. It shows nothing, on the page or on a
+-- slide. The first one counts; the editor warns of any other
+-- ("Wiki.Core.Markdown.Problems").
 --
 -- Steps are counted as Beamer counts them, so that a Beamer PDF has one
 -- page for each step the browser shows. Each block is shown from the step
@@ -43,9 +48,10 @@
 -- next steps in document order, nested lists' items included, and content
 -- after the list without a pause is shown with the list's first item, as
 -- in Beamer. A pause after such items starts the step after the last
--- item. A pause is read only where the Markdown reader reads one ('Pause'),
--- and a quotation, a footnote, a table or code is shown whole, at the step
--- of the block it is.
+-- item. A pause is read only where the Markdown reader reads one ('Pause'):
+-- on the slide, in a box, an alert, a spoiler, a quotation and a list
+-- item. A footnote, a table or code is shown whole, at the step of the
+-- block it is.
 --
 -- A step changes nothing on a slide but what is visible: the slide's body
 -- holds all of its content, and each piece shown from a later step than
@@ -64,8 +70,8 @@ module Wiki.Core.Slides
   , Slide (..)
   , SlideTitle (..)
   , deckOf
-  , isDeck
   , titleBlock
+  , styleClass
 
     -- * Steps
   , atStep
@@ -174,7 +180,7 @@ deckOf :: [Block] -> Deck
 deckOf page =
   Deck
     { options = maybe defaultDeckOptions optionsOf (head [attrs | Div attrs _ <- doc, isOptions attrs])
-    , slides = map cutSteps (withFootnotes notes (nonEmpty' (filter (not . emptySlide) (map slideOf (splitAtBreaks content)))))
+    , slides = map cutSteps (withFootnotes notes (nonEmpty' (filter (not . emptySlide) (map slideOf (splitAtOpeners content)))))
     }
   where
     notes = concat [ns | Footnotes ns <- doc]
@@ -198,42 +204,37 @@ sectionsShown = concatMap $ \case
   Spoiler h bs | h.kind == OnHeading -> sectionsShown bs
   b -> [b]
 
--- | Whether a page is written as a deck: split into slides, or setting its
--- slides' look. Any page can be shown as slides; this says whether the
--- page is meant to be.
-isDeck :: [Block] -> Bool
-isDeck page = any isBreak doc || or [isOptions attrs | Div attrs _ <- doc]
-  where
-    doc = sectionsShown page
-    isBreak = \case
-      ThematicBreak -> True
-      _ -> False
-
 -- | A slide's title as the heading it was written as, for rendering.
 titleBlock :: SlideTitle -> Block
 titleBlock t = Heading t.level t.attributes t.text
 
--- | The blocks between the top level's thematic breaks.
-splitAtBreaks :: [Block] -> [[Block]]
-splitAtBreaks bs = case break isBreak bs of
+-- | The blocks before the first opener, then each opener with the blocks
+-- up to the next: the slides' blocks ('isOpener').
+splitAtOpeners :: [Block] -> [[Block]]
+splitAtOpeners bs = case break isOpener bs of
   (before, []) -> [before]
-  (before, _ : after) -> before : splitAtBreaks after
+  (before, opener : after) -> before : go opener after
   where
-    isBreak = \case
-      ThematicBreak -> True
-      _ -> False
+    go opener rest = case break isOpener rest of
+      (inside, []) -> [opener : inside]
+      (inside, next : after) -> (opener : inside) : go next after
 
+-- | Whether a block of the page's top level opens a slide: a heading of
+-- level one or two.
+isOpener :: Block -> Bool
+isOpener = \case
+  Heading level _ _ -> level <= 2
+  _ -> False
+
+-- | A slide of its blocks: its opener the title, and none for the blocks
+-- before the first opener.
 slideOf :: [Block] -> Slide
-slideOf bs = Slide {title, body = before <> drop 1 rest, notes = concat [inner | Div attrs inner <- bs, isNotes attrs], steps = 1}
+slideOf bs = Slide {title, body, notes = concat [inner | Div attrs inner <- bs, isNotes attrs], steps = 1}
   where
     shown = filter (not . notesDiv) bs
-    (before, rest) = break isHeading shown
-    title = case rest of
-      Heading level attributes text : _ -> Just SlideTitle {level, attributes, text}
-      _ -> Nothing
-    isHeading = \case
-      Heading {} -> True
-      _ -> False
+    (title, body) = case shown of
+      Heading level attributes text : rest | level <= 2 -> (Just SlideTitle {level, attributes, text}, rest)
+      _ -> (Nothing, shown)
     notesDiv = \case
       Div attrs _ -> isNotes attrs
       _ -> False
@@ -245,9 +246,9 @@ isNotes :: Attributes -> Bool
 isNotes attrs = "notes" `elem` classes attrs
 
 isOptions :: Attributes -> Bool
-isOptions attrs = "slides" `elem` classes attrs
+isOptions attrs = styleClass `elem` classes attrs
 
--- | The options a @slides@ div's attributes set. An option the attributes
+-- | The options the attributes of @[[!style]]@ set. An option the attributes
 -- leave out, or set to an unknown value, gets the default.
 optionsOf :: Attributes -> DeckOptions
 optionsOf attrs =
@@ -348,11 +349,12 @@ piecesOf incremental shownFrom bs = do
     pause c = let at = max (c.shown + 1) c.next in c {shown = at, next = at}
 
 -- | A block shown from a step, with the steps inside it: in a box, in an
--- alert, and in a list's items.
+-- alert, in a spoiler, in a quotation, and in a list's items.
 blockSteps :: Bool -> Int -> Block -> State Counter Block
 blockSteps incremental at = \case
   Div attrs bs -> Div attrs <$> piecesOf (incrementalIn attrs) at bs
   Alert kind title bs -> Alert kind title <$> piecesOf incremental at bs
+  BlockQuote bs -> BlockQuote <$> piecesOf incremental at bs
   Spoiler h bs -> Spoiler h <$> piecesOf incremental at bs
   List kind items -> List kind <$> traverse item items
   other -> pure other
@@ -409,6 +411,7 @@ atStep k s = blocks s.body
       Div attrs bs | Just (item, at) <- markOf attrs -> if item || at > k then [] else blocks bs
       Div attrs bs -> [Div attrs (blocks bs)]
       Alert kind title bs -> [Alert kind title (blocks bs)]
+      BlockQuote bs -> [BlockQuote (blocks bs)]
       Spoiler h bs -> [Spoiler h (blocks bs)]
       List kind items -> case [ListItem task (blocks bs) | ListItem task bs <- items, shown bs] of
         [] -> []
@@ -427,6 +430,7 @@ showingStep k s = Slide {title = s.title, body = map block s.body, notes = s.not
       Div attrs bs | Just (item, at) <- markOf attrs -> Div [("class", T.unwords ((if item then "slide-step-item" else "slide-step") : ["slide-step-later" | at > k])), ("data-step", show at)] (map block bs)
       Div attrs bs -> Div attrs (map block bs)
       Alert kind title bs -> Alert kind title (map block bs)
+      BlockQuote bs -> BlockQuote (map block bs)
       Spoiler h bs -> Spoiler h (map block bs)
       List kind items -> List kind [ListItem task (map block bs) | ListItem task bs <- items]
       other -> other

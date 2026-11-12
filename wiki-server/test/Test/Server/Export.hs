@@ -450,15 +450,16 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
         (output, divClasses bs) `shouldBe` (output, [])
         (output, query pauses bs) `shouldBe` (output, [])
         (output, filter (`elem` [":::", ":::", ". . ."]) (words' bs)) `shouldBe` (output, [":::", ":::", ". . .", ". . ."])
-    it "shows a block never closed, a name the wiki does not have and a pause in a quotation as their lines and reasons" $ do
+    it "shows a block never closed and a name the wiki does not have as their lines and reasons, and reads a pause in a quotation" $ do
       bs <- blocksOf ToOther place "[[!oops]]\n\n> [[!pause]]\n\n[[!notes]]\nx\n"
       divClasses bs `shouldBe` []
       paragraphs bs
-        `shouldBe` [ "[[!oops]] — “oops” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, slides, pause, toc, in lower case"
-                   , "[[!pause]] — a pause is not read in a quotation or a footnote, which a deck shows whole"
+        `shouldBe` [ "[[!oops]] — “oops” is not a name of the wiki's blocks, which are spoiler, notes, incremental, div, style, pause, toc, in lower case"
                    , "[[!notes]] — the [[!notes]] block is not closed: add [[/notes]] after its last line"
                    , "x"
                    ]
+      deck <- blocksOf ToBeamer place "## A\n\n> a\n>\n> [[!pause]]\n>\n> b\n"
+      length (query pauses deck) `shouldBe` 1
     it "finds a pause and a line in red that are a list's items" $ do
       bs <- blocksOf ToBeamer place "## A\n\n- one\n- [[!pause]]\n- [[!oops]]\n"
       length (query pauses bs) `shouldBe` 1
@@ -628,23 +629,35 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
 
 slides :: Spec
 slides = describe "a deck, as pandoc's slide writers read it" $ do
-  it "cuts at the breaks, titles each slide with its first heading, and keeps the notes" $ do
-    bs <- blocksOf ToTeX place "# The deck\n\nBy me.\n\n---\n\n### A small title\n\nText.\n\n## Not the title\n\n[[!notes]]\nSay this.\n[[/notes]]\n\n---\n\nNo title here.\n"
+  it "cuts at the headings of level one and two, each its slide's title, keeps the notes, and a rule on its slide" $ do
+    bs <- blocksOf ToTeX place "Before the first.\n\n# The deck\n\nBy me.\n\n## One\n\n### A small title\n\nText.\n\n---\n\n> ## Quoted\n\n[[!notes]]\nSay this.\n[[/notes]]\n\n## Two\n"
     let out = slideBlocks bs
-    [l | P.Header l _ _ <- out] `shouldBe` [1, 2, 2, 3, 2]
-    query (\case P.Header _ _ xs -> [xs]; _ -> []) out `shouldBe` [[P.Str "The", P.Space, P.Str "deck"], [], [P.Str "A", P.Space, P.Str "small", P.Space, P.Str "title"], [P.Str "Not", P.Space, P.Str "the", P.Space, P.Str "title"], []]
+        title = P.Str "The" : P.Space : [P.Str "deck"]
+    [l | P.Header l _ _ <- out] `shouldBe` [2, 1, 2, 2, 3, 2]
+    take 4 (query (\case P.Header _ _ xs -> [xs]; _ -> []) out) `shouldBe` [[], title, [], [P.Str "One"]]
     [cls | P.Div (_, cls, _) _ <- out] `shouldBe` [["notes"]]
+    -- No rule is left for a writer to start a slide at.
+    query (\case P.HorizontalRule -> [()]; _ -> []) out `shouldBe` []
+    [t | P.RawBlock (P.Format "latex") t <- out] `shouldBe` ["\\par\\noindent\\rule{\\linewidth}{0.4pt}\\par"]
+    -- The heading in the quotation is below the slide level.
+    query (\case P.Header l _ [P.Str "Quoted"] -> [l]; _ -> []) out `shouldBe` [3]
+
+  it "puts a list after a line {.incremental} in an incremental box, for Beamer and PowerPoint" $
+    for_ [ToBeamer, ToPowerPoint] $ \output -> do
+      bs <- blocksOf output place "## A\n\n{.incremental}\n- a\n- b\n\n> {.incremental}\n> - c\n"
+      [(cls, length items) | P.Div (_, cls, _) [P.BulletList items] <- query (\case b@P.Div {} -> [b]; _ -> []) bs] `shouldBe` [(["incremental"], 2), (["incremental"], 1)]
 
   it "keeps a deck's pauses and incremental boxes for Beamer, where the wiki reads them, and three dots as text" $ do
     bs <- blocksOf ToBeamer place stepsDeck
     let latex = [t | P.RawBlock (P.Format "latex") t <- query (\case b@P.RawBlock {} -> [b]; _ -> []) bs]
-    -- The pause after "One", and the one that starts slide B: after a
-    -- break, the count of items starts again.
-    length (query pauses bs) `shouldBe` 2
+    -- The pause after "One", the one in the quotation, and the one that
+    -- starts slide B: at a slide's heading, the count of items starts
+    -- again.
+    length (query pauses bs) `shouldBe` 3
     latex `shouldBe` ["\\pause[\\value{beamerpauses}]"]
     divClasses bs `shouldSatisfy` elem ["incremental"]
     [inner | P.BlockQuote inner <- query (\case b@P.BlockQuote {} -> [b]; _ -> []) bs]
-      `shouldBe` [[P.Div ("", ["nonincremental"], []) [P.Para [P.Str ". . ."], P.BulletList [[P.Plain [P.Str "q"]]]]]]
+      `shouldBe` [[P.Div ("", ["nonincremental"], []) [P.Para [P.Str ". . ."], P.Para [P.Str ".", P.Space, P.Str ".", P.Space, P.Str "."], P.BulletList [[P.Plain [P.Str "q"]]]]]]
     [inner | P.Div (_, ["notes"], _) inner <- query (\case b@P.Div {} -> [b]; _ -> []) bs]
       `shouldBe` [[P.Para [P.Str "Say."], P.Para [P.Str "More."]]]
     query (\case P.Note inner -> [inner]; _ -> []) bs `shouldBe` [[P.Para [P.Str ". . ."]]]
@@ -669,9 +682,10 @@ slides = describe "a deck, as pandoc's slide writers read it" $ do
     Map.lookup "aspectratio" meta `shouldBe` Just (P.MetaString "43")
     Map.lookup "title" meta `shouldBe` Just (P.MetaInlines [P.Str "Deck"])
 
--- | A deck with steps: pauses (one in the notes), an incremental box, and
--- three dots, which are text wherever they are (alone in a paragraph, a
--- quotation, a footnote).
+-- | A deck with steps: pauses (one in the notes, one in a quotation), an
+-- incremental box, three dots, which are text wherever they are (alone in
+-- a paragraph, a quotation, a footnote), and a rule, which is no slide's
+-- end.
 stepsDeck :: Text
 stepsDeck =
   T.unlines
@@ -696,6 +710,8 @@ stepsDeck =
     , ""
     , "> . . ."
     , ">"
+    , "> [[!pause]]"
+    , ">"
     , "> - q"
     , ""
     , "[[!notes]]"
@@ -711,6 +727,8 @@ stepsDeck =
     , "[^1]: . . ."
     , ""
     , "---"
+    , ""
+    , "A rule, on its slide."
     , ""
     , "## B"
     , ""
@@ -866,7 +884,7 @@ overHttp backing = describe "over HTTP" $ do
     tex `shouldSatisfy` T.isInfixOf "\\begin{itemize}[<+->]"
     slideFiles <- Map.filterWithKey (\n _ -> "ppt/slides/slide" `T.isPrefixOf` n && ".xml" `T.isSuffixOf` n) <$> (zipped =<< export Pptx)
     -- The title slide, the deck's two and pandoc's slide of footnotes: a
-    -- pause makes no slide.
+    -- pause makes no slide, and neither does a rule.
     Map.size slideFiles `shouldBe` 4
     -- The incremental list is built item by item; no pause is written out,
     -- and the three dots, alone, in the quotation and in the footnote, are text.

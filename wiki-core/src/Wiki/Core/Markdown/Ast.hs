@@ -22,9 +22,9 @@
 --   deck's speaker notes and its lists shown item by item, @[[!notes]]@
 --   and @[[!incremental]]@; and a box styled by its classes,
 --   @[[!div]]{.summary}@ (each a 'Div'). Three markers are one line with
---   no end marker: @[[!slides]]{theme=dark aspect=4:3}@, the deck's look
---   (an empty 'Div' of the class @slides@), @[[!pause]]@, which cuts a
---   slide into steps ('Pause'), and @[[!toc]]@, where the table of
+--   no end marker: @[[!style]]{theme=dark aspect=4:3}@, a presentation's
+--   look (an empty 'Div' of the class 'styleClass'), @[[!pause]]@, which
+--   cuts a slide into steps ('Pause'), and @[[!toc]]@, where the table of
 --   contents goes ('TableOfContents');
 -- * spoilers: @||hidden||@ inline, read as the strikethrough's @~~@ is
 --   read ('Hidden'), and heading spoilers, @## [[!spoiler]] Question@ or
@@ -99,6 +99,7 @@ module Wiki.Core.Markdown.Ast
   , MarkerStart (..)
   , markerNameText
   , openingMarker
+  , styleClass
   , closingMarker
   , markerAt
   , parseWithMarkers
@@ -166,12 +167,13 @@ data Block
     -- text.
     Heading Int Attributes [Inline]
   | ThematicBreak
-  | -- | A pause, @[[!pause]]@ on a line of its own. A deck
+  | -- | A pause, @[[!pause]]@ on a line of its own. A presentation
     -- ("Wiki.Core.Slides") shows a slide in steps, and a pause starts the
-    -- next step; a page shows nothing for it. It is read at the top level
-    -- of the page, in boxes, in alerts, in spoilers and in list items. In
-    -- a quotation or a footnote the line is a 'MarkerError': a deck shows
-    -- a quotation and a footnote whole.
+    -- next step; a document shows nothing for it. It is read at the top
+    -- level of the page, in boxes, in alerts, in spoilers, in quotations
+    -- and in list items. In a footnote the line is a 'MarkerError': a
+    -- presentation shows a footnote whole, as Beamer cannot pause inside
+    -- the argument of @\\footnote@.
     Pause
   | BlockQuote [Block]
   | -- | Fenced or indented code: attributes, the language (the first word
@@ -200,8 +202,8 @@ data Block
     -- @[[/div]]@ gives the attributes in its braces; @[[!notes]]@ and
     -- @[[!incremental]]@ give their name as a class too (@notes@,
     -- @incremental@), which a deck reads ("Wiki.Core.Slides"). The one
-    -- line @[[!slides]]{theme=dark}@ is an empty 'Div' of the class
-    -- @slides@: the deck's look. A block of these three names that is not
+    -- line @[[!style]]{theme=dark}@ is an empty 'Div' of the class
+    -- 'styleClass': a presentation's look. A block of these three names that is not
     -- closed is a 'MarkerError' line, then a 'Div' of the class
     -- @spoiler-unclosed@ that holds its blocks, which the page shows in
     -- red as it shows an unclosed spoiler's.
@@ -622,8 +624,8 @@ data MarkerRole
     Ends Int
   | -- | A pause, @[[!pause]]@, read as one ('Pause').
     Pauses
-  | -- | The deck's look, @[[!slides]]{…}@.
-    SetsSlides
+  | -- | A presentation's look, @[[!style]]{…}@.
+    SetsStyle
   | -- | Where the table of contents goes, @[[!toc]]@.
     PlacesContents
   | -- | A line the page shows in red ('MarkerError'): the line as
@@ -644,10 +646,11 @@ data MarkerRole
     -- block after it takes (a list is put in a 'Div' with them). Pandoc's
     -- reader would read it as text, so the export leaves it out.
     SetsAttributes
-  | -- | A fence starts here that took the attributes of the line of
-    -- attributes alone before it ('SetsAttributes'): these. Pandoc's
-    -- reader reads a fence's attributes only after its fence, where the
-    -- export puts them. Only the parser knows which block a line of
+  | -- | A fence or a list starts here that took the attributes of the
+    -- line of attributes alone before it ('SetsAttributes'): these.
+    -- Pandoc's reader reads a fence's attributes only after its fence,
+    -- where the export puts them, and none for a list, which the export
+    -- puts in a box of them. Only the parser knows which block a line of
     -- attributes went to (a quotation that starts with a fence takes them,
     -- not the fence), so the export asks it rather than read the text.
     TakesAttributes Attributes
@@ -1122,10 +1125,15 @@ instance CM.HasAttributes Blocks where
       -- Blocks the parser has placed ('startOf') take the attributes of a
       -- line before them; a fence's own, after its info word, come before
       -- it is placed. A fence that takes those of a line says so, at its
-      -- start ('TakesAttributes').
+      -- start ('TakesAttributes'), and so does a list, which the export
+      -- then puts in a box of those attributes, as the page does
+      -- (@{.incremental}@ on the line before a list).
       taken = case (at, toList xs) of
-        (Just (line, column), [(_, b)]) | not (null new), fence b -> Markers [] [MarkerLine line column (TakesAttributes new)] []
+        (Just (line, column), [(_, b)]) | not (null new), fence b || isList b -> Markers [] [MarkerLine line column (TakesAttributes new)] []
         _ -> mempty
+      isList = \case
+        List _ _ -> True
+        _ -> False
       fence = \case
         CodeBlock {} -> True
         HtmlBlock {} -> True
@@ -1324,7 +1332,7 @@ hiddenSpec = mempty {CM.syntaxFormattingSpecs = [CMI.FormattingSpec '|' True Tru
 -- * @[[!notes]]@, @[[!incremental]]@ and @[[!div]]@, with attributes in
 --   braces or none, start a 'Div' with those attributes, the first two
 --   with their name as a class too.
--- * @[[!slides]]@, with the deck's options in braces or none,
+-- * @[[!style]]@, with a presentation's look in braces or none,
 --   @[[!pause]]@ and @[[!toc]]@ are one line each, with no end marker.
 --
 -- The braces hold pandoc's attributes, @#id@, @.class@ and @key=value@,
@@ -1350,7 +1358,7 @@ hiddenSpec = mempty {CM.syntaxFormattingSpecs = [CMI.FormattingSpec '|' True Tru
 -- block is open inside it, the names differ, something follows the
 -- marker), the line is a 'MarkerError', which ends nothing. So is a line
 -- that starts as a start marker and is not a whole one, and a pause in a
--- quotation or a footnote. A block whose container (the document, a
+-- footnote. A block whose container (the document, a
 -- quotation, a list item) ends before its end marker is not closed: a
 -- spoiler is 'NotClosed', and any other block is a 'MarkerError' line
 -- followed by its blocks. An end marker in code, in a block of HTML or in
@@ -1369,13 +1377,20 @@ data MarkerName
     IncrementalName
   | -- | A box styled by its classes.
     DivName
-  | -- | The deck's look, one line.
-    SlidesName
+  | -- | A presentation's look, one line.
+    StyleName
   | -- | The next step of a slide, one line.
     PauseName
   | -- | Where the page's table of contents goes, one line.
     TocName
   deriving stock (Eq, Show, Enum, Bounded)
+
+-- | 'styleClass' is the class of the empty box the line
+-- @[[!style]]{theme=dark aspect=4:3}@ makes, a presentation's look
+-- ("Wiki.Core.Slides"): one no author would give a box of their own, so
+-- that no @[[!div]]@ is read as the look.
+styleClass :: Text
+styleClass = "wiki-deck-style"
 
 -- | A marker's name as its markers write it.
 markerNameText :: MarkerName -> Text
@@ -1384,7 +1399,7 @@ markerNameText = \case
   NotesName -> "notes"
   IncrementalName -> "incremental"
   DivName -> "div"
-  SlidesName -> "slides"
+  StyleName -> "style"
   PauseName -> "pause"
   TocName -> "toc"
 
@@ -1457,7 +1472,7 @@ data MarkerText
     EndText MarkerName (Maybe Text)
   | -- | An end marker that is not a whole one: why.
     BrokenEnd MarkerName Text
-  | -- | A marker of one line, and the block it makes: @[[!slides]]@ and
+  | -- | A marker of one line, and the block it makes: @[[!style]]@ and
     -- its attributes, @[[!pause]]@ or @[[!toc]]@.
     LineText MarkerName Block
   | -- | A line that starts as a start marker and is not a whole one: why.
@@ -1526,11 +1541,11 @@ readMarker toks = do
   where
     start name rest = case name of
       SpoilerName -> spoiler rest
-      SlidesName -> case bracedAt rest of
-        Nothing | blankToks rest -> LineText SlidesName (Div [("class", "slides")] [])
-        Just (Attributed attrs, after) | blankToks after -> LineText SlidesName (Div (("class", "slides") : attrs) [])
+      StyleName -> case bracedAt rest of
+        Nothing | blankToks rest -> LineText StyleName (Div [("class", styleClass)] [])
+        Just (Attributed attrs, after) | blankToks after -> LineText StyleName (Div (("class", styleClass) : attrs) [])
         Just (Attributed _, _) -> BrokenText (nothingAfter name)
-        _ -> BrokenText ("the braces after " <> openingMarker SlidesName <> " hold the deck's options, as in " <> openingMarker SlidesName <> "{theme=dark aspect=4:3}")
+        _ -> BrokenText ("the braces after " <> openingMarker StyleName <> " hold a presentation's look, as in " <> openingMarker StyleName <> "{theme=dark aspect=4:3}")
       PauseName -> alone name Pause rest
       TocName -> alone name TableOfContents rest
       _ -> case bracedAt rest of
@@ -1657,7 +1672,7 @@ markerBlockSpec =
           Just (EndText kind named) -> ending kind (endProblem kind named open)
           Just (BrokenEnd kind why) -> ending kind why
           Just (LineText PauseName _)
-            | any ((`elem` ["BlockQuote", "Footnote"]) . specOf) stack -> broken "a pause is not read in a quotation or a footnote, which a deck shows whole"
+            | any ((== "Footnote") . specOf) stack -> broken "a pause is not read in a footnote, which a presentation shows whole"
           Just (LineText name b) -> oneLine b (lineRole name)
           Just (BrokenText why) -> broken why
         pure CM.BlockStartMatch
@@ -1702,7 +1717,7 @@ markerBlockSpec =
   where
     lineRole = \case
       PauseName -> Pauses
-      SlidesName -> SetsSlides
+      StyleName -> SetsStyle
       _ -> PlacesContents
     -- The line is the end marker of this block: it has the block's name,
     -- the block is the innermost open one on this line, and the line is
