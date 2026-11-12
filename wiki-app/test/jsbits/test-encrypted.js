@@ -56,6 +56,7 @@ function wikiTestEncSealed(p) {
     updatedBy: null,
     pageKeys: [p.pageKey, ...(p.olderKeys ?? [])],
     attachments: (p.attachments ?? []).map((a) => ({ id: a.id, size: a.bytes.length, meta: a.meta })),
+    kind: p.kind ?? "document",
   };
 }
 
@@ -318,7 +319,7 @@ function wikiTestEncServer(request) {
       if (!wikiTestEncFollows(sent.content.chain, null)) return wikiTestEncJson(409, { error: "Conflict", text: "This version does not follow on the page's latest one." });
       if (wikiTestEncDue(s)) return wikiTestEncJson(409, wikiTestEncRenewal);
       const time = wikiTestEncNow();
-      const p = { id: sent.id, space: s.space.id, parent: sent.parent ?? s.space.homePage ?? null, slug: `p${wikiTestEncrypted.next}x${Math.random().toString(36).slice(2, 9)}`, position: pages.length, pageKey: sent.pageKey, versions: [{ updatedAt: time, content: sent.content, author: me }] };
+      const p = { id: sent.id, space: s.space.id, parent: sent.parent ?? s.space.homePage ?? null, slug: `p${wikiTestEncrypted.next}x${Math.random().toString(36).slice(2, 9)}`, position: pages.length, pageKey: sent.pageKey, kind: sent.kind ?? "document", versions: [{ updatedAt: time, content: sent.content, author: me }] };
       wikiTestEncrypted.pages.set(p.id, p);
       wikiTestEncrypted.created.push(request.body);
       const sealed = wikiTestEncSealed(p);

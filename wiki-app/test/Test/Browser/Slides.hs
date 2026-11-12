@@ -129,7 +129,7 @@ spec m = do
     press "n"
     find ui ".slides-view" >>= (`shouldHaveClass` "notes-open")
     shouldBeVisible notes
-    textContent notes >>= (`shouldSatisfy` T.isInfixOf "a page with no")
+    textContent notes >>= (`shouldSatisfy` T.isInfixOf "a presentation with no")
     find ui ".slides-view button.slides-notes-toggle" >>= (\b -> getAttribute b "aria-pressed") >>= (`shouldBe` Just "true")
     -- The next slide's notes, under it.
     press "ArrowRight"
