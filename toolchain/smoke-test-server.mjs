@@ -1660,7 +1660,7 @@ try {
 
   // ---- 10. Encrypted spaces ---------------------------------------------------
 
-  await encryptedSpaces({ browser, url, origin, data, timeout, eventually, failures, admin: { login: adminLogin, password: adminPassword }, reader: readerUser });
+  await encryptedSpaces({ browser, url, origin, data, work, wikiServer, app, timeout, eventually, failures, admin: { login: adminLogin, password: adminPassword }, reader: readerUser });
 
   // ---- 5. What the server says of itself -------------------------------------
 

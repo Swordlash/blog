@@ -22,6 +22,13 @@
 //   space's "New subspace", encrypted with a key of its own, writes a page
 //   in it, and grants it alone to the reader removed, who reads the page
 //   and not the space around it.
+// - She exports the space through its "Export, decrypted here": her
+//   browser decrypts the space and its subspace into an archive, which a
+//   second server, on a fresh data directory of its own, imports through
+//   its administration's merge import; every title, text, attachment
+//   (name, type, bytes) and comment (text, quote, author's name) is there,
+//   plain. The second server and what is sent to it are outside the
+//   canary's watch: the export's plain text is the reader's to keep.
 // - The canary (toolchain/smoke-canary.mjs): a marker in the title, the
 //   text, the older version, a comment, the text it quotes, an
 //   attachment's name and its bytes, and the title and text of the
@@ -29,10 +36,12 @@
 //   any request the browsers sent or any answer or live channel's frame
 //   they and the test received.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { assertNoCanary, marker, saw, watch } from "./smoke-canary.mjs";
 
-export async function encryptedSpaces({ browser, url, origin, data, timeout, eventually, failures, admin, reader }) {
+export async function encryptedSpaces({ browser, url, origin, data, work, wikiServer, app, timeout, eventually, failures, admin, reader }) {
   const editorText = "#app .editor-cm .cm-content";
   const shown = [];
   const read = async (page) => shown.push(await page.locator("#app").innerText());
@@ -353,6 +362,56 @@ export async function encryptedSpaces({ browser, url, origin, data, timeout, eve
   assert.notEqual((await as(bea)("spaces/at/smoke-secret")).status, 200, "the reader of the subspace alone reads the space around it");
   console.log("ok: a subspace of the encrypted space is encrypted with a key of its own, and a reader of it alone reads its page and not the space around it");
 
+  // ---- The export decrypted in the browser, imported elsewhere -------------
+
+  // From the space's list of pages, once it shows a title decrypted here.
+  // Her browser holds both keys, so nothing is left out.
+  await page.goto(url("/s/smoke-secret/pages/"));
+  await page.locator("#app .space-view", { hasText: title }).waitFor({ timeout });
+  await page.locator("#app .space-view .export-decrypted").click();
+  await page.locator("#app .export-decrypted-panel", { hasText: "older versions" }).waitFor({ timeout });
+  const downloading = page.waitForEvent("download", { timeout });
+  await page.locator("#app .export-decrypted-confirm").click();
+  const download = await downloading;
+  assert.match(download.suggestedFilename(), /^smoke-secret-decrypted-\d{4}-\d{2}-\d{2}\.zip$/, "the export's file name");
+  const exported = await readFile(await download.path());
+  const done = await page.locator("#app .export-decrypted-done").textContent({ timeout });
+  assert.match(done, /4 pages of 2 spaces/, `the export's summary: ${done}`);
+  assert.doesNotMatch(done, /Left out/, `the export left something out: ${done}`);
+  const imported = await importedElsewhere(exported);
+  try {
+    const at = (path) => imported.get(path);
+    const pagesOf = async (spacePath) => {
+      const s = await at(`spaces/at/${spacePath}`);
+      return { s, pages: await at(`spaces/${encodeURIComponent(s.id)}/pages`) };
+    };
+    const outer = await pagesOf("smoke-secret");
+    assert.equal(outer.s.encryption ?? null, null, "the imported space is plain");
+    // Found by the marker its title holds, as the parts above find it
+    // ("hasText"): the title the editor saved is not the marker alone.
+    const summary = outer.pages.find((p) => p.title.includes(title));
+    assert.ok(summary, `the page is not imported: ${JSON.stringify(outer.pages.map((p) => p.title))}`);
+    const imp = await at(`spaces/${encodeURIComponent(outer.s.id)}/pages/at/${summary.slug}`);
+    assert.ok(imp.body.includes(marker("text")) && imp.body.includes(quote), "the imported page's text");
+    assert.deepEqual(imp.attachments.map((a) => [a.name, a.mediaType, a.size]), [[fileName, "image/svg+xml", Buffer.byteLength(fileBytes)]], "the imported attachment");
+    assert.equal(await imported.bytes(`attachments/${encodeURIComponent(imp.attachments[0].id)}/${encodeURIComponent(fileName)}`), fileBytes, "the imported attachment's bytes");
+    const threads = await at(`pages/${encodeURIComponent(imp.id)}/threads`);
+    assert.deepEqual(
+      threads.map((t) => [t.anchor?.exact, t.comments.map((c) => c.body)]),
+      [[quote, [marker("comment")]]],
+      "the imported comment and the text it quotes",
+    );
+    assert.match(threads[0].comments[0].author.name, /Ada Admin/, "the imported comment's author");
+    const innerImported = await pagesOf("smoke-secret/smoke-inner");
+    const innerSummary = innerImported.pages.find((p) => p.title.includes(innerTitle));
+    assert.ok(innerSummary, "the subspace's page is not imported");
+    const innerPage = await at(`spaces/${encodeURIComponent(innerImported.s.id)}/pages/at/${innerSummary.slug}`);
+    assert.ok(innerPage.body.includes(marker("subspace text")), "the imported subspace page's text");
+  } finally {
+    imported.stop();
+  }
+  console.log("ok: the space exported decrypted in the browser, and imported by a server on a fresh data directory, with its title, text, attachment, comment and subspace");
+
   // ---- What the server keeps and sends -------------------------------------
 
   for (const [who, cookie] of [
@@ -369,4 +428,58 @@ export async function encryptedSpaces({ browser, url, origin, data, timeout, eve
   console.log(`ok: none of ${checked.markers} markers of the encrypted space is in any of ${checked.places} files, requests and answers`);
 
   for (const c of [ada.context, bea.context, elsewhere]) await c.close();
+
+  // A second server, on a fresh data directory beside the first's, always
+  // on SQLite (the PostgreSQL run's database is the first server's, which
+  // the canary dumps), with the archive imported through its admin
+  // listener's merge import, which asks nobody to sign in. What it is sent
+  // and answers is not watched: the plain text there is what the export
+  // is for.
+  async function importedElsewhere(archive) {
+    const env = { ...process.env };
+    delete env.WIKI_DATABASE_URL;
+    const second = spawn(
+      wikiServer,
+      ["serve", "--data", join(work, "imported"), "--static", app, "--listen", "127.0.0.1:0", "--admin-listen", "127.0.0.1:0", "--no-guide"],
+      { stdio: ["ignore", "pipe", "pipe"], env },
+    );
+    let log = "";
+    const api = await new Promise((ready, fail) => {
+      const read = (chunk) => {
+        log += chunk;
+        const match = log.match(/listener=admin address="?(http:\/\/[^\s"]+?)\/admin\/"?(\s|$)/m);
+        if (match) ready(`${match[1]}/admin/api/v1`);
+      };
+      second.stdout.on("data", read);
+      second.stderr.on("data", read);
+      second.on("exit", (code) => fail(new Error(`the second wiki-server exited (${code}):\n${log}`)));
+      setTimeout(() => fail(new Error(`the second wiki-server did not start:\n${log}`)), timeout).unref();
+    });
+    const stop = () => second.kill();
+    try {
+      const form = new FormData();
+      form.append("archive", new Blob([archive], { type: "application/zip" }), "export.zip");
+      form.append("choices", JSON.stringify({ skipSpaces: [], skipPages: [], conflicts: [] }));
+      const applied = await fetch(`${api}/import/apply`, { method: "POST", headers: { "X-Wiki-Request": "1" }, body: form });
+      const said = await applied.text();
+      assert.equal(applied.status, 200, `the import of the export: ${said}`);
+      assert.match(said, /"spacesCreated":2/, `the import's summary: ${said}`);
+    } catch (error) {
+      stop();
+      throw error;
+    }
+    return {
+      get: async (path) => {
+        const response = await fetch(`${api}/${path}`);
+        assert.equal(response.status, 200, `the second server's ${path}`);
+        return response.json();
+      },
+      bytes: async (path) => {
+        const response = await fetch(`${api}/${path}`);
+        assert.equal(response.status, 200, `the second server's ${path}`);
+        return Buffer.from(await response.arrayBuffer()).toString("utf8");
+      },
+      stop,
+    };
+  }
 }

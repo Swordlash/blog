@@ -112,6 +112,7 @@ component =
                         {% end %}
                       </ul>
                       <p>If a passkey of yours unlocks them, nothing is lost: sign in, and let them open with your new password too under Keys in your account's security, which asks for the passkey once.</p>
+                      <p class="reset-export">To keep a copy of an encrypted space first, open it where you are still signed in, or after signing in with a passkey, and choose <strong>Export, decrypted here</strong> in its list of pages: your browser saves its pages, their attachments and their comments, decrypted, in a file a wiki imports.</p>
                     </div>
                     <label class="field">
                       <span>New password</span>

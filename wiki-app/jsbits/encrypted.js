@@ -414,6 +414,12 @@ function wiki_enc_opened_error(o) {
   return o.error ?? "";
 }
 
+// An attachment's decrypted bytes, for the program to copy (the export
+// decrypted in the browser).
+function wiki_enc_opened_bytes(o) {
+  return new Uint8Array(o.opened ?? new ArrayBuffer(0));
+}
+
 // Object URLs of an attachment's decrypted bytes: one of this media type,
 // and one of the link's type (the same URL when the types are one), as
 // JSON {url, link}. The caller revokes them when no view shows them.

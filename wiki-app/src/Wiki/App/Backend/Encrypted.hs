@@ -29,6 +29,7 @@ import Halogen.Query.HalogenM (HalogenM)
 import Protolude
 import Wiki.Api.Encrypted (SpaceEncryption)
 import Wiki.App.Backend (WikiError (..))
+import Wiki.App.DecryptedExport (DecryptedExport)
 import Wiki.Core.Encrypted (ChainProblem)
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Space (Space)
@@ -101,6 +102,17 @@ class (Monad m) => MonadEncryption m where
   chainProblem :: PageId -> m (Maybe ChainProblem)
   default chainProblem :: (MonadTrans t, m ~ t n, MonadEncryption n) => PageId -> m (Maybe ChainProblem)
   chainProblem = lift . chainProblem
+
+  -- | The space and those of its subspaces whose keys this browser can
+  -- open, decrypted here into an archive of the wiki's own format, zipped
+  -- and checked ("Wiki.App.DecryptedExport"): the file to save, and the
+  -- subspaces left out, with why. A subspace whose key does not open here
+  -- is left out with the subspaces under it; anything else that does not
+  -- decrypt refuses the whole export, naming it, so that the file never
+  -- lacks something silently. Nothing decrypted is sent to the server.
+  exportDecrypted :: SpaceId -> m (Either WikiError DecryptedExport)
+  default exportDecrypted :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> m (Either WikiError DecryptedExport)
+  exportDecrypted = lift . exportDecrypted
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadEncryption m) => MonadEncryption (HalogenM st act slots output m)

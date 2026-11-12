@@ -96,12 +96,14 @@ import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, getCurrentTime)
+import Data.Version (showVersion)
 import Halogen.JSBits (inBrowser)
 import Halogen.Subscription (Subscribe (..))
 import Halogen.Subscription qualified as HS
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Network.HTTP.Types (Status, methodGet, statusCode, statusIsSuccessful)
+import Paths_wiki_app qualified as Paths
 import Protolude
 import Servant.API (NoContent, getResponse)
 import Servant.Client.Core (BaseUrl (..), ClientError (..), RunClient (..), Scheme (..), clientIn)
@@ -147,7 +149,8 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Opaque qualified as Opaque
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
-import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, keepSeen, keyNamed, newPageId, newPageKey, newSpaceKey, newTag, noEncryption, objectUrls, openAttachmentBytes, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openText, openVersionTitles, revokeUrl, rotateKeys, sealBytes, sealContent, sealText, seenOf, shareSpaceKey)
+import Wiki.App.DecryptedExport (DecryptedExport (..), ExportedSpace (..), LeftOut (..), checkedZip, decryptedArchive, exportFileName)
+import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, keepSeen, keyNamed, newPageId, newPageKey, newSpaceKey, newTag, noEncryption, objectUrls, openAttachmentBytes, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openText, openVersionTitles, openedBytes, revokeUrl, rotateKeys, sealBytes, sealContent, sealText, seenOf, shareSpaceKey)
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (browserOnline, forgetReads, offlineCopy)
@@ -167,8 +170,9 @@ import Wiki.Core.Path (ancestry, pathOf)
 import Wiki.Core.Permission (canAdministerSpace)
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), searchPlain)
 import Wiki.Core.Search qualified as Search
-import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (..), homeBody, homeTitle)
+import Wiki.Core.Slug (Slug, slugText)
+import Wiki.Core.Space (Icon (..), Space (..), homeBody, homeTitle)
+import Wiki.Core.Space qualified as Space
 import Wiki.Core.User (Password (..), Standing (..), User (..), checkNewPassword)
 import Wiki.Core.Vault (KeyId, Nonce)
 import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..), maxVersionsPageSize, versionsPageSize)
@@ -2524,6 +2528,116 @@ foundIn sid current =
               pure pages
         _ -> pure []
 
+--------------------------------------------------------------------------------
+-- The export decrypted in the browser
+
+-- | 'Wiki.App.Backend.Encrypted.exportDecrypted': the space and its
+-- subspaces, from the list of spaces fetched now, parents first. Each
+-- space's key is opened through 'openKey', the one place keys are opened.
+-- A subspace whose key this browser cannot hold ('KeyState') is left out,
+-- with every space under it, since the archive keeps the tree; any other
+-- refusal, or anything that does not decrypt, refuses the whole export.
+-- The archive is zipped and read back before it is returned
+-- ('checkedZip').
+decryptedExport :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError DecryptedExport)
+decryptedExport top = do
+  immediate <- HttpWiki (asks (\env -> env.immediate))
+  if immediate
+    then pure (Left (Invalid inServer))
+    else runExceptT $ do
+      spaces <- ExceptT freshSpaces
+      start <- maybe (throwError NotFound) pure (find (\s -> s.id == top) spaces)
+      when (isNothing start.encryption) $
+        throwError (Invalid "This space is not encrypted: the wiki's own export holds it.")
+      let below s = sortOn (\c -> (c.position, c.name)) [c | c <- spaces, c.parent == Just s.id]
+          tree s = s : concatMap tree (below s)
+          step (done, left) s
+            | s.id /= start.id && not (any (\e -> Just e.space.id == s.parent) done) =
+                pure (done, left <> [LeftOut {name = s.name, why = "The space above it is left out."}])
+            | otherwise = case s.encryption of
+                Nothing -> pure (done, left <> [LeftOut {name = s.name, why = "It is not encrypted: the wiki's own export holds it."}])
+                Just k ->
+                  lift (openKey NoRefresh s.id k) >>= \case
+                    Left e -> throwError e
+                    Right (Left st)
+                      | s.id == start.id -> throwError (Invalid (keyStateText st))
+                      | otherwise -> pure (done, left <> [LeftOut {name = s.name, why = keyStateText st}])
+                    Right (Right _) -> ExceptT (exportedSpace s k) <&> \e -> (done <> [e], left)
+      (done, left) <- foldlM step ([], []) (tree start)
+      now <- liftIO getCurrentTime
+      let archive = decryptedArchive now ("wiki-app " <> toS (showVersion Paths.version)) done
+      bytes <- ExceptT (first Invalid <$> checkedZip archive)
+      pure DecryptedExport {fileName = exportFileName start now, bytes, archive, leftOut = left}
+
+-- | One space of the export, decrypted with its key ('readingSealed', so
+-- that a key renewed meanwhile is opened and the space read once more):
+-- every page's latest version and attachments (read by its path, as the
+-- page view reads it), and its threads. Whatever does not decrypt refuses
+-- the export, naming the page, and so does a page whose versions this tab
+-- found wrong ('checkHead': an older version than one read here, or
+-- another under the same number).
+exportedSpace :: (MonadIO m) => Space -> KeyId -> HttpWiki m (Either WikiError ExportedSpace)
+exportedSpace s current =
+  readingSealed NoRefresh s.id current $ \key ->
+    runExceptT (exportedWith key) <&> \case
+      Left (e, opened) -> (Left e, opened)
+      Right x -> (Right x, True)
+  where
+    -- A refusal of the server's ('True': everything that came opened) or
+    -- something that did not decrypt ('False').
+    sent :: (Monad n) => n (Either WikiError a) -> ExceptT (WikiError, Bool) n a
+    sent = withExceptT (,True) . ExceptT
+    unopened :: (Monad n) => [Slug] -> Text -> ExceptT (WikiError, Bool) n a
+    unopened path what = throwError (Invalid (pageNamed path <> " " <> what <> " does not decrypt here, so nothing was exported."), False)
+    pageNamed path
+      | null path = "The home page of " <> s.name <> ":"
+      | otherwise = "The page at " <> T.intercalate "/" (map slugText path) <> " in " <> s.name <> ":"
+
+    exportedWith key = do
+      listed <- sent (send (endpoints.encrypted.pages s.id))
+      let byId = Map.fromList [(p.id, summaryFrom p "") | p <- listed]
+      read' <- for listed $ \x -> do
+        path <- maybe (throwError (Invalid ("A page of " <> s.name <> " is not in the space's tree, so nothing was exported."), True)) pure (Space.pagePath s (`Map.lookup` byId) x.id)
+        p <- sent (send (getResponse <$> endpoints.encrypted.pageAt s.id path))
+        (title, body) <- case keyNamed p.content.keyId p.pageKeys of
+          Nothing -> unopened path "its text"
+          Just ck -> lift (withPageKey key s.id p.id ck (\pk -> liftIO (first Invalid <$> openContent pk s.id p.id p.content))) >>= either (const (unopened path "its text")) pure
+        -- The version opened, so its tag and chain are its own: checked
+        -- against what this browser read before, as a page read is, so that
+        -- a version older than one read here never goes into the file.
+        lift (checkHead key s.id p.id p.pageKeys p.content.tag p.content.chain)
+        lift (Map.lookup p.id . (\h -> h.heldProblems) <$> readHeld) >>= traverse_ (\problem -> throwError (Invalid (pageNamed path <> " " <> chainProblemText problem <> " Nothing was exported."), True))
+        attached <- for p.attachments $ \a -> lift (exportedAttachment key s.id p.id p.pageKeys a) >>= either (const (unopened path "an attachment of it")) pure
+        listedThreads <- sent (send (endpoints.encrypted.threads p.id))
+        threads <- for listedThreads.threads $ \t -> lift (openThreadWith key s.id p.id listedThreads.pageKeys t) >>= maybe (unopened path "a comment on it") pure
+        pure (pageWith p (map fst attached) title body, threads, Map.fromList [(blob, bytes) | (Attachment {source = SourceBlob blob}, bytes) <- attached])
+      icon <- case s.icon of
+        Just (IconImage blob _) -> do
+          r <- sent (send (endpoints.spaces.icon s.id blob methodGet))
+          pure (Map.singleton blob (BSL.toStrict r.responseBody))
+        _ -> pure mempty
+      pure
+        ExportedSpace
+          { space = s
+          , pages = [p | (p, _, _) <- read']
+          , threads = Map.fromList [(p.id, ts) | (p, ts, _) <- read', not (null ts)]
+          , blobs = Map.unions (icon : [b | (_, _, b) <- read'])
+          }
+
+-- | An attachment of a page of an encrypted space for the export: its
+-- name and media type, and its bytes, fetched and decrypted with the key
+-- of its page's it names. Its size is that of the bytes decrypted.
+exportedAttachment :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> SealedAttachment -> HttpWiki m (Either WikiError (Attachment, ByteString))
+exportedAttachment key sid pid keys a = case keyNamed a.meta.keyId keys of
+  Nothing -> pure (Left (Invalid "No key of the page's opens it."))
+  Just k -> withPageKey key sid pid k $ \pk -> liftIO . runExceptT $ do
+    meta <- ExceptT (first Invalid <$> openText pk a.meta.meta (attachmentMetaData sid pid k.keyId a.id))
+    AttachmentMeta name mediaType <- either (throwError . Invalid . toS) pure (eitherDecodeStrict' (encodeUtf8 meta))
+    n <- either (throwError . Invalid) pure (parseFileName name)
+    opened <- ExceptT (first Invalid <$> openAttachmentBytes pk (Links.links.attachments.content a.id (FileName a.id.text)) a.meta.bytesNonce (attachmentBytesData sid pid k.keyId a.id))
+    bytes <- liftIO (openedBytes opened)
+    pure (Attachment {id = a.id, name = n, mediaType = uploadedMimeType mediaType, size = fromIntegral (BS.length bytes), source = SourceBlob (BlobId a.id.text)}, bytes)
+
 -- | Encrypted spaces over the API's @encrypted\/@ routes.
 instance (MonadIO m) => MonadEncryption (HttpWiki m) where
   keyState sid =
@@ -2555,3 +2669,4 @@ instance (MonadIO m) => MonadEncryption (HttpWiki m) where
             pure result
   spaceEncryption sid = send (endpoints.encrypted.space sid)
   chainProblem pid = Map.lookup pid . (\h -> h.heldProblems) <$> readHeld
+  exportDecrypted = decryptedExport

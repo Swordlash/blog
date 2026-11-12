@@ -63,12 +63,14 @@ import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
-import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..))
+import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), keyStateText)
 import Wiki.App.Backend.Http (HttpEnv, HttpWiki, browserTransport, newHttpEnv, ownersHeld, runHttpWiki)
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State qualified as M
 import Wiki.App.Backend.Stars (MonadStars (..))
+import Wiki.App.Browser (unzipFiles)
+import Wiki.App.DecryptedExport (DecryptedExport (..), LeftOut (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Encrypted (keepSeen, seenOf)
 import Wiki.App.Islands (MonadIslands)
@@ -77,6 +79,8 @@ import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Encrypted (ChainProblem (..), Kept (..), Seen (..))
+import Wiki.Core.Export (readArchive)
+import Wiki.Core.Export qualified as Export
 import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..))
@@ -557,6 +561,51 @@ spec m = do
     run solo (listPages secret.id) >>= (`shouldSatisfy` isLeft)
     soloAsked <- drop before <$> asked
     [r.url | r <- soloAsked, ("api/v1/encrypted/spaces/" <> secret.id.text) `T.isPrefixOf` r.url] `shouldSatisfy` all (\u -> u /= "api/v1/encrypted/spaces/" <> secret.id.text)
+
+  -- Item 3 of #213: the export decrypted in the browser. The archive's
+  -- files hold the pages' texts, the attachment's bytes and the comment,
+  -- decrypted; 'readArchive' takes them; nothing plain is sent to the
+  -- server meanwhile. A reader who does not hold the subspace's key gets
+  -- the space without it, and is told so.
+  it "exports a space decrypted in the browser, which readArchive takes, and leaves out a subspace whose key is not held" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Export plans" "The launch is on *Tuesday*.")
+    void (ok =<< run env (uploadAttachment made.id "plans.svg" "image/svg+xml" (svgOf 7 "Attached words")))
+    void (ok =<< run env (openThread made.id (Just (Anchor "Tuesday" "on *" "*.")) "A comment on Tuesday"))
+    inner <- ok =<< run env (createSpace (Just secret.id) "Inner")
+    void (run env listSpaces)
+    void (ok =<< run env (createPage inner.id Nothing "Inner plans" "Only the inner circle."))
+    before <- length <$> asked
+    exported <- okAt "the export" =<< run env (exportDecrypted secret.id)
+    sentDuring <- drop before <$> asked
+    let plain = ["Export plans", "Tuesday", "Attached words", "A comment on Tuesday", "Inner plans", "inner circle"]
+    [(r.url, w) | r <- sentDuring, w <- plain, w `T.isInfixOf` (r.url <> r.body)] `shouldBe` []
+    exported.leftOut `shouldBe` []
+    files <- unsafeIOToPageM (unzipFiles exported.bytes) >>= either (\why -> panic ("not a zip file: " <> why)) pure
+    let holding needle = [path | (path, bytes) <- Map.toList files, encodeUtf8 needle `BS.isInfixOf` bytes]
+    -- The page's text in its page.md, the comment in its comments.json,
+    -- the attachment's bytes in its file, the subspace's page in its own
+    -- directory under the space's.
+    filter ("page.md" `T.isSuffixOf`) (holding "The launch is on *Tuesday*.") `shouldSatisfy` (== 1) . length
+    filter ("comments.json" `T.isSuffixOf`) (holding "A comment on Tuesday") `shouldSatisfy` (== 1) . length
+    filter ("attachments/plans.svg" `T.isSuffixOf`) (holding "Attached words") `shouldSatisfy` (== 1) . length
+    filter (\p -> "/spaces/inner/" `T.isInfixOf` p && "page.md" `T.isSuffixOf` p) (holding "Only the inner circle.") `shouldSatisfy` (== 1) . length
+    back <- either (\why -> panic ("refused: " <> why)) pure (readArchive files)
+    sort [p.title | p <- back.pages] `shouldBe` ["Export plans", "Home", "Home", "Inner plans"]
+    (back.users, [s.encryption | s <- back.spaces]) `shouldBe` ([], [Nothing, Nothing])
+    [(t.anchor, map (\c -> c.body) t.comments) | ts <- Map.elems back.threads, t <- ts] `shouldBe` [(Just (Anchor "Tuesday" "on *" "*."), ["A comment on Tuesday"])]
+    -- The reader gets the space's key from the administrator's next
+    -- opening of it, and not the subspace's: her export leaves it out.
+    unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
+    admin <- as "user-admin"
+    void (run admin listSpaces)
+    run admin (keyState secret.id) `shouldReturn` Right KeyReady
+    readerTab <- as "user-reader"
+    void (run readerTab listSpaces)
+    hers <- okAt "the reader's export" =<< run readerTab (exportDecrypted secret.id)
+    hers.leftOut `shouldBe` [LeftOut {name = "Inner", why = keyStateText WaitingForKey}]
+    sort [p.title | p <- hers.archive.pages] `shouldBe` ["Export plans", "Home"]
 
   -- A space encrypted before encrypted spaces had home pages gets one from
   -- its administrator's browser when she opens it; a reader's does not

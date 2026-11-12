@@ -871,6 +871,22 @@ to go on editing. A whole-wiki export leaves encrypted spaces out, and a
 whole-wiki archive is imported with every space plain. Notifications of
 a change in an encrypted space carry no title and no excerpt.
 
+**Export, decrypted here**, in an encrypted space's list of pages, is the
+export your browser makes, for anyone who holds the space's key: it reads
+the space and each of its subspaces whose key it holds, decrypts them, and
+saves one file in the wiki's own archive format, with the latest title and
+text of each page, their attachments, and their comments with their
+authors' names. The file holds no older versions, drafts, users, groups or
+grants; a subspace whose key the browser does not hold is left out, with
+the subspaces under it, and the export says which. Anything else that does
+not decrypt refuses the whole export, naming the page, so that the file
+never lacks something silently, and the browser reads the file back before
+it saves it. The plain text exists only in your browser and in the file:
+nothing of it is sent to the server. A wiki imports the file as plain
+spaces, through its administration's import (not into the encrypted space
+it came from, which the import refuses). Make one before a password reset
+that would delete your keys.
+
 What the server still sees: the space's name (shown in the list of
 spaces), the shape of its tree of pages, how large each page is, when and
 by whom pages are saved and commented on, how many comments and
@@ -880,12 +896,11 @@ The words searched for reach the server too: the search page's address
 carries them, and the server searches the plain spaces with them. It
 never sees the encrypted pages, nor which of them matched.
 
-Not there yet, and to come: an export of an encrypted space decrypted in
-your browser; encrypting a space that already has pages, and turning
-encryption off; an option of an encrypted space to ask for a passkey or
-the password before each opening, with signing out removing your keys from
-the device; and the titles of encrypted pages under the bell (they show as
-"an encrypted page" there for now).
+Not there yet, and to come: encrypting a space that already has pages,
+and turning encryption off; an option of an encrypted space to ask for a
+passkey or the password before each opening, with signing out removing
+your keys from the device; and the titles of encrypted pages under the
+bell (they show as "an encrypted page" there for now).
 
 Removing a reader gives the space a new key (WP5.74b3). A reader stops
 being one when their grant, their group's grant or their membership of the

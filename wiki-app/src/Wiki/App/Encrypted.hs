@@ -47,6 +47,7 @@ module Wiki.App.Encrypted
   , sealBytes
   , Opened
   , openAttachmentBytes
+  , openedBytes
   , objectUrls
   , revokeUrl
 
@@ -92,6 +93,7 @@ $( browserJS
      , ("js_open_attachmentPromise", "wiki_enc_open_attachment", Safe, [t|Int -> JSText -> JSText -> JSText -> IO (Promise JSVal)|])
      , ("js_opened_error", "wiki_enc_opened_error", Safe, [t|JSVal -> IO JSText|])
      , ("js_object_urls", "wiki_enc_object_urls", Safe, [t|JSVal -> JSText -> JSText -> IO JSText|])
+     , ("js_opened_bytes", "wiki_enc_opened_bytes", Safe, [t|JSVal -> IO JSVal|])
      , ("js_revoke", "wiki_enc_revoke", Safe, [t|JSText -> IO ()|])
      , ("js_keep_seen", "wiki_enc_keep_seen", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
      ]
@@ -416,6 +418,14 @@ openAttachmentBytes (PageKeyRef k) address nonce data' = whenHere $ do
   opened <- evaluate =<< js_open_attachment k (toJSText address) (toJSText nonce.text) (toJSText data')
   why <- fromJSText <$> js_opened_error opened
   pure (if why == "" then Right (Opened opened) else Left why)
+
+-- | An attachment's decrypted bytes, copied into the program: what the
+-- export decrypted in the browser writes into its file
+-- ("Wiki.App.DecryptedExport"). Natively, none.
+openedBytes :: Opened -> IO ByteString
+openedBytes (Opened o)
+  | inBrowser = fromJSBytes =<< js_opened_bytes o
+  | otherwise = pure mempty
 
 -- | Two object URLs of an attachment's decrypted bytes, which 'revokeUrl'
 -- lets go: one of the media type given, which the page shows, and one of
