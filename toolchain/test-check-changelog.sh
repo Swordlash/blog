@@ -5,9 +5,10 @@
 # a wrong number, pr: 0, none, two, an old entry edited well and badly, an
 # entry deleted, a number another entry has, a file that is not an entry,
 # the base moved on after the branch, a pull request stacked on another's
-# branch, and the label no-changelog. Then the
-# grammar on entries of its own (well formed or not, each with the reason),
-# and every entry of this repository's changelog/.
+# branch, the label no-changelog, and a technical entry as the pull
+# request's own. Then the grammar on entries of its own (well formed or
+# not, each with the reason), and every entry of this repository's
+# changelog/.
 #
 #   sh toolchain/test-check-changelog.sh
 set -eu
@@ -227,6 +228,19 @@ expect_refused 160 --labels 'no-changelog-please,documentation'
 expect_refused 160 --labels ''
 pass 'the label no-changelog: exempt, given on a line or between commas; another label is not it'
 
+# A technical entry is the pull request's one entry as any other is, and
+# a malformed technical line refuses it.
+branch technical
+printf -- '---\npr: 160\ntitle: CI caches\ntechnical: true\n---\n\n## Other changes\n\n- Faster CI.\n' >"$REPO/changelog/00160-ci-caches.md"
+commit 'a technical entry'
+expect_ok 160
+assert_contains 'ok: changelog/00160-ci-caches.md, the entry of #160'
+printf -- '---\npr: 160\ntitle: CI caches\ntechnical: yes\n---\n\n## Other changes\n\n- Faster CI.\n' >"$REPO/changelog/00160-ci-caches.md"
+commit 'a wrong value'
+expect_refused 160
+assert_contains 'changelog/00160-ci-caches.md: line 4: technical must be true or false, not "yes"'
+pass 'a technical entry: the pull request'"'"'s one entry, its value checked'
+
 # Its own mistakes are 2, not a verdict.
 if (cd "$REPO" && sh "$CHECK" --pr 0 --base main) >"$out" 2>&1; then fail 'took --pr 0'; else [ $? -eq 2 ] || fail 'a bad --pr is not exit 2'; fi
 if (cd "$REPO" && sh "$CHECK" --pr 160) >"$out" 2>&1; then fail 'took no --base'; else [ $? -eq 2 ] || fail 'no --base is not exit 2'; fi
@@ -273,6 +287,14 @@ w 00003-crlf.md '---\r\npr: 3\r\ntitle: T\r\n---\r\n\r\n## Bug fixes\r\n\r\nx\r\
 w Bad_Name.md '---\npr: 3\ntitle: T\n---\n\n## Bug fixes\n\nx\n'
 w 00004-wrong-number.md '---\npr: 3\ntitle: T\n---\n\n## Bug fixes\n\nx\n'
 w heading-spoilers.md '---\npr: 3\ntitle: T\n---\n\n## Bug fixes\n\nx\n'
+w 00008-technical.md '---\npr: 8\ntitle: CI\ntechnical: true\n---\n\n## Other changes\n\nx\n'
+w 00008-not-technical.md '---\npr: 8\ntitle: T\ntechnical:\tfalse \n---\n## Bug fixes\nx'
+w 00008-technical-yes.md '---\npr: 8\ntitle: CI\ntechnical: yes\n---\n\n## Other changes\n\nx\n'
+w 00008-technical-empty.md '---\npr: 8\ntitle: CI\ntechnical:\n---\n\n## Other changes\n\nx\n'
+w 00008-technical-open.md '---\npr: 8\ntitle: CI\ntechnical: true\n\n## Other changes\n\nx\n'
+w 00008-technical-short.md '---\npr: 8\ntitle: CI\ntechnical: true\n'
+w 00008-other-field.md '---\npr: 8\ntitle: CI\ndraft: true\n---\n\n## Other changes\n\nx\n'
+w 00008-technical-empty-section.md '---\npr: 8\ntitle: CI\ntechnical: true\n---\n\n## Bug fixes\n\n## Other changes\n\nx\n'
 form 00005-nested.md ok
 form 00004-wrong-number.md 'named with 00004 but its pr is 3: name it 00003-wrong-number.md'
 form heading-spoilers.md 'not an entry'"'"'s name'
@@ -300,7 +322,15 @@ form 00003-unclosed.md 'line 8: the code block opened here is not closed'
 form 00003-short-close.md 'line 8: the code block opened here is not closed'
 form 00003-crlf.md 'line ends must be Unix ones'
 form Bad_Name.md 'not an entry'"'"'s name'
-pass 'the grammar: nested and indented fences, spaces around the values and pr: 0 are well formed; each mistake refused with its line'
+form 00008-technical.md 'ok 8'
+form 00008-not-technical.md 'ok 8'
+form 00008-technical-yes.md 'line 4: technical must be true or false, not "yes"'
+form 00008-technical-empty.md 'line 4: technical must be true or false, not ""'
+form 00008-technical-open.md 'line 5: the file must start with the front matter'
+form 00008-technical-short.md 'line 5: the file must start with the front matter'
+form 00008-other-field.md 'line 4: the file must start with the front matter'
+form 00008-technical-empty-section.md 'line 7: the section ## Bug fixes is empty'
+pass 'the grammar: nested and indented fences, spaces around the values, pr: 0 and technical: true or false are well formed; each mistake refused with its line'
 
 # Every entry of this repository.
 (cd "$SOURCE_DIR/.." && sh "$CHECK" changelog/*.md) >"$out" 2>&1 || fail 'an entry of this repository is malformed'

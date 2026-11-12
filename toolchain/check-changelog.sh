@@ -2,8 +2,9 @@
 # Check the changelog entries a pull request adds or changes under
 # changelog/ (WP5.66 of docs/PLAN.md): the CI job `changelog` runs it on
 # every pull request. An entry says what the pull request changed, for the
-# wiki's users; the page "What's new?" shows the newest twelve, which
-# wiki-server embeds when it is compiled (wiki-server/src/Wiki/Server/WhatsNew).
+# wiki's users; the page "What's new?" shows the newest twelve that are not
+# technical, which wiki-server embeds when it is compiled
+# (wiki-server/src/Wiki/Server/WhatsNew.hs).
 #
 #   sh toolchain/check-changelog.sh --pr N --base REF [--head REF] [--labels LABELS]
 #   sh toolchain/check-changelog.sh FILE...
@@ -26,13 +27,15 @@
 # With FILE..., each file is checked for its form alone, as an author would
 # before committing an entry.
 #
-# The grammar is the one wiki-server's reader enforces when it compiles
-# (wiki-server/src/Wiki/Server/WhatsNew/Entry.hs) and the README describes
-# under "Changelog entries": a change to one is a change to all three.
+# The grammar is the one the reader enforces when wiki-server and wiki-app
+# are compiled (wiki-api/src/Wiki/Api/WhatsNew/Entry.hs) and the README
+# describes under "Changelog entries": a change to one is a change to all
+# three.
 #
 #   ---
 #   pr: 158
 #   title: A copy button on code blocks
+#   technical: true        (optional: true or false)
 #   ---
 #
 #   ## New features        (each section optional, at least one, at most
@@ -43,8 +46,20 @@
 # (00000 while it is not numbered yet), a hyphen, a slug (lower-case letters
 # and digits in words joined by single hyphens) and .md, such as
 # 00160-heading-spoilers.md: the files then list in the order the pull
-# requests were opened. The front matter is exactly those four lines: pr
-# a number without a leading zero, the title not empty and at most 80 bytes.
+# requests were opened. The front matter is exactly those lines: pr a number
+# without a leading zero, the title not empty and at most 80 bytes, and
+# technical, when it is there, true or false. technical: true marks an entry
+# technical. The page "What's new?" holds what makes someone using the wiki
+# in a browser think "a new feature, I will try it" or "that bug is fixed
+# now"; an entry that gives a user neither thought is technical, whatever it
+# touched. To tell: nothing of it is seen on the wiki's pages. CI, the tests,
+# the build and deploy scripts, the configuration wizard, the server's
+# console commands and options, backups and upgrades, the toolchain and the
+# repository's own process are technical, and so is a refactoring or a
+# speed-up nobody would notice. A fix of a bug a user could have met on a
+# page is not. The page "What's new?" leaves a technical entry out, and
+# it takes none of the twelve places; it is still checked here, and still
+# the pull request's one entry. An entry without the line is not technical.
 # No other heading of level one or two outside a fenced code block. A fence
 # is three or more backticks or tildes after any indentation, closed by a
 # line of at least as many of the same and nothing else. Unix line ends.
@@ -63,6 +78,7 @@ die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 2; }
 
 # The form of one entry, read on standard input: prints "ok <pr>" when it is
 # well formed, and otherwise the first problem, "line N: what", and exits 1.
+# The front matter ends on line 4, or on line 5 when line 4 is technical's.
 entry_form() {
   # Bytes, as wiki-server counts a title's length: the C locale.
   LC_ALL=C awk '
@@ -82,9 +98,10 @@ entry_form() {
       if (!content) fail(secline, "the section ## " name_of(sec) " is empty")
       else if (sec == 1 && !fenced) fail(secline, "## New features has no fenced code block; every new feature comes with an example in one")
     }
-    BEGIN { problem = ""; sec = 0; fence = ""; flen = 0 }
+    BEGIN { problem = ""; sec = 0; fence = ""; flen = 0; fmend = 0
+      front = "the file must start with the front matter: ---, pr: N, title: T, --- (four lines; a technical entry has technical: true before the last ---)" }
     index($0, "\r") > 0 { fail(NR, "line ends must be Unix ones (\\n), without \\r") }
-    NR == 1 { if ($0 != "---") fail(1, "the file must start with the front matter: ---, pr: N, title: T, --- (four lines)"); next }
+    NR == 1 { if ($0 != "---") fail(1, front); next }
     NR == 2 {
       if (substr($0, 1, 3) != "pr:") { fail(2, "expected \"pr: …\""); next }
       pr = trim(substr($0, 4))
@@ -101,7 +118,14 @@ entry_form() {
       else if (length(title) > 80) fail(3, "the title is " length(title) " bytes long, more than 80")
       next
     }
-    NR == 4 { if ($0 != "---") fail(4, "the file must start with the front matter: ---, pr: N, title: T, --- (four lines)"); next }
+    NR == 4 {
+      if ($0 == "---") { fmend = 4; next }
+      if (substr($0, 1, 10) != "technical:") { fail(4, front); fmend = 4; next }
+      technical = trim(substr($0, 11))
+      if (technical != "true" && technical != "false") fail(4, "technical must be true or false, not \"" technical "\"")
+      next
+    }
+    NR == 5 && fmend == 0 { if ($0 != "---") fail(5, front); fmend = 5; next }
     {
       line = $0
       if (fence != "") {
@@ -137,7 +161,7 @@ entry_form() {
       }
     }
     END {
-      if (NR < 4) fail(NR + 1, "the file must start with the front matter: ---, pr: N, title: T, --- (four lines)")
+      if (fmend == 0) fail(NR + 1, front)
       if (fence != "") fail(fenceline, "the code block opened here is not closed")
       if (sec == 0) fail(NR, "the entry has no section: add ## New features, ## Bug fixes or ## Other changes")
       close_section()
@@ -191,8 +215,13 @@ slug lower-case words joined by hyphens, such as changelog/00160-heading-spoiler
   - Anything else a user notices.
 
 Each section is optional (at least one), at most once, in this order.
-README.md, "Changelog entries", has the whole grammar; a pull request that
-should have none is labelled no-changelog by the owner.
+An entry that gives nobody using the wiki in a browser the thought "a new
+feature, I will try it" or "that bug is fixed now" is technical: nothing of
+it is seen on the wiki's pages (CI, tests, build and deploy scripts, the
+server's console and options, the repository's own process). It has the
+line technical: true before the last ---, and the page "What's new?" leaves
+it out. README.md, "Changelog entries", has the whole grammar; a pull request
+that should have none is labelled no-changelog by the owner.
 EOF
 }
 
