@@ -527,7 +527,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
       edited <- ok =<< as p.ada (sealedEditComment pid tid rid SealedCommentEdit {content = commentUnder pageKeyId 'e'})
       (edited.content, isJust edited.editedAt) `shouldBe` (commentUnder pageKeyId 'e', True)
       listed <- ok =<< as p.ada (sealedThreads pid)
-      map (\t -> (t.id, map (\c -> c.content) t.comments)) listed `shouldBe` [(tid, [commentUnder pageKeyId 'c', commentUnder pageKeyId 'e'])]
+      map (\t -> (t.id, map (\c -> c.content) t.comments)) listed.threads `shouldBe` [(tid, [commentUnder pageKeyId 'c', commentUnder pageKeyId 'e'])]
       -- The rows every other path reads hold no text of them.
       threadRows <- reading st (runSelectReturningList (select (all_ wikiDb.threads)))
       [(r.quote, r.prefix, r.suffix) | r <- threadRows] `shouldBe` [(Just "", Just "", Just "")]
@@ -550,11 +550,11 @@ spec backing = describe "encrypted spaces in the storage" $ do
       as p.ada (reply pid tid "A reply") >>= (`shouldSatisfy` refusedAsEncrypted)
       as p.ada (editComment pid tid cid "Again") >>= (`shouldSatisfy` refusedAsEncrypted)
       void (ok =<< as p.ada (setResolved pid tid True))
-      map (\t -> t.resolved) <$> (ok =<< as p.ada (sealedThreads pid)) `shouldReturn` [True]
+      map (\t -> t.resolved) <$> threadsOf (ok =<< as p.ada (sealedThreads pid)) `shouldReturn` [True]
       ok =<< as p.ada (deleteComment pid tid rid)
-      map (\t -> length t.comments) <$> (ok =<< as p.ada (sealedThreads pid)) `shouldReturn` [1]
+      map (\t -> length t.comments) <$> threadsOf (ok =<< as p.ada (sealedThreads pid)) `shouldReturn` [1]
       ok =<< as p.ada (deleteThread pid tid)
-      (ok =<< as p.ada (sealedThreads pid)) `shouldReturn` []
+      threadsOf (ok =<< as p.ada (sealedThreads pid)) `shouldReturn` []
       sealedRows <- reading st (length <$> runSelectReturningList (select (all_ wikiDb.sealed_comments)))
       sealedRows `shouldBe` 0
       -- A plain space's pages have no encrypted threads.
@@ -630,8 +630,13 @@ spec backing = describe "encrypted spaces in the storage" $ do
       page.pageKey.keyId `shouldNotBe` pageKeyId
       pageKeyId `shouldSatisfy` (`elem` keyIds)
       map (\a -> a.meta.keyId) page.attachments `shouldBe` [pageKeyId]
-      threads <- ok =<< as p.ada (sealedThreads pid)
+      threads <- threadsOf (ok =<< as p.ada (sealedThreads pid))
       [(t.anchor, map (\c -> c.content.keyId) t.comments) | t <- threads] `shouldBe` [(Just (anchorUnder pageKeyId 'q'), [pageKeyId])]
+      -- The threads come with every key of the page's, the older one among
+      -- them, wrapped by the space's new key.
+      answered <- ok =<< as p.ada (sealedThreads pid)
+      sort (map (\k -> k.keyId) answered.pageKeys) `shouldBe` sort keyIds
+      map (\k -> k.spaceKeyId) answered.pageKeys `shouldSatisfy` all (/= spaceKey)
       -- New ones are taken under the page's new key only.
       as p.ada (sealedReply pid tid NewSealedComment {id = rid, content = commentUnder pageKeyId 'r'}) >>= (`shouldSatisfy` conflict)
       void (ok =<< as p.ada (sealedReply pid tid NewSealedComment {id = rid, content = commentUnder page.pageKey.keyId 'r'}))
@@ -851,6 +856,10 @@ savedOn previous c = chainedAs (Just (chainAfter previous.tag previous.chain)) (
 -- | A version with another chain.
 chainedAs :: Maybe Chain -> SealedContent -> SealedContent
 chainedAs chain x = SealedContent {tag = x.tag, keyId = x.keyId, chain, title = x.title, body = x.body}
+
+-- | The threads of an answer of the encrypted threads' route.
+threadsOf :: IO SealedThreads -> IO [SealedThread]
+threadsOf = fmap (\x -> x.threads)
 
 -- | A comment encrypted with a page key, its ciphertexts made of a letter.
 commentUnder :: KeyId -> Char -> SealedComment

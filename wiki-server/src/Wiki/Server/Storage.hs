@@ -224,7 +224,7 @@ import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invite
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 -- Imported without their fields, which pages' and spaces' share; the
 -- qualified import brings the fields.
-import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedComment (..), NewSealedPage, NewSealedThread (..), PendingMember (PendingMember), RotatedPage (..), Rotation (..), RotationInfo (RotationInfo), RotationPage (RotationPage), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit, SealedPage (SealedPage), SealedSummary (SealedSummary), SealedThread (..), SealedVersion (SealedVersion), SealedVersionInfo (SealedVersionInfo), SpaceEncryption (SpaceEncryption), maxRotatedGrants, maxRotatedKeys)
+import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedComment (..), NewSealedPage, NewSealedThread (..), PendingMember (PendingMember), RotatedPage (..), Rotation (..), RotationInfo (RotationInfo), RotationPage (RotationPage), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit, SealedPage (SealedPage), SealedSummary (SealedSummary), SealedThread (..), SealedThreads (..), SealedVersion (SealedVersion), SealedVersionInfo (SealedVersionInfo), SpaceEncryption (SpaceEncryption), maxRotatedGrants, maxRotatedKeys)
 import Wiki.Api.Encrypted qualified as E
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
@@ -1801,8 +1801,11 @@ rotateSpaceKey :: (MonadIO m) => SpaceId -> Rotation -> StoredWiki m (Either Wik
 rotateSpaceKey sid = run Writes . rotateSpaceKeyTx sid
 
 -- | The threads of a page of an encrypted space, encrypted.
-sealedThreads :: (MonadIO m) => PageId -> StoredWiki m (Either WikiError [SealedThread])
-sealedThreads = run Reads . sealedThreadsTx
+sealedThreads :: (MonadIO m) => PageId -> StoredWiki m (Either WikiError SealedThreads)
+sealedThreads pid = run Reads $ do
+  threads <- sealedThreadsTx pid
+  pageKeys <- db (loadPageKeys pid)
+  pure SealedThreads {pageKeys, threads}
 
 -- | A new thread of a page of an encrypted space, published once committed.
 openSealedThread :: (MonadIO m) => PageId -> NewSealedThread -> StoredWiki m (Either WikiError SealedThread)

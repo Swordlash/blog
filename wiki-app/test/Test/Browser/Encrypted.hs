@@ -266,6 +266,47 @@ spec m = do
     stored <- unsafeIOToPageM (fromJSText <$> js_stored)
     filter (`T.isInfixOf` stored) words' `shouldBe` []
 
+  -- The attachment of the same name is replaced, by the id this tab
+  -- remembers for it, which is the latest: after a replacement and after
+  -- a deletion too.
+  it "replaces an attachment of the same name, again and again, and after a deletion" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Plans" "Again.")
+    void (ok =<< run env (getPage secret.id [made.slug]))
+    for_ [3, 4, 5 :: Int] $ \w -> void (ok =<< run env (uploadAttachment made.id "same.svg" "image/svg+xml" (svgOf w "Same")))
+    page <- ok =<< run env (getPage secret.id [made.slug])
+    map (\a -> a.name.text) page.attachments `shouldBe` ["same.svg"]
+    for_ (head page.attachments) $ \a -> do
+      ok =<< run env (deleteAttachment a.id)
+      address <- run env (attachmentUrl a)
+      address `shouldSatisfy` (not . T.isPrefixOf "blob:")
+    again <- ok =<< run env (uploadAttachment made.id "same.svg" "image/svg+xml" (svgOf 6 "Same"))
+    other <- as "user-admin"
+    page' <- ok =<< run other (getPage secret.id [made.slug])
+    map (\a -> a.id) page'.attachments `shouldBe` [again.id]
+    address <- run other (attachmentUrl again)
+    unsafeIOToPageM (js_image_width (toJSText address)) `shouldReturn` 6
+
+  -- An object URL of an attachment's decrypted bytes is let go when
+  -- another page's attachment is opened: the page view shows one page.
+  -- A type the server would not show in the browser is downloaded.
+  it "lets one page's attachment URLs go when another page's are made, and gives a download no type of its own" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    pageOne <- ok =<< run env (createPage secret.id Nothing "One" "First.")
+    pageTwo <- ok =<< run env (createPage secret.id Nothing "Two" "Second.")
+    void (ok =<< run env (getPage secret.id [pageOne.slug]))
+    first' <- ok =<< run env (uploadAttachment pageOne.id "one.svg" "image/svg+xml" (svgOf 3 "One"))
+    void (ok =<< run env (getPage secret.id [pageTwo.slug]))
+    second' <- ok =<< run env (uploadAttachment pageTwo.id "two.svg" "text/html" (svgOf 4 "Two"))
+    firstUrl <- run env (attachmentUrl first')
+    unsafeIOToPageM (js_image_width (toJSText firstUrl)) `shouldReturn` 3
+    secondUrl <- run env (attachmentUrl second')
+    unsafeIOToPageM (js_image_width (toJSText firstUrl)) `shouldReturn` (-1)
+    -- Given as text/html, the bytes are no image (and no page) here.
+    unsafeIOToPageM (js_image_width (toJSText secondUrl)) `shouldReturn` (-1)
+
   -- The blob store keeps each upload's bytes under their hash: the same
   -- file uploaded twice is encrypted under a new nonce each time, so the
   -- server cannot tell it from two different files of one size.
@@ -514,10 +555,13 @@ spec m = do
     void (ok =<< run env (openThread made.id Nothing "Before the renewal."))
     unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
     void (ok =<< run env (listPages secret.id))
-    -- A tab of the administrator's open before the renewal, holding the key.
+    -- Tabs of the administrator's open before the renewal, holding the key.
     before <- as "user-admin"
     void (run before listSpaces)
     void (ok =<< run before (getPage secret.id [made.slug]))
+    early <- as "user-admin"
+    void (run early listSpaces)
+    void (ok =<< run early (getPage secret.id [made.slug]))
     unsafeIOToPageM (js_remove_reader (toJSText ("user-reader" :: Text)))
     -- The opening that renews reads the list with the new wraps.
     renewing <- as "user-admin"
@@ -556,6 +600,9 @@ spec m = do
           _ -> []
     length (ordNub keysOf) `shouldBe` 2
     map (\t -> map (\c -> c.body) t.comments) <$> (ok =<< run before (listThreads made.id)) `shouldReturn` [["Before the renewal.", "After the renewal."]]
+    -- A tab that read the page before the renewal, and reads its threads
+    -- again without the page, as when it hears that they changed.
+    map (\t -> map (\c -> c.body) t.comments) <$> (ok =<< run early (listThreads made.id)) `shouldReturn` [["Before the renewal.", "After the renewal."]]
     resaved.updatedAt `shouldSatisfy` (> made.updatedAt)
 
   it "renews the key at once when the administrator revokes a reader in the permissions dialog" $ runPage $ do

@@ -161,6 +161,15 @@ function wikiTestEncServer(request) {
     const s = wikiTestEncrypted.spaces.get(id) ?? wikiTestEncrypted.spaces.get(wikiTestEncrypted.pages.get(id)?.space);
     if (s && s.space.encryption && s.readers.includes(me)) return wikiTestEncJson(409, { error: "Conflict", text: "This page is in an encrypted space." });
   }
+  // An attachment deleted, by the plain route, which carries no text.
+  m = path.match(/^attachments\/([^/]+)$/);
+  if (m && request.method === "DELETE") {
+    for (const p of wikiTestEncrypted.pages.values()) {
+      const before = (p.attachments ?? []).length;
+      p.attachments = (p.attachments ?? []).filter((x) => x.id !== decodeURIComponent(m[1]));
+      if (p.attachments.length < before) return { status: 204, body: "" };
+    }
+  }
   // An attachment's bytes, as the server keeps them: encrypted.
   m = path.match(/^attachments\/([^/]+)\/([^/]+)$/);
   if (m && request.method === "GET") {
@@ -299,7 +308,7 @@ function wikiTestEncServer(request) {
     // never reads them.
     p.threads ??= [];
     p.attachments ??= [];
-    if (rest === "/threads" && request.method === "GET") return wikiTestEncJson(200, p.threads);
+    if (rest === "/threads" && request.method === "GET") return wikiTestEncJson(200, { pageKeys: [p.pageKey, ...(p.olderKeys ?? [])], threads: p.threads });
     if (rest === "/threads" && request.method === "POST") {
       if (wikiTestEncDue(s)) return wikiTestEncJson(409, wikiTestEncRenewal);
       const asked = JSON.parse(request.body);
@@ -336,6 +345,7 @@ function wikiTestEncServer(request) {
       const sealed = JSON.parse(parts.sealed);
       if (!wikiTestEncTakes({ ids: [sealed.id], nonces: [sealed.meta.meta.nonce, sealed.meta.bytesNonce] })) return wikiTestEncJson(400, wikiTestEncNotTaken);
       const bytes = Uint8Array.from(parts.file, (c) => c.charCodeAt(0));
+      if (sealed.replaces && !p.attachments.some((a) => a.id === sealed.replaces)) return wikiTestEncJson(400, { error: "Invalid", text: "The attachment replaced is not one of the page's." });
       p.attachments = p.attachments.filter((a) => a.id !== sealed.replaces);
       p.attachments.push({ id: sealed.id, meta: sealed.meta, bytes });
       return wikiTestEncJson(201, { id: sealed.id, size: bytes.length, meta: sealed.meta });

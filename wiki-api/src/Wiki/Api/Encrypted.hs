@@ -28,6 +28,7 @@ module Wiki.Api.Encrypted
   , maxRotatedGrants
 
     -- * Comments and attachments
+  , SealedThreads (..)
   , SealedThread (..)
   , SealedCommentInfo (..)
   , NewSealedThread (..)
@@ -184,6 +185,18 @@ maxRotatedGrants = 5000
 
 --------------------------------------------------------------------------------
 -- Comments and attachments
+
+-- | 'SealedThreads': the comment threads of a page of an encrypted space,
+-- with every key of the page's, each wrapped by the space's current key:
+-- each anchor and comment names the key it was encrypted with, which may
+-- be one older than the page's current key, and the keys are read with
+-- the threads so that the browser opens them whatever it read before.
+data SealedThreads = SealedThreads
+  { pageKeys :: [PageKey]
+  , threads :: [SealedThread]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
 
 -- | 'SealedThread': a comment thread of a page of an encrypted space: whether
 -- it is about a quote of the page ('anchored') and that quote, encrypted,

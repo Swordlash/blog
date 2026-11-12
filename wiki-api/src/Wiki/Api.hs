@@ -99,7 +99,7 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, TexEngine, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
-import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedVersion, SealedVersionInfo, SpaceEncryption, sealedVersion)
+import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedThreads, SealedVersion, SealedVersionInfo, SpaceEncryption, sealedVersion)
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -330,7 +330,7 @@ data EncryptedApi form mode = EncryptedApi
   -- ^ A page of the page's history, latest first, as for a plain page.
   , version :: mode :- "pages" :> Capture "page" PageId :> "versions" :> Capture "version" VersionTime :> Get '[JSON] SealedVersion
   -- ^ One version, by its time.
-  , threads :: mode :- "pages" :> Capture "page" PageId :> "threads" :> Get '[JSON] [SealedThread]
+  , threads :: mode :- "pages" :> Capture "page" PageId :> "threads" :> Get '[JSON] SealedThreads
   -- ^ The page's comment threads, their anchors and comments encrypted.
   , openThread :: mode :- "pages" :> Capture "page" PageId :> "threads" :> ReqBody '[JSON] NewSealedThread :> PostCreated '[JSON] SealedThread
   -- ^ A new thread, with its first comment, encrypted with the page's

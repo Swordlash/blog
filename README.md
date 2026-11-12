@@ -836,9 +836,12 @@ How it works:
   bell are told by the page's id, with no title and no excerpt, and a
   mention in it notifies nobody, since the server cannot read it. Editing
   a comment tells nobody. An attachment's bytes are fetched encrypted
-  and decrypted in your browser into a link of its own, let go when you
-  leave the page; an interactive SVG is shown as an image there, as on a
-  copy kept offline. Each upload is encrypted afresh, so the server
+  and decrypted in your browser into a link of its own, let go when
+  another page's attachments are opened or you sign out; an interactive
+  SVG is shown as an image there, as on a copy kept offline. A file of a
+  type the wiki does not show in the browser (anything but images, video,
+  audio and plain text) is downloaded from that link, never opened as a
+  page. Each upload is encrypted afresh, so the server
   cannot tell one file uploaded twice from two files of one size. The
   server sees how many comments a thread has, who wrote each and when,
   whether a thread quotes the page and is resolved, and each
