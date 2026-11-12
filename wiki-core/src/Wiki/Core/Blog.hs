@@ -175,6 +175,9 @@ inlineText = foldMap $ \case
   Emoji _ t -> t
   Mention l -> "@" <> l
   RawHtml _ -> ""
+  InlinePause _ _ -> ""
+  MisplacedPause {} -> ""
+  Marked _ xs -> inlineText xs
 
 -- | The destination of a page's first image, as written: the image a link
 -- preview shows for the page, if any.

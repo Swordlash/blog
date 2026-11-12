@@ -20,8 +20,9 @@
 -- * the footnotes the slide refers to are placed at its end, rather than
 --   all at the end of the last slide;
 -- * the slide is shown in steps ('steps'), as pandoc's slide writers show
---   it. A pause, @[[!pause]]@ on a line of its own ('Pause'), starts the
---   next step: the content after it is shown from that step on. A box
+--   it. A pause, @[[!pause]]@ on a line of its own ('Pause') or among the
+--   words of a paragraph ('InlinePause'), starts the next step: the
+--   content after it is shown from that step on. A box
 --   with the class @incremental@ (@[[!incremental]]@ … @[[/incremental]]@)
 --   shows the items of the lists
 --   in it one at a time: the first item with what comes before the list,
@@ -343,10 +344,31 @@ piecesOf incremental shownFrom bs = do
     marked = \case
       run@((at, _) : _) | at > shownFrom -> [stepMark at (map snd run)]
       run -> map snd run
-    -- A pause shows what follows after everything before it: one step
-    -- later, or after the last item of an incremental list, whichever is
-    -- later.
-    pause c = let at = max (c.shown + 1) c.next in c {shown = at, next = at}
+
+-- | A pause shows what follows after everything before it: one step
+-- later, or after the last item of an incremental list, whichever is
+-- later.
+pause :: Counter -> Counter
+pause c = let at = max (c.shown + 1) c.next in c {shown = at, next = at}
+
+-- | The inlines of a paragraph shown from the step @shownFrom@ on, with
+-- the pauses among them ('InlinePause'): each run of inlines shown from a
+-- later step is marked ('Marked', as 'stepMark' marks blocks), and the
+-- pauses are gone. The blocks after the paragraph go on from its last
+-- pause, as after a pause on a line of its own.
+inlineSteps :: Int -> [Inline] -> State Counter [Inline]
+inlineSteps shownFrom xs = do
+  read' <- for xs $ \case
+    InlinePause _ _ -> Nothing <$ modify pause
+    x -> do
+      at <- gets (\c -> c.shown)
+      reach at
+      pure (Just (at, x))
+  pure (concatMap marked (groupBy ((==) `on` fst) (catMaybes read')))
+  where
+    marked = \case
+      run@((at, _) : _) | at > shownFrom -> [Marked (stepAttributes at) (map snd run)]
+      run -> map snd run
 
 -- | A block shown from a step, with the steps inside it: in a box, in an
 -- alert, in a spoiler, in a quotation, and in a list's items.
@@ -356,6 +378,8 @@ blockSteps incremental at = \case
   Alert kind title bs -> Alert kind title <$> piecesOf incremental at bs
   BlockQuote bs -> BlockQuote <$> piecesOf incremental at bs
   Spoiler h bs -> Spoiler h <$> piecesOf incremental at bs
+  Para xs | any isInlinePause xs -> Para <$> inlineSteps at xs
+  Plain xs | any isInlinePause xs -> Plain <$> inlineSteps at xs
   List kind items -> List kind <$> traverse item items
   other -> pure other
   where
@@ -383,7 +407,17 @@ reach at = modify (\c -> c {highest = max c.highest at})
 -- @slide-step@ and the step in @data-step@. It is rendered as a @div@
 -- around them ('showingStep').
 stepMark :: Int -> [Block] -> Block
-stepMark at = Div [("class", "slide-step"), ("data-step", show at)]
+stepMark at = Div (stepAttributes at)
+
+-- | The attributes of the mark of a piece shown from a step: the class
+-- @slide-step@ and the step.
+stepAttributes :: Int -> Attributes
+stepAttributes at = [("class", "slide-step"), ("data-step", show at)]
+
+isInlinePause :: Inline -> Bool
+isInlinePause = \case
+  InlinePause _ _ -> True
+  _ -> False
 
 -- | The mark of a list item shown from a step: an empty box with the class
 -- @slide-step-item@ and the step in @data-step@, last in the item. The
@@ -416,8 +450,13 @@ atStep k s = blocks s.body
       List kind items -> case [ListItem task (blocks bs) | ListItem task bs <- items, shown bs] of
         [] -> []
         shownItems -> [List kind shownItems]
+      Para xs -> [Para (concatMap inline xs)]
+      Plain xs -> [Plain (concatMap inline xs)]
       other -> [other]
     shown bs = and [at <= k | Div attrs _ <- bs, Just (True, at) <- [markOf attrs]]
+    inline = \case
+      Marked attrs xs | Just (_, at) <- markOf attrs -> if at > k then [] else xs
+      x -> [x]
 
 -- | A slide as presented at a step: everything in it, the pieces shown
 -- from a later step given the class @slide-step-later@, which the
@@ -433,7 +472,12 @@ showingStep k s = Slide {title = s.title, body = map block s.body, notes = s.not
       BlockQuote bs -> BlockQuote (map block bs)
       Spoiler h bs -> Spoiler h (map block bs)
       List kind items -> List kind [ListItem task (map block bs) | ListItem task bs <- items]
+      Para xs -> Para (map inline xs)
+      Plain xs -> Plain (map inline xs)
       other -> other
+    inline = \case
+      Marked attrs xs | Just (_, at) <- markOf attrs -> Marked [("class", T.unwords ("slide-step" : ["slide-step-later" | at > k])), ("data-step", show at)] xs
+      x -> x
 
 -- | 'RenderedSlide': a slide as HTML, its title (the heading), its body and
 -- its notes, each placed where the slide view shows it.

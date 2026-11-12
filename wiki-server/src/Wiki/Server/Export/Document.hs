@@ -361,6 +361,9 @@ data PageRead = PageRead
   , bars :: [((Int, Int), (Int, Int))]
   -- ^ Where the bars of each inline spoiler are, the opening pair's line
   -- and column and the closing pair's ('InlineBars').
+  , pauses :: [(Int, Int)]
+  -- ^ Where each pause among a paragraph's words is, its line and column
+  -- ('InlinePause').
   }
 
 -- | A page's Markdown, read ('PageRead').
@@ -373,6 +376,7 @@ readPage raw =
     , lineEdits = either (const mempty) (\(bs, _, ss, _) -> markerEdits bs ss) parsedPage
     , written = either (const (WrittenIds [] [])) (\(_, _, _, w) -> w) parsedPage
     , bars = either (const []) (\(_, _, ss, _) -> [((s.lineAt, s.columnAt), (l, c)) | s <- ss, InlineBars l c <- [s.role]]) parsedPage
+    , pauses = either (const []) (\(bs, _, _, _) -> [(l, c) | Ast.InlinePause l c <- Ast.allInlines bs]) parsedPage
     }
   where
     source = normalLines raw
@@ -492,7 +496,7 @@ withBoxesRead :: [BoxKind] -> Numbering -> PageRead -> Either PandocError [P.Blo
 withBoxesRead defined numbering page = go page.markers page.lineEdits
   where
     go markers edits = do
-      let (marked, boxes, markedLines, bars) = withBoxes page.source markers edits page.bars
+      let (marked, boxes, markedLines, bars, paused) = withBoxes page.source markers edits page.bars page.pauses
       -- Without pandoc's automatic identifiers, so that a heading's
       -- identifier is one written in the source ('reidentified').
       P.Pandoc _ read' <- runPure (readMarkdown def {readerExtensions = disableExtension Ext_auto_identifiers wikiExtensions} marked)
@@ -510,7 +514,7 @@ withBoxesRead defined numbering page = go page.markers page.lineEdits
           strayMarked = Set.fromList (map fst strayLines <> [start | (_, CloseBox start) <- strayLines])
           unmarked = Map.filterWithKey (\line (_, e) -> line `Set.notMember` strayMarked && (case e of CloseBox start -> start `Set.notMember` strayMarked; _ -> True)) edits
       if Set.null stray && Set.null strayMarked
-        then pure (reidentified page.written (maybe boxed (\b -> restoreBars b (walk (hiddenSpans b) boxed)) bars))
+        then pure (reidentified page.written (maybe identity (walk . pauseSpans) paused (maybe boxed (\b -> restoreBars b (walk (hiddenSpans b) boxed)) bars)))
         else go (filter (`Set.notMember` stray) markers) unmarked
     -- Every text a document holds where a placeholder could end up.
     texts :: [P.Block] -> [Text]
@@ -572,9 +576,14 @@ type Boxes = Map Text (BoxMarker, Text)
 -- 'hiddenSpans' pairs again once pandoc has read the page. So pandoc
 -- never decides what is a spoiler either: bars it would read as text
 -- once it has decoded them (@\\|@, @&#124;@) stay text.
-withBoxes :: Text -> [BoxMarker] -> Map Int (Int, MarkerEdit) -> [((Int, Int), (Int, Int))] -> (Text, Boxes, Map Text (Int, MarkerEdit), Maybe Bars)
-withBoxes source markers edits bars = case family of
-  Nothing -> (source, mempty, mempty, Nothing)
+--
+-- Each pause among a paragraph's words ('Wiki.Core.Markdown.Ast.InlinePause')
+-- is replaced the same way, by one placeholder between spaces (the fifth
+-- result), which 'pauseSpans' makes the pause once pandoc has read the
+-- page.
+withBoxes :: Text -> [BoxMarker] -> Map Int (Int, MarkerEdit) -> [((Int, Int), (Int, Int))] -> [(Int, Int)] -> (Text, Boxes, Map Text (Int, MarkerEdit), Maybe Bars, Maybe Text)
+withBoxes source markers edits bars pauses = case family of
+  Nothing -> (source, mempty, mempty, Nothing, Nothing)
   Just prefix ->
     let placed =
           Map.fromList
@@ -590,14 +599,15 @@ withBoxes source markers edits bars = case family of
           Map.fromListWith
             (<>)
             ( concat
-                [ [(ol, [(oc, "|" <> prefix <> "ho" <> show n <> "z|")]), (cl, [(cc, "|" <> prefix <> "hc" <> show n <> "z|")])]
+                [ [(ol, [(oc, ("|" <> prefix <> "ho" <> show n <> "z|", "||"))]), (cl, [(cc, ("|" <> prefix <> "hc" <> show n <> "z|", "||"))])]
                 | (n, ((ol, oc), (cl, cc))) <- zip [1 :: Int ..] bars
                 ]
+                <> [(line, [(column, (" " <> pausePlaceholder prefix <> " ", Ast.openingMarker PauseName))]) | (line, column) <- pauses]
             )
-        -- A line with its bars replaced, from its end, so that each
-        -- column is still the line's as written.
-        withPlaceholders n text = foldl' place text (sortOn (Down . fst) (mapMaybe (\(c, p) -> (\i -> (i, p)) <$> barsAt text c) (Map.findWithDefault [] n barPlaceholders)))
-        place text (i, placeholder) = T.take i text <> placeholder <> T.drop (i + 2) text
+        -- A line with its bars and its pauses replaced, from its end, so
+        -- that each column is still the line's as written.
+        withPlaceholders n text = foldl' place text (sortOn (Down . fst) (mapMaybe (\(c, p@(_, old)) -> (\i -> (i, p)) <$> writtenAt old text c) (Map.findWithDefault [] n barPlaceholders)))
+        place text (i, (placeholder, old)) = T.take i text <> placeholder <> T.drop (i + T.length old) text
         rewrite n written =
           let text = withPlaceholders n written
            in case (Map.lookup n placed, Map.lookup n edits) of
@@ -632,12 +642,13 @@ withBoxes source markers edits bars = case family of
         , Map.fromList [(placeholder, (m, original)) | (placeholder, m, _, original) <- Map.elems placed]
         , Map.fromList [(placeholder, (line, e)) | (line, placeholder) <- Map.toList linePlaceholders, Just (_, e) <- [Map.lookup line edits]]
         , Bars (prefix <> "h") <$ guard (not (null bars))
+        , pausePlaceholder prefix <$ guard (not (null pauses))
         )
   where
     -- The index in a line of the bars at a column, if they are there.
-    barsAt text column = do
+    writtenAt old text column = do
       i <- indexAt text column
-      i <$ guard ("||" `T.isPrefixOf` T.drop i text)
+      i <$ guard (old `T.isPrefixOf` T.drop i text)
     -- The index in a line of the character at a column, if one is
     -- there. The wiki's parser gives columns as CommonMark counts them:
     -- a tab counts to the next multiple of four columns. So a column is
@@ -749,6 +760,29 @@ pandocAttributes attrs =
 -- ('markedBlocks').
 dotsAsText :: P.Block -> P.Block
 dotsAsText b = if isPause b then P.Para [P.Str ". . ."] else b
+
+-- | The placeholder of every pause among a paragraph's words, of a
+-- page's family of placeholders ('withBoxes').
+pausePlaceholder :: Text -> Text
+pausePlaceholder prefix = prefix <> "pz"
+
+-- | Some inlines with each pause's placeholder ('withBoxes') made the
+-- pause, a 'pauseSpan'; a placeholder pandoc read with text around it is
+-- taken out of the text.
+pauseSpans :: Text -> [P.Inline] -> [P.Inline]
+pauseSpans placeholder = concatMap $ \case
+  P.Str t | placeholder `T.isInfixOf` t -> intercalate [pauseSpan] [[P.Str piece | not (T.null piece)] | piece <- T.splitOn placeholder t]
+  x -> [x]
+
+-- | A pause among a paragraph's words, as the export reads it: an empty
+-- span of the class @wiki-pause@, which Beamer's document makes
+-- @\\pause@ ('slideSteps') and every other leaves out.
+pauseSpan :: P.Inline
+pauseSpan = P.Span ("", ["wiki-pause"], []) []
+
+-- | Whether an inline is a pause among a paragraph's words ('pauseSpan').
+isPauseSpan :: P.Inline -> Bool
+isPauseSpan = (== pauseSpan)
 
 -- | 'Bars' are the placeholders 'withBoxes' put in place of the bars of
 -- the page's inline spoilers: each starts with this text, then @o@ for an
@@ -1234,12 +1268,15 @@ isPause = (== P.Para [P.Str ".", P.Space, P.Str ".", P.Space, P.Str "."])
 -- document that is not a presentation shows its content once, and would
 -- otherwise print the three dots.
 withoutPauses :: [P.Block] -> [P.Block]
-withoutPauses = concatMap $ \case
+withoutPauses = walk (filter (not . isPauseSpan)) . withoutBlockPauses
+
+withoutBlockPauses :: [P.Block] -> [P.Block]
+withoutBlockPauses = concatMap $ \case
   b | isPause b -> []
-  P.Div attr bs -> [P.Div attr (withoutPauses bs)]
-  P.BlockQuote bs -> [P.BlockQuote (withoutPauses bs)]
-  P.BulletList items -> [P.BulletList (map withoutPauses items)]
-  P.OrderedList attrs items -> [P.OrderedList attrs (map withoutPauses items)]
+  P.Div attr bs -> [P.Div attr (withoutBlockPauses bs)]
+  P.BlockQuote bs -> [P.BlockQuote (withoutBlockPauses bs)]
+  P.BulletList items -> [P.BulletList (map withoutBlockPauses items)]
+  P.OrderedList attrs items -> [P.OrderedList attrs (map withoutBlockPauses items)]
   b -> [b]
 
 -- | A deck's steps as a slide writer reads them, Beamer's when the flag
@@ -1277,8 +1314,10 @@ slideSteps beamer = concat . (`evalState` False) . traverse topLevel
             | not beamer -> []
             | afterItems -> [P.RawBlock (P.Format "latex") "\\pause[\\value{beamerpauses}]"]
             | otherwise -> [b]
+      P.Para xs | any isPauseSpan xs -> pure . P.Para . catMaybes <$> traverse inline xs
+      P.Plain xs | any isPauseSpan xs -> pure . P.Plain . catMaybes <$> traverse inline xs
       P.Div attr@(_, cls, _) bs
-        | "notes" `elem` cls -> pure [P.Div attr (walk (filter (not . isPause)) bs)]
+        | "notes" `elem` cls -> pure [P.Div attr (walk (filter (not . isPauseSpan)) (walk (filter (not . isPause)) bs))]
         | otherwise -> pure . P.Div attr <$> blocks (incrementalIn cls incremental) bs
       P.BulletList items -> pure . P.BulletList <$> traverse (item incremental) items
       P.OrderedList attrs items -> pure . P.OrderedList attrs <$> traverse (item incremental) items
@@ -1290,6 +1329,20 @@ slideSteps beamer = concat . (`evalState` False) . traverse topLevel
     item incremental bs = do
       when incremental (put True)
       blocks incremental bs
+    -- A pause among a paragraph's words, as a pause on a line of its
+    -- own: Beamer's @\\pause@, after an incremental list's items the one
+    -- that starts the step after the last; nothing in PowerPoint.
+    inline :: P.Inline -> State Bool (Maybe P.Inline)
+    inline x
+      | isPauseSpan x = do
+          afterItems <- get
+          put False
+          pure $ case () of
+            _
+              | not beamer -> Nothing
+              | afterItems -> Just (P.RawInline (P.Format "latex") "\\pause[\\value{beamerpauses}]")
+              | otherwise -> Just (P.RawInline (P.Format "latex") "\\pause ")
+      | otherwise = pure (Just x)
     incrementalIn cls incremental
       | "incremental" `elem` cls = True
       | "nonincremental" `elem` cls = False

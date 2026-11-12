@@ -655,6 +655,8 @@ slides = describe "a deck, as pandoc's slide writers read it" $ do
     -- again.
     length (query pauses bs) `shouldBe` 3
     latex `shouldBe` ["\\pause[\\value{beamerpauses}]"]
+    -- The pause among the words of "Two and a half", where it is.
+    query (\case P.Para xs -> [[t | P.RawInline (P.Format "latex") t <- xs]]; _ -> []) bs `shouldSatisfy` elem ["\\pause "]
     divClasses bs `shouldSatisfy` elem ["incremental"]
     [inner | P.BlockQuote inner <- query (\case b@P.BlockQuote {} -> [b]; _ -> []) bs]
       `shouldBe` [[P.Div ("", ["nonincremental"], []) [P.Para [P.Str ". . ."], P.Para [P.Str ".", P.Space, P.Str ".", P.Space, P.Str "."], P.BulletList [[P.Plain [P.Str "q"]]]]]]
@@ -667,12 +669,15 @@ slides = describe "a deck, as pandoc's slide writers read it" $ do
     bs <- blocksOf ToPowerPoint place stepsDeck
     length (query pauses bs) `shouldBe` 0
     raw bs `shouldBe` []
+    query (\case x@(P.Span _ _) -> [x]; _ -> []) bs `shouldBe` []
     divClasses bs `shouldSatisfy` elem ["incremental"]
 
   it "leaves the pauses out of any other document, where three dots are text" $
     for_ [ToTeX, ToOther] $ \output -> do
       bs <- blocksOf output place stepsDeck
       query pauses bs `shouldBe` []
+      query (\case x@(P.Span _ _) -> [x]; _ -> []) bs `shouldBe` []
+      show bs `shouldNotSatisfy` T.isInfixOf "wikibox"
       query (\case P.Note inner -> [inner]; _ -> []) bs `shouldBe` [[P.Para [P.Str ". . ."]]]
       [() | P.Para [P.Str ". . ."] <- bs] `shouldBe` [()]
       divClasses bs `shouldSatisfy` elem ["incremental"]
@@ -682,7 +687,8 @@ slides = describe "a deck, as pandoc's slide writers read it" $ do
     Map.lookup "aspectratio" meta `shouldBe` Just (P.MetaString "43")
     Map.lookup "title" meta `shouldBe` Just (P.MetaInlines [P.Str "Deck"])
 
--- | A deck with steps: pauses (one in the notes, one in a quotation), an
+-- | A deck with steps: pauses (one in the notes, one in a quotation, one
+-- among a paragraph's words), an
 -- incremental box, three dots, which are text wherever they are (alone in
 -- a paragraph, a quotation, a footnote), and a rule, which is no slide's
 -- end.
@@ -695,7 +701,7 @@ stepsDeck =
     , ""
     , "[[!pause]]"
     , ""
-    , "Two"
+    , "Two [[!pause]] and a half"
     , ""
     , "[[!incremental]]"
     , "- a"

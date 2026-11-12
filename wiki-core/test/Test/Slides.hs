@@ -168,6 +168,18 @@ spec = describe "Slides" $ do
       map (plainOf . (`atStep` t)) [1, 2] `shouldBe` [["a"], ["a", "more", "b"]]
       t.body `shouldBe` [List BulletList [ListItem Nothing [Para [Str "a"], stepMark 2 [Para [Str "more"]]], ListItem Nothing [Para [Str "b"], itemMark 2]]]
 
+    it "reads a pause among a paragraph's words, shown from the next step with what follows" $ do
+      let s = slide "## A\n\nOne [[!pause]] two\n\nThree"
+      s.steps `shouldBe` 2
+      atStep 1 s `shouldBe` [Para [Str "One "]]
+      atStep 2 s `shouldBe` [Para [Str "One ", Str " two"], Para [Str "Three"]]
+      (showingStep 1 s).body
+        `shouldBe` [Para [Str "One ", Marked [("class", "slide-step slide-step-later"), ("data-step", "2")] [Str " two"]], Div [("class", "slide-step slide-step-later"), ("data-step", "2")] [Para [Str "Three"]]]
+      -- In a list item's text, the items after it wait too.
+      let t = slide "- a [[!pause]] b\n- c\n"
+      t.steps `shouldBe` 2
+      map (plainOf . (`atStep` t)) [1, 2] `shouldBe` [["a "], ["a  b", "c"]]
+
     it "reads a pause in a quotation, and goes on from it after the quotation" $ do
       let s = slide "> First\n>\n> [[!pause]]\n>\n> Second\n\nAfter"
       s.steps `shouldBe` 2

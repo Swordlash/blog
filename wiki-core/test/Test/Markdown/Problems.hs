@@ -169,5 +169,9 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
     it "warns in a presentation of a look after the first, and of one not at the top level" $
       map (\(l, _, m) -> (l, T.take 17 m)) (warned Presentation "[[!style]]{theme=dark}\n\n[[!style]]{theme=light}\n\n> [[!style]]\n")
         `shouldBe` [(3, "Only the first [["), (5, "[[!style]] is rea")]
+    it "warns of a pause among a document's words, and marks one where none is read as an error" $ do
+      map (\(l, sev, _) -> (l, sev)) (warned Document "Text [[!pause]] more.\n") `shouldBe` [(1, Warning)]
+      warned Presentation "Text [[!pause]] more.\n" `shouldBe` []
+      [(p.from, p.severity) | p <- parserProblems "# T\n\n*a [[!pause]] b*\n"] `shouldBe` [(3, Error)]
     it "puts the warnings beside the parser's errors when the editor checks a text" $
       [(p.from, p.severity) | p <- (checkText Document "[[!pause]]\n\n[[!oops]]\n").problems] `shouldBe` [(1, Warning), (3, Error)]

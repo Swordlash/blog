@@ -652,6 +652,16 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
           | not inLink ->
               [PNode (HH.a [HP.href target.href, classesProp ["mention"], HP.title target.name] [HH.text ("@" <> login)])]
         _ -> [PText ("@" <> login)]
+      -- A pause matters only on a slide ("Wiki.Core.Slides"), which has
+      -- marked what follows it; a page shows nothing for it.
+      InlinePause _ _ -> pure []
+      -- One where none is read: in red, with the reason, as a marker
+      -- line that is wrong.
+      MisplacedPause _ _ why ->
+        pure [PNode (HH.span [classesProp ["spoiler-error"], HP.title why] [HH.text (openingMarker PauseName), HH.span [classesProp ["spoiler-error-reason"]] [HH.text why]])]
+      Marked written xs -> do
+        attrs <- ownAttrs written
+        node (HH.span (idAndClasses attrs [])) . fromPieces <$> inlinePieces inLink xs
 
     renderLink :: Attributes -> Text -> Text -> [Inline] -> R [Piece w i]
     renderLink attrs dest title xs = do
@@ -1077,6 +1087,9 @@ linkDestinations = concatMap block
       FootnoteRef _ _ -> []
       Emoji _ _ -> []
       Mention _ -> []
+      InlinePause _ _ -> []
+      MisplacedPause {} -> []
+      Marked _ xs -> inlines inLink xs
     htmlContext inLink = if inLink then Html.PhrasingInLink else Html.Phrasing
     -- Every @a@ with an @href@ ('htmlElement' makes each a link), and the
     -- Markdown among the elements, which inside an @a@ is a link's text.

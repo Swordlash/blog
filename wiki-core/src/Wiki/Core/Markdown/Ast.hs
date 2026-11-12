@@ -100,6 +100,7 @@ module Wiki.Core.Markdown.Ast
   , markerNameText
   , openingMarker
   , styleClass
+  , allInlines
   , closingMarker
   , markerAt
   , parseWithMarkers
@@ -291,6 +292,21 @@ data Inline
     -- asks whether it belongs to a user; one that does not, and one in a
     -- link, is shown as written.
     Mention Text
+  | -- | A pause between the words of a paragraph or of a list item's text,
+    -- @First [[!pause]] then@, at its line and column: a presentation
+    -- ("Wiki.Core.Slides") shows what follows it one step later, as
+    -- Beamer's @\\pause@ in running text; a document shows nothing for
+    -- it. It is read only at a paragraph's own level ('placedPauses').
+    InlinePause Int Int
+  | -- | A pause written where none is read (inside emphasis, a link's
+    -- text, a heading, a table, a box's title, a spoiler's description, a
+    -- footnote), at its line and column, with the reason. The page shows
+    -- it in red, as a marker line that is wrong.
+    MisplacedPause Int Int Text
+  | -- | Inlines a presentation shows from a later step, marked with their
+    -- step ("Wiki.Core.Slides"): rendered as a @\<span>@ of these
+    -- attributes. The parser never makes one.
+    Marked Attributes [Inline]
   deriving stock (Eq, Show)
 
 data MathKind = InlineMath | DisplayMath
@@ -571,8 +587,89 @@ finished = map snd . finishedWith . map ((),)
 -- the spoiler keeps what its heading carried.
 finishedWith :: [(a, Block)] -> [(a, Block)]
 finishedWith located =
-  let grouped = withHeadingSections (map (second withMentions) located)
+  let grouped = withHeadingSections (map (second (placedPauses . withMentions)) located)
    in zip (map fst grouped) (withHeadingIds (withSpoilerSections (map snd grouped)))
+
+-- | A block with each pause among its words kept where one is read, at
+-- the own level of a paragraph or of a list item's text, wherever such a
+-- block is (in a box, an alert, a spoiler, a quotation, a list), and made
+-- a 'MisplacedPause' anywhere else: inside emphasis, a link's or an
+-- embed's text, an inline spoiler, a heading, a table's cell, a box's
+-- title, a spoiler's description and a footnote. Beamer's @\\pause@ does
+-- not work inside a command's argument, which each of these is in the
+-- Beamer export; a table and a footnote are shown whole by the wiki's own
+-- rule, as for a pause on a line of its own.
+placedPauses :: Block -> Block
+placedPauses = \case
+  Para xs -> Para (map atTop xs)
+  Plain xs -> Plain (map atTop xs)
+  Heading l attrs xs -> Heading l attrs (map misplace xs)
+  BlockQuote bs -> BlockQuote (map placedPauses bs)
+  List kind items -> List kind [ListItem task (map placedPauses bs) | ListItem task bs <- items]
+  Table aligns header rows -> Table aligns (map (map misplace) header) (map (map (map misplace)) rows)
+  Div attrs bs -> Div attrs (map placedPauses bs)
+  Alert kind box bs -> Alert kind box {title = map misplace <$> box.title} (map placedPauses bs)
+  Spoiler h bs -> Spoiler h {description = map misplace h.description} (map placedPauses bs)
+  Footnotes notes -> Footnotes [Footnote n label (map misplaceAll bs) | Footnote n label bs <- notes]
+  other -> other
+  where
+    atTop = \case
+      InlinePause l c -> InlinePause l c
+      x -> misplace x
+    -- In a footnote, no pause is read, at any level.
+    misplaceAll = \case
+      Para xs -> Para (map misplace xs)
+      Plain xs -> Plain (map misplace xs)
+      Heading l attrs xs -> Heading l attrs (map misplace xs)
+      BlockQuote bs -> BlockQuote (map misplaceAll bs)
+      List kind items -> List kind [ListItem task (map misplaceAll bs) | ListItem task bs <- items]
+      Table aligns header rows -> Table aligns (map (map misplace) header) (map (map (map misplace)) rows)
+      Div attrs bs -> Div attrs (map misplaceAll bs)
+      Alert kind box bs -> Alert kind box {title = map misplace <$> box.title} (map misplaceAll bs)
+      Spoiler h bs -> Spoiler h {description = map misplace h.description} (map misplaceAll bs)
+      other -> other
+
+-- | Every inline of some blocks, in the order of the source, those inside
+-- others too: of paragraphs, headings, tables' cells, boxes' titles and
+-- spoilers' descriptions, in every block, the footnotes' included.
+allInlines :: [Block] -> [Inline]
+allInlines = concatMap ofBlock
+  where
+    ofBlock = \case
+      Para xs -> deep xs
+      Plain xs -> deep xs
+      Heading _ _ xs -> deep xs
+      Table _ header rows -> concatMap deep header <> concatMap (concatMap deep) rows
+      BlockQuote bs -> allInlines bs
+      List _ items -> concat [allInlines bs | ListItem _ bs <- items]
+      Div _ bs -> allInlines bs
+      Alert _ box bs -> maybe [] deep box.title <> allInlines bs
+      Spoiler h bs -> deep h.description <> allInlines bs
+      Footnotes notes -> concat [allInlines bs | Footnote _ _ bs <- notes]
+      _ -> []
+    deep = concatMap $ \x ->
+      x : case x of
+        Emph xs -> deep xs
+        Strong xs -> deep xs
+        Strikeout xs -> deep xs
+        Hidden xs -> deep xs
+        Link _ _ _ xs -> deep xs
+        Image _ _ _ xs -> deep xs
+        Marked _ xs -> deep xs
+        _ -> []
+
+-- | An inline with every pause in it made a 'MisplacedPause'.
+misplace :: Inline -> Inline
+misplace = \case
+  InlinePause l c -> MisplacedPause l c "a pause is read only between the words of a paragraph or of a list item's text, not inside emphasis, a link, a heading, a table, a box's title or a footnote"
+  Emph xs -> Emph (map misplace xs)
+  Strong xs -> Strong (map misplace xs)
+  Strikeout xs -> Strikeout (map misplace xs)
+  Hidden xs -> Hidden (map misplace xs)
+  Link attrs d t xs -> Link attrs d t (map misplace xs)
+  Image attrs d t xs -> Image attrs d t (map misplace xs)
+  Marked attrs xs -> Marked attrs (map misplace xs)
+  other -> other
 
 -- | 'BoxMarker' is where a box's marker, @[!KIND]@, is in a page's source:
 -- its line and column (from 1; a tab counts to the next multiple of four
@@ -750,6 +847,9 @@ plainText = foldMap $ \case
   Emoji _ t -> t
   RawHtml _ -> ""
   Mention login -> "@" <> login
+  InlinePause _ _ -> ""
+  MisplacedPause {} -> ""
+  Marked _ xs -> plainText xs
 
 -- | The value of the first attribute with this name.
 attribute :: Text -> Attributes -> Maybe Text
@@ -1003,21 +1103,27 @@ sectionLevels = concatMap $ \case
 -- of the inline spoilers among them are in the source ('InlineBars'), for
 -- the export, and whether they are an inline spoiler just made, whose
 -- place the parser gives next ('CM.Rangeable').
-data Inlines = Inlines (Seq Inline) [MarkerLine] Bool
+data Inlines = Inlines (Seq Inline) [MarkerLine] Fresh
   deriving stock (Show)
+
+-- | 'Fresh' says whether some inlines are one just made whose place the
+-- parser gives next ('CM.Rangeable'), and which: an inline spoiler, whose
+-- bars' place is kept, or a pause, which takes its place.
+data Fresh = NotFresh | FreshBars | FreshPause
+  deriving stock (Eq, Show)
 
 instance Semigroup Inlines where
   Inlines xs bs _ <> Inlines ys cs _ = case (Seq.viewr xs, Seq.viewl ys) of
-    (xs' Seq.:> Str a, Str b Seq.:< ys') -> Inlines ((xs' Seq.|> Str (a <> b)) <> ys') (bs <> cs) False
-    _ -> Inlines (xs <> ys) (bs <> cs) False
+    (xs' Seq.:> Str a, Str b Seq.:< ys') -> Inlines ((xs' Seq.|> Str (a <> b)) <> ys') (bs <> cs) NotFresh
+    _ -> Inlines (xs <> ys) (bs <> cs) NotFresh
 
 instance Monoid Inlines where
-  mempty = Inlines Seq.empty [] False
+  mempty = Inlines Seq.empty [] NotFresh
 
 -- | One inline made of others, with the bars of the inline spoilers in
 -- them.
 wrapping :: ([Inline] -> Inline) -> Inlines -> Inlines
-wrapping make xs = Inlines (Seq.singleton (make (inlines xs))) (barsOf xs) False
+wrapping make xs = Inlines (Seq.singleton (make (inlines xs))) (barsOf xs) NotFresh
 
 -- | Where the bars of the inline spoilers among some inlines are.
 barsOf :: Inlines -> [MarkerLine]
@@ -1062,7 +1168,7 @@ instance Monoid Blocks where
   mempty = Blocks Seq.empty mempty Nothing
 
 inline :: Inline -> Inlines
-inline x = Inlines (Seq.singleton x) [] False
+inline x = Inlines (Seq.singleton x) [] NotFresh
 
 block :: Block -> Blocks
 block b = Blocks (Seq.singleton (Nothing, b)) mempty Nothing
@@ -1085,11 +1191,17 @@ blocks (Blocks xs _ _) = map snd (toList xs)
 -- bars to the end of its last two, says where its bars are.
 instance CM.Rangeable Inlines where
   ranged (CM.SourceRange ranges) = \case
-    Inlines xs bs True
+    Inlines xs bs FreshBars
       | Just (start, _) <- head ranges
       , Just (_, end) <- lastMay ranges ->
-          Inlines xs (bs <> [MarkerLine (Parsec.sourceLine start) (Parsec.sourceColumn start) (InlineBars (Parsec.sourceLine end) (Parsec.sourceColumn end - 2))]) False
-    Inlines xs bs _ -> Inlines xs bs False
+          Inlines xs (bs <> [MarkerLine (Parsec.sourceLine start) (Parsec.sourceColumn start) (InlineBars (Parsec.sourceLine end) (Parsec.sourceColumn end - 2))]) NotFresh
+    Inlines xs bs FreshPause
+      | Just (start, _) <- head ranges ->
+          let placed = \case
+                InlinePause _ _ -> InlinePause (Parsec.sourceLine start) (Parsec.sourceColumn start)
+                other -> other
+           in Inlines (placed <$> xs) bs NotFresh
+    Inlines xs bs _ -> Inlines xs bs NotFresh
 
 -- | The parser says where each block is once it has made it, innermost
 -- first: a block without lines yet is written on the lines this range
@@ -1207,8 +1319,13 @@ instance CME.HasStrikethrough Inlines where
 instance CME.HasEmoji Inlines where
   emoji keyword = inline . Emoji keyword
 
+-- | A wiki link, and @[[!pause]]@ among a line's words, which is a pause
+-- ('InlinePause'), placed once the parser says where it is. A page's
+-- address cannot hold an exclamation mark, so no link is lost to it.
 instance CME.HasWikilinks Inlines where
-  wikilink destination = wrapping (Link [("class", "wikilink")] destination "")
+  wikilink destination description
+    | destination == "!" <> markerNameText PauseName = Inlines (Seq.singleton (InlinePause 0 0)) [] FreshPause
+    | otherwise = wrapping (Link [("class", "wikilink")] destination "") description
 
 instance CME.HasPipeTable Inlines Blocks where
   pipeTable aligns header rows =
@@ -1319,7 +1436,7 @@ hiddenSpec = mempty {CM.syntaxFormattingSpecs = [CMI.FormattingSpec '|' True Tru
   where
     -- Marked as just made, so that its place, which the parser gives
     -- next, is kept as its bars'.
-    hidden xs = let Inlines made bs _ = wrapping Hidden xs in Inlines made bs True
+    hidden xs = let Inlines made bs _ = wrapping Hidden xs in Inlines made bs FreshBars
 
 -- | The wiki's own blocks, each written between two marker lines of its
 -- own, @[[!name]]{attributes}(Title)@ and @[[/name]]@, indented by at most

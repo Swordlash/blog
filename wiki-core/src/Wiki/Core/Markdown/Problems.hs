@@ -175,7 +175,7 @@ parserProblems source = problemsParsed (either (const ([], [])) identity (A.pars
 
 -- | 'parserProblems' of a text parsed already.
 problemsParsed :: ([(Maybe Int, A.Block)], [A.MarkerLine]) -> [Problem]
-problemsParsed (located, markers) = sort (markerLines <> spoilerHeads <> boxes)
+problemsParsed (located, markers) = sort (markerLines <> spoilerHeads <> boxes <> misplacedPauses)
   where
     tree = map snd located
     markerLines =
@@ -190,6 +190,10 @@ problemsParsed (located, markers) = sort (markerLines <> spoilerHeads <> boxes)
       [ Problem {from = h.line, to = h.line, kind = Spoiler, severity = Error, message = A.spoilerProblemText h problem}
       | A.Spoiler h _ <- concatMap everyBlock tree
       , Just problem <- [h.problem]
+      ]
+    misplacedPauses =
+      [ Problem {from = line, to = line, kind = Marker, severity = Error, message = sentence why}
+      | A.MisplacedPause line _ why <- A.allInlines tree
       ]
     -- Only a quotation of the page itself has a line: the parser gives
     -- none to the blocks inside another.
@@ -230,6 +234,8 @@ kindProblemsParsed pageKind (located, markers) = case pageKind of
       | A.MarkerLine line _ role <- markers
       , Just message <- [presentationOnly role]
       ]
+        <> [warn line (fromMaybe "" (presentationOnly A.Pauses)) | A.InlinePause line _ <- A.allInlines tree]
+    tree = map snd located
     presentationOnly = \case
       A.Pauses -> Just "[[!pause]] makes steps of a slide in a presentation; a document shows nothing for it"
       A.SetsStyle -> Just "[[!style]] sets a presentation's look; a document shows nothing for it"

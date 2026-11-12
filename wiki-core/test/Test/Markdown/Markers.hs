@@ -110,6 +110,17 @@ spec = describe "the wiki's own blocks, [[!name]] … [[/name]]" $ do
       [() | Alert _ _ [Pause] <- blocksOf "> [!TIP]\n> [[!pause]]"] `shouldBe` [()]
       "- a\n\n  [[!pause]]\n" `parses` [List BulletList [ListItem Nothing [Para [Str "a"], Pause]]]
       [() | Spoiler _ [Pause] <- blocksOf "[[!spoiler]]{s}(S)\n[[!pause]]\n[[/spoiler]]"] `shouldBe` [()]
+    it "reads a pause among a paragraph's words, or a list item's, at its place" $ do
+      "First [[!pause]] then" `parses` [Para [Str "First ", InlinePause 1 7, Str " then"]]
+      "- a [[!pause]] b" `parses` [List BulletList [ListItem Nothing [Plain [Str "a ", InlinePause 1 5, Str " b"]]]]
+      "> x [[!pause]] y" `parses` [BlockQuote [Para [Str "x ", InlinePause 1 5, Str " y"]]]
+    it "shows a pause among words where none is read in red: in emphasis, a link, a heading, a table, a footnote" $ do
+      let why = "a pause is read only between the words of a paragraph or of a list item's text, not inside emphasis, a link, a heading, a table, a box's title or a footnote"
+      "*a [[!pause]] b*" `parses` [Para [Emph [Str "a ", MisplacedPause 1 4 why, Str " b"]]]
+      "[a [[!pause]] b](x)" `parses` [Para [Link [] "x" "" [Str "a ", MisplacedPause 1 4 why, Str " b"]]]
+      [xs | Heading 2 _ xs <- blocksOf "## A [[!pause]] B"] `shouldBe` [[Str "A ", MisplacedPause 1 6 why, Str " B"]]
+      [rows | Table _ _ rows <- blocksOf "| a |\n| - |\n| x [[!pause]] |\n"] `shouldBe` [[[[Str "x ", MisplacedPause 3 5 why]]]]
+      [bs | Footnotes [Footnote _ _ bs] <- blocksOf "A[^1].\n\n[^1]: b [[!pause]] c\n"] `shouldBe` [[Para [Str "b ", MisplacedPause 3 9 why, Str " c"]]]
     it "shows a pause in a footnote in red" $
       [why | Footnotes [Footnote _ _ [MarkerError _ why]] <- blocksOf "A[^1].\n\n[^1]: [[!pause]]\n"]
         `shouldBe` ["a pause is not read in a footnote, which a presentation shows whole"]
