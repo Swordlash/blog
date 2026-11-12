@@ -1911,6 +1911,23 @@ which the wiki pins since #227.
 
 ### Later, or waiting for the owner
 
+- **`deploy-local.sh` adopts a deployment whose directory was moved (the
+  owner, 2026-11-12, after moving one at work one directory up and
+  repairing it by hand).** A deployment holds its own absolute paths in
+  five places: the systemd unit (`ExecStart`, `WorkingDirectory`, the
+  `# Prefix:` line), the state file `<prefix>/state/<name>.state`, the
+  `bin/wiki` wrapper, PostgreSQL's compose file and wrapper, and the
+  toolchain's env files (`~/.wiki-toolchain/env` and what it names:
+  after his move the deploy still wanted to install ghcup at the old
+  path). Today the deploy refuses, saying the deployment is under
+  another prefix, and the repair is by hand. Wanted: the deploy sees
+  that the unit's prefix no longer exists while the checkout it runs
+  from holds that deployment's state, says so, and with a flag
+  (`--adopt-moved`) rewrites the five places to the new path, stops and
+  starts the service once, and changes nothing of the data. Not started:
+  he has no second move ahead; the package is small, of the maker's
+  deploy and its script tests, with a `technical: true` entry.
+
 - **Compressing the text of page versions (#241; the owner, 2026-11-11: not
   now).** A version is a whole copy of the page. Versions as diffs were
   weighed and refused (reading a version would need a chain, one bad diff
