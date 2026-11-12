@@ -208,7 +208,7 @@ component =
         -- and its own editor to listen for.
         when (liveKey old.space.id old.path /= liveKey input.space.id input.path) $ do
           stopListening
-          Body.releaseOwned (\st -> st.owners) (\owners st -> st {owners})
+          Body.resetOwned (\st -> st.owners) (\owners st -> st {owners})
           modify (\st -> st {shown = Loading, attachments = [], addresses = Body.noAddresses, page = st.page + 1, fetched = False})
           handleAction Initialize
       Listened raw -> case eitherDecodeStrict @Heard (encodeUtf8 raw) of

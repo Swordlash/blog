@@ -61,6 +61,7 @@ module Wiki.App.Backend.Http
   , newImmediateHttpEnv
   , runHttpWiki
   , cacheOf
+  , ownersHeld
   , frameUrlIn
   , FrameReach (..)
 
@@ -1508,6 +1509,12 @@ forgetHeldOf env = do
 
 modifyHeld :: (MonadIO m) => (Held -> Held) -> HttpWiki m ()
 modifyHeld f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.held (\h -> (f h, ()))))
+
+-- | How many owners of attachments' addresses the tab holds
+-- ("Wiki.App.Backend"'s 'UrlOwner'): those of the views open now, which
+-- each lets go when it closes. The browser tests count them.
+ownersHeld :: HttpEnv -> IO Int
+ownersHeld env = Set.size . (\h -> h.heldOwners) <$> readIORef env.held
 
 readHeld :: (MonadIO m) => HttpWiki m Held
 readHeld = HttpWiki (ask >>= \env -> liftIO (readIORef env.held))

@@ -50,7 +50,7 @@ import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, i
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
-import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, release, serveDemo, serverStarts, startServer, tellServer)
+import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, release, serveDemo, serverStarts, startServer, startServerOver, tellServer)
 import Test.Browser.Mount (clickButton)
 import Test.Browser.Text (editorText)
 import Test.Hspec.Halogen
@@ -64,7 +64,7 @@ import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..))
-import Wiki.App.Backend.Http (HttpEnv, HttpWiki, browserTransport, newHttpEnv, runHttpWiki)
+import Wiki.App.Backend.Http (HttpEnv, HttpWiki, browserTransport, newHttpEnv, ownersHeld, runHttpWiki)
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State qualified as M
@@ -437,6 +437,42 @@ spec m = do
     blobs <- blobsNow
     [u | (u, (_, gone)) <- Map.toList blobs, not gone] `shouldBe` []
     a.id `shouldNotBe` b.id
+
+  -- What a view registers to hold attachments' addresses, the view lets go
+  -- when it closes: the page view, the editor, the slides and the live
+  -- preview, mounted and unmounted again and again, on a plain page and on
+  -- an encrypted one with an attachment, leave the tab's owners as many as
+  -- before.
+  it "leaves no owner of addresses behind a view that closes, on a plain page and an encrypted one" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Deck" "First.")
+    void (ok =<< run env (getPage secret.id [made.slug]))
+    void (ok =<< run env (uploadAttachment made.id "a.svg" "image/svg+xml" (svgOf 3 "A")))
+    again <- ok =<< run env (getPage secret.id [made.slug])
+    void (ok =<< run env (savePage made.id again.updatedAt "Deck" "![a](attachment:a.svg)"))
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    tab <- unsafeIOToPageM (newHttpEnv browserTransport)
+    let held = unsafeIOToPageM (ownersHeld tab)
+        docs = either (const (panic "not a slug")) identity . mkSlug
+        routes =
+          [ R.Page [docs "docs"] [docs "tour"]
+          , R.EditPage [docs "docs"] [docs "tour"]
+          , R.PageSlides [docs "docs"] [docs "tour"] 1 1
+          , R.LivePreview [docs "docs"] [docs "tour"]
+          , R.Page [secretSlug] [made.slug]
+          , R.EditPage [secretSlug] [made.slug]
+          , R.PageSlides [secretSlug] [made.slug] 1 1
+          , R.LivePreview [secretSlug] [made.slug]
+          ]
+    before <- held
+    for_ [1 .. 5 :: Int] $ \_ -> for_ routes $ \route -> do
+      ui <- startServerOver m tab route
+      -- The view is open, and holds an owner.
+      eventually (held >>= (`shouldSatisfy` (> before)))
+      unmount ui
+    held `shouldReturn` before
 
   -- The live channel says only that a page's threads changed: the page
   -- reads them again, and shows another reader's comment, decrypted,

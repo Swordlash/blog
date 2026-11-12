@@ -358,7 +358,7 @@ component =
         case () of
           _
             | elsewhere -> do
-                Body.releaseOwned ownersOf' setOwners
+                Body.resetOwned ownersOf' setOwners
                 modify (\s -> s {loaded = Loading, current = 1, step = 1, notesOpen = False, overview = False, asked = []})
                 load
             | old.context.revision /= input.context.revision -> load

@@ -46,6 +46,7 @@ module Wiki.App.View.Body
   , ownersOf
   , beginOwned
   , settleOwned
+  , resetOwned
   , releaseOwned
   , People (..)
   , noPeople
@@ -156,8 +157,8 @@ attachmentAddresses owner attachments = do
 -- ("Wiki.App.Backend"'s 'UrlOwner'): the one whose addresses it shows,
 -- and those of its fetches not answered yet. Every owner a view asks for
 -- is registered here before any address is asked for under it, so that
--- 'releaseOwned', which the view runs when it goes to another page or
--- closes, lets go of every address the view made, those of a fetch that
+-- 'resetOwned' (the view goes to another page) and 'releaseOwned' (the
+-- view closes) let go of every address the view made, those of a fetch that
 -- was cut short included. Every view that shows attachments keeps its
 -- owners this way.
 data Owners = Owners
@@ -193,15 +194,24 @@ settleOwned get' set' o taken = do
       modify (set' Owners {shown = before.shown, pending = pending'})
       releaseUrls o
 
--- | Let go of every address the view holds, those of its fetches not
--- answered included, which then make none. The view goes to another page,
--- or closes. A new owner takes the place of the one shown.
+-- | Let go of every owner the view registered, those of its fetches not
+-- answered included, which then make no address, and register a new owner
+-- for what the view shows next: the view goes to another page.
+resetOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m ()
+resetOwned get' set' = do
+  releaseOwned get' set'
+  fresh <- newUrlOwner
+  modify (set' (ownersOf fresh))
+
+-- | Let go of every owner the view registered, those of its fetches not
+-- answered included, and register none: the view closes. What a view
+-- registers, the view releases, and a view that is going away registers
+-- nothing, so the backend's owners are as many after a view as before.
 releaseOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m ()
 releaseOwned get' set' = do
   os <- gets get'
   traverse_ releaseUrls (os.shown : os.pending)
-  fresh <- newUrlOwner
-  modify (set' (ownersOf fresh))
+  modify (set' Owners {shown = os.shown, pending = []})
 
 -- | The URL a link to an attachment leads to: its download's, or its own.
 linkUrlOf :: Addresses -> AttachmentId -> Text

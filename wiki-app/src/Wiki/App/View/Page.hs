@@ -809,8 +809,10 @@ component =
       -- The browser's question before closing the tab is the view's only
       -- while it has ticks: the editor sets it too, and may be the next
       -- view.
+      -- The view closes: every owner of addresses it registered is let go,
+      -- and none is registered in their place.
       Finalize -> do
-        letAddressesGo
+        Body.releaseOwned ownersOf' setOwners
         disconnectFeed
         whenM (gets unsaved) (H.liftEffect (guardUnload False))
       Retry -> do
@@ -829,7 +831,7 @@ component =
         barred <- gets (\st -> not elsewhere && unsaved st && not (mayEditShown st))
         when barred $ stage (Ticking.Clear MayNoLongerEdit)
         when elsewhere $ do
-          letAddressesGo
+          Body.resetOwned ownersOf' setOwners
           unwatchAll
           -- Another page or version: the shell asked before leaving the
           -- ticks ('HasUnsaved'), and the reader chose Leave.
@@ -1276,12 +1278,6 @@ component =
       gets (\st -> (st.visit, st.fetches) == which) >>= \case
         True -> act
         False -> Body.settleOwned ownersOf' setOwners owner False
-
-    -- Let go of the addresses of the page shown and of the fetches not
-    -- answered yet: the view goes to another page, or closes. A fetch let
-    -- go makes no addresses when it is answered.
-    letAddressesGo :: H.HalogenM State Action Slots ViewOutput m ()
-    letAddressesGo = Body.releaseOwned ownersOf' setOwners
 
     ownersOf' :: State -> Body.Owners
     ownersOf' st = st.owners
