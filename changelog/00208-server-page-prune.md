@@ -1,6 +1,7 @@
 ---
 pr: 208
 title: The server page's build tidies its cache again
+technical: true
 ---
 
 ## Other changes

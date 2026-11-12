@@ -1,6 +1,7 @@
 ---
 pr: 245
 title: One changelog
+technical: true
 ---
 
 ## Other changes

@@ -1,6 +1,7 @@
 ---
 pr: 233
 title: A deployed wiki moves from SQLite to PostgreSQL in one command
+technical: true
 ---
 
 ## New features

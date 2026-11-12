@@ -1,6 +1,7 @@
 ---
 pr: 173
 title: The deploy's last steps run in the maker
+technical: true
 ---
 
 ## Other changes

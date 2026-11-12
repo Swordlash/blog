@@ -1,6 +1,7 @@
 ---
 pr: 179
 title: CI keeps its cabal stores for every job of a run
+technical: true
 ---
 
 ## Other changes

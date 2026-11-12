@@ -1,6 +1,7 @@
 ---
 pr: 227
 title: The server's OPAQUE package moves to a repository of its own
+technical: true
 ---
 
 ## Other changes

@@ -1,6 +1,7 @@
 ---
 pr: 177
 title: The deploy takes the page CI built in the maker
+technical: true
 ---
 
 ## Other changes

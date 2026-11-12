@@ -1,6 +1,7 @@
 ---
 pr: 157
 title: A deploy that checks its TeX once and does not hang
+technical: true
 ---
 
 ## Bug fixes

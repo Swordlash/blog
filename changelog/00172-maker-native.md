@@ -1,6 +1,7 @@
 ---
 pr: 172
 title: Installing for the server goes through the maker too
+technical: true
 ---
 
 ## Other changes

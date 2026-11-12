@@ -1,6 +1,7 @@
 ---
 pr: 222
 title: Upgrades can rewrite data in code, and their sign-in check is tested
+technical: true
 ---
 
 ## Other changes

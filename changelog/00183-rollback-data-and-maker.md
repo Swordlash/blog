@@ -1,6 +1,7 @@
 ---
 pr: 183
 title: Going back after a database switch, --fresh or an adoption
+technical: true
 ---
 
 ## New features

@@ -1,6 +1,7 @@
 ---
 pr: 244
 title: The test scripts no longer need a particular port
+technical: true
 ---
 
 ## Other changes

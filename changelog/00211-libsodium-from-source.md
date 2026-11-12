@@ -1,6 +1,7 @@
 ---
 pr: 211
 title: The server carries its own libsodium
+technical: true
 ---
 
 ## Other changes

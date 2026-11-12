@@ -1,6 +1,7 @@
 ---
 pr: 180
 title: wiki-server migrate and wiki-server check
+technical: true
 ---
 
 ## New features

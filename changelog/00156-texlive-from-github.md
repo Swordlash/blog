@@ -1,6 +1,7 @@
 ---
 pr: 156
 title: TeX Live's installer and Perl's source from GitHub
+technical: true
 ---
 
 ## New features
