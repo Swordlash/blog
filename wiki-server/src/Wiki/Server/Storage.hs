@@ -1335,6 +1335,39 @@ requireEditPage c pid = do
   unless (any (\s -> Home.isHomeSpace x.server.homePage s.id) c) $
     require (canEditPage x.principal x.grants c pid)
 
+-- | What creating a page in a space asks of the caller, by the plain route
+-- and by the encrypted one alike: to edit the space, which is not the
+-- wiki's front page.
+requireCreatePage :: SpaceId -> [Space] -> Tx ()
+requireCreatePage sid c = requireEdit c >> requireOrdinary sid
+
+-- | What saving a page asks of the caller, by the plain route and by the
+-- encrypted one alike ('requireEditPage'): a space's home page is its
+-- administrators' to change (decision 68). A restore is a save, and
+-- asks the same; so does a rename, which a save of the title is.
+requireSavePage :: [Space] -> PageId -> Tx ()
+requireSavePage = requireEditPage
+
+-- | What attaching a file to a page, replacing one or deleting one asks of
+-- the caller, by the plain routes and by the encrypted upload alike
+-- ('requireEditPage'): the attachments of a space's home page are its
+-- administrators' to change, as the page is.
+requireAttachTo :: [Space] -> PageId -> Tx ()
+requireAttachTo = requireEditPage
+
+-- | What creating a space under another asks of the caller, by the plain
+-- route and by the encrypted subspace's alike: to view the parent, which
+-- is not the wiki's front page's space, and to be let make spaces there.
+-- The parent's chain, if there is a parent.
+requireCreateSpace :: Maybe SpaceId -> Tx (Maybe [Space])
+requireCreateSpace parent = do
+  ctx <- ask
+  parentChain <- traverse (fmap snd . findSpace) parent
+  traverse_ requireView parentChain
+  traverse_ requireOrdinary parent
+  require (mayCreateSpace ctx.principal ctx.grants parentChain)
+  pure parentChain
+
 -- | Root documents cannot be restructured through the ordinary space APIs.
 requireOrdinary :: SpaceId -> Tx ()
 requireOrdinary sid =
@@ -2246,10 +2279,7 @@ withAncestors = go mempty
 createSpaceTx :: Maybe SpaceId -> Text -> Tx Space
 createSpaceTx parent name = do
   ctx <- ask
-  parentChain <- traverse (fmap snd . findSpace) parent
-  traverse_ requireView parentChain
-  traverse_ requireOrdinary parent
-  require (mayCreateSpace ctx.principal ctx.grants parentChain)
+  _ <- requireCreateSpace parent
   n <- nonBlank "A space's name" name
   i <- newId
   time <- now
@@ -2798,8 +2828,7 @@ createPageTx sid asked title body = do
   (s, c) <- findSpace sid
   let parent = parentOrRoot s asked
   parentPage <- traverse findNode parent
-  requireEdit c
-  requireOrdinary sid
+  requireCreatePage sid c
   requirePlain "Writing a page as plain text" c
   when (any (\p -> p.space /= sid) parentPage) $
     invalid "A page's parent has to be in the same space."
@@ -2839,7 +2868,7 @@ savePageTx :: PageId -> UTCTime -> Text -> Text -> Tx Page
 savePageTx pid base title body = do
   p <- findPage pid
   c <- asks (`chainOf` p.space)
-  requireEditPage c pid
+  requireSavePage c pid
   requirePlain "Writing a page as plain text" c
   t <- nonBlank "A page's title" title
   when (p.updatedAt /= base) $
@@ -2953,7 +2982,7 @@ uploadAttachmentTx :: PageId -> Text -> Text -> Integer -> (FilePath -> IO BlobI
 uploadAttachmentTx pid name mediaType size store = do
   p <- findNode pid
   c <- chainOfPage p
-  requireEditPage c pid
+  requireAttachTo c pid
   requirePlain "An attachment" c
   n <- either invalid pure (parseFileName name)
   when (size > fromIntegral maxAttachmentSize) $
@@ -2972,7 +3001,7 @@ deleteAttachmentTx aid = do
   (pid, _) <- db (loadAttachment aid) >>= maybe (failWith NotFound) pure
   p <- findNode pid
   c <- chainOfPage p
-  requireEditPage c pid
+  requireAttachTo c pid
   db (deleteAttachmentRow aid)
 
 --------------------------------------------------------------------------------
@@ -3051,7 +3080,7 @@ restoreVersionTx :: PageId -> UTCTime -> UTCTime -> Tx Page
 restoreVersionTx pid at base = do
   p <- findNode pid
   c <- chainOfPage p
-  requireEditPage c pid
+  requireSavePage c pid
   requirePlain "Restoring a version on the server" c
   v <- findVersion pid at
   savePageTx pid base v.title v.body
@@ -3232,10 +3261,8 @@ encryptSpaceTx sid req = do
 createEncryptedSubspaceTx :: SpaceId -> NewEncryptedSubspace -> Tx Space
 createEncryptedSubspaceTx parent new = do
   ctx <- ask
-  (p, parentChain) <- findSpace parent
-  requireView parentChain
-  requireOrdinary parent
-  require (mayCreateSpace ctx.principal ctx.grants (Just parentChain))
+  _ <- requireCreateSpace (Just parent)
+  (p, _) <- findSpace parent
   _ <- requireEncrypted p
   requireUuid "A space" new.id.text
   when (Map.member new.id ctx.spaces) $ failWith (Conflict "A space with this id exists already.")
@@ -3564,7 +3591,7 @@ createSealedPageTx sid new = do
   -- pages at the top.
   let parent = parentOrRoot s new.parent
   parentPage <- traverse findNode parent
-  requireEdit c
+  requireCreatePage sid c
   k <- requireEncrypted s
   when (any (\p -> p.space /= sid) parentPage) $
     invalid "A page's parent has to be in the same space."
@@ -3616,7 +3643,8 @@ saveSealedPageTx :: PageId -> UTCTime -> SealedEdit -> Tx SealedPage
 saveSealedPageTx pid base edit = do
   p <- findPage pid
   c <- asks (`chainOf` p.space)
-  requireEdit c
+  -- As a plain save asks: the space's home page is its administrators'.
+  requireSavePage c pid
   s <- fst <$> findSpace p.space
   k <- requireEncrypted s
   requireNoRenewal p.space c k
@@ -4442,7 +4470,7 @@ uploadSealedAttachmentTx :: PageId -> SealedUpload -> Integer -> (FilePath -> IO
 uploadSealedAttachmentTx pid up size store = do
   p <- findNode pid
   c <- chainOfPage p
-  requireEditPage c pid
+  requireAttachTo c pid
   (_, pk) <- sealedTarget pid
   requireUuid "An attachment" up.id.text
   checkSealedText pk up.meta.keyId up.meta.meta maxMetaCiphertext

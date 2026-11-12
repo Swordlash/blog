@@ -724,6 +724,36 @@ spec backing = describe "encrypted spaces in the storage" $ do
       -- A write in the open subspace waits for the renewal.
       as p.ada (createSealedPage open (newPageUnder open (PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f") 'a')) >>= (`shouldSatisfy` renewalRefused)
 
+    -- An encrypted space's home page is its administrators' to change, as
+    -- a plain space's is (decision 68): the encrypted routes ask what the
+    -- plain ones ask, by the same checks. An editor who does not
+    -- administer the space still writes its other pages.
+    it "keeps an encrypted space's home page for its administrators, and lets its editors write the other pages" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          home = homeIdOf secret.id
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) Edit True))
+      ok =<< as p.ada (grantSpaceKey secret.id (grantsOf [newGrant p.bob p.bobKey]))
+      read' <- ok =<< as p.bob (sealedPageAt secret.id [])
+      read'.id `shouldBe` home
+      -- A save, a rename (a save of another title) or a restore (a save of
+      -- an older version's text): refused.
+      as p.bob (saveSealedPage home read'.updatedAt SealedEdit {content = savedOn read'.content 'x'}) `shouldReturn` Left Forbidden
+      as p.bob (saveSealedPage home read'.updatedAt SealedEdit {content = chainedAs (Just (chainAfter read'.content.tag read'.content.chain)) (homeIn secret.id).content}) `shouldReturn` Left Forbidden
+      -- Its attachments, deleting it or moving it: refused.
+      withSystemTempDirectory "sealed-attachment" $ \dir -> do
+        BS.writeFile (dir </> "upload") (BS.replicate 40 7)
+        as p.bob (uploadSealedAttachmentFile home SealedUpload {id = AttachmentId "4d5e6f7a-8b9c-4d4e-9f5a-6b7c8d9e0f1a", meta = metaUnder homeKey.keyId 'm', replaces = Nothing} (dir </> "upload")) `shouldReturn` Left Forbidden
+      as p.bob (deletePage home) >>= (`shouldSatisfy` isLeft)
+      other <- ok =<< as p.ada (createSealedPage secret.id (newPage (PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f") Nothing 'a'))
+      as p.bob (movePage home secret.id (Just other.id)) >>= (`shouldSatisfy` isLeft)
+      -- The other pages are the editor's to write.
+      saved <- ok =<< as p.bob (saveSealedPage other.id other.updatedAt SealedEdit {content = savedOn other.content 'b'})
+      saved.content `shouldBe` savedOn other.content 'b'
+      void (ok =<< as p.bob (createSealedPage secret.id (newPage otherId Nothing 'c')))
+      -- The administrator saves the home page.
+      void (ok =<< as p.ada (saveSealedPage home read'.updatedAt SealedEdit {content = chainedAs (Just (chainAfter read'.content.tag read'.content.chain)) (contentUnder homeKey.keyId 'y')}))
+
     -- A space with its home page alone has a page a renewal protects: its
     -- administrators are told.
     it "tells the administrators of a space whose only page is its home page that its key must be renewed" $ withEncrypted backing $ \st p secret -> do
