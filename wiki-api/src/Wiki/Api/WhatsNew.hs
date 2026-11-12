@@ -5,8 +5,9 @@
 --
 -- The repository keeps one changelog entry per pull request, a Markdown
 -- file under @changelog\/@ (the README's "Changelog entries"). The server
--- embeds the newest of them when it is compiled, with the version and the
--- date of its build, and answers them here. A server started with
+-- embeds the entries that are not technical when it is compiled, with
+-- the version and the date of its build, and answers the newest of them
+-- here. A server started with
 -- @--no-whats-new@ answers this endpoint with 404, and its sessions say the
 -- page is off ('Wiki.Api.Types.SessionInfo''s @whatsNew@).
 module Wiki.Api.WhatsNew
@@ -32,7 +33,7 @@ data WhatsNew = WhatsNew
   -- ^ When the server was compiled.
   , entries :: [WhatsNewEntry]
   -- ^ The newest entries by their pull request's number, the newest
-  -- first: twelve at most.
+  -- first: twelve at most, none of them technical.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

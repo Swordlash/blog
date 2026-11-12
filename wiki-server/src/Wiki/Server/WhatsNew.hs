@@ -35,7 +35,8 @@ import Wiki.Api.WhatsNew.Entry (Entry, toWhatsNew)
 import Wiki.Server.WhatsNew.Version (embedVersion)
 
 -- | Every entry of the changelog this server was compiled with, numbered
--- or not.
+-- or not, but for the technical ones, which are left out when the
+-- changelog is embedded.
 changelogEntries :: [Entry]
 changelogEntries = $(embedEntries)
 {-# NOINLINE changelogEntries #-}

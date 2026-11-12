@@ -5,7 +5,9 @@
 -- users (WP5.66 of docs/PLAN.md). This module reads one, and refuses one
 -- that is not written as the grammar below says. The server reads every
 -- entry when it is compiled ("Wiki.Server.WhatsNew"), so a malformed entry
--- is a compile error. @toolchain\/check-changelog.sh@ checks the same
+-- is a compile error. An entry marked technical is read and checked like
+-- any other, and then left out ('userEntries'): it is not compiled into
+-- the programs, and the page never shows it. @toolchain\/check-changelog.sh@ checks the same
 -- grammar in a pull request's CI, and the two must say the same: a change
 -- to one is a change to the other, and to the README's "Changelog
 -- entries".
@@ -37,12 +39,20 @@
 -- > …
 --
 -- * The front matter is the first four lines, exactly: @---@, then
---   @pr: N@, then @title: T@, then @---@. N is the pull request's number,
+--   @pr: N@, then @title: T@, then @---@; or five, with @technical: B@
+--   before the last @---@. N is the pull request's number,
 --   digits without a leading zero; 0 means "not numbered yet", which an
 --   entry has between its commit and the pull request's opening, and the
 --   page leaves out. T is the title, not empty, at most 80 bytes of
 --   UTF-8 (80 letters of English; a letter outside ASCII takes two or
---   more). Spaces and tabs around N and T are not part of them.
+--   more). B is @true@ or @false@; @true@ marks an entry technical. The
+--   page holds what makes someone using the wiki in a browser think "a
+--   new feature, I will try it" or "that bug is fixed now"; an entry that
+--   gives neither thought is technical: nothing of it is seen on the
+--   wiki's pages (CI, the tests, the build and deploy scripts, the
+--   server's console, the repository's own process). The README's
+--   "Changelog entries" says more. An entry without the line is not technical. Spaces
+--   and tabs around N, T and B are not part of them.
 -- * After it, blank lines, then the sections. A section starts with one of
 --   the lines @## New features@, @## Bug fixes@ and @## Other changes@,
 --   written exactly so; each comes at most once, in that order, and at
@@ -68,6 +78,7 @@ module Wiki.Api.WhatsNew.Entry
     -- * The directory
   , entryFileName
   , readEntries
+  , userEntries
   , newestEntries
   , shownEntries
   , toWhatsNew
@@ -89,6 +100,9 @@ data Entry = Entry
   { pr :: Int
   -- ^ The pull request's number, 0 for one not numbered yet.
   , title :: Text
+  , technical :: Bool
+  -- ^ Whether the entry is technical (@technical: true@): nothing of it
+  -- is seen on the wiki's pages, so the page leaves it out.
   , sections :: [(Section, Text)]
   -- ^ Its sections, in order, each with its Markdown without the
   -- section's heading and without blank lines around it.
@@ -114,15 +128,27 @@ parseEntry :: Text -> Either Text Entry
 parseEntry contents
   | T.any (== '\r') contents = Left "line ends must be Unix ones (\\n), without \\r"
   | otherwise = case T.lines contents of
-      (open : prLine : titleLine : close : rest)
-        | open == "---"
-        , close == "---" -> do
+      (open : prLine : titleLine : fourth : more)
+        | open == "---" -> do
             n <- at 2 (number =<< field "pr" prLine)
             t <- at 3 (titleOf =<< field "title" titleLine)
-            found <- sectionsOf 5 rest
-            pure Entry {pr = n, title = t, sections = found}
-      _ -> Left "the file must start with the front matter: ---, pr: N, title: T, --- (four lines)"
+            (tech, start, rest) <- frontEnd fourth more
+            found <- sectionsOf start rest
+            pure Entry {pr = n, title = t, technical = tech, sections = found}
+      _ -> Left frontMatter
   where
+    -- The end of the front matter, from its line 4 on: whether the entry
+    -- is technical, the line its sections start on, and the lines after.
+    -- The front matter ends on line 4, or on line 5 after technical: B.
+    frontEnd fourth more
+      | fourth == "---" = Right (False, 5, more)
+      | "technical:" `T.isPrefixOf` fourth = do
+          b <- at 4 (flag =<< field "technical" fourth)
+          case more of
+            "---" : rest -> Right (b, 6, rest)
+            _ -> Left ("line 5: " <> frontMatter)
+      | otherwise = Left ("line 4: " <> frontMatter)
+    frontMatter = "the file must start with the front matter: ---, pr: N, title: T, --- (four lines; a technical entry has technical: true before the last ---)"
     field name line = maybe (Left ("expected \"" <> name <> ": …\"")) (Right . T.dropAround (`elem` [' ', '\t'])) (T.stripPrefix (name <> ":") line)
     number t
       | T.null t = Left "pr is empty: write the pull request's number (0 until it is opened)"
@@ -134,6 +160,10 @@ parseEntry contents
       | T.null t = Left "the title is empty"
       | BS.length (encodeUtf8 t) > 80 = Left ("the title is " <> show (BS.length (encodeUtf8 t)) <> " bytes long, more than 80")
       | otherwise = Right t
+    flag = \case
+      "true" -> Right True
+      "false" -> Right False
+      v -> Left ("technical must be true or false, not \"" <> v <> "\"")
 
 at :: Int -> Either Text a -> Either Text a
 at n = first (\e -> "line " <> show n <> ": " <> e)
@@ -262,14 +292,21 @@ readEntries files = do
     (n, ps) : _ -> Left ("pr " <> show n <> " is in more than one entry: " <> T.intercalate ", " (map toS (sort ps)))
     [] -> pure (map snd entries)
 
+-- | The entries the page may show: those that are not technical. The
+-- programs embed only these ("Wiki.Api.WhatsNew.Embed"), after every entry
+-- has been read and checked, so that a technical entry takes none of the
+-- page's places and never counts as the newest entry.
+userEntries :: [Entry] -> [Entry]
+userEntries = filter (\e -> not e.technical)
+
 -- | How many entries the page shows: the newest twelve.
 shownEntries :: Int
 shownEntries = 12
 
 -- | The newest entries by number, the newest first, at most this many;
--- the entries not numbered yet (0) are left out.
+-- the entries not numbered yet (0) and the technical ones are left out.
 newestEntries :: Int -> [Entry] -> [Entry]
-newestEntries n = take n . sortOn (Down . (\e -> e.pr)) . filter (\e -> e.pr /= 0)
+newestEntries n = take n . sortOn (Down . (\e -> e.pr)) . filter (\e -> e.pr /= 0) . userEntries
 
 -- | The response of @GET api\/v1\/whats-new@: the build's version and time,
 -- and the newest entries.
