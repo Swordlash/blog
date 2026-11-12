@@ -18,10 +18,15 @@
 // - She attaches a file to the page in the editor, and comments on text
 //   she selects in it; the reader reads both. They were written before
 //   the key's renewal, and are read after it.
+// - After the reader's removal, she makes a subspace from the encrypted
+//   space's "New subspace", encrypted with a key of its own, writes a page
+//   in it, and grants it alone to the reader removed, who reads the page
+//   and not the space around it.
 // - The canary (toolchain/smoke-canary.mjs): a marker in the title, the
 //   text, the older version, a comment, the text it quotes, an
-//   attachment's name and its bytes is found nowhere in the data
-//   directory, the database, any request the browsers sent or any answer
+//   attachment's name and its bytes, and the title and text of the
+//   subspace's page, is found nowhere in the data directory, the database,
+//   any request the browsers sent or any answer or live channel's frame
 //   they and the test received.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -118,7 +123,11 @@ export async function encryptedSpaces({ browser, url, origin, data, timeout, eve
   // them matched (the README's "What the server still sees"). A marker
   // searched for would be found there by the canary, rightly.
   const searchWord = `zebracrossing${Date.now()}`;
+  // The space's address shows its home page, made with it in this browser;
+  // its list of pages is under its settings.
   await page.goto(url("/s/smoke-secret/"));
+  await page.locator("#app .page-view .page-body", { hasText: "Welcome to" }).waitFor({ timeout });
+  await page.goto(url("/s/smoke-secret/pages/"));
   await page.locator("#app .space-view .actions a", { hasText: "New page" }).click();
   await page.locator("#app .new-page-title").pressSequentially(title);
   await page.locator("#app .new-page-view button.primary").click();
@@ -230,10 +239,10 @@ export async function encryptedSpaces({ browser, url, origin, data, timeout, eve
   // The administrator opens the space: her browser seals its key to the
   // reader.
   await page.goto(url("/s/smoke-secret/"));
-  await page.locator("#app .space-view").waitFor({ timeout });
+  await page.locator("#app .page-view .page-body", { hasText: "Welcome to" }).waitFor({ timeout });
   await eventually(async () => {
     await bea.page.locator("#app .encrypted-retry").click();
-    await bea.page.locator("#app .space-view", { hasText: title }).waitFor({ timeout: 2000 });
+    await bea.page.locator("#app .page-view .page-body", { hasText: "Welcome to" }).waitFor({ timeout: 2000 });
   }, "the reader given the key");
   await bea.page.goto(url(pageAddress));
   await bea.page.locator("#app .page-view .page-body", { hasText: marker("text") }).waitFor({ timeout });
@@ -292,6 +301,57 @@ export async function encryptedSpaces({ browser, url, origin, data, timeout, eve
   await readsAfter(newTab, "a new browser");
   await readsAfter(fresh, "the browser opened before");
   await afterwards.close();
+
+  // ---- A subspace, with a reader of its own ---------------------------------
+
+  // Made after the reader's removal, so that no renewal of its key falls
+  // due: made from the encrypted space's "New subspace", it is encrypted
+  // with a key of its own, and its home page is made in her browser. Its
+  // name is plain, as every space's; its pages' titles and texts are not.
+  // From the space's list of pages, once it shows a title decrypted here
+  // (the program runs): the form is the program's, not the page the
+  // server rendered.
+  await page.goto(url("/s/smoke-secret/pages/"));
+  await page.locator("#app .space-view", { hasText: title }).waitFor({ timeout });
+  await page.locator("#app .space-view .actions a", { hasText: "New subspace" }).click();
+  await page.locator("#app .new-space-view input").fill("Smoke inner");
+  const subspaceMade = page.waitForResponse((r) => r.request().method() === "POST" && /\/api\/v1\/encrypted\/spaces\/[^/]+\/subspaces$/.test(new URL(r.url()).pathname), { timeout });
+  await page.locator("#app .new-space-view button.primary").click();
+  assert.equal((await subspaceMade).status(), 201, "the encrypted subspace");
+  const inner = (await as(ada)("spaces/at/smoke-secret/smoke-inner")).body;
+  assert.ok(inner.encryption && inner.homePage && inner.encryption !== space.encryption, `the subspace is not encrypted with a key of its own: ${JSON.stringify(inner)}`);
+  const innerTitle = marker("subspace title");
+  await page.goto(url("/s/smoke-secret/smoke-inner/"));
+  await page.locator("#app .page-view .page-body", { hasText: "Welcome to" }).waitFor({ timeout });
+  await page.goto(url("/s/smoke-secret/smoke-inner/pages/"));
+  await page.locator("#app .space-view .actions a", { hasText: "New page" }).click();
+  await page.locator("#app .new-page-title").pressSequentially(innerTitle);
+  await page.locator("#app .new-page-view button.primary").click();
+  await editor.waitFor({ timeout });
+  await editor.press("Control+End");
+  await editor.press("Enter");
+  await editor.pressSequentially(`Inside: ${marker("subspace text")}.`);
+  answered = saved();
+  await editor.press("Control+s");
+  assert.ok((await answered).ok(), "the save of the subspace's page");
+  const innerAddress = new URL(page.url()).pathname.replace(/edit\/$/, "");
+  // The reader removed from the space is granted the subspace alone: the
+  // administrator's browser shares its key when she opens it, and the
+  // reader reads its page; the space around it stays closed to her.
+  const innerGranted = await as(ada)(`spaces/${encodeURIComponent(inner.id)}/grants`, {
+    method: "PUT",
+    body: JSON.stringify({ subject: { tag: "SubjectUser", contents: bea.id }, permission: "View", granted: true }),
+  });
+  assert.equal(innerGranted.status, 204, "granting the reader the subspace");
+  await page.goto(url("/s/smoke-secret/smoke-inner/pages/"));
+  await page.locator("#app .space-view", { hasText: innerTitle }).waitFor({ timeout });
+  await eventually(async () => {
+    await bea.page.goto(url(innerAddress));
+    await bea.page.locator("#app .page-view .page-body", { hasText: marker("subspace text") }).waitFor({ timeout: 3000 });
+  }, "the subspace's reader given its key");
+  await read(bea.page);
+  assert.notEqual((await as(bea)("spaces/at/smoke-secret")).status, 200, "the reader of the subspace alone reads the space around it");
+  console.log("ok: a subspace of the encrypted space is encrypted with a key of its own, and a reader of it alone reads its page and not the space around it");
 
   // ---- What the server keeps and sends -------------------------------------
 

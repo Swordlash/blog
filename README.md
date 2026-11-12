@@ -781,9 +781,11 @@ quotes) and their attachments (names, types and bytes) are encrypted in
 its members' browsers, and the server keeps only ciphertext it cannot
 read. In the
 space's settings, under **Permissions**, **Encrypt this space…** turns a
-space encrypted. Only a private space with nothing written in it yet can be
-(a new space's untouched home page is deleted with it), and an encrypted
-space stays encrypted.
+space encrypted. Only a space with nothing written in it yet can be, and an
+encrypted space stays encrypted. Its untouched home page is replaced by
+one your browser writes and encrypts, with the same starter text: an
+encrypted space has a home page, as every space does, and its address
+shows it.
 
 How it works:
 
@@ -801,6 +803,23 @@ How it works:
   first sign-in makes one.
 - Each page has a key of its own, encrypted with the space's key, so that
   a single page can be shared later.
+- **New subspace** in an encrypted space makes the subspace encrypted, with
+  a key of its own and its home page, made in your browser. Its readers are
+  the parent's, unless it is private from its parent, and those its own
+  permissions add: each gets its key as for any encrypted space, so a
+  reader granted the subspace alone reads it and not its parent. The rule
+  the server keeps: every space below an encrypted space is encrypted, and
+  an encrypted space shares its readers only with encrypted spaces, none of
+  them public. So a plain space is not moved into an encrypted one, a
+  subspace open to a plain parent is not encrypted (make it private from
+  its parent first), an encrypted subspace is not moved under a plain
+  space unless it is private from it, and no space whose readers an
+  encrypted space shares is made public. Removing a reader of a space makes
+  a renewal of the key due in it and in each subspace open to it, and not
+  in a subspace private from it. A subspace's name is plain, as every
+  space's; its pages are not. A space encrypted before subspaces and home
+  pages came gets its home page when one of its administrators next opens
+  it: its pages go under it, and keep their addresses.
 - On a device that does not hold your keys, the space shows as locked and
   offers to unlock them there, with a passkey or your password.
 - Slugs in an encrypted space are random, since a title's slug would show
@@ -857,7 +876,7 @@ What the server does with a page's text cannot be done in an encrypted
 space, and is refused there with the reason: the server's search, PDF and
 Word exports, feeds and link previews, drafts, templates, moving a page in
 or out (a page moves within the space as usual), importing an archive into
-it, subspaces, and making it public. The page does not offer exports
+it, and making it public. The page does not offer exports
 there, and your browser sends no page's text, comment or attachment by
 the plain routes, even to be refused. No draft is kept, on the server or in
 your browser: **Cancel** with unsaved changes offers to discard them or

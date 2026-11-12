@@ -5,6 +5,16 @@ title: Encrypted spaces: comments, attachments, rollbacks caught, new keys
 
 ## New features
 
+- An encrypted space can now have subspaces. **New subspace** in it makes
+  one that is encrypted too, with a key of its own, so that someone given
+  the subspace alone reads it and not the space around it. For example,
+  in an encrypted space "Board", make the subspace "Salaries" private from
+  its parent and grant it to the two people who should read it: the rest
+  of the board does not get its key. Every encrypted space now also has a
+  home page, written and encrypted in your browser, as a plain space has;
+  a space encrypted before gets one the next time one of its
+  administrators opens it, and every page keeps its address.
+
 - Pages of an encrypted space now have comments and attachments, both
   encrypted in your browser like the page: the server keeps the
   comments, the text they quote, and the files with their names, only as
