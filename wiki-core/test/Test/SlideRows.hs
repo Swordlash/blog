@@ -274,6 +274,10 @@ spec = describe "SlideRows" $ do
       swallowed rows0 `shouldBe` []
       swallowed opened `shouldBe` [(2, 1), (3, 1)]
 
+    it "finds the line that opens the block a row leaves open, past a block opened and closed before it" $ do
+      map (\t -> leftOpenAt (Row (RowKey 0) t)) ["## A\n\nText.\n\n```\nopen", "## A\n```\nclosed\n```\n\n<!--\nopen\n", "## A\n\n[[!spoiler]]{x}(Q)\nopen", "## A\n\nText.\n", "## A\n\n<div>\nopen"]
+        `shouldBe` [Just 13, Just 21, Just 6, Nothing, Nothing]
+
     prop "says no row is taken in exactly when the rows are where a fresh cut puts them" $
       checkCoverage $
         forAll anyDeck $ \source ->

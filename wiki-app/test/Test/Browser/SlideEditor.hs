@@ -226,9 +226,13 @@ spec m = do
       rowText 3 `shouldReturn` rowTextOf deck 3
       rowSelection 3 `shouldReturn` (3, 5)
       markdown ui `shouldReturn` T.replace "First." ("First.\n\n" <> block) deck
+      -- Marked on the line that opens the block, and there alone.
+      let typed = T.replace "First." ("First.\n\n" <> block) deck
+          opening = T.length (fst (T.breakOn block typed))
+          openingEnd = opening + T.length (T.takeWhile (/= '\n') block)
       eventually $ do
         marked <- problemsMarked ui
-        [message | (_, _, message) <- marked] `shouldSatisfy` any ("A code block, a box or an HTML block on this slide is not closed" `T.isPrefixOf`)
+        [(a, b) | (a, b, message) <- marked, "A code block, a box or an HTML block on this slide is not closed" `T.isPrefixOf` message] `shouldBe` [(opening, openingEnd)]
       replicateM_ 3 (press "Control+z")
       eventually $ markdown ui `shouldReturn` deck
       eventually $ length <$> findAll ui ".editor-slides .slide-row-part" `shouldReturn` 0

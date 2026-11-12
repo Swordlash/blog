@@ -65,6 +65,7 @@ module Wiki.Core.SlideRows
   , rowHeading
   , rowTitle
   , swallowed
+  , leftOpenAt
   , openerStarts
   )
 where
@@ -458,6 +459,29 @@ swallowed r = go 0 (zip [0 ..] (rowStarts r))
       (k, s) : rest
         | Set.member s whole -> go k rest
         | otherwise -> (k, holder) : go holder rest
+
+-- | Where a row leaves a block open (a code fence, a box, an HTML
+-- comment), which takes the slides after it into its own in the whole
+-- text: the first character of the line that opens it, read from the row's
+-- own text: the line from which on, to the row's end, a heading put after
+-- the text, on a line of its own after a blank line, would not open a
+-- slide (a block opened and closed before it does not count). 'Nothing'
+-- when the row leaves nothing open, and when the line would be the row's
+-- first, its opener.
+leftOpenAt :: Row -> Maybe Int
+leftOpenAt row = case reverse run of
+  (at, _) : _ | length run < length flags -> Just at
+  _ -> Nothing
+  where
+    -- Each line's start, and whether the text up to its end takes in a
+    -- heading after it; the lines at the end that do.
+    flags = zip starts (map (swallows . (`T.take` row.text)) ends)
+    run = takeWhile snd (reverse flags)
+    starts = scanl (+) 0 (map ((+ 1) . T.length) lines')
+    ends = [s + T.length l | (s, l) <- zip starts lines']
+    lines' = T.splitOn "\n" row.text
+    -- Whether a heading after this text is taken in by it.
+    swallows before = let probe = before <> "\n\n## Probe\n" in (T.length before + 2) `notElem` openerStarts probe
 
 -- | The character each opener of a text starts at: the first character of
 -- the line of each heading of level one or two at the presentation's top

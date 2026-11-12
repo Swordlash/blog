@@ -795,10 +795,11 @@ headsOf st text rows =
 problemsOf :: State -> [Problems.Problem]
 problemsOf st = sort (Problems.allProblems st.checked st.failedIslands <> fitProblems st <> swallowProblems st)
 
--- | A problem on the first line of each row whose block left open (a code
--- fence, a box, an HTML comment) takes the rows below it into its slide,
--- in the presentation read from the whole text, while the rows keep their
--- own: only for the text checked.
+-- | A problem on the line that opens a block left open (a code fence, a
+-- box, an HTML comment) in a row, which takes the rows below it into its
+-- slide in the presentation read from the whole text, while the rows keep
+-- their own; on the row's heading line when that line cannot be found.
+-- Only for the text checked.
 swallowProblems :: State -> [Problems.Problem]
 swallowProblems st = case st.rows of
   Just rows
@@ -806,7 +807,9 @@ swallowProblems st = case st.rows of
         [ Problems.Problem {from = line, to = line, kind = Problems.SlideSwallows, severity = Problems.Error, message = "A code block, a box or an HTML block on this slide is not closed: in the presentation it takes in the slides after it, up to the end."}
         | holder <- ordNub (map snd (SlideRows.swallowed rows))
         , Just start <- [atMay (SlideRows.rowStarts rows) holder]
-        , let line = 1 + T.count "\n" (T.take start st.checkedText)
+        , Just row <- [atMay rows.rows holder]
+        , let at = start + fromMaybe 0 (SlideRows.leftOpenAt row)
+              line = 1 + T.count "\n" (T.take at st.checkedText)
         ]
   _ -> []
 
