@@ -100,6 +100,13 @@ module Wiki.App.Editor.Browser
   , rowWanted
   , historyKey
   , undoIn
+  , moveKey
+  , rowKeyOf
+  , stepIn
+  , focusHeader
+  , dragCarries
+  , markDragged
+  , pointerAfter
 
     -- * Mentions
   , mentionAsked
@@ -122,7 +129,7 @@ import Data.Foreign (foreignToInt)
 import Data.List (lookup)
 import Data.Text qualified as T
 import Halogen.JSBits (Callback, Inert (..), JSText, JSVal, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, isNull, jsValText, mkSyncCallback, toJSText)
-import Halogen.JSBits.Fields (Member (..), jsFields)
+import Halogen.JSBits.Fields (Member (..), inlineJS, jsFields)
 import Halogen.JSBits.Promise (wait)
 import Halogen.Query.Event.Window qualified as WindowEvent
 import Halogen.Subscription (Emitter)
@@ -152,6 +159,7 @@ import Wiki.Core.Assistant.Prompt (Span (..))
 import Wiki.Core.Markdown.Edit (Command (..), Selection (..), apply, cursor)
 import Wiki.Core.Markdown.Folds (Fold (..))
 import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), rowStarts)
+import Wiki.Core.SlideRows qualified as SlideRows
 import Wiki.Core.User (Login (..), User (..))
 
 -- What works on the text as CodeMirror and the textarea count it, in
@@ -169,6 +177,8 @@ $( browserJS
      , ("js_hold_focus", "wiki_editor_hold_focus", Safe, [t|Element -> IO ()|])
      , ("js_restore_focus", "wiki_editor_restore_focus", Safe, [t|Element -> IO ()|])
      , ("js_history", "wiki_editor_history", Safe, [t|Element -> Bool -> IO ()|])
+     , ("js_step", "wiki_editor_step", Safe, [t|Element -> JSText -> JSText -> IO Bool|])
+     , ("js_focus_header", "wiki_editor_focus_header", Safe, [t|Element -> Int -> IO ()|])
      , ("js_selection_start", "wiki_editor_selection_start", Safe, [t|Element -> IO Int|])
      , ("js_selection_end", "wiki_editor_selection_end", Safe, [t|Element -> IO Int|])
      , ("js_write", "wiki_editor_write", Safe, [t|Element -> JSText -> Int -> Int -> IO ()|])
@@ -187,6 +197,14 @@ $( browserJS
      , ("js_offer_folds", "wiki_editor_offer_folds", Safe, [t|Element -> JSText -> JSText -> IO ()|])
      ]
  )
+
+-- A drag's data and the pointer's place, read in a drag's listeners, for
+-- a slide's row dragged by its handle: what the Web types do not read.
+$(inlineJS "js_drag_carries" "Array.from($1.dataTransfer?.types ?? []).includes($2)" [t|Event -> JSText -> Bool|])
+
+$(inlineJS "js_mark_dragged" "(() => { if (!$1.dataTransfer) return false; $1.dataTransfer.setData(\"application/x-wiki-slide\", String($2)); $1.dataTransfer.effectAllowed = \"move\"; return true; })()" [t|Event -> Int -> Bool|])
+
+$(inlineJS "js_pointer_after" "(() => { const r = $1.currentTarget?.getBoundingClientRect?.(); return r ? $1.clientY > r.top + r.height / 2 : false; })()" [t|Event -> Bool|])
 
 -- | The host element, as @web/src/editor.js@ adds to it: the CodeMirror
 -- put in it, once the page's islands have loaded the editor.
@@ -255,6 +273,7 @@ $( jsFields
      , Fixed "left" ''Int
      , Fixed "close" ''Bool
      , Fixed "focus" ''Bool
+     , Fixed "reason" ''Text
      ]
  )
 
@@ -789,6 +808,8 @@ detachRow = liftIO . js_detach_row
 -- "Wiki.Core.SlideRows" cuts again ('fromLayout'). Offsets in characters.
 data Layout = Layout
   { text :: Text
+  , anchor :: Int
+  -- ^ Where the selection starts, the cursor being where it ends.
   , cursor :: Int
   , focused :: Maybe RowKey
   -- ^ The row whose editor had the focus last.
@@ -799,9 +820,10 @@ instance FromJSON Layout where
   parseJSON = withObject "Layout" $ \o -> do
     text <- o .: "text"
     at <- o .: "head"
+    from' <- o .: "anchor"
     pairs <- o .: "rows"
     lastFocused <- o .: "focused"
-    pure Layout {text, cursor = at, focused = if lastFocused < 0 then Nothing else Just (RowKey lastFocused), starts = [(RowKey k, s) | (k, s) <- pairs]}
+    pure Layout {text, anchor = from', cursor = at, focused = if lastFocused < 0 then Nothing else Just (RowKey lastFocused), starts = [(RowKey k, s) | (k, s) <- pairs]}
 
 -- | The master's 'Layout', once CodeMirror is in place.
 rowsLayout :: (MonadIO m) => Element -> m (Maybe Layout)
@@ -846,6 +868,9 @@ data RowWanted = RowWanted
   , left :: Maybe RowKey
   , close :: Bool
   , focus :: Bool
+  , reason :: Text
+  -- ^ What took the cursor there: @undo@, @redo@, @problem@ (the next
+  -- problem), @write@ (the toolbar) or @assistant@.
   }
 
 -- | The row a @wiki-row-wanted@ event asks for. Pure, since the event does
@@ -853,7 +878,7 @@ data RowWanted = RowWanted
 rowWanted :: Event -> Maybe RowWanted
 rowWanted event = do
   detail <- RowWantedDetail <$> detailOf event
-  Just RowWanted {key = RowKey detail.key, left = if detail.left < 0 then Nothing else Just (RowKey detail.left), close = detail.close, focus = detail.focus}
+  Just RowWanted {key = RowKey detail.key, left = if detail.left < 0 then Nothing else Just (RowKey detail.left), close = detail.close, focus = detail.focus, reason = detail.reason}
 
 -- | Whether a keydown is the editor's undo ('True': Ctrl+Z, Cmd+Z) or redo
 -- ('False': Ctrl+Y, Ctrl+Shift+Z, Cmd+Shift+Z), pressed where CodeMirror
@@ -873,6 +898,64 @@ historyKey event
 -- whole text's history.
 undoIn :: (MonadIO m) => Element -> Bool -> m ()
 undoIn host undoing = liftIO (js_history host undoing)
+
+-- | Whether a keydown is Alt+Up (-1) or Alt+Down (1), with no other
+-- modifier: a slide moved one place. Pure, as 'editorKey' is.
+moveKey :: Event -> Maybe Int
+moveKey event
+  | pressed.isComposing || not pressed.altKey || pressed.ctrlKey || pressed.metaKey || pressed.shiftKey = Nothing
+  | otherwise = lookup pressed.key [("ArrowUp", -1), ("ArrowDown", 1)]
+  where
+    pressed = KeyboardEvent event
+
+-- | The key of the presentation's row an event happened in: the
+-- @data-row-key@ of the nearest element around its target that has one.
+-- Pure, read in the event's listener.
+rowKeyOf :: Event -> Maybe RowKey
+rowKeyOf event = do
+  target <- Event.target event >>= Element.fromEventTarget
+  row <- Element.closestNow target "[data-row-key]"
+  RowKey <$> (readMaybe . T.unpack =<< Element.getAttributeNow row "data-row-key")
+
+-- | Make a structural step of a presentation's rows on the master's text,
+-- which "Wiki.Core.SlideRows" computed it for (a slide moved, deleted or
+-- added): the history's user event (@move.slide@, @delete.slide@ or
+-- @input.slide@), the edits of the text, the rows after it, and what to
+-- select then, in characters of the text after it. One entry of the
+-- history, with its layout. The master takes it only while it holds that
+-- text: whether it was taken.
+stepIn :: (MonadIO m) => Element -> Text -> Text -> [SlideRows.Edit] -> Rows -> Maybe (Int, Int) -> m Bool
+stepIn host text event edits after select =
+  liftIO . js_step host (toJSText text) . jsonText $
+    object
+      [ "event" .= event
+      , "edits" .= [(e.from, e.to, e.insert) | e <- edits]
+      , "rows" .= [(k, s, s + T.length row.text) | (row, s) <- zip after.rows (rowStarts after), let RowKey k = row.key]
+      , "select" .= fmap (\(a, b) -> [a, b]) select
+      ]
+
+-- | Give the focus to the header of a row in the rows' list, once the
+-- render that puts it there is done.
+focusHeader :: (MonadIO m) => Element -> RowKey -> m ()
+focusHeader rowsList (RowKey k) = liftIO (js_focus_header rowsList k)
+
+-- | Whether a drag carries data of this type: @Files@ for files, or
+-- 'slideType' for a slide's row. Pure, read in the drag's listener.
+dragCarries :: Text -> Event -> Bool
+dragCarries kind event = js_drag_carries event (toJSText kind)
+
+-- | Mark the drag a dragstart starts as a slide's row's, with the row's
+-- key, and the drag as a move, as browsers want a drag's data set in its
+-- dragstart's listener. It does this when it is forced, so force it there:
+-- it is pure only to be called from the listener ('HE.handler'').
+markDragged :: Event -> RowKey -> Bool
+markDragged event (RowKey k) = js_mark_dragged event k
+
+-- | Whether a drag's pointer is in the lower half of the element the
+-- listener is on: a row dropped there goes after that row. Pure, read in
+-- the listener.
+pointerAfter :: Event -> Bool
+pointerAfter = js_pointer_after
 
 -- | Whether the browser should warn before a reload or closing the tab,
 -- as browsers do for a page with unsaved changes.

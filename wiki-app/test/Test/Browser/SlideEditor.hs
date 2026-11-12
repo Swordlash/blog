@@ -35,7 +35,8 @@ import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Page (Page (id, updatedAt))
 import Wiki.Core.PageKind qualified as Kind
-import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), cutRows)
+import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), assemble, cutRows, deleteRow, newRow)
+import Wiki.Core.Slides (moveSlide)
 import Wiki.Core.Space (Space (id))
 
 $( browserJS
@@ -346,6 +347,175 @@ spec m = do
     click bold
     eventually $ markdown ui `shouldReturn` T.replace "Second." "**Second.**" deck
     rowText 2 `shouldReturn` "## Two\n\n**Second.**\n"
+
+  it "moves a slide with Alt+Up and Alt+Down from its header and from its text, one step each that one undo takes back, the editors, cursors and focus kept, the title slide staying first" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    -- From the header.
+    rowHeader ui "Two" >>= focus
+    press "Alt+ArrowUp"
+    let up = moveSlide 2 1 deck
+    eventually $ markdown ui `shouldReturn` up
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "Two", "One", "Three"]
+    openTitles ui `shouldReturn` ["Deck", "Two"]
+    eventually $ status ui `shouldReturn` "Slide 2, 'Two' moved to 2 of 4"
+    -- Up again would put it above the title slide: no move.
+    press "Alt+ArrowUp"
+    markdown ui `shouldReturn` up
+    press "Alt+ArrowDown"
+    eventually $ markdown ui `shouldReturn` deck
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` up
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` deck
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    -- From the text, with "Three" open below: the moved row keeps its
+    -- editor, its cursor and the focus, and so does the other.
+    rowHeader ui "Three" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two", "Three"]
+    two <- find ui ".editor-slides > li:nth-child(3) .cm-editor"
+    three <- find ui ".editor-slides > li:nth-child(4) .cm-editor"
+    rowSelect 3 2 4
+    rowSelect 2 3 5
+    press "Alt+ArrowDown"
+    let down = moveSlide 2 3 deck
+    eventually $ markdown ui `shouldReturn` down
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Three", "Two"]
+    find ui ".editor-slides > li:nth-child(4) .cm-editor" >>= (`shouldBeSameElement` two)
+    find ui ".editor-slides > li:nth-child(3) .cm-editor" >>= (`shouldBeSameElement` three)
+    eventually $ rowFocused 3 `shouldReturn` True
+    rowSelection 3 `shouldReturn` (3, 5)
+    rowSelection 2 `shouldReturn` (2, 4)
+    -- Undone in the row: back, the same editors.
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` deck
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    find ui ".editor-slides > li:nth-child(3) .cm-editor" >>= (`shouldBeSameElement` two)
+    -- And redone from the raw Markdown's history.
+    modeButton ui "Raw" >>= click
+    selectText ui 0 0
+    press "Control+y"
+    eventually $ markdown ui `shouldReturn` down
+    modeButton ui "Slides" >>= click
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Three", "Two"]
+
+  it "moves a slide dragged by its handle before or after the row it is dropped on, and gives no handle to the title slide" $ runPage $ do
+    (ui, _) <- openDeck deck
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    handles <- eventually $ do
+      found <- findAll ui ".editor-slides .slide-row-handle"
+      length found `shouldBe` 3
+      pure found
+    -- Dropped on the upper half of a header: before that row.
+    target <- rowHeader ui "Three"
+    traverse_ (`dragTo` target) (head handles)
+    eventually $ markdown ui `shouldReturn` moveSlide 1 2 deck
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` deck
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    -- Dropped low on a row: after it.
+    below <- find ui ".editor-slides > li:nth-child(4) .slide-row-add"
+    findAll ui ".editor-slides .slide-row-handle" >>= traverse_ (`dragTo` below) . head
+    eventually $ markdown ui `shouldReturn` moveSlide 1 3 deck
+    length <$> findAll ui ".editor-slides .drop-before, .editor-slides .drop-after" `shouldReturn` 0
+
+  it "deletes a slide without asking, one step: the next row's header takes the focus, and Ctrl+Z brings the row back, open as it was" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    rowDelete ui "Two" >>= click
+    let cut = fst (cutRows (RowKey 0) deck)
+        deleted = maybe deck (assemble . fst) (deleteRow 2 cut)
+    eventually $ markdown ui `shouldReturn` deleted
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Three"]
+    eventually $ status ui `shouldReturn` "Slide 3, 'Two' deleted. Ctrl+Z brings it back."
+    -- The focus on "Three"'s header: Ctrl+Z there.
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` deck
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    -- The title slide has no delete button.
+    length <$> findAll ui ".editor-slides .slide-row-delete" `shouldReturn` 3
+
+  it "adds a slide after the row last typed in, and at the end by a row's +, open with its title selected and the focus in it" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    rowSelect 1 3 3
+    find ui ".editor-new-slide" >>= click
+    let cut = fst (cutRows (RowKey 0) deck)
+        added = assemble (fst (newRow (RowKey 9) "New slide" 2 cut))
+    eventually $ markdown ui `shouldReturn` added
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "New slide", "Two", "Three"]
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One", "New slide"]
+    eventually $ rowFocused 2 `shouldReturn` True
+    eventually $ status ui `shouldReturn` "Slide 3, 'New slide' added."
+    openRowContent ui >>= (`typeText` "Mine")
+    markdown ui `shouldReturn` T.replace "## New slide" "## Mine" added
+    press "Control+z"
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` deck
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    -- At the end, by the last row's "+".
+    find ui ".editor-slides > li:nth-child(4) .slide-row-add" >>= click
+    eventually $ markdown ui `shouldReturn` assemble (fst (newRow (RowKey 9) "New slide" 4 cut))
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three", "New slide"]
+
+  it "says in its live region where an undo took the cursor" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    rowSelect 1 14 14
+    rowContent ui "One" >>= (`typeText` "x")
+    rowSelect 0 2 2
+    press "Control+z"
+    eventually $ status ui `shouldReturn` "Undo in slide 2, 'One'"
+
+  it "keeps a draft through a reopened editor in either mode" $ runPage $ do
+    (ui, wiki) <- openDeck deck
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    rowSelect 1 14 14
+    rowContent ui "One" >>= (`typeText` "x")
+    let typed = T.replace "First." "First.x" deck
+    keepDraft ui
+    again <- startOn m wiki helloEditor
+    eventually $ markdown again `shouldReturn` typed
+    eventually $ rowTitles again `shouldReturn` ["Deck", "One", "Two", "Three"]
+    modeButton again "Raw" >>= click
+    selectText again (lineEnd typed 11) (lineEnd typed 11)
+    editorText again >>= (`typeText` "y")
+    let both = T.replace "Second." "Second.y" typed
+    keepDraft again
+    third <- startOn m wiki helloEditor
+    eventually $ markdown third `shouldReturn` both
+    modeButton third "Slides" >>= click
+    eventually $ rowTitles third `shouldReturn` ["Deck", "One", "Two", "Three"]
+    rowHeader third "Two" >>= click
+    eventually $ rowText 2 `shouldReturn` "## Two\n\nSecond.y\n"
+
+  it "mounts no row's editor for sixty slides but the one the cursor starts in, and one more for each header clicked" $ runPage $ do
+    let sixty = T.intercalate "\n\n" ("# Sixty" : concat [["## Slide " <> show n, "Text " <> show n <> "."] | n <- [1 .. 59 :: Int]])
+    (ui, _) <- openDeck sixty
+    eventually $ length <$> rowTitles ui `shouldReturn` 60
+    eventually $ openTitles ui `shouldReturn` ["Slide 1"]
+    length <$> findAll ui ".editor-slides .cm-editor" `shouldReturn` 1
+    length <$> findAll ui ".editor-form .cm-editor" `shouldReturn` 2
+    rowHeader ui "Slide 1" >>= click
+    eventually $ length <$> findAll ui ".editor-slides .cm-editor" `shouldReturn` 0
+    rowHeader ui "Slide 40" >>= click
+    eventually $ length <$> findAll ui ".editor-slides .cm-editor" `shouldReturn` 1
+
+  it "keeps the title line's mark in the first row" $ runPage $ do
+    (ui, _) <- openDeck deck
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    rowSelect 0 0 0
+    press "Backspace"
+    press "Delete"
+    press "Delete"
+    eventually $ markdown ui >>= (`shouldSatisfy` T.isPrefixOf "# ")
+    rowText 0 >>= (`shouldSatisfy` T.isPrefixOf "# ")
 
   it "renders the deck whole for one slide's preview: a macro of an earlier slide, a footnote's number, the same slide in every view" $ runPage $ do
     (ui, wiki) <- openDeck macros
@@ -661,6 +831,26 @@ bodyText ui title = eventually $ do
   frames <- findAll ui ".editor-preview .slide-frame:not(.slide-offstage)"
   titled <- filterM (\f -> (== title) <$> (findIn f ".slide-title" >>= textContent)) frames
   maybe (expectationFailure ("no card " <> title)) (\f -> findIn f ".slide-body" >>= textContent) (head titled)
+
+-- | What the rows' live region says last.
+status :: Mounted s q o m -> PageM s Text
+status ui = find ui ".editor-slides-status" >>= textContent
+
+-- | The delete button of the row with this title.
+rowDelete :: Mounted s q o m -> Text -> PageM s (Element s)
+rowDelete ui title = eventually $ do
+  rows <- findAll ui ".editor-slides .slide-row"
+  named <- filterM (\r -> (== title) <$> (findIn r ".slide-row-title" >>= textContent)) rows
+  maybe (expectationFailure ("no row " <> title)) (`findIn` ".slide-row-delete") (head named)
+
+-- | Cancel, and keep the draft: the editor goes, its work kept as a draft.
+keepDraft :: Mounted s q o m -> PageM s ()
+keepDraft ui = do
+  find ui ".editor-cancel" >>= click
+  buttons <- eventually (findAll ui ".editor-cancel-confirm button")
+  named <- filterM (fmap (T.isInfixOf "Keep the draft") . textContent) buttons
+  maybe (expectationFailure "no Keep the draft") click (head named)
+  eventually $ length <$> findAll ui ".editor-form" `shouldReturn` 0
 
 -- | The rows' titles, in the order of the rows; and the open rows'.
 rowTitles :: Mounted s q o m -> PageM s [Text]

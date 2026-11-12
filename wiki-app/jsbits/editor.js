@@ -71,19 +71,36 @@ function wiki_editor_slides_mode(host, on) {
   host.wikiEditor?.slidesMode?.(on);
 }
 
+// A structural step on the master's text (web/src/editor.js's step):
+// whether the master took it, which it does only while it holds `text`.
+function wiki_editor_step(host, text, json) {
+  return host.wikiEditor?.step?.(text, json) ?? false;
+}
+
+// Give the focus to the header of the row with this key in the rows' list,
+// once the render that may have just put it there is done.
+function wiki_editor_focus_header(list, key) {
+  requestAnimationFrame(() => list.querySelector(`[data-row-key="${key}"] .slide-row-toggle`)?.focus({ preventScroll: true }));
+}
+
 // The editor's undo (true) or redo (false), on the master's history.
 function wiki_editor_history(host, undoing) {
   host.wikiEditor?.history?.(undoing);
 }
 
 // What has the focus in the rows' list (a row's text, a row's header), if
-// anything, kept before a change of the list, so that the focus can be
-// given back when the list's patch moves that element, which loses the
-// focus in the browser. The patch may come after the change returns (a
-// render of the component's), so the element is watched for a second: if
-// it loses the focus to nothing, with no press of the pointer since, it
-// takes it back in the next frame. A press elsewhere is the author moving
-// the focus, which stays where it went.
+// anything, kept before a change of the list (a re-cut, a jump, a move, a
+// row deleted or added), so that the focus can be given back when the
+// list's patch moves that element: an element the browser takes out and
+// puts back loses the focus. Halogen gives no hook after its patch, which
+// may come after the change returns (a render of the component's, after a
+// fork), so the element is watched instead: the first time it loses the
+// focus, if it lost it to nothing (no other element took it) and no press
+// of the pointer came since the change (a press is the author moving the
+// focus, which stays where it went), it takes the focus back in the next
+// frame, when the patch has put it back in the page. The watch ends at
+// that first loss of the focus, restored or not, or after a second without
+// one; either way its listener and its timer are both gone.
 function wiki_editor_hold_focus(list) {
   const active = document.activeElement;
   if (!(active instanceof HTMLElement) || !list.contains(active)) return;
@@ -93,7 +110,9 @@ function wiki_editor_hold_focus(list) {
   }
   list.wikiHeld = active;
   const held = performance.now();
+  let timer = 0;
   const back = (event) => {
+    clearTimeout(timer);
     if (event.relatedTarget !== null) return;
     requestAnimationFrame(() => {
       const nowhere = document.activeElement === null || document.activeElement === document.body;
@@ -102,7 +121,7 @@ function wiki_editor_hold_focus(list) {
     });
   };
   active.addEventListener("focusout", back, { once: true });
-  setTimeout(() => active.removeEventListener("focusout", back), 1000);
+  timer = setTimeout(() => active.removeEventListener("focusout", back), 1000);
 }
 
 // The same, at once: the focus back to what had it in the list, if the

@@ -244,7 +244,7 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID)
 import DOM.HTML.Indexed qualified as I
-import Data.List (zip3)
+import Data.List (lookup, zip3)
 import Data.Map.Strict qualified as Map
 import Data.Row (type (.+), type (.==))
 import Data.Set qualified as Set
@@ -293,11 +293,13 @@ import Wiki.App.Editor.Browser
   , cursorLineOf
   , decision
   , detachEditor
+  , dragCarries
   , droppedFiles
   , editorAvailable
   , editorKey
   , emojiAsked
   , focusElement
+  , focusHeader
   , focusInView
   , focusText
   , forgetPreviewEntry
@@ -320,6 +322,7 @@ import Wiki.App.Editor.Browser
   , pushPreviewEntry
   , readPickedFile
   , restoreFocus
+  , rowKeyOf
   , rowWanted
   , rowsLayout
   , selectedSpan
@@ -327,6 +330,7 @@ import Wiki.App.Editor.Browser
   , settleChanges
   , showProblems
   , slidesModeIn
+  , stepIn
   , textShown
   , typedText
   , undoIn
@@ -632,6 +636,15 @@ data State = State
   , focusRow :: Maybe RowKey
   -- ^ The row that takes the focus as it opens: one a jump opened.
   , rowsList :: H.RefLabel
+  , dragging :: Maybe RowKey
+  -- ^ The row whose handle a drag started from, while the drag lasts.
+  , dropAt :: Maybe (RowKey, Bool)
+  -- ^ Where the row dragged would go: before or after ('True') this row.
+  , deletedOpen :: [RowKey]
+  -- ^ The rows deleted while open: an undo that brings one back opens it.
+  , announcement :: Text
+  -- ^ What the rows' live region says last: a move, a delete, a new slide,
+  -- a jump.
   -- ^ The rows' list, which gives the focus back to what had it when a
   -- patch moved that element.
   , cursorAt :: Int
@@ -737,6 +750,9 @@ data Action
   | EditorReady
   | FromRow SlideRow.Output
   | RowWantedBy RowWanted
+  | MoveFromText RowKey Int
+  | NewSlide
+  | Relaid
 
 -- | The local storage key for whether the preview goes beside the
 -- Markdown.
@@ -787,7 +803,7 @@ swallowProblems :: State -> [Problems.Problem]
 swallowProblems st = case st.rows of
   Just rows
     | isDeck st && SlideRows.assemble rows == st.checkedText ->
-        [ Problems.Problem {from = line, to = line, kind = Problems.SlideFit, severity = Problems.Error, message = "A code block, a box or an HTML block on this slide is not closed: in the presentation it takes in the slides after it, up to the end."}
+        [ Problems.Problem {from = line, to = line, kind = Problems.SlideSwallows, severity = Problems.Error, message = "A code block, a box or an HTML block on this slide is not closed: in the presentation it takes in the slides after it, up to the end."}
         | holder <- ordNub (map snd (SlideRows.swallowed rows))
         , Just start <- [atMay (SlideRows.rowStarts rows) holder]
         , let line = 1 + T.count "\n" (T.take start st.checkedText)
@@ -833,6 +849,21 @@ previewSlides st work
   | work.page.kind /= Kind.Presentation = Nothing
   | slidesShown st || st.oneSlide = Just (Preview.SlideAt (fromMaybe 0 (Slides.slideAtLine st.checked.slides st.cursorAt)))
   | otherwise = Just Preview.WholeDeck
+
+-- | The title a new slide gets, selected so that typing replaces it.
+newSlideTitle :: Text
+newSlideTitle = "New slide"
+
+-- | A slide as the live region names it: "slide 4, 'Results'"; at the
+-- start of a sentence, "Slide 4, 'Results'" ('capital').
+slideNamed :: RowKey -> State -> Text
+slideNamed key st = case head [h | h <- st.rowHeads, h.key == key] of
+  Just h -> "slide" <> maybe "" (\n -> " " <> show n) h.number <> ", '" <> SlideRow.titleOf h <> "'"
+  Nothing -> "the slide"
+
+-- | A text with its first letter a capital.
+capital :: Text -> Text
+capital t = maybe t (\(c, rest) -> T.cons (toUpper c) rest) (T.uncons t)
 
 -- | The browser's storage key of the way a presentation is edited: true
 -- for its raw Markdown, false (or nothing kept) for slide by slide.
@@ -956,6 +987,10 @@ component =
               , keptOpen = []
               , focusRow = Nothing
               , rowsList
+              , dragging = Nothing
+              , dropAt = Nothing
+              , deletedOpen = []
+              , announcement = ""
               , cursorAt = 1
               , oneSlide = False
               , measures = Nothing
@@ -1070,7 +1105,7 @@ component =
           </div>
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
-            {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
+            {{ HE.preventingDefault (HE.handler' (EventType "dragover") (\ev -> if dragCarries "Files" ev then Just DragOver else Nothing)) }}
             {{ HE.handler' (EventType "dragleave") (const (Just DragLeave)) }}
             {{ HE.preventingDefault (HE.handler' (EventType "drop") dropped) }}
             {{ HE.preventingDefault (HE.handler' (EventType "paste") pasted) }}
@@ -1292,6 +1327,9 @@ component =
       Just EscapeKey -> Nothing
       -- Alt+Up and Alt+Down are the browser's until slides move by them
       -- again (WP5.103's next stage).
+      -- Alt+Up and Alt+Down in a row's text move its slide; elsewhere
+      -- they are the browser's.
+      Just (MoveSlideKey by) | slidesShown st -> (`MoveFromText` by) <$> rowKeyOf ev
       Just (MoveSlideKey _) -> Nothing
       Just key -> Just (Key key)
       Nothing -> Nothing
@@ -1471,7 +1509,9 @@ component =
                 <button type="button" aria-pressed={{ if d.bySlide then "true" else "false" :: Text }} title="Slide by slide: a row for each slide, to open and edit" disabled={{ d.noEditor }} onClick={{ const (SlidesMode True) }}>Slides</button>
                 <button type="button" aria-pressed={{ if d.bySlide then "false" else "true" :: Text }} title="The presentation's Markdown as it is" onClick={{ const (SlidesMode False) }}>Raw</button>
               </span>
-              {% if not d.bySlide %}
+              {% if d.bySlide %}
+                <button type="button" class="editor-new-slide" title="A new slide after the one you were in, or at the end" onClick={{ const NewSlide }}>New slide</button>
+              {% else %}
                 <button type="button" class="editor-one-slide" aria-pressed={{ if d.oneShown then "true" else "false" :: Text }} title="The preview shows the cursor's slide alone, or the whole deck" onClick={{ const (OneSlide (not d.oneShown)) }}>One slide</button>
               {% end %}
               {% if d.noEditor %}
@@ -1671,6 +1711,7 @@ component =
                 {{ HE.handler' (EventType "wiki-cursor-line") (fmap CursorAt . cursorLineOf) }}
                 {{ HE.handler' (EventType "wiki-ready") (const (Just EditorReady)) }}
                 {{ HE.handler' (EventType "wiki-row-wanted") (fmap RowWantedBy . rowWanted) }}
+                {{ HE.handler' (EventType "wiki-relayout") (const (Just Relaid)) }}
               ></div>
             |]
             )
@@ -1688,7 +1729,7 @@ component =
             )
           , ("hint", [hh|<p class="editor-hint">{{ hint st }}</p>|])
           ]
-            <> [("slides", slideList st) | slidesShown st]
+            <> [("slides", HH.div [HP.class_ "editor-slides-holder"] [slideList st, HH.p [HP.class_ "visually-hidden editor-slides-status", attr "role" "status"] [HH.text st.announcement]]) | slidesShown st]
         )
 
     -- A presentation's rows, slide by slide, one per slide, keyed by the
@@ -1713,13 +1754,19 @@ component =
                     , open = h.key `elem` st.openRows
                     , master = if st.master == Attached then st.hostElement else Nothing
                     , focus = st.focusRow == Just h.key
+                    , movable = i >= fixed
+                    , dropMark = case st.dropAt of
+                        Just (at, after) | at == h.key -> Just after
+                        _ -> Nothing
                     }
                   FromRow
               ]
           )
-        | h <- st.rowHeads
+        | (i, h) <- zip [0 ..] st.rowHeads
         , let RowKey k = h.key
         ]
+      where
+        fixed = maybe 0 SlideRows.fixedRows st.rows
 
     loadKey :: State -> Text
     loadKey st = "load-" <> show st.loads
@@ -2150,14 +2197,35 @@ component =
       -- A change took the master's cursor to another row: that row opens,
       -- with the focus, and the row left closes when the author went there
       -- (an undo, a redo, the next problem); other open rows stay open.
-      RowWantedBy wanted -> keepingRowsFocus $
-        modify $ \st ->
-          let opened = if wanted.key `elem` st.openRows then st.openRows else st.openRows <> [wanted.key]
-              closed = if wanted.close then [l | Just l <- [wanted.left], l /= wanted.key] else []
-           in st
-                { openRows = filter (`notElem` closed) opened
-                , focusRow = if wanted.key `elem` st.openRows || not wanted.focus then st.focusRow else Just wanted.key
-                }
+      RowWantedBy wanted -> do
+        keepingRowsFocus $
+          modify $ \st ->
+            let opened = if wanted.key `elem` st.openRows then st.openRows else st.openRows <> [wanted.key]
+                closed = if wanted.close then [l | Just l <- [wanted.left], l /= wanted.key] else []
+             in st
+                  { openRows = filter (`notElem` closed) opened
+                  , focusRow = if wanted.key `elem` st.openRows || not wanted.focus then st.focusRow else Just wanted.key
+                  }
+        for_ (lookup wanted.reason [("undo", "Undo"), ("redo", "Redo"), ("problem", "Problem")]) $ \what ->
+          gets (slideNamed wanted.key) >>= say . ((what <> " in ") <>)
+      -- Alt+Up or Alt+Down in a row's text, on its header or its handle.
+      MoveFromText key by -> moveRowBy key by
+      FromRow (SlideRow.Moved key by) -> moveRowBy key by
+      FromRow (SlideRow.Deleted key) -> deleteSlide key
+      FromRow (SlideRow.AddedAfter key) -> newSlideAfter (Just key)
+      NewSlide -> newSlideAfter Nothing
+      -- A row dragged by its handle, and dropped before or after another.
+      FromRow (SlideRow.DragStarted key) -> modify (\st -> st {dragging = Just key, dropAt = Nothing})
+      FromRow (SlideRow.DraggedOver key after) -> whenM (gets (\st -> isJust st.dragging)) $ modify (\st -> st {dropAt = Just (key, after)})
+      FromRow (SlideRow.DroppedOn target after) -> do
+        dragged <- gets (\st -> st.dragging)
+        modify (\st -> st {dragging = Nothing, dropAt = Nothing})
+        for_ dragged $ \key -> dropSlide key target after
+      FromRow SlideRow.DragEnded -> modify (\st -> st {dragging = Nothing, dropAt = Nothing})
+      -- A step, or its undo or redo, changed the master's layout: the rows
+      -- are read again at once, and a row brought back by the undo of its
+      -- delete opens again if it was open.
+      Relaid -> recutRowsWith True >> refreshHeads
       -- CodeMirror has taken the textarea's place: the master is told the
       -- mode and given the rows of the text it holds, which can open now,
       -- the row its cursor starts in first.
@@ -2457,7 +2525,12 @@ component =
     -- row that splits off an open row is open too. Run after the typing
     -- has paused, with the check.
     recutRows :: H.HalogenM State Action Slots ViewOutput m ()
-    recutRows = do
+    recutRows = recutRowsWith False
+
+    -- The same, after a structural step or its undo or redo ('True'): a row
+    -- that comes back opens only if it was open when it was deleted.
+    recutRowsWith :: Bool -> H.HalogenM State Action Slots ViewOutput m ()
+    recutRowsWith afterStep = do
       st <- get
       case (st.master, st.hostElement, st.rows) of
         (Attached, Just host, Just old) ->
@@ -2471,13 +2544,119 @@ component =
                         keys = [r.key | r <- new.rows]
                         wasOpen k = k `elem` st.openRows
                         neighbours = zip3 (Nothing : map Just keys) keys (map Just (drop 1 keys) <> [Nothing])
-                        opened = [k | (above, k, below) <- neighbours, wasOpen k || (k `notElem` [r.key | r <- old.rows] && any (maybe False wasOpen) [above, below])]
+                        fresh k = k `notElem` [r.key | r <- old.rows]
+                        opened =
+                          [ k
+                          | (above, k, below) <- neighbours
+                          , wasOpen k || (fresh k && if afterStep then k `elem` st.deletedOpen else any (maybe False wasOpen) [above, below])
+                          ]
                     unless (new == old) $ do
                       taken <- H.liftEffect (setRows host layout.text new)
                       when taken . keepingRowsFocus $
-                        modify (\s -> s {rows = Just new, nextKey, openRows = opened})
+                        modify (\s -> s {rows = Just new, nextKey, openRows = opened, deletedOpen = filter (`notElem` keys) s.deletedOpen})
               )
         _ -> pass
+
+    -- The rows as the master holds them now, cut again first if typing
+    -- changed them, for a structural step: the master's host, its layout
+    -- and the rows, in the slide mode once CodeMirror is in place.
+    withRows :: (Element -> Layout -> Rows -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()
+    withRows act = do
+      recutRows
+      st <- get
+      case (st.master, st.hostElement, st.rows) of
+        (Attached, Just host, Just rows)
+          | slidesShown st ->
+              H.liftEffect (rowsLayout host) >>= traverse_ (\layout -> when (SlideRows.assemble rows == layout.text) (act host layout rows))
+        _ -> pass
+
+    -- Make a structural step on the master, one entry of its history, and
+    -- take its rows: the cursor where it was in its row, wherever that row
+    -- went, unless the step says where. Whether the master took it.
+    stepWith :: Element -> Layout -> Rows -> Text -> (Rows, [SlideRows.Edit]) -> Maybe (Int, Int) -> H.HalogenM State Action Slots ViewOutput m Bool
+    stepWith host layout old event (new, edits) chosen = do
+      let at = SlideRows.rowAt old layout.cursor
+          select =
+            chosen <|> do
+              row <- atMay old.rows at
+              wasAt <- atMay (SlideRows.rowStarts old) at
+              nowAt <- lookup row.key (zip [r.key | r <- new.rows] (SlideRows.rowStarts new))
+              moved <- find (\r -> r.key == row.key) new.rows
+              -- The selection, if it is all in that row.
+              guard (layout.anchor >= wasAt && layout.anchor <= wasAt + T.length row.text)
+              let shifted c = nowAt + min (c - wasAt) (T.length moved.text)
+              Just (shifted layout.anchor, shifted layout.cursor)
+      taken <- H.liftEffect (stepIn host layout.text event edits new select)
+      when taken $ do
+        keepingRowsFocus (modify (\s -> s {rows = Just new, dragging = Nothing}))
+        refreshHeads
+      pure taken
+
+    -- Move a slide one place up (-1) or down (1), as one step.
+    moveRowBy :: RowKey -> Int -> H.HalogenM State Action Slots ViewOutput m ()
+    moveRowBy key by = withRows $ \host layout rows ->
+      for_ (indexOf key rows) $ \i -> for_ (SlideRows.moveRow i (i + by) rows) $ \moved -> do
+        taken <- stepWith host layout rows "move.slide" moved Nothing
+        when taken (announceMove key)
+
+    -- Move the slide dragged before or after the slide it was dropped on.
+    dropSlide :: RowKey -> RowKey -> Bool -> H.HalogenM State Action Slots ViewOutput m ()
+    dropSlide key target after = withRows $ \host layout rows ->
+      for_ ((,) <$> indexOf key rows <*> indexOf target rows) $ \(i, k) -> do
+        let j
+              | after = if k > i then k else k + 1
+              | otherwise = if k < i then k else k - 1
+        unless (k == i) . for_ (SlideRows.moveRow i j rows) $ \moved -> do
+          taken <- stepWith host layout rows "move.slide" moved Nothing
+          when taken (announceMove key)
+
+    -- Delete a slide, as one step, without asking: Ctrl+Z brings it back,
+    -- open if it was. The focus goes to the next row's header, or the
+    -- previous one's for the last row.
+    deleteSlide :: RowKey -> H.HalogenM State Action Slots ViewOutput m ()
+    deleteSlide key = withRows $ \host layout rows ->
+      for_ (indexOf key rows) $ \i -> for_ (SlideRows.deleteRow i rows) $ \deleted@(new, _) -> do
+        name <- gets (slideNamed key)
+        -- Whether it is open, read before the step: the master tells of
+        -- the step at once ("wiki-relayout"), and the rows read again then
+        -- may come before what follows here.
+        wasOpen <- gets (\s -> key `elem` s.openRows)
+        when wasOpen $ modify (\s -> s {deletedOpen = key : s.deletedOpen})
+        taken <- stepWith host layout rows "delete.slide" deleted Nothing
+        when taken $ do
+          modify (\s -> s {openRows = filter (/= key) s.openRows})
+          say (capital name <> " deleted. Ctrl+Z brings it back.")
+          shown <- gets (\s -> s.rowsList) >>= H.getRef
+          for_ ((,) <$> shown <*> (atMay new.rows i <|> atMay new.rows (i - 1))) $ \(l, r) -> H.liftEffect (focusHeader l r.key)
+
+    -- A new slide after a row (the one whose text had the focus last, when
+    -- none is given), or at the end, as one step: open, its title selected
+    -- and the focus in it.
+    newSlideAfter :: Maybe RowKey -> H.HalogenM State Action Slots ViewOutput m ()
+    newSlideAfter given = withRows $ \host layout rows -> do
+      key <- gets (\s -> s.nextKey)
+      let after = given <|> layout.focused
+          at = maybe (length rows.rows) (+ 1) (after >>= (`indexOf` rows))
+          made@(new, _) = SlideRows.newRow key newSlideTitle at rows
+          start = fromMaybe 0 (indexOf key new >>= atMay (SlideRows.rowStarts new))
+      taken <- stepWith host layout rows "input.slide" made (Just (start + 3, start + 3 + T.length newSlideTitle))
+      when taken $ do
+        modify (\s -> s {nextKey = succ s.nextKey, openRows = s.openRows <> [key], focusRow = Just key})
+        gets (slideNamed key) >>= say . (<> " added.") . capital
+
+    -- The index of the row with a key.
+    indexOf :: RowKey -> Rows -> Maybe Int
+    indexOf key rows = head [i | (i, r) <- zip [0 ..] rows.rows, r.key == key]
+
+    -- What the live region says of a moved slide: where it is now.
+    announceMove :: RowKey -> H.HalogenM State Action Slots ViewOutput m ()
+    announceMove key = do
+      st <- get
+      let total = length [() | h <- st.rowHeads, isJust h.number]
+      say (capital (slideNamed key st) <> " moved to " <> maybe "its place" (\(n :: Int) -> show n <> " of " <> show total) (head [n | h <- st.rowHeads, h.key == key, Just n <- [h.number]]))
+
+    say :: Text -> H.HalogenM State Action Slots ViewOutput m ()
+    say said = modify (\st -> st {announcement = said})
 
     -- The row whose editor has the focus keeps it through a re-cut: when
     -- its key is gone (its start was taken away, an undo joining it to the

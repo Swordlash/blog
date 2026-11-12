@@ -27,6 +27,13 @@ title: A presentation's slides as rows, each with its own editor
   block or a box you have not closed yet stays within its own slide's row; the
   editor marks it, as in the presentation it takes in the slides after it.
 
+- Move a slide by dragging the handle at the left of its header onto another
+  row, or with Alt+Up and Alt+Down. Delete one with the × at the right of its
+  header: it goes at once, and Ctrl+Z brings it back. "New slide" in the
+  toolbar adds a slide after the one you were in, and the "+" under a row adds
+  one after that row, with its title selected to type over. The title slide
+  stays first. Each of these is one step that Ctrl+Z takes back.
+
 - "N problems" opens the row of the next problem and puts the cursor on it. A
   spoiler's section or block folds and unfolds inside an open row, with the
   marks beside the text. The toolbar writes in the row your cursor is in, and

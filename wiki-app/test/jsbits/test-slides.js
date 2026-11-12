@@ -189,3 +189,4 @@ function wiki_test_ids_report() {
     .map((a) => a.getAttribute("href"));
   return JSON.stringify({ duplicates, outside, contents });
 }
+

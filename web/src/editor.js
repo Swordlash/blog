@@ -1141,12 +1141,34 @@ const charactersOfAll = (text, units) => {
 // text typed at either end of a row is the row's.
 const setLayout = StateEffect.define();
 
+// A layout mapped through a change, as rowsLayout maps it.
+const mappedLayout = (rows, mapping) => rows.map((row) => ({ key: row.key, from: mapping.mapPos(row.from, -1), to: mapping.mapPos(row.to, 1) }));
+
+// A structural step (a slide moved, deleted or added; the editor's step): the
+// layout before the step's change and the layout after it, keys included.
+// The step's transaction carries it, and its inverse (invertedEffects),
+// with the two swapped, goes into the history with the change's, so that
+// an undo puts the rows back with their keys and a redo makes the step
+// again; the open rows keep their editors. History maps an effect it keeps
+// through changes made outside it; both layouts are mapped as positions,
+// which is right for the layout of the text the change applies to.
+const relayout = StateEffect.define({
+  map: (value, mapping) => ({ before: mappedLayout(value.before, mapping), after: mappedLayout(value.after, mapping) }),
+});
+
+const steps = invertedEffects.of((tr) =>
+  tr.effects.filter((effect) => effect.is(relayout)).map((effect) => relayout.of({ before: effect.value.after, after: effect.value.before })),
+);
+
 const rowsLayout = StateField.define({
   create: () => [],
   update: (rows, tr) => {
-    for (const effect of tr.effects) if (effect.is(setLayout)) return effect.value;
+    for (const effect of tr.effects) {
+      if (effect.is(setLayout)) return effect.value;
+      if (effect.is(relayout)) return effect.value.after;
+    }
     if (!tr.docChanged || rows.length === 0) return rows;
-    return rows.map((row) => ({ key: row.key, from: tr.changes.mapPos(row.from, -1), to: tr.changes.mapPos(row.to, 1) }));
+    return mappedLayout(rows, tr.changes);
   },
 });
 
@@ -1277,7 +1299,8 @@ const rowsSync = (host) =>
   EditorView.updateListener.of((update) => {
     const rows = host.wikiRows ?? new Map();
     const problems = update.transactions.some((tr) => tr.effects.some((e) => e.is(setDiagnosticsEffect)));
-    const folds = update.transactions.some((tr) => tr.effects.some((e) => e.is(offerFolds) || e.is(setLayout)));
+    const relaid = update.transactions.some((tr) => tr.effects.some((e) => e.is(relayout)));
+    const folds = relaid || update.transactions.some((tr) => tr.effects.some((e) => e.is(offerFolds) || e.is(setLayout)));
     if (!update.docChanged && !update.selectionSet && !problems && !folds) return;
     const origin = update.transactions.map((tr) => tr.annotation(rowOf)).find((key) => key !== undefined);
     for (const [key, view] of rows) {
@@ -1285,23 +1308,37 @@ const rowsSync = (host) =>
       if (problems) problemsToRow(key, view, update.state);
       if (folds) foldsToRow(key, view, update.state);
     }
+    // A step, or its undo or redo: the component reads the rows again at
+    // once ("wiki-relayout"), and decides which open and which has the
+    // focus.
+    if (relaid) {
+      host.dispatchEvent(new CustomEvent("wiki-relayout"));
+      return;
+    }
     const editor = host.wikiEditor;
     if (!editor?.slidesShown() || origin !== undefined) return;
     const left = host.wikiFocusedRow;
-    const want = (key, close, focus) => host.dispatchEvent(new CustomEvent("wiki-row-wanted", { detail: { key, left: left ?? -1, close, focus } }));
+    const want = (key, close, focus, reason) =>
+      host.dispatchEvent(new CustomEvent("wiki-row-wanted", { detail: { key, left: left ?? -1, close, focus, reason } }));
     if (update.docChanged && update.transactions.some((tr) => tr.isUserEvent("input.wiki.assistant"))) {
       const written = new Set();
       update.changes.iterChangedRanges((_fromA, _toA, fromB) => written.add(rowAtPosition(update.state, fromB)));
-      for (const key of written) if (key !== undefined && !rows.has(key)) want(key, false, false);
+      for (const key of written) if (key !== undefined && !rows.has(key)) want(key, false, false, "assistant");
       return;
     }
     if (!(update.docChanged || update.selectionSet)) return;
     const target = rowAtPosition(update.state, update.state.selection.main.head);
     if (target === undefined || target === left) return;
-    const went = editor.jumping() || update.transactions.some((tr) => tr.isUserEvent("undo") || tr.isUserEvent("redo"));
+    const reason = editor.jumping()
+      ? "problem"
+      : update.transactions.some((tr) => tr.isUserEvent("undo"))
+        ? "undo"
+        : update.transactions.some((tr) => tr.isUserEvent("redo"))
+          ? "redo"
+          : "write";
     host.wikiFocusedRow = target;
     rows.get(target)?.focus();
-    want(target, went && left !== undefined, true);
+    want(target, reason !== "write" && left !== undefined, true, reason);
   });
 
 // Put the row with this key of the master's layout in `rowHost`: a
@@ -1680,6 +1717,7 @@ export function attach(textarea, host, original, codeTokens) {
       lintGutter(),
       folding,
       rowsLayout,
+      steps,
       rowsSync(host),
       EditorView.contentAttributes.of({
         "aria-label": textarea.getAttribute("aria-label") ?? "",
@@ -1791,16 +1829,51 @@ export function attach(textarea, host, original, codeTokens) {
       view.dispatch({ effects: setLayout.of(rows.map((r, i) => ({ key: Number(r[0]), from: units[2 * i], to: units[2 * i + 1] }))) });
       return true;
     },
+    // A structural step Haskell computed for `text` ("Wiki.Core.SlideRows":
+    // moveRow, deleteRow, newRow), as JSON {event, edits: [[from, to,
+    // insert]] in characters of `text`, rows: [[key, from, to]] in
+    // characters of the text after, select: [anchor, head] there or null}:
+    // one transaction, one step of the history, with its layout (relayout).
+    // Taken only while the master holds `text`: whether it was taken.
+    step: (text, json) => {
+      if (text !== view.state.doc.toString()) return false;
+      let given;
+      try {
+        given = JSON.parse(json);
+      } catch {
+        return false;
+      }
+      const edits = Array.isArray(given?.edits) ? given.edits : [];
+      const units = unitsOfAll(text, edits.flatMap((e) => [Number(e[0]) || 0, Number(e[1]) || 0]));
+      const changes = ChangeSet.of(
+        edits.map((e, i) => ({ from: units[2 * i], to: units[2 * i + 1], insert: String(e[2] ?? "") })),
+        text.length,
+      );
+      const next = changes.apply(view.state.doc).toString();
+      const rows = Array.isArray(given?.rows) ? given.rows : [];
+      const rowUnits = unitsOfAll(next, rows.flatMap((r) => [Number(r[1]) || 0, Number(r[2]) || 0]));
+      const after = rows.map((r, i) => ({ key: Number(r[0]), from: rowUnits[2 * i], to: rowUnits[2 * i + 1] }));
+      const select = Array.isArray(given?.select) ? unitsOfAll(next, given.select.map(Number)) : null;
+      view.dispatch({
+        changes,
+        selection: select ? EditorSelection.single(select[0], select[1]) : undefined,
+        effects: relayout.of({ before: view.state.field(rowsLayout), after }),
+        annotations: [isolateHistory.of("full"), Transaction.userEvent.of(String(given?.event ?? "input.slide"))],
+        filter: false,
+      });
+      return true;
+    },
     // The master's text and its rows' layout as it is now, mapped through
-    // every change since the last setRows, the cursor, and the key of the
-    // row whose editor had the focus last (-1 for none), as JSON {text,
-    // head, focused, rows: [[key, from]]}, in characters: what the
+    // every change since the last setRows, the selection, and the key of
+    // the row whose editor had the focus last (-1 for none), as JSON {text,
+    // anchor, head, focused, rows: [[key, from]]}, in characters: what the
     // component cuts again ("Wiki.Core.SlideRows.fromLayout").
     rows: () => {
       const all = view.state.doc.toString();
       const layout = view.state.field(rowsLayout);
-      const chars = charactersOfAll(all, [view.state.selection.main.head, ...layout.map((r) => r.from)]);
-      return JSON.stringify({ text: all, head: chars[0], focused: host.wikiFocusedRow ?? -1, rows: layout.map((r, i) => [r.key, chars[i + 1]]) });
+      const { anchor, head } = view.state.selection.main;
+      const chars = charactersOfAll(all, [anchor, head, ...layout.map((r) => r.from)]);
+      return JSON.stringify({ text: all, anchor: chars[0], head: chars[1], focused: host.wikiFocusedRow ?? -1, rows: layout.map((r, i) => [r.key, chars[i + 2]]) });
     },
     hasFocus: () => view.hasFocus,
     text: () => view.state.doc.toString(),

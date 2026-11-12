@@ -12,6 +12,7 @@
 module Wiki.App.View.SlideRow
   ( Head (..)
   , heads
+  , titleOf
   , Input (..)
   , Output (..)
   , component
@@ -30,7 +31,7 @@ import Halogen.HTML.Properties qualified as HP
 import Protolude hiding (State, head)
 import Web.DOM.Internal.Types (Element)
 import Web.Event.Event (EventType (..))
-import Wiki.App.Editor.Browser (attachRow, detachRow, historyKey)
+import Wiki.App.Editor.Browser (attachRow, detachRow, dragCarries, historyKey, markDragged, moveKey, pointerAfter)
 import Wiki.App.Editor.Problems (ProblemRange (..))
 import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), rowHeading, rowStarts, swallowed)
 import Wiki.Core.Slides (Fit (..), SlideSpan (..), fitName)
@@ -96,14 +97,31 @@ data Input = Input
   , open :: Bool
   , master :: Maybe Element
   , focus :: Bool
+  , movable :: Bool
+  -- ^ Whether the row can be moved and deleted: not one of the rows that
+  -- stay first ('Wiki.Core.SlideRows.fixedRows').
+  , dropMark :: Maybe Bool
+  -- ^ Where a row dragged over this one would go: before it ('False') or
+  -- after it ('True'), drawn as a line.
   }
 
 -- | What a row tells the editor: its header was clicked (to open or close
--- it), or Ctrl+Z ('True') or Ctrl+Y ('False') was pressed on it, which
--- are the editor's undo and redo.
+-- it); Ctrl+Z ('True') or Ctrl+Y ('False') was pressed on its header,
+-- which are the editor's undo and redo; Alt+Up (-1) or Alt+Down (1) was
+-- pressed on its header or its handle; its delete button or its "+" (a new
+-- slide after it) was pressed; its handle started a drag; a drag is over
+-- it, in its upper half or its lower one ('True'), or dropped there; or
+-- the drag ended.
 data Output
   = Toggled RowKey
   | History Bool
+  | Moved RowKey Int
+  | Deleted RowKey
+  | AddedAfter RowKey
+  | DragStarted RowKey
+  | DraggedOver RowKey Bool
+  | DroppedOn RowKey Bool
+  | DragEnded
 
 data State = State
   { input :: Input
@@ -117,6 +135,13 @@ data Action
   | Gone
   | Clicked
   | Pressed Bool
+  | MoveBy Int
+  | Delete
+  | AddAfter
+  | DragStart
+  | DragOver Bool
+  | Drop Bool
+  | DragEnd
 
 component :: forall query m. (MonadIO m, MonadUUID m) => H.Component query Input Output m
 component =
@@ -139,27 +164,74 @@ component =
       let h = st.input.head
           RowKey k = h.key
           body = "slide-row-body-" <> show k
+          number = maybe "" (\n -> " " <> show n) h.number
+          ready = isJust st.input.master
        in HH.div
-            [HP.class_ (HH.ClassName ("slide-row" <> (if st.input.open then " open" else ""))), HP.attr (HH.AttrName "data-fit") (fitName h.fit)]
-            [ HH.button
-                [ HP.attr (HH.AttrName "type") "button"
-                , HP.class_ (HH.ClassName "slide-row-toggle")
-                , HP.attr (HH.AttrName "aria-expanded") (if st.input.open then "true" else "false")
-                , HP.attr (HH.AttrName "aria-controls") body
-                , HP.disabled (isNothing st.input.master)
-                , HE.onClick (const Clicked)
-                , HE.handler' (EventType "keydown") (fmap Pressed . historyKey)
-                ]
-                ( [ HH.span [HP.class_ (HH.ClassName "slide-row-number")] [HH.text (maybe "" (\n -> show n <> ".") h.number)]
-                  , HH.span [HP.class_ (HH.ClassName "slide-row-title")] [HH.text (titleOf h)]
-                  , HH.span [HP.class_ (HH.ClassName ("slide-row-fit slide-fit-" <> fitName h.fit)), HP.attr (HH.AttrName "aria-hidden") "true"] []
-                  , HH.span [HP.class_ (HH.ClassName "visually-hidden")] [HH.text (", " <> fitPhrase h)]
+            ( [ HP.class_ (HH.ClassName ("slide-row" <> (if st.input.open then " open" else "") <> dropClass st.input.dropMark))
+              , HP.attr (HH.AttrName "data-fit") (fitName h.fit)
+              , HP.attr (HH.AttrName "data-row-key") (show k)
+              ]
+                <> if ready
+                  then
+                    [ HE.preventingDefault (HE.handler' (EventType "dragover") (\ev -> if dragCarries slideType ev then Just (DragOver (pointerAfter ev)) else Nothing))
+                    , HE.preventingDefault (HE.handler' (EventType "drop") (\ev -> if dragCarries slideType ev then Just (Drop (pointerAfter ev)) else Nothing))
+                    ]
+                  else []
+            )
+            ( [ HH.span
+                  [ HP.class_ (HH.ClassName "slide-row-handle")
+                  , HP.attr (HH.AttrName "draggable") "true"
+                  , HP.attr (HH.AttrName "role") "button"
+                  , HP.attr (HH.AttrName "tabindex") "0"
+                  , HP.attr (HH.AttrName "aria-label") ("Move slide" <> number <> " (Alt+Up, Alt+Down)")
+                  , HP.attr (HH.AttrName "title") "Drag to move, or Alt+Up and Alt+Down"
+                  , HE.handler' (EventType "dragstart") (\ev -> if markDragged ev h.key then Just DragStart else Just DragStart)
+                  , HE.handler' (EventType "dragend") (const (Just DragEnd))
+                  , HE.preventingDefault (HE.handler' (EventType "keydown") (\ev -> (Pressed <$> historyKey ev) <|> (MoveBy <$> moveKey ev)))
                   ]
-                    <> [HH.span [HP.class_ (HH.ClassName "slide-row-part")] [HH.text ("part of slide " <> show n)] | Just n <- [h.partOf]]
-                    <> [HH.span [HP.class_ (HH.ClassName "slide-row-problems")] [HH.text (problemsPhrase h.problems)] | h.problems > 0]
-                )
-            , HH.div [HP.class_ (HH.ClassName "slide-row-body editor-cm"), HP.id body, HP.ref st.host, HP.hidden (not st.input.open)] []
-            ]
+                  [HH.text "\x2807"]
+              | st.input.movable && ready
+              ]
+                <> [ HH.button
+                       [ HP.attr (HH.AttrName "type") "button"
+                       , HP.class_ (HH.ClassName "slide-row-toggle")
+                       , HP.attr (HH.AttrName "aria-expanded") (if st.input.open then "true" else "false")
+                       , HP.attr (HH.AttrName "aria-controls") body
+                       , HP.disabled (not ready)
+                       , HE.onClick (const Clicked)
+                       , HE.preventingDefault (HE.handler' (EventType "keydown") (\ev -> (Pressed <$> historyKey ev) <|> (if st.input.movable then MoveBy <$> moveKey ev else Nothing)))
+                       ]
+                       ( [ HH.span [HP.class_ (HH.ClassName "slide-row-number")] [HH.text (maybe "" (\n -> show n <> ".") h.number)]
+                         , HH.span [HP.class_ (HH.ClassName "slide-row-title")] [HH.text (titleOf h)]
+                         , HH.span [HP.class_ (HH.ClassName ("slide-row-fit slide-fit-" <> fitName h.fit)), HP.attr (HH.AttrName "aria-hidden") "true"] []
+                         , HH.span [HP.class_ (HH.ClassName "visually-hidden")] [HH.text (", " <> fitPhrase h)]
+                         ]
+                           <> [HH.span [HP.class_ (HH.ClassName "slide-row-part")] [HH.text ("part of slide " <> show n)] | Just n <- [h.partOf]]
+                           <> [HH.span [HP.class_ (HH.ClassName "slide-row-problems")] [HH.text (problemsPhrase h.problems)] | h.problems > 0]
+                       )
+                   ]
+                <> [ HH.button
+                       [ HP.attr (HH.AttrName "type") "button"
+                       , HP.class_ (HH.ClassName "slide-row-delete")
+                       , HP.attr (HH.AttrName "aria-label") ("Delete slide" <> number)
+                       , HP.attr (HH.AttrName "title") "Delete this slide (Ctrl+Z brings it back)"
+                       , HE.onClick (const Delete)
+                       ]
+                       [HH.text "\x00d7"]
+                   | st.input.movable && ready
+                   ]
+                <> [ HH.div [HP.class_ (HH.ClassName "slide-row-body editor-cm"), HP.id body, HP.ref st.host, HP.hidden (not st.input.open)] []
+                   , HH.button
+                       [ HP.attr (HH.AttrName "type") "button"
+                       , HP.class_ (HH.ClassName "slide-row-add")
+                       , HP.attr (HH.AttrName "aria-label") ("New slide after slide" <> number)
+                       , HP.attr (HH.AttrName "title") "A new slide after this one"
+                       , HP.disabled (not ready)
+                       , HE.onClick (const AddAfter)
+                       ]
+                       [HH.text "+"]
+                   ]
+            )
 
     handleAction :: Action -> H.HalogenM State Action Empty Output m ()
     handleAction = \case
@@ -172,6 +244,19 @@ component =
       Gone -> gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . detachRow)
       Clicked -> gets (\st -> st.input.head.key) >>= H.raise . Toggled
       Pressed undoing -> H.raise (History undoing)
+      MoveBy by -> key >>= \k -> H.raise (Moved k by)
+      Delete -> key >>= H.raise . Deleted
+      AddAfter -> key >>= H.raise . AddedAfter
+      DragStart -> key >>= H.raise . DragStarted
+      DragOver after -> do
+        k <- key
+        mark <- gets (\st -> st.input.dropMark)
+        unless (mark == Just after) $ H.raise (DraggedOver k after)
+      Drop after -> key >>= \k -> H.raise (DroppedOn k after)
+      DragEnd -> H.raise DragEnded
+
+    key :: H.HalogenM State Action Empty Output m RowKey
+    key = gets (\st -> st.input.head.key)
 
     -- The row's CodeMirror put in while the row is open and the master is
     -- there, and let go of when it closes.
@@ -191,7 +276,18 @@ component =
 -- | Whether two inputs of a row show the same: the master compared only by
 -- whether it is there, which it is from one load to the next.
 same :: Input -> Input -> Bool
-same a b = a.head == b.head && a.open == b.open && a.focus == b.focus && isJust a.master == isJust b.master
+same a b = a.head == b.head && a.open == b.open && a.focus == b.focus && isJust a.master == isJust b.master && a.movable == b.movable && a.dropMark == b.dropMark
+
+-- | The class of the line a dragged row would be dropped at.
+dropClass :: Maybe Bool -> Text
+dropClass = \case
+  Nothing -> ""
+  Just False -> " drop-before"
+  Just True -> " drop-after"
+
+-- | The type of a drag's data that a slide's row carries.
+slideType :: Text
+slideType = "application/x-wiki-slide"
 
 -- | A header's title: the opener's, "(untitled)" for an empty heading, and
 -- for text before the first slide, what it is.

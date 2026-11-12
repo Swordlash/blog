@@ -3654,6 +3654,21 @@ body:has(.slides-view) {
   border-color: var(--accent);
 }
 
+/* The chevron of a row that opens, as the editor's fold markers draw it:
+   pointing right while the row is closed, down while it is open. */
+.slide-row-toggle::before {
+  content: "\203a";
+  display: inline-block;
+  width: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+  transition: transform 0.1s;
+}
+
+.slide-row-toggle[aria-expanded="true"]::before {
+  transform: rotate(90deg);
+}
+
 .slide-row-number {
   min-width: 1.6rem;
   color: var(--muted);
@@ -3682,6 +3697,80 @@ body:has(.slides-view) {
 
 .slide-row-problems {
   color: #cf222e;
+}
+
+/* A movable row's handle, which drags it (or moves it with Alt+Up and
+   Alt+Down), and its delete button, beside its header; and the "+" under
+   a row, shown on hover and focus, for a new slide after it. A row
+   dragged over another draws a line where it would go. */
+.slide-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  column-gap: 0.25rem;
+  position: relative;
+}
+
+.slide-row > .slide-row-toggle {
+  grid-column: 2;
+}
+
+.slide-row > .slide-row-body,
+.slide-row > .slide-row-add {
+  grid-column: 1 / -1;
+}
+
+.slide-row-handle {
+  grid-column: 1;
+  padding: 0 0.2rem;
+  color: var(--muted);
+  cursor: grab;
+  user-select: none;
+}
+
+.slide-row-delete {
+  grid-column: 3;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.slide-row-handle:hover,
+.slide-row-handle:focus-visible,
+.slide-row-delete:hover,
+.slide-row-delete:focus-visible {
+  color: var(--accent);
+}
+
+.slide-row-add {
+  justify-self: center;
+  height: 1.2rem;
+  padding: 0 0.6rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--muted);
+  font: inherit;
+  line-height: 1;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.slide-row:hover > .slide-row-add,
+.slide-row-add:focus-visible {
+  opacity: 1;
+}
+
+.slide-row.drop-before {
+  box-shadow: 0 -2px 0 var(--accent);
+}
+
+.slide-row.drop-after {
+  box-shadow: 0 2px 0 var(--accent);
 }
 
 .editor-slides .editor-cm .cm-editor {
