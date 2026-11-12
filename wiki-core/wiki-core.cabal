@@ -249,6 +249,7 @@ test-suite wiki-core-html-test
         Test.Markdown.Highlight
         Test.Markdown.Html
         Test.Markdown.HtmlBlock
+        Test.Markdown.DeckEmbed
         Test.Markdown.InteractiveSvg
         Test.Markdown.RawHtml
         Test.Markdown.Render

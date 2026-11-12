@@ -63,6 +63,15 @@
 -- Otherwise it is the image, as without the class; so is an interactive
 -- embed in a link's text, where a frame and its link cannot go.
 --
+-- An embedded page with the class @presentation@
+-- (@![Talk](/s/docs/p/talk/){.presentation}@) is what the caller draws
+-- for it ('deckEmbed'), an island: the application's page draws a viewer
+-- of the presentation (WP5.97 of docs/PLAN.md), which starts as the link
+-- and stays it for a document or a page the reader may not read. With no
+-- 'deckEmbed' (a feed, an export, the slides, a viewer itself), in a
+-- link's text, or for anything but a page, it is what it is without the
+-- class.
+--
 -- __Layout.__ Headings carry their @id@, and end with an empty link to
 -- it, @\<a class=\"heading-anchor\">@, which the stylesheet shows as a @#@
 -- on hover. @[[!toc]]@ is the document's table of contents
@@ -174,6 +183,7 @@ module Wiki.Core.Markdown.Render
   , IslandKey (..)
   , defaultOptions
   , defaultResolveLink
+  , presentationClass
   , renderBlocks
   , renderLines
   , renderSections
@@ -241,6 +251,11 @@ data Options page w i = Options
   -- draws it. 'Nothing' by default: the embed is then an image, as a feed
   -- or an export shows it, since neither has the wiki's server behind it
   -- to answer the frame.
+  , deckEmbed :: Maybe (IslandKey -> page -> Text -> HH.HTML w i)
+  -- ^ How a page embedded with the class @presentation@ is drawn, given
+  -- the page and the caption (or else the destination), as an island:
+  -- the application's page draws a viewer. 'Nothing' by default: the
+  -- embed is then the link to the page, as without the class.
   , frameScheme :: FrameScheme
   -- ^ The colours an @html@ fence's frame is drawn in: the system's on a
   -- page, by default, and a slide's theme's on a slide ("Wiki.Core.Slides").
@@ -322,6 +337,7 @@ defaultOptions =
     , tikz = \_ src -> HH.pre [HP.class_ (HH.ClassName "tikz")] [HH.text src]
     , htmlBlock = \_ src _ _ -> HH.pre_ [HH.code [HP.class_ (HH.ClassName "language-html")] [HH.text src]]
     , svgFrame = Nothing
+    , deckEmbed = Nothing
     , frameScheme = SystemScheme
     , resolveLink = defaultResolveLink
     , pageHref = identity
@@ -708,7 +724,13 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
               ]
         | safeSrc ref.url -> pure [PNode (media (maybe (mediaKindOfPath ref.name) mediaKindOfType ref.mediaType) ref.url ref.downloadUrl (Just ref.name))]
         | otherwise -> pure [PText caption]
-      Page page -> pure [PNode (HH.a [HP.href (opts.pageHref page)] [HH.text (nonEmptyOr dest caption)])]
+      Page page
+        | not inLink
+        , presentationClass `elem` classes attrs
+        , Just draw <- opts.deckEmbed -> do
+            k <- island ("presentation " <> dest)
+            pure [PNode (draw k page (nonEmptyOr dest caption))]
+        | otherwise -> pure [PNode (HH.a [HP.href (opts.pageHref page)] [HH.text (nonEmptyOr dest caption)])]
       Unresolved -> pure [PNode (HH.span [classesProp ["embed-unresolved"], HP.title dest] [HH.text (nonEmptyOr dest caption)])]
       where
         common :: (HasType "title" Text r, HasType "id" Text r, HasType "class" Text r) => [HP.IProp r i]
@@ -1181,3 +1203,8 @@ frameContent opts = Html.renderHtml . map resolve . Html.parseFrameHtml
               kept = [(k, v) | (k, v) <- resolvedAttributes opts written, k `notElem` ["rel", "download"], not (k == "href" && inPage)]
            in kept <> (if any ((== "href") . fst) kept then [("target", "_blank"), ("rel", "noopener noreferrer")] else [])
       | otherwise = resolvedAttributes opts written
+
+-- | The class that makes an embedded page a viewer of the presentation
+-- ('deckEmbed'): @![Talk](/s/docs/p/talk/){.presentation}@.
+presentationClass :: Text
+presentationClass = "presentation"
