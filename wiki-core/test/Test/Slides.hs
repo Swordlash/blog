@@ -354,8 +354,8 @@ spec = describe "Slides" $ do
       forAll aClosedMove $ \(source, i, j) ->
         let spans = slideSpans source
             texts = snd (slideChunks source)
-         in i >= fixedSlides spans && j >= fixedSlides spans && i /= j && max i j < length spans && ordNub texts == texts
-              ==> moveSlide i j source /= source
+         in i >= fixedSlides spans && j >= fixedSlides spans && i /= j && max i j < length spans && ordNub texts == texts ==>
+              moveSlide i j source /= source
 
   describe "options" $ do
     it "are Beamer's look on a wide slide unless the page says otherwise" $
