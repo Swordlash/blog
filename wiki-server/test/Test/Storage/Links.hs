@@ -41,8 +41,9 @@ spec backing = describe "the table of links" $ do
     withDemoAt backing $ \at st -> do
       written <- linkRows st
       written `shouldSatisfy` (not . null)
-      -- The database as it was before step 14: no table, no step 14, no
-      -- version of the links. Step 14 alone runs again.
+      -- The database as it was before step 14: no table, no version of
+      -- the links; step 14 then makes the table again, empty, and the
+      -- program that opens the database fills it.
       withConnectionTo at $ \c -> do
         begin True c
         forgetStep 14 ["DROP TABLE page_links;"] c

@@ -66,6 +66,7 @@ module Wiki.Server.Rehearsal
     -- * Checks
   , Check (..)
   , Seeding (..)
+  , copyHasStep
   , Server (..)
   , withServer
   , listenAnywhere
@@ -139,7 +140,7 @@ import Wiki.Server.Storage (Place (..), withDatabase)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Backup (Restore (..), backupInto, restore)
 import Wiki.Server.Storage.Layout (PgPrograms (..))
-import Wiki.Server.Storage.Migrate (hasStep)
+import Wiki.Server.Storage.Migrate (schemaVersion)
 import Wiki.Server.Storage.Migrate.Code.Step0013 (step0013)
 import Wiki.Server.Storage.Migrate.Code.Step0015 (Renamed (..), renamedLogins, step0015)
 import Wiki.Server.Storage.Migrate.CodeStep (CodeStep (..))
@@ -234,7 +235,7 @@ rehearse o = either identity identity <$> runExceptT steps
       holdAll checks $ \held -> do
         -- What each check makes in the copy before the old program serves
         -- it, through the old program's console or in the copy's settings.
-        let seeding = Seeding {copy = scratchPlace, console = runConsole o.old (placeArgs scratchChoice)}
+        let seeding = Seeding {copy = scratchPlace, console = runConsole o.old (placeArgs scratchChoice), stepRan = copyHasStep scratchPlace}
         seeded <- for held $ \(Held name seed before after) ->
           liftIO (try (seed seeding)) >>= \case
             Left (e :: SomeException) -> broken ("The check of " <> name <> " could not prepare the copy: " <> show e)
@@ -469,7 +470,17 @@ data Seeding = Seeding
   -- @--data@ and database options, with this text on its standard input.
   -- Its output, or what it said when it failed. A command a check runs
   -- here is stable from then on, and says so in its documentation.
+  , stepRan :: Int -> IO Bool
+  -- ^ Whether the old program has applied this step of the schema to the
+  -- copy: whether the copy's version is that step's or later
+  -- ('copyHasStep'). A check whose seed depends on one step asks this; a
+  -- test plays an old program without a step by answering no.
   }
+
+-- | Whether the copy's schema is at a step or later: what 'stepRan' asks
+-- of a copy the old program made.
+copyHasStep :: Place -> Int -> IO Bool
+copyHasStep copy n = withDatabase copy (fmap (>= n) . schemaVersion)
 
 -- | A check while its 'holding' runs: its other parts, given what it
 -- holds.
@@ -1258,7 +1269,7 @@ seedLogins :: Seeding -> IO (Either Text (Maybe (Text, Text)))
 seedLogins seeding = runExceptT $ do
   -- Whether the program rehearsed from has step 15 already: then it has
   -- renamed every login it would.
-  done <- liftIO (withDatabase seeding.copy (hasStep step0015.version))
+  done <- liftIO (seeding.stepRan step0015.version)
   if done
     then pure Nothing
     else do
