@@ -1,10 +1,14 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | The editor marks what does not render (WP5.65 of docs/PLAN.md), in a
 -- browser, in the shell, over the demo's wiki: a Mermaid fence that does
 -- not parse, marked on the fence's lines once the preview has drawn it and
 -- no longer once it is fixed; a formula KaTeX cannot parse, marked again
 -- when the text is undone back to what a hidden preview shows; a spoiler that
 -- is not closed, which the parser finds without the preview; and the count
--- beside the buttons, which moves to the next problem at each click.
+-- beside the buttons, which moves to the next problem at each click; and
+-- the box a problem's mark opens, and the completion's list, readable in
+-- the light and the dark scheme.
 --
 -- A TikZ picture's failure goes the same way as a diagram's, through the
 -- islands' script's event; TeX runs in a worker and takes long, so it is
@@ -12,15 +16,26 @@
 module Test.Browser.Problems (spec) where
 
 import Control.Monad.UUID (MonadUUID)
+import Data.Aeson (decodeStrict, withObject, (.:))
+import Data.Aeson.Types (parseMaybe)
 import Data.Text qualified as T
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, startWith)
-import Test.Browser.Text (editorSelection, insertText, markdown, problemsMarked, setMarkdown)
+import Test.Browser.Text (editorSelection, editorText, insertText, markdown, problemsMarked, setMarkdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+
+$( browserJS
+     ["jsbits/test-tooltips.js"]
+     [ ("js_dark_scheme", "wiki_test_dark_scheme", Safe, [t|Bool -> IO Bool|])
+     , ("js_hover", "wiki_test_hover", Safe, [t|JSText -> IO Bool|])
+     , ("js_contrast", "wiki_test_contrast", Safe, [t|JSText -> IO JSText|])
+     ]
+ )
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
@@ -114,8 +129,48 @@ spec m = do
     -- After the last, the first again.
     find ui ".editor-problems" >>= click
     eventually $ editorSelection ui `shouldReturn` linesOf text 3 3
+
+  it "draws the box of a warning and of an error, and the completion's list, in colours that can be read, in the light and the dark scheme" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    -- A marker only a presentation reads, in a document, is a warning; a
+    -- spoiler not closed is an error.
+    let text = "# Hello, world\n\n[[!pause]]\n\n[[!spoiler]]{answer}(The answer)\nForty-two."
+    for_ [False, True] $ \dark -> do
+      setMarkdown ui text
+      eventually $ length <$> problemsMarked ui `shouldReturn` 2
+      unsafeIOToPageM (js_dark_scheme dark) `shouldReturn` True
+      -- The box each mark in the text opens when hovered.
+      for_ ["warning", "error"] $ \severity -> do
+        -- The mark, then one move over it: each move starts CodeMirror's
+        -- wait for a resting mouse again.
+        _ <- find ui (".editor-cm .cm-content .cm-lintRange-" <> severity)
+        unsafeIOToPageM (js_hover (toJSText (".cm-content .cm-lintRange-" <> severity))) `shouldReturn` True
+        _ <- find ui (".cm-tooltip-hover .cm-tooltip-lint .cm-diagnostic-" <> severity)
+        readable (".cm-tooltip-lint .cm-diagnostic-" <> severity <> " .cm-diagnosticText")
+      -- The box a mark in the gutter opens, a tooltip of its own.
+      unsafeIOToPageM (js_hover (toJSText (".cm-gutter-lint .cm-lint-marker-warning" :: Text))) `shouldReturn` True
+      _ <- find ui ".cm-tooltip.cm-tooltip-lint .cm-diagnostic-warning"
+      readable ".cm-tooltip.cm-tooltip-lint .cm-diagnostic-warning .cm-diagnosticText"
+      -- The completion's list: the entry Enter would choose, and another.
+      markdown ui >>= \now -> insertText ui (T.length now) "\n\n"
+      editorText ui >>= (`typeText` ":ta")
+      _ <- find ui ".cm-tooltip.cm-tooltip-autocomplete li[aria-selected] .cm-completionLabel"
+      readable ".cm-tooltip-autocomplete li[aria-selected] .cm-completionLabel"
+      readable ".cm-tooltip-autocomplete li:not([aria-selected]) .cm-completionLabel"
+      press "Escape"
+      eventually $ length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
   where
     helloEditor = EditPage (slugs ["blog"]) (slugs ["hello-world"])
+
+-- | That the text of the first element the selector finds in the editor
+-- has a contrast ratio of at least 4.5 against what is drawn behind it
+-- (WCAG's AA for text), as test/jsbits/test-tooltips.js computes it.
+readable :: Text -> PageM s ()
+readable selector = eventually $ do
+  json <- unsafeIOToPageM (fromJSText <$> js_contrast (toJSText selector))
+  case decodeStrict (encodeUtf8 json) >>= parseMaybe (withObject "Contrast" (.: "ratio")) of
+    Just (ratio :: Double) | ratio >= 4.5 -> pass
+    _ -> expectationFailure (toS (selector <> " is not readable: " <> json))
 
 -- | Turn the side by side preview on, so that the preview, and its
 -- islands, follow the typing.
