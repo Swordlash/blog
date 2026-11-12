@@ -70,6 +70,15 @@ function wiki_test_rows_master_shown_text() {
   return [...document.querySelectorAll(".rows-master .cm-line")].map((line) => line.textContent).join("\n");
 }
 
+// Type a text into a row at its cursor, a character at a time, as typing
+// does (each an "input.type" transaction of its own), all from this one
+// call: no wait between the keys, however slow the machine.
+function wiki_test_rows_type(key, text) {
+  const view = wikiTestRow(key)?.view;
+  if (!view) return;
+  for (const character of text) view.dispatch({ ...view.state.replaceSelection(character), userEvent: "input.type", scrollIntoView: true });
+}
+
 // Where a row's completion is: "active", "pending" or "".
 function wiki_test_rows_completing(key) {
   return wikiTestRow(key)?.completing() ?? "";

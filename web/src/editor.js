@@ -122,7 +122,7 @@ import {
 // tag completion, none of which the editor wants.
 import { markdownLanguage } from "@codemirror/lang-markdown";
 import { tagHighlighter, tags } from "@lezer/highlight";
-import { forEachDiagnostic, lintGutter, nextDiagnostic, setDiagnostics } from "@codemirror/lint";
+import { forEachDiagnostic, lintGutter, nextDiagnostic, setDiagnostics, setDiagnosticsEffect } from "@codemirror/lint";
 
 // What each piece of Markdown's syntax is drawn as: classes of web/style.css,
 // stable, so that the tests and the style sheet can name them. A marker
@@ -1310,24 +1310,87 @@ const editors = new Set();
 // that the master's history groups typing in a row as it groups typing in
 // the master. Each change of the master that a row did not make (an undo,
 // a toolbar command, the assistant) is put into the rows it touches. Which
-// text is which row is Haskell's (Wiki.Core.SlideRows); this only forwards
-// and maps.
+// text is which row is Haskell's (Wiki.Core.SlideRows): the master keeps
+// the rows' layout it was given (rowsLayout) and maps it through each
+// change; this only forwards and maps.
 //
-// `rowOf` marks a master transaction with the row it came from, and
-// `mirrored` marks a row transaction that only copies the master's, which
-// is not sent back.
+// Offsets cross to Haskell in characters (code points), and are UTF-16
+// units here: unitsOfAll and charactersOfAll convert them, each way, in
+// one pass over the text.
+//
+// `rowOf` marks a master transaction with the key of the row it came from,
+// and `mirrored` marks a row transaction that only copies the master's,
+// which is not sent back.
 const rowOf = Annotation.define();
 const mirrored = Annotation.define();
 
+// The UTF-16 offsets of some offsets in characters into a text, and the
+// other way, in the order given.
+const unitsOfAll = (text, counts) => {
+  const order = counts.map((count, index) => [count, index]).sort((a, b) => a[0] - b[0]);
+  const found = new Array(counts.length);
+  let at = 0;
+  let n = 0;
+  for (const [count, index] of order) {
+    while (n < count && at < text.length) {
+      at += text.codePointAt(at) > 0xffff ? 2 : 1;
+      n++;
+    }
+    found[index] = at;
+  }
+  return found;
+};
+
+const charactersOfAll = (text, units) => {
+  const order = units.map((unit, index) => [unit, index]).sort((a, b) => a[0] - b[0]);
+  const found = new Array(units.length);
+  let at = 0;
+  let n = 0;
+  for (const [unit, index] of order) {
+    while (at < unit && at < text.length) {
+      at += text.codePointAt(at) > 0xffff ? 2 : 1;
+      n++;
+    }
+    found[index] = n;
+  }
+  return found;
+};
+
+// The rows' layout, in the master's state: each row's key and range,
+// {key, from, to} in UTF-16 units, in the order of the text, as Haskell
+// last set it (setLayout), mapped through every change since: a start
+// stays before what is put in at it, and an end goes after it, so that
+// text typed at either end of a row is the row's.
+const setLayout = StateEffect.define();
+
+const rowsLayout = StateField.define({
+  create: () => [],
+  update: (rows, tr) => {
+    for (const effect of tr.effects) if (effect.is(setLayout)) return effect.value;
+    if (!tr.docChanged || rows.length === 0) return rows;
+    return rows.map((row) => ({ key: row.key, from: tr.changes.mapPos(row.from, -1), to: tr.changes.mapPos(row.to, 1) }));
+  },
+});
+
+// A row's range in a state's layout, or null for a key it does not have.
+const rangeOf = (state, key) => state.field(rowsLayout).find((row) => row.key === key) ?? null;
+
+// The key of the row a position is in: the last that starts at or before
+// it.
+const rowAtPosition = (state, at) => {
+  let found;
+  for (const row of state.field(rowsLayout)) if (row.from <= at) found = row.key;
+  return found;
+};
+
 // The master's transaction for a row's: the same changes, selection, user
 // event and history boundary, moved to where the row starts in the master.
-const forwarded = (row, tr) => {
-  const offset = row.from;
+const forwarded = (key, offset, tr) => {
   const changes = [];
   tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
     changes.push({ from: fromA + offset, to: toA + offset, insert: inserted.toString() });
   });
-  const annotations = [rowOf.of(row)];
+  const annotations = [rowOf.of(key)];
   const userEvent = tr.annotation(Transaction.userEvent);
   if (userEvent !== undefined) annotations.push(Transaction.userEvent.of(userEvent));
   const isolated = tr.annotation(isolateHistory);
@@ -1343,7 +1406,8 @@ const forwarded = (row, tr) => {
       : undefined,
     annotations,
     // The master's own filters (the title line's guard) are for typing in
-    // the master: a row's edit is taken as it was made.
+    // the master: a row's edit is taken as it was made, the first row's
+    // with the guard of its own.
     filter: false,
   };
 };
@@ -1353,138 +1417,187 @@ const forwarded = (row, tr) => {
 // a header's button) changes no selection of its own, and without this an
 // undo of what is typed next would put the master's cursor back in the row
 // the focus came from.
-const selectionToMaster = (row, masterView) => {
-  const { ranges, mainIndex } = row.view.state.selection;
+const selectionToMaster = (key, view, masterView) => {
+  const range = rangeOf(masterView.state, key);
+  if (range === null) return;
+  const { ranges, mainIndex } = view.state.selection;
   masterView.dispatch({
     selection: EditorSelection.create(
-      ranges.map((range) => EditorSelection.range(range.anchor + row.from, range.head + row.from)),
+      ranges.map((r) => EditorSelection.range(r.anchor + range.from, r.head + range.from)),
       mainIndex,
     ),
-    annotations: [rowOf.of(row), Transaction.addToHistory.of(false)],
+    annotations: [rowOf.of(key), Transaction.addToHistory.of(false)],
     filter: false,
   });
 };
 
+// Whether a position of a text is between the two halves of a surrogate
+// pair.
+const splitsPair = (text, at) => at > 0 && at < text.length && (text.charCodeAt(at) & 0xfc00) === 0xdc00;
+
 // Make a row's text the master's range again, after a change of the master
 // the row did not make: the part that differs replaced, as one change that
-// is not sent back. The row's selection follows the master's when the
-// master's cursor is in the row.
-const mirror = (row, state) => {
-  const now = state.sliceDoc(row.from, row.to);
-  const shown = row.view.state.doc.toString();
+// is not sent back, never between the halves of a character. The row's
+// selection follows the master's when the master's cursor is in the row.
+const mirror = (key, view, state) => {
+  const range = rangeOf(state, key);
+  if (range === null) return;
+  const now = state.sliceDoc(range.from, range.to);
+  const shown = view.state.doc.toString();
   const { head, anchor } = state.selection.main;
-  const inside = head >= row.from && head <= row.to && anchor >= row.from && anchor <= row.to;
+  const inside = head >= range.from && head <= range.to && anchor >= range.from && anchor <= range.to;
   if (now === shown && !inside) return;
   let start = 0;
   while (start < now.length && start < shown.length && now[start] === shown[start]) start++;
   let end = 0;
   while (end < now.length - start && end < shown.length - start && now[now.length - 1 - end] === shown[shown.length - 1 - end]) end++;
-  row.view.dispatch({
+  if (splitsPair(now, start) || splitsPair(shown, start)) start--;
+  if (splitsPair(now, now.length - end) || splitsPair(shown, shown.length - end)) end--;
+  view.dispatch({
     changes: now === shown ? undefined : { from: start, to: shown.length - end, insert: now.slice(start, now.length - end) },
-    selection: inside ? EditorSelection.single(anchor - row.from, head - row.from) : undefined,
+    selection: inside ? EditorSelection.single(anchor - range.from, head - range.from) : undefined,
     annotations: mirrored.of(true),
   });
 };
 
-// The master's side: each row's range mapped through every change, its
-// start before what is put in at it and its end after, so that text typed
-// at a row's either end is the row's; and the rows a change did not come
-// from shown the master's text.
+// The master's problems in a row's range, moved to the row, as the row's.
+const problemsToRow = (key, view, state) => {
+  const range = rangeOf(state, key);
+  if (range === null) return;
+  const found = [];
+  forEachDiagnostic(state, (d, from, to) => {
+    if (from >= range.from && from <= range.to) found.push({ ...d, from: from - range.from, to: Math.min(to, range.to) - range.from });
+  });
+  view.dispatch(setDiagnostics(view.state, found));
+};
+
+// The master's side: the rows a change did not come from shown the
+// master's text, and the master's problems; and, slide by slide, a "jump":
+// a change the author did not make in the row with the focus (an undo, a
+// redo, the next problem, the toolbar or the assistant writing) that put
+// the master's cursor in another row. The host then gets a
+// "wiki-row-wanted" event, {key, left, close}: the row to open, the row
+// that had the focus (-1 for none), and whether that row closes, which it
+// does when the author went there (an undo, a redo, the next problem) and
+// not when something was written there. A row already open takes the
+// focus at once.
 const rowsSync = (host) =>
   EditorView.updateListener.of((update) => {
-    const rows = host.wikiRows;
-    if (!rows || rows.size === 0) return;
-    if (!update.docChanged && !update.selectionSet) return;
-    const from = update.transactions.map((tr) => tr.annotation(rowOf)).find((row) => row !== undefined);
-    for (const row of rows) {
-      if (update.docChanged) {
-        row.from = update.changes.mapPos(row.from, -1);
-        row.to = update.changes.mapPos(row.to, 1);
-      }
-      if (row !== from) mirror(row, update.state);
+    const rows = host.wikiRows ?? new Map();
+    const problems = update.transactions.some((tr) => tr.effects.some((e) => e.is(setDiagnosticsEffect)));
+    if (!update.docChanged && !update.selectionSet && !problems) return;
+    const origin = update.transactions.map((tr) => tr.annotation(rowOf)).find((key) => key !== undefined);
+    for (const [key, view] of rows) {
+      if (key !== origin) mirror(key, view, update.state);
+      if (problems) problemsToRow(key, view, update.state);
     }
+    const editor = host.wikiEditor;
+    if (!editor?.slidesShown() || origin !== undefined || !(update.docChanged || update.selectionSet)) return;
+    const target = rowAtPosition(update.state, update.state.selection.main.head);
+    const left = host.wikiFocusedRow;
+    if (target === undefined || target === left) return;
+    const went = editor.jumping() || update.transactions.some((tr) => tr.isUserEvent("undo") || tr.isUserEvent("redo"));
+    host.wikiFocusedRow = target;
+    rows.get(target)?.focus();
+    const event = new CustomEvent("wiki-row-wanted", { detail: { key: target, left: left ?? -1, close: went && left !== undefined } });
+    host.dispatchEvent(event);
   });
 
-// Put a row in `rowHost`: a CodeMirror over the master's text from `from`
-// up to `to`, in characters (code points, as Haskell counts), the master
-// being the CodeMirror in `masterHost`. With `focus`, the row takes the
-// focus. A row already in the host gives way. Nothing without a master.
-export function attachRow(masterHost, rowHost, fromCharacters, toCharacters, focus) {
+// Put the row with this key of the master's layout in `rowHost`: a
+// CodeMirror over its range of the master's text, the master being the
+// CodeMirror in `masterHost`. With `focus`, the row takes the focus. Its
+// cursor starts where the master's is, when that is in the row (it opened
+// where an undo or a problem took the master's cursor), and at its start
+// otherwise. A row already in the host gives way. Nothing without a
+// master, or for a key the layout does not have.
+export function attachRow(masterHost, rowHost, key, focus) {
   const master = masterHost.wikiEditor;
   if (!master || !rowHost.isConnected) return;
   rowHost.wikiRow?.destroy();
   const masterView = master.view;
-  const text = masterView.state.doc.toString();
-  const row = { from: unitsOf(text, fromCharacters), to: unitsOf(text, toCharacters), view: null };
+  const range = rangeOf(masterView.state, key);
+  if (range === null) return;
   const keys = [
     { key: "Mod-z", run: () => undo(masterView), preventDefault: true },
     { key: "Mod-y", mac: "Mod-Shift-z", run: () => redo(masterView), preventDefault: true },
     { linux: "Mod-Shift-z", run: () => redo(masterView), preventDefault: true },
   ];
-  // The row's cursor starts where the master's is, when that is in the row
-  // (the row opened where an undo or a problem took the master's cursor),
-  // and at the row's start otherwise.
   const { anchor, head } = masterView.state.selection.main;
-  const inside = (at) => at >= row.from && at <= row.to;
-  row.view = new EditorView({
+  const inside = (at) => at >= range.from && at <= range.to;
+  const titled = masterHost.dataset.titleLine !== "false";
+  const view = new EditorView({
     state: EditorState.create({
-      doc: masterView.state.sliceDoc(row.from, row.to),
-      selection: inside(anchor) && inside(head) ? EditorSelection.single(anchor - row.from, head - row.from) : undefined,
+      doc: masterView.state.sliceDoc(range.from, range.to),
+      selection: inside(anchor) && inside(head) ? EditorSelection.single(anchor - range.from, head - range.from) : undefined,
       extensions: [
         // As the master's: a "\r" is a character of the text, not a line
         // break, so that the row's offsets are the master's.
         EditorState.lineSeparator.of("\n"),
         EditorView.clipboardInputFilter.of((pasted) => pasted.replace(/\r\n?/g, "\n")),
+        // The page's title line is the first row's first line.
+        titled && range.from === 0 ? titleLine : [],
         master.rowExtensions,
-        keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...keys, ...textKeys]),
+        keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...keys, ...textKeys, ...foldKeys]),
         EditorView.lineWrapping,
+        EditorView.contentAttributes.of({ spellcheck: "true", autocapitalize: "sentences", autocorrect: "on" }),
         EditorView.domEventHandlers({
-          focus: () => {
-            selectionToMaster(row, masterView);
+          focus: (_event, focused) => {
+            masterHost.wikiFocusedRow = key;
+            selectionToMaster(key, focused, masterView);
             return false;
+          },
+          // The browser's own undo and redo (a menu, a gesture) are the
+          // master's too.
+          beforeinput: (event) => {
+            if (event.inputType === "historyUndo") undo(masterView);
+            else if (event.inputType === "historyRedo") redo(masterView);
+            else return false;
+            event.preventDefault();
+            return true;
           },
         }),
       ],
     }),
-    dispatchTransactions: (trs, view) => {
-      view.update(trs);
+    dispatchTransactions: (trs, rowView) => {
+      rowView.update(trs);
       for (const tr of trs) {
         if (tr.annotation(mirrored) || (!tr.docChanged && !tr.selection)) continue;
-        masterView.dispatch(forwarded(row, tr));
+        const now = rangeOf(masterView.state, key);
+        if (now !== null) masterView.dispatch(forwarded(key, now.from, tr));
       }
     },
   });
-  rowHost.replaceChildren(row.view.dom);
-  masterHost.wikiRows ??= new Set();
-  masterHost.wikiRows.add(row);
-  master.rowsChanged();
+  rowHost.replaceChildren(view.dom);
+  masterHost.wikiRows ??= new Map();
+  masterHost.wikiRows.set(key, view);
+  problemsToRow(key, view, masterView.state);
+  const characterRange = () => {
+    const now = rangeOf(masterView.state, key);
+    return now === null ? [] : charactersOfAll(masterView.state.doc.toString(), [now.from, now.to]);
+  };
   rowHost.wikiRow = {
-    view: row.view,
-    text: () => row.view.state.doc.toString(),
-    range: () => {
-      const all = masterView.state.doc.toString();
-      return [characters(all, row.from), characters(all, row.to)];
-    },
+    view,
+    key,
+    text: () => view.state.doc.toString(),
+    range: characterRange,
     selection: () => {
-      const shown = row.view.state.doc.toString();
-      const { anchor, head } = row.view.state.selection.main;
-      return [characters(shown, anchor), characters(shown, head)];
+      const { anchor: a, head: h } = view.state.selection.main;
+      return charactersOfAll(view.state.doc.toString(), [a, h]);
     },
-    select: (anchor, head) => {
-      const shown = row.view.state.doc.toString();
-      row.view.dispatch({ selection: EditorSelection.single(unitsOf(shown, anchor), unitsOf(shown, head)) });
-      row.view.focus();
+    select: (a, h) => {
+      const [from, to] = unitsOfAll(view.state.doc.toString(), [a, h]);
+      view.dispatch({ selection: EditorSelection.single(from, to) });
+      view.focus();
     },
-    completing: () => completionStatus(row.view.state) ?? "",
-    hasFocus: () => row.view.hasFocus,
+    completing: () => completionStatus(view.state) ?? "",
+    hasFocus: () => view.hasFocus,
     destroy: () => {
-      masterHost.wikiRows?.delete(row);
-      masterHost.wikiEditor?.rowsChanged();
-      row.view.destroy();
-      if (rowHost.wikiRow?.view === row.view) delete rowHost.wikiRow;
+      if (masterHost.wikiRows?.get(key) === view) masterHost.wikiRows.delete(key);
+      view.destroy();
+      if (rowHost.wikiRow?.view === view) delete rowHost.wikiRow;
     },
   };
-  if (focus) row.view.focus();
+  if (focus) view.focus();
 }
 
 // Put CodeMirror in `host` in place of `textarea`, with `original`, the
@@ -1714,11 +1827,15 @@ export function attach(textarea, host, original, codeTokens) {
   const clamp = (at) => Math.min(Math.max(at, 0), doc.length);
   const changes = tracking(host);
   const completion = completions(host);
-  // The master's own completion, which is off while rows type into it
-  // (attachRow): a row's typing reaches the master as typing, and the
-  // master would ask the same question again and open a list of its own.
+  // The master's own completion, off while a presentation is edited slide
+  // by slide (attachRow): a row's typing reaches the master as typing, and
+  // the master would ask the same question again and open a list of its
+  // own. The component says which mode the editor is in (slidesMode).
   const ownCompletion = new Compartment();
-  let masterCompletes = true;
+  let bySlide = false;
+  // Whether the change being made is the author going somewhere (the next
+  // problem), which a jump from row to row closes the row left for.
+  let going = false;
   const follow = following(host);
   // The selection last told, in characters, as "from:to" ("" for none),
   // and whether it was empty.
@@ -1767,6 +1884,7 @@ export function attach(textarea, host, original, codeTokens) {
       dropTarget,
       slideControls(host),
       slideDrops(host),
+      rowsLayout,
       rowsSync(host),
       EditorView.contentAttributes.of({
         "aria-label": textarea.getAttribute("aria-label") ?? "",
@@ -1856,6 +1974,15 @@ export function attach(textarea, host, original, codeTokens) {
   });
   follow.start(view);
 
+  // The text takes the focus: the master's, or slide by slide the row the
+  // master's cursor is in, if it is open (the component opens it
+  // otherwise, on the "wiki-row-wanted" its change sent).
+  const focusText = () => {
+    if (!bySlide) return view.focus();
+    const key = rowAtPosition(view.state, view.state.selection.main.head);
+    host.wikiRows?.get(key)?.focus();
+  };
+
   const editor = {
     textarea,
     host,
@@ -1863,13 +1990,44 @@ export function attach(textarea, host, original, codeTokens) {
     // (attachRow): the completion, which asks the master's host, and the
     // Markdown as it is drawn.
     view,
-    rowExtensions: [completion.extension, new LanguageSupport(wikiMarkdown), syntaxHighlighting(highlighter), decorations(codeTokens), unclosedMath],
-    // A row came or went: the master completes only while it has none.
-    rowsChanged: () => {
-      const completes = (host.wikiRows?.size ?? 0) === 0;
-      if (completes === masterCompletes) return;
-      masterCompletes = completes;
-      view.dispatch({ effects: ownCompletion.reconfigure(completes ? completion.extension : []) });
+    rowExtensions: [completion.extension, new LanguageSupport(wikiMarkdown), syntaxHighlighting(highlighter), decorations(codeTokens), unclosedMath, lintGutter(), folding],
+    // Whether the presentation is edited slide by slide, its rows typing
+    // into the master: the master's completion is then off, and its focus
+    // goes to a row (focus below).
+    slidesMode: (on) => {
+      if (on === bySlide) return;
+      bySlide = on;
+      view.dispatch({ effects: ownCompletion.reconfigure(on ? [] : completion.extension) });
+    },
+    slidesShown: () => bySlide,
+    jumping: () => going,
+    // The rows' layout Haskell cut `text` into, as JSON [[key, from, to]]
+    // in characters, in the order of the text: taken only if the master
+    // still holds that text (a re-cut of an older text is dropped, and the
+    // next comes). Whether it was taken.
+    setRows: (text, json) => {
+      const all = view.state.doc.toString();
+      if (text !== all) return false;
+      let given = [];
+      try {
+        given = JSON.parse(json);
+      } catch {
+        return false;
+      }
+      const rows = (Array.isArray(given) ? given : []).filter((r) => Array.isArray(r) && r.length === 3);
+      const units = unitsOfAll(all, rows.flatMap((r) => [Number(r[1]) || 0, Number(r[2]) || 0]));
+      view.dispatch({ effects: setLayout.of(rows.map((r, i) => ({ key: Number(r[0]), from: units[2 * i], to: units[2 * i + 1] }))) });
+      return true;
+    },
+    // The master's text and its rows' layout as it is now, mapped through
+    // every change since the last setRows, and the cursor, as JSON {text,
+    // head, rows: [[key, from]]}, in characters: what the component cuts
+    // again ("Wiki.Core.SlideRows.fromLayout").
+    rows: () => {
+      const all = view.state.doc.toString();
+      const layout = view.state.field(rowsLayout);
+      const chars = charactersOfAll(all, [view.state.selection.main.head, ...layout.map((r) => r.from)]);
+      return JSON.stringify({ text: all, head: chars[0], rows: layout.map((r, i) => [r.key, chars[i + 1]]) });
     },
     hasFocus: () => view.hasFocus,
     text: () => view.state.doc.toString(),
@@ -1886,16 +2044,16 @@ export function attach(textarea, host, original, codeTokens) {
         userEvent: "input.wiki",
         scrollIntoView: true,
       });
-      view.focus();
+      focusText();
     },
-    focus: () => view.focus(),
+    focus: () => focusText(),
     // The caret at the end of the first line, the page's title line (after
     // its "# ", or wherever the line ends), the line scrolled into view and
     // the text focused: a click on the editor's title (WP5.55).
     titleLine: () => {
       const first = view.state.doc.line(1);
       view.dispatch({ selection: { anchor: first.to }, effects: EditorView.scrollIntoView(first.from, { y: "nearest" }) });
-      view.focus();
+      focusText();
     },
     // The component's answer to the question `id` about a mention: the
     // users, as [{login, name}], or null when they could not be found.
@@ -2017,8 +2175,13 @@ export function attach(textarea, host, original, codeTokens) {
     // The cursor to the next problem after it (or the first), with its
     // message shown, and the focus in the text.
     nextProblem: () => {
-      nextDiagnostic(view);
-      view.focus();
+      going = true;
+      try {
+        nextDiagnostic(view);
+      } finally {
+        going = false;
+      }
+      focusText();
     },
     // The problems marked, as {from, to, message} in UTF-16 units, for the
     // browser tests.
@@ -2071,7 +2234,7 @@ export function attach(textarea, host, original, codeTokens) {
     textShown: () => follow.textShown(),
     destroy: () => {
       editors.delete(editor);
-      for (const row of host.wikiRows ?? []) row.view.destroy();
+      for (const row of host.wikiRows?.values() ?? []) row.destroy();
       host.wikiRows?.clear();
       follow.stop();
       view.destroy();

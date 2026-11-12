@@ -36,17 +36,58 @@ function wiki_editor_attach(host, original) {
 }
 
 // Put a row of a presentation's slide mode in `rowHost`: a CodeMirror over
-// the master's text from `from` up to `to`, characters (code points) of the
-// text, the master being the CodeMirror in `masterHost` (web/src/editor.js's
-// attachRow). Without the page's islands.js, or before the master is in
-// place, nothing.
-function wiki_editor_attach_row(masterHost, rowHost, from, to, focus) {
-  globalThis.wikiIslands?.attachRow?.(masterHost, rowHost, from, to, focus);
+// the range the master's layout gives the row with this key, the master
+// being the CodeMirror in `masterHost` (web/src/editor.js's attachRow).
+// Without the page's islands.js, or before the master is in place, nothing.
+function wiki_editor_attach_row(masterHost, rowHost, key, focus) {
+  globalThis.wikiIslands?.attachRow?.(masterHost, rowHost, key, focus);
 }
 
 // Let go of the row in `rowHost`, if it has one.
 function wiki_editor_detach_row(rowHost) {
   rowHost.wikiRow?.destroy();
+}
+
+// Whether the page can put CodeMirror in place of the textarea: its
+// islands.js is there, with the editor.
+function wiki_editor_available() {
+  return typeof globalThis.wikiIslands?.attachEditor === "function";
+}
+
+// The master's text, its cursor and its rows' layout, as JSON {text, head,
+// rows: [[key, from]]} in characters; "" before CodeMirror is in place.
+function wiki_editor_rows(host) {
+  return host.wikiEditor?.rows?.() ?? "";
+}
+
+// Give the master the rows' layout Haskell cut `text` into, JSON [[key,
+// from, to]] in characters: taken only while the master holds that text.
+function wiki_editor_set_rows(host, text, json) {
+  return host.wikiEditor?.setRows?.(text, json) ?? false;
+}
+
+// Tell the master whether the presentation is edited slide by slide.
+function wiki_editor_slides_mode(host, on) {
+  host.wikiEditor?.slidesMode?.(on);
+}
+
+// The rows' list keeps what had the focus in it (a row's text, a row's
+// header), so that the focus can be given back when the list's patch moved
+// that element, which loses the focus in the browser.
+function wiki_editor_keep_focus(list) {
+  if (list.wikiKeepsFocus) return;
+  list.wikiKeepsFocus = true;
+  list.addEventListener("focusin", (event) => {
+    list.wikiFocused = event.target;
+  });
+}
+
+// Give the focus back to what had it in the list, if the focus is now
+// nowhere (on the page's body) and that element is still in the list.
+function wiki_editor_restore_focus(list) {
+  const last = list.wikiFocused;
+  const nowhere = document.activeElement === null || document.activeElement === document.body;
+  if (nowhere && last instanceof HTMLElement && last.isConnected && list.contains(last)) last.focus({ preventScroll: true });
 }
 
 function wikiCharacters(text, units) {

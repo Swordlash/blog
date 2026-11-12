@@ -35,8 +35,7 @@ module Wiki.App.Editor.Browser
     -- * The text
   , attachEditor
   , detachEditor
-  , attachRow
-  , detachRow
+  , editorAvailable
   , typedText
   , applyCommand
   , insertAtCursor
@@ -97,6 +96,18 @@ module Wiki.App.Editor.Browser
   , moveSlideIn
   , appendSlide
 
+    -- * A presentation's rows
+  , attachRow
+  , detachRow
+  , Layout (..)
+  , rowsLayout
+  , setRows
+  , slidesModeIn
+  , keepFocus
+  , restoreFocus
+  , RowWanted (..)
+  , rowWanted
+
     -- * Mentions
   , mentionAsked
   , answerMention
@@ -147,6 +158,7 @@ import Wiki.Core.Assistant.Edit (Change (..), Decision (..), Edit, Refusal, Repl
 import Wiki.Core.Assistant.Prompt (Span (..))
 import Wiki.Core.Markdown.Edit (Command (..), Selection (..), apply, cursor)
 import Wiki.Core.Markdown.Folds (Fold (..))
+import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), rowStarts)
 import Wiki.Core.Slides qualified as Slides
 import Wiki.Core.User (Login (..), User (..))
 
@@ -156,8 +168,14 @@ import Wiki.Core.User (Login (..), User (..))
 $( browserJS
      ["jsbits/editor.js"]
      [ ("js_attach", "wiki_editor_attach", Safe, [t|Element -> JSText -> IO ()|])
-     , ("js_attach_row", "wiki_editor_attach_row", Safe, [t|Element -> Element -> Int -> Int -> Bool -> IO ()|])
+     , ("js_attach_row", "wiki_editor_attach_row", Safe, [t|Element -> Element -> Int -> Bool -> IO ()|])
      , ("js_detach_row", "wiki_editor_detach_row", Safe, [t|Element -> IO ()|])
+     , ("js_available", "wiki_editor_available", Safe, [t|IO Bool|])
+     , ("js_rows", "wiki_editor_rows", Safe, [t|Element -> IO JSText|])
+     , ("js_set_rows", "wiki_editor_set_rows", Safe, [t|Element -> JSText -> JSText -> IO Bool|])
+     , ("js_slides_mode", "wiki_editor_slides_mode", Safe, [t|Element -> Bool -> IO ()|])
+     , ("js_keep_focus", "wiki_editor_keep_focus", Safe, [t|Element -> IO ()|])
+     , ("js_restore_focus", "wiki_editor_restore_focus", Safe, [t|Element -> IO ()|])
      , ("js_selection_start", "wiki_editor_selection_start", Safe, [t|Element -> IO Int|])
      , ("js_selection_end", "wiki_editor_selection_end", Safe, [t|Element -> IO Int|])
      , ("js_write", "wiki_editor_write", Safe, [t|Element -> JSText -> Int -> Int -> IO ()|])
@@ -274,6 +292,19 @@ $( jsFields
      ]
  )
 
+-- | The detail of a @wiki-row-wanted@ event: the row a change took the
+-- editor's cursor to.
+newtype RowWantedDetail = RowWantedDetail JSVal
+  deriving newtype (Inert)
+
+$( jsFields
+     ''RowWantedDetail
+     [ Fixed "key" ''Int
+     , Fixed "left" ''Int
+     , Fixed "close" ''Bool
+     ]
+ )
+
 -- | The detail of a @wiki-mention@ or @wiki-emoji@ event: a question
 -- about the letters typed of a mention or of an emoji's name.
 newtype QuestionDetail = QuestionDetail JSVal
@@ -383,17 +414,10 @@ attachEditor host original = liftIO (js_attach host (toJSText original))
 detachEditor :: (MonadIO m) => Element -> m ()
 detachEditor host = liftIO $ codeMirror host >>= traverse_ (.destroy)
 
--- | Put a row of a presentation's slide mode (WP5.103) in an element: a
--- CodeMirror over the range of the editor's text from one character up to
--- another, whose edits are the master's (the CodeMirror in the editor's
--- host), one history for the whole text. With 'True', the row takes the
--- focus. Nothing before the master is in place, nor natively.
-attachRow :: (MonadIO m) => Element -> Element -> Int -> Int -> Bool -> m ()
-attachRow master row start end focus = liftIO (js_attach_row master row start end focus)
-
--- | Let go of the row in an element, as its slide is closed or goes.
-detachRow :: (MonadIO m) => Element -> m ()
-detachRow = liftIO . js_detach_row
+-- | Whether the page can put CodeMirror in place of the textarea: its
+-- islands' script is there, with the editor. Natively, never.
+editorAvailable :: (MonadIO m) => m Bool
+editorAvailable = liftIO js_available
 
 -- | The whole text a @wiki-input@ event says the editor now has. Pure,
 -- since the event does not change.
@@ -900,6 +924,87 @@ emojiAsked = questionOf
 answerEmoji :: (MonadIO m) => Element -> Int -> [(Text, Text)] -> m ()
 answerEmoji host i found =
   liftIO . js_emojied host i $ jsonText [object ["name" .= name, "emoji" .= emoji] | (name, emoji) <- found]
+
+----------------------------------------------------------------------
+-- A presentation's rows
+
+-- | Put a row of a presentation's slide mode (WP5.103) in an element: a
+-- CodeMirror over the range the editor's CodeMirror, the master, gives
+-- the row with this key in its layout ('setRows'). The row's edits are the
+-- master's: one text, one history. With 'True', the row takes the focus.
+-- Nothing before the master is in place, for a key its layout does not
+-- have, nor natively.
+attachRow :: (MonadIO m) => Element -> Element -> RowKey -> Bool -> m ()
+attachRow master row (RowKey key) focus = liftIO (js_attach_row master row key focus)
+
+-- | Let go of the row in an element, as its slide is closed or goes.
+detachRow :: (MonadIO m) => Element -> m ()
+detachRow = liftIO . js_detach_row
+
+-- | 'Layout' is the master's text as it is now, its cursor, and its rows'
+-- starts, mapped through every change since the layout was last set: what
+-- "Wiki.Core.SlideRows" cuts again ('fromLayout'). Offsets in characters.
+data Layout = Layout
+  { text :: Text
+  , cursor :: Int
+  , starts :: [(RowKey, Int)]
+  }
+
+instance FromJSON Layout where
+  parseJSON = withObject "Layout" $ \o -> do
+    text <- o .: "text"
+    at <- o .: "head"
+    pairs <- o .: "rows"
+    pure Layout {text, cursor = at, starts = [(RowKey k, s) | (k, s) <- pairs]}
+
+-- | The master's 'Layout', once CodeMirror is in place.
+rowsLayout :: (MonadIO m) => Element -> m (Maybe Layout)
+rowsLayout host = liftIO $ do
+  json <- fromJSText <$> js_rows host
+  pure (decodeStrict (encodeUtf8 json))
+
+-- | Give the master the rows a text was cut into. The master takes them
+-- only while it holds that text, so that a cut of an older text is
+-- dropped: whether they were taken.
+setRows :: (MonadIO m) => Element -> Text -> Rows -> m Bool
+setRows host text rows =
+  liftIO . js_set_rows host (toJSText text) . jsonText $
+    [(k, s, s + T.length row.text) | (row, s) <- zip rows.rows (rowStarts rows), let RowKey k = row.key]
+
+-- | Tell the master whether the presentation is edited slide by slide: its
+-- own completion is off then, and its focus goes to the row its cursor is
+-- in.
+slidesModeIn :: (MonadIO m) => Element -> Bool -> m ()
+slidesModeIn host bySlide = liftIO (js_slides_mode host bySlide)
+
+-- | Keep, in the rows' list, what had the focus in it, for 'restoreFocus'.
+keepFocus :: (MonadIO m) => Element -> m ()
+keepFocus = liftIO . js_keep_focus
+
+-- | Give the focus back to what had it in the rows' list, when the list's
+-- patch moved that element and the focus went nowhere. Run it after a
+-- render that may have moved a row.
+restoreFocus :: (MonadIO m) => Element -> m ()
+restoreFocus = liftIO . js_restore_focus
+
+-- | 'RowWanted' is the row a change the author did not make in the row
+-- with the focus took the editor's cursor to (an undo, a redo, the next
+-- problem, the toolbar or the assistant writing elsewhere): the row to
+-- open, the row that had the focus, if any, and whether it closes, which
+-- it does when the author went to the other row and not when something
+-- was written there.
+data RowWanted = RowWanted
+  { key :: RowKey
+  , left :: Maybe RowKey
+  , close :: Bool
+  }
+
+-- | The row a @wiki-row-wanted@ event asks for. Pure, since the event does
+-- not change.
+rowWanted :: Event -> Maybe RowWanted
+rowWanted event = do
+  detail <- RowWantedDetail <$> detailOf event
+  Just RowWanted {key = RowKey detail.key, left = if detail.left < 0 then Nothing else Just (RowKey detail.left), close = detail.close}
 
 -- | Whether the browser should warn before a reload or closing the tab,
 -- as browsers do for a page with unsaved changes.

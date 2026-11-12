@@ -14,7 +14,7 @@
 //   wikiIslands.renderTikz(element, source, preamble, picture): Promise<void>
 //   wikiIslands.highlight(element, language, code)
 //   wikiIslands.attachEditor(textarea, host, original)
-//   wikiIslands.attachRow(masterHost, rowHost, from, to, focus)
+//   wikiIslands.attachRow(masterHost, rowHost, key, focus)
 //   wikiIslands.assistant(): Promise<module>
 //   wikiIslands.cropAvatar(host, file): Promise<void>
 //   wikiIslands.opaque(): Promise<module>
@@ -360,9 +360,9 @@ const attachEditor = (textarea, host, original) => {
 // A row of a presentation's slide mode over the editor's text (editor.js's
 // attachRow), once the editor's module has loaded: the module is loaded
 // already when the master is in place, so this waits only for a task.
-const attachRow = (masterHost, rowHost, from, to, focus) => {
+const attachRow = (masterHost, rowHost, key, focus) => {
   loadEditor()
-    .then((editor) => editor.attachRow(masterHost, rowHost, from, to, focus))
+    .then((editor) => editor.attachRow(masterHost, rowHost, key, focus))
     .catch((error) => console.error("A slide's row could not be shown:", error));
 };
 

@@ -24,19 +24,18 @@ module Test.Browser.SlideRows (spec) where
 import Control.Monad.UUID (MonadUUID)
 import DOM.HTML.Indexed qualified as I
 import Data.Aeson (decodeStrict)
-import Data.List (lookup, zip3)
 import Data.Row (Empty, type (.==))
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Protolude hiding (State, find)
 import Test.Hspec.Halogen
 import Web.DOM.Internal.Types qualified as Web
 import Web.Event.Event (EventType (..))
-import Wiki.App.Editor.Browser (answerEmoji, answerMention, attachEditor, attachRow, detachRow, emojiAsked, mentionAsked)
+import Wiki.App.Editor.Browser (answerEmoji, answerMention, attachEditor, attachRow, detachRow, emojiAsked, mentionAsked, setRows, slidesModeIn)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), cutRows, rowStarts)
 import Wiki.Core.User (Login (..), User (..))
@@ -62,6 +61,7 @@ $( browserJS
      , ("js_errors", "wiki_test_rows_errors", Safe, [t|IO JSText|])
      , ("js_master_completing", "wiki_test_rows_master_completing", Safe, [t|IO JSText|])
      , ("js_row_focused", "wiki_test_rows_focused", Safe, [t|Int -> IO Bool|])
+     , ("js_row_type", "wiki_test_rows_type", Safe, [t|Int -> JSText -> IO ()|])
      , ("js_master_shown_text", "wiki_test_rows_master_shown_text", Safe, [t|IO JSText|])
      ]
  )
@@ -69,13 +69,15 @@ $( browserJS
 spec :: forall m -> (MonadBrowserTest m, MonadUUID m) => Spec
 spec m = do
   it "sends typing in a row to the master, one undo step a word and one a row" $ runPage $ do
-    ui <- start deck [1, 2]
-    -- At the end of row 1's text, then of row 2's.
-    typeAt ui 1 (rowLength deck 1) " word"
+    _ <- start deck [1, 2]
+    -- At the end of row 1's text, then of row 2's, each word's keys typed
+    -- from one call in the page: no machine is slow enough to part them by
+    -- CodeMirror's grouping window.
+    typeFast 1 (rowLength deck 1) " word"
     let once = insertAt (rowEnd deck 1) " word" deck
     masterText `shouldReturn` once
     rowText 1 `shouldReturn` rowOf once 1
-    typeAt ui 2 (rowLength deck 2) " more"
+    typeFast 2 (rowLength deck 2) " more"
     let twice = insertAt (rowEnd deck 2 + T.length " word") " more" once
     masterText `shouldReturn` twice
     rowText 2 `shouldReturn` rowOf twice 2
@@ -91,6 +93,19 @@ spec m = do
     press "Control+y"
     eventually $ masterText `shouldReturn` once
     rowText 1 `shouldReturn` rowOf once 1
+
+  it "starts another undo step in a row after a pause longer than CodeMirror's grouping window" $ runPage $ do
+    _ <- start deck [1]
+    typeFast 1 (rowLength deck 1) " one"
+    -- 500 ms is CodeMirror's newGroupDelay.
+    unsafeIOToPageM (threadDelay 700_000)
+    unsafeIOToPageM (js_row_type 1 (toJSText " two"))
+    let both = insertAt (rowEnd deck 1) " one two" deck
+    masterText `shouldReturn` both
+    press "Control+z"
+    eventually $ masterText `shouldReturn` insertAt (rowEnd deck 1) " one" deck
+    press "Control+z"
+    eventually $ masterText `shouldReturn` deck
 
   it "takes back from a row the last change, made in another row, with the master's cursor in that row, open or closed" $ runPage $ do
     ui <- start deck [1, 2]
@@ -172,6 +187,7 @@ spec m = do
     ui <- mount m harness (Harness deck True)
     unsafeIOToPageM js_watch
     eventuallyWithin 10000 $ unsafeIOToPageM js_master_ready `shouldReturn` True
+    void (query ui (H.mkTell SendRows))
     unsafeIOToPageM js_master_shown `shouldReturn` False
     void (query ui (H.mkTell (OpenRow 2)))
     eventually $ unsafeIOToPageM (js_row_ready 2) `shouldReturn` True
@@ -260,6 +276,7 @@ spec m = do
     start text open = do
       ui <- mount m harness (Harness text False)
       eventuallyWithin 10000 $ unsafeIOToPageM js_master_ready `shouldReturn` True
+      void (query ui (H.mkTell SendRows))
       for_ open $ \k -> do
         void (query ui (H.mkTell (OpenRow k)))
         eventually $ unsafeIOToPageM (js_row_ready k) `shouldReturn` True
@@ -279,6 +296,13 @@ spec m = do
       content <- rowContent ui k
       selectIn k at at
       typeText content typed
+
+    -- Put the cursor in a row, and type there, every key from one call.
+    typeFast :: forall s. Int -> Int -> Text -> PageM s ()
+    typeFast k at typed = do
+      selectIn k at at
+      unsafeIOToPageM (js_row_type k (toJSText typed))
+      settle
 
     selectIn :: forall s. Int -> Int -> Int -> PageM s ()
     selectIn k anchor head' = unsafeIOToPageM (js_row_select k anchor head') >> settle
@@ -358,18 +382,20 @@ insertAt at piece text = T.take at text <> piece <> T.drop at text
 -- hidden from the start.
 data Harness = Harness Text Bool
 
--- | What a test asks of the harness: a row opened or closed, the list in
--- another order of keys, the master hidden or shown.
+-- | What a test asks of the harness: the master given the rows' layout
+-- and put in the slide mode, once it is there; a row opened or closed; the
+-- list in another order of keys; the master hidden or shown.
 data Query a
-  = OpenRow Int a
+  = SendRows a
+  | OpenRow Int a
   | CloseRow Int a
   | Reorder [Int] a
   | HideMaster Bool a
 
 data State = State
   { text :: Text
-  , ranges :: [(Int, (Int, Int))]
-  -- ^ Each row's key and range, in characters, from the fresh cut.
+  , rows :: Rows
+  -- ^ The text's fresh cut, keys from 0.
   , order :: [Int]
   , opened :: [Int]
   , hidden :: Bool
@@ -393,9 +419,7 @@ harness =
       { initialState = \(Harness text hidden) -> do
           ref <- H.newRefLabel "rows-master"
           let cut = rowsOf text
-              starts = rowStarts cut
-              ranges = [(k, (s, s + T.length r.text)) | (k, r, s) <- zip3 [0 ..] cut.rows starts]
-          pure State {text, ranges, order = map fst ranges, opened = [], hidden, masterRef = ref, masterHost = Nothing}
+          pure State {text, rows = cut, order = [0 .. length cut.rows - 1], opened = [], hidden, masterRef = ref, masterHost = Nothing}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.handleQuery = handleQuery, H.initialize = Just Initialize}
       }
@@ -417,9 +441,8 @@ harness =
             @I.HTMLol
             (HH.ElemName "ol")
             [HP.class_ (HH.ClassName "rows-list")]
-            [ (show k, HH.li [HP.attr (HH.AttrName "data-key") (show k)] [HH.slot "row" k row RowInput {master = st.masterHost, start, end, open = k `elem` st.opened} absurd])
+            [ (show k, HH.li [HP.attr (HH.AttrName "data-key") (show k)] [HH.slot "row" k row RowInput {master = st.masterHost, key = RowKey k, open = k `elem` st.opened} absurd])
             | k <- st.order
-            , Just (start, end) <- [lookup k st.ranges]
             ]
         ]
 
@@ -437,6 +460,12 @@ harness =
 
     handleQuery :: Query a -> H.HalogenM State Action Slots Void m (Maybe a)
     handleQuery = \case
+      SendRows next -> do
+        st <- get
+        for_ st.masterHost $ \host -> H.liftEffect $ do
+          void (setRows host st.text st.rows)
+          slidesModeIn host True
+        pure (Just next)
       OpenRow k next -> modify (\st -> st {opened = ordNub (k : st.opened)}) $> Just next
       CloseRow k next -> modify (\st -> st {opened = filter (/= k) st.opened}) $> Just next
       Reorder keys next -> modify (\st -> st {order = keys}) $> Just next
@@ -444,12 +473,11 @@ harness =
 
     ada = User {id = UserId "ada", login = Login "ada", displayName = "Ada Lovelace", avatar = Nothing}
 
--- | A row's input: the master's host, its range in characters, and whether
--- it is open.
+-- | A row's input: the master's host, the row's key in the master's
+-- layout, and whether it is open.
 data RowInput = RowInput
   { master :: Maybe Web.Element
-  , start :: Int
-  , end :: Int
+  , key :: RowKey
   , open :: Bool
   }
 
@@ -491,7 +519,7 @@ row =
       host <- H.getRef st.ref
       case (st.input.open, st.attached, st.input.master, host) of
         (True, False, Just master, Just h) -> do
-          H.liftEffect (attachRow master h st.input.start st.input.end False)
+          H.liftEffect (attachRow master h st.input.key False)
           modify (\s -> s {attached = True})
         (False, True, _, Just h) -> do
           H.liftEffect (detachRow h)
