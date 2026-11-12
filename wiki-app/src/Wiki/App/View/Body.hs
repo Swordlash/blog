@@ -65,6 +65,7 @@ module Wiki.App.View.Body
   , commentBodies
   , startsWithHeading
   , slides
+  , slidesReporting
   , followingLinks
   , followingLinksIn
   , islandOptions
@@ -409,6 +410,20 @@ slides
   -> Slides.Deck
   -> [Slides.RenderedSlide (H.ComponentSlot slots m action) action]
 slides place = Slides.renderDeck (options place)
+
+-- | 'slides', with each island reporting how it drew, as 'articleLines'
+-- does: the editor's preview of a presentation, whose islands' failures
+-- the editor marks in the text.
+slidesReporting
+  :: forall action slots m
+   . (MonadIslands m, MonadUUID m, HasIslands slots)
+  => (Md.IslandKey -> Islands.Output -> action)
+  -> Place
+  -> Slides.Deck
+  -> [Slides.RenderedSlide (H.ComponentSlot slots m action) action]
+slidesReporting onIsland place = Slides.renderDeck (optionsWith reported place)
+  where
+    reported key input = HH.slot "island" key Islands.reporting input (onIsland key)
 
 options :: (MonadIslands m, MonadUUID m, HasIslands slots) => Place -> Md.Options PageLink (H.ComponentSlot slots m action) action
 options = optionsWith quietIsland

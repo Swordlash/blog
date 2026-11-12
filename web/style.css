@@ -2521,15 +2521,103 @@ body:has(.slides-view) {
 
 /* The editor's preview of a presentation (Wiki.App.View.Preview): its
    slides as cards, one under the other, each with its notes under it,
-   every step shown. */
+   every step shown. Each slide is laid out 1024px wide, where it is
+   measured (wiki-app/jsbits/slide-fit.js), and scaled to the pane by a
+   transform, which leaves the layout as it is; a card not shown is laid
+   out off the pane. */
+.slides-preview {
+  position: relative;
+}
+
 .slides-preview .slide-frame {
+  position: relative;
   display: flex;
   margin-bottom: 1.5rem;
 }
 
+.slides-preview .slide-frame.slide-offstage {
+  position: absolute;
+  top: 0;
+  left: -40000px;
+  width: 1024px;
+  visibility: hidden;
+}
+
+.slides-preview .slide-scaled {
+  height: calc(1024px / (var(--slide-ratio)) * var(--slide-scale, 1));
+  overflow: hidden;
+}
+
 .slides-preview .slide-slot {
   flex: none;
+  width: 1024px;
   aspect-ratio: var(--slide-ratio);
+  transform: scale(var(--slide-scale, 1));
+  transform-origin: 0 0;
+}
+
+/* Whether a card's content fits: a dot at its corner, grey until
+   measured, green, yellow or red. */
+.slide-fit {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 1;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--fit-colour, #8c959f);
+  box-shadow: 0 0 0 2px var(--background);
+}
+
+.slide-fit-fits,
+.cm-wiki-fit-fits {
+  --fit-colour: #1a7f37;
+}
+
+.slide-fit-tight,
+.cm-wiki-fit-tight {
+  --fit-colour: #bf8700;
+}
+
+.slide-fit-overflowing,
+.cm-wiki-fit-overflowing {
+  --fit-colour: #cf222e;
+}
+
+/* A slide's body ends with an empty mark, which the measure finds its
+   content's end by. */
+.slide-end {
+  display: block;
+  height: 0;
+}
+
+/* A presentation's preview is always laid out, so that its slides are
+   measured: off the screen while it is not shown. */
+.editor-form.deck .editor-panes .editor-preview {
+  display: block;
+  position: fixed;
+  top: 0;
+  left: -40000px;
+  width: 1024px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@media (min-width: 961px) {
+  .editor-form.deck.side-by-side:not(.conflicting) .editor-panes .editor-preview {
+    position: static;
+    width: auto;
+    visibility: visible;
+    pointer-events: auto;
+  }
+}
+
+.editor-form.deck.previewing .editor-panes .editor-preview {
+  position: static;
+  width: auto;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .slides-preview .slide {
@@ -3474,6 +3562,16 @@ body:has(.slides-view) {
 .cm-wiki-slide-toggle:hover,
 .cm-wiki-slide-handle:hover {
   color: var(--accent);
+}
+
+.cm-wiki-slide-fit {
+  display: inline-block;
+  align-self: center;
+  width: 0.55em;
+  height: 0.55em;
+  margin: 0 0.2rem;
+  border-radius: 50%;
+  background: var(--fit-colour, #8c959f);
 }
 
 .cm-wiki-slide-drop {

@@ -1,4 +1,5 @@
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | The editor's preview: a draft rendered as the page view will show it
 -- once it is saved ("Wiki.App.View.Body"), each block after a marker of
@@ -32,9 +33,14 @@ module Wiki.App.View.Preview
 where
 
 import Control.Monad.UUID (MonadUUID)
+import Data.Aeson (decodeStrict)
 import Halogen qualified as H
+import Halogen.JSBits (Callback, Safety (..), browserJS, freeCallback, inBrowser, jsValText, mkSyncCallback)
+import Halogen.Subscription qualified as HS
 import Halogen.TH (hh)
 import Protolude hiding (State)
+-- With its constructor: the FFI passes the value inside the newtype.
+import Web.DOM.Internal.Types (Element (..))
 import Wiki.App.Backend (MonadLoad (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
@@ -46,7 +52,7 @@ import Wiki.App.View.Common (Context (..))
 import Wiki.App.View.Slides (deckClasses, slideCard)
 import Wiki.Core.Markdown (parseMarkdown)
 import Wiki.Core.Markdown.Render (IslandKey)
-import Wiki.Core.Slides (Deck (..), Slide (..), deckOf, showingStep)
+import Wiki.Core.Slides (Deck (..), Fit (..), Slide (..), deckOf, fitOf, showingStep)
 
 -- | The preview's input: the draft's title and Markdown, the place it is
 -- read in, and, for a presentation, which of its slides are shown.
@@ -73,59 +79,128 @@ data State = State
   { input :: Input
   , known :: Body.People
   -- ^ The people the draft mentions, as far as they have been looked up.
+  , root :: H.RefLabel
+  -- ^ A presentation's cards, which are measured.
+  , watch :: Maybe FitWatch
+  -- ^ The measuring of a presentation's cards, once started.
+  , measured :: Maybe (Text, [Fit])
+  -- ^ Whether each slide fits, by its place in the deck, and the text it
+  -- was measured for.
   }
 
 -- | What the preview tells its parent: an island's output, with the
--- island's key in the draft.
-data Output = IslandDrawn IslandKey Islands.Output
+-- island's key in the draft; and whether each slide of a presentation
+-- fits, measured for a text, by its place in the deck.
+data Output = IslandDrawn IslandKey Islands.Output | SlidesMeasured Text [Fit]
 
-data Action = Initialize | Receive Input | FollowLink ArticleLink | FromIsland IslandKey Islands.Output
+data Action
+  = Initialize
+  | Finalize
+  | Receive Input
+  | FollowLink ArticleLink
+  | FromIsland IslandKey Islands.Output
+  | Measured Text
+
+-- | The measuring of a presentation's cards (@jsbits/slide-fit.js@): its
+-- number there, and the callback the measures come through, freed when it
+-- stops.
+data FitWatch = FitWatch Int Callback
+
+$( browserJS
+     ["jsbits/slide-fit.js"]
+     [ ("js_fit_watch", "wiki_fit_watch", Safe, [t|Element -> Callback -> IO Int|])
+     , ("js_fit_stop", "wiki_fit_stop", Safe, [t|Int -> IO ()|])
+     ]
+ )
 
 component :: forall query m. (MonadLoad m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input Output m
 component =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \input -> pure State {input, known = Body.noPeople}
+      { initialState = \input -> do
+          root <- H.newRefLabel "slides-preview"
+          pure State {input, known = Body.noPeople, root, watch = Nothing, measured = Nothing}
       , render
-      , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.receive = Just . Receive, H.initialize = Just Initialize}
+      , eval =
+          H.mkEval
+            H.defaultEval
+              { H.handleAction = handleAction
+              , H.receive = Just . Receive
+              , H.initialize = Just Initialize
+              , H.finalize = Just Finalize
+              }
       }
   where
     render :: State -> H.ComponentHTML Action IslandSlots m
-    render State {input = Input {place, title, body, slides}, known} = case slides of
+    render st@State {input = Input {place, title, body, slides}, known} = case slides of
       Nothing ->
         [hh|
           <div class="preview">{{ Body.heading title body }}{{ Body.articleLines FollowLink FromIsland (Body.withPeople known.found place) body }}</div>
         |]
+      -- Every slide is rendered, as one document cut into slides, as the
+      -- slides view renders them, so that what a slide takes from those
+      -- before it (a macro, a footnote's number, an island's key) is the
+      -- same; the cards not asked for are laid out off the pane, where
+      -- they are measured too.
       Just shown ->
         let d = either (const (deckOf [])) deckOf (parseMarkdown body)
             count = length d.slides
-            picked = case shown of
-              WholeDeck -> zip [1 ..] d.slides
-              SlideAt i -> [(m, s) | (m, s) <- zip [1 ..] d.slides, m == max 1 (min (i + 1) count)]
+            picked n = case shown of
+              WholeDeck -> True
+              SlideAt i -> n == max 1 (min (i + 1) count)
             withPlace = Body.withPeople known.found place
-            rendered = Body.slides withPlace Deck {options = d.options, slides = [showingStep s.steps s | (_, s) <- picked]}
+            rendered = Body.slidesReporting FromIsland withPlace Deck {options = d.options, slides = [showingStep s.steps s | s <- d.slides]}
+            fits = case st.measured of
+              Just (text, found) | text == body -> found
+              _ -> []
+            fitAt n = fromMaybe Unmeasured (atMay fits (n - 1))
          in [hh|
-              <div class="preview slides-preview {{ deckClasses d }}" {{ Body.followingLinks FollowLink withPlace }}>
-                {% for ((n, s), html) in zip picked rendered %}
-                  {{ slideCard title count n s html }}
+              <div ref={{ st.root }} class="preview slides-preview {{ deckClasses d }}" {{ Body.followingLinks FollowLink withPlace }}>
+                {% for ((n, s), html) in zip (zip [1 ..] d.slides) rendered %}
+                  {{ slideCard title count n (picked n) (fitAt n) s html }}
                 {% end %}
               </div>
             |]
 
     handleAction :: Action -> H.HalogenM State Action IslandSlots Output m ()
     handleAction = \case
-      Initialize -> resolvePeople
+      Initialize -> resolvePeople >> watchFits
+      Finalize -> gets (\st -> st.watch) >>= traverse_ (\(FitWatch i callback) -> liftIO (js_fit_stop i >> freeCallback callback))
       Receive new -> do
         old <- gets (\st -> st.input)
         unless (same old new) $ do
           modify (\st -> st {input = new})
           resolvePeople
+          watchFits
       -- A link in the preview is followed as in the page: the shell asks
       -- before it leaves unsaved changes behind.
       FollowLink target -> do
         router <- gets (\st -> st.input.place.context.router)
         H.liftEffect (followArticleLink router target)
       FromIsland key out -> H.raise (IslandDrawn key out)
+      -- The cards as they are laid out now, for the text rendered now.
+      Measured json -> do
+        st <- get
+        let fits = maybe [] (map (maybe Unmeasured (uncurry fitOf))) (decodeStrict (encodeUtf8 json) :: Maybe [Maybe (Double, Double)])
+            now = (st.input.body, fits)
+        when (isJust st.input.slides && st.measured /= Just now) $ do
+          modify (\s -> s {measured = Just now})
+          H.raise (SlidesMeasured st.input.body fits)
+
+    -- Start measuring a presentation's cards, once they are rendered.
+    watchFits :: H.HalogenM State Action IslandSlots Output m ()
+    watchFits = when inBrowser $ do
+      st <- get
+      when (isJust st.input.slides && isNothing st.watch) $
+        H.getRef st.root
+          >>= traverse_
+            ( \element -> do
+                channel <- liftIO HS.create
+                void (H.subscribe channel.emitter)
+                callback <- liftIO (mkSyncCallback (HS.notify channel.listener . Measured . jsValText))
+                i <- liftIO (js_fit_watch element callback)
+                modify (\s -> s {watch = Just (FitWatch i callback)})
+            )
 
     resolvePeople :: H.HalogenM State Action IslandSlots Output m ()
     resolvePeople = do

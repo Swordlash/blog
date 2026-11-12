@@ -217,7 +217,7 @@ $( jsFields
      , -- The folds, as JSON: [[first, last]], lines from 1.
        Method "foldedLines" [t|IO Text|]
      , -- A presentation's slides found in a text, as JSON: [[first line,
-       -- movable]].
+       -- movable, fit]].
        Method "slides" [t|Text -> Text -> IO ()|]
      , -- The cursor's line, from 1.
        Method "cursorLine" [t|IO Int|]
@@ -571,12 +571,13 @@ reportedFolds = fromMaybe [] . (decodeRanges . jsValText <=< detailOf)
 -- | Mark a presentation's slides found in a text
 -- ("Wiki.Core.Slides.slideSpans") in the editor (WP5.97 of
 -- docs/PLAN.md): each slide's first line gets a button that opens or
--- closes it ('slideToggled') and, when it can move, a handle to drag it
--- by ('slideDropped'). The marks replace those made before; none takes
+-- closes it ('slideToggled'), when it can move a handle to drag it by
+-- ('slideDropped'), and a mark of whether it fits
+-- ('Wiki.Core.Slides.fitName'). The marks replace those made before; none takes
 -- them away (a document, or a presentation's raw Markdown). CodeMirror
 -- takes them only while it holds that text. Before CodeMirror has loaded
 -- nothing is marked: its @wiki-ready@ event says when to mark them.
-markSlides :: (MonadIO m) => Element -> Text -> [(Int, Bool)] -> m ()
+markSlides :: (MonadIO m) => Element -> Text -> [(Int, Bool, Text)] -> m ()
 markSlides host text marks = liftIO $ codeMirror host >>= traverse_ (\cm -> cm.slides text (decodeUtf8 (BSL.toStrict (encode marks))))
 
 -- | The line the editor's cursor is on, from 1: the first line before

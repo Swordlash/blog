@@ -619,8 +619,9 @@ const folding = [
 // component for the text they were found in (wikiEditor.slides) and never
 // computed here, as the folds are. Each slide's first line starts with its
 // controls: a handle to drag the slide by, when it can move (not the text
-// before the first heading, nor the title slide), and a button that opens
-// or closes it, which tells the component by a "wiki-open-slide" event
+// before the first heading, nor the title slide), a button that opens
+// or closes it, and a mark of whether its content fits on it, as the
+// preview measured it (grey until measured), and the button which tells the component by a "wiki-open-slide" event
 // ({line, open, more}: the slide's first line, from 1, and more when Ctrl
 // or Cmd was held). A slide dragged by its handle and dropped on another
 // slide is told by a "wiki-move-slide" event ({from, to, after}: the two
@@ -665,17 +666,27 @@ const dropTarget = StateField.define({
 // lasts. One at a time in a page: a drag is the pointer's.
 let draggedSlide = null;
 
+// What a slide's mark of its fit says, on hover, by the fit's name
+// (Wiki.Core.Slides.fitName).
+const fitTitles = {
+  unmeasured: "Not measured yet",
+  fits: "Fits on the slide",
+  tight: "May be cut slightly: less than half a line to spare, or up to a line beyond the slide",
+  overflowing: "Cut: more than a line beyond the slide",
+};
+
 class SlideControls extends WidgetType {
-  constructor(index, movable, open, host) {
+  constructor(index, movable, open, fit, host) {
     super();
     this.index = index;
     this.movable = movable;
     this.open = open;
+    this.fit = fit;
     this.host = host;
   }
 
   eq(other) {
-    return other.index === this.index && other.movable === this.movable && other.open === this.open;
+    return other.index === this.index && other.movable === this.movable && other.open === this.open && other.fit === this.fit;
   }
 
   toDOM(view) {
@@ -713,6 +724,12 @@ class SlideControls extends WidgetType {
       this.host.dispatchEvent(new CustomEvent("wiki-open-slide", { detail }));
     });
     controls.append(toggle);
+    // Whether the slide's content fits on it, as the preview measured it.
+    const fit = document.createElement("span");
+    const name = Object.hasOwn(fitTitles, this.fit) ? this.fit : "unmeasured";
+    fit.className = `cm-wiki-slide-fit cm-wiki-fit-${name}`;
+    fit.title = fitTitles[name];
+    controls.append(fit);
     return controls;
   }
 
@@ -730,7 +747,7 @@ const slideControls = (host) =>
     });
     return Decoration.set(
       state.field(slideMarks).map((mark) =>
-        Decoration.widget({ widget: new SlideControls(mark.index, mark.movable, !folded.has(mark.from), host), side: -1 }).range(mark.from),
+        Decoration.widget({ widget: new SlideControls(mark.index, mark.movable, !folded.has(mark.from), mark.fit, host), side: -1 }).range(mark.from),
       ),
     );
   });
@@ -1752,8 +1769,8 @@ export function attach(textarea, host, original, codeTokens) {
     // text.
     foldedLines: () => JSON.stringify(foldedLinesOf(view.state)),
     // A presentation's slides Haskell found in `text`
-    // (Wiki.Core.Slides.slideSpans), as JSON [[first line, movable]], lines
-    // from 1, in place of those marked before; [] for none (a document, or
+    // (Wiki.Core.Slides.slideSpans), as JSON [[first line, movable, fit]],
+    // lines from 1, in place of those marked before; [] for none (a document, or
     // the presentation's raw Markdown). Taken only for the text CodeMirror
     // holds, as the folds are.
     slides: (text, json) => {
@@ -1766,10 +1783,13 @@ export function attach(textarea, host, original, codeTokens) {
         list = [];
       }
       const marks = (Array.isArray(list) ? list : [])
-        .map((entry, index) => (Array.isArray(entry) && Number.isInteger(entry[0]) && entry[0] >= 1 && entry[0] <= doc.lines ? { from: doc.line(entry[0]).from, index, movable: entry[1] === true } : null))
+        .map((entry, index) => (Array.isArray(entry) && Number.isInteger(entry[0]) && entry[0] >= 1 && entry[0] <= doc.lines ? { from: doc.line(entry[0]).from, index, movable: entry[1] === true, fit: String(entry[2] ?? "unmeasured") } : null))
         .filter((mark) => mark !== null);
       view.dispatch({ effects: setSlides.of(marks) });
     },
+    // The fits marked beside the slides' handles, by their names, in the
+    // order of the text, for the browser tests.
+    slideFits: () => view.state.field(slideMarks).map((mark) => mark.fit),
     // The cursor's line, from 1.
     cursorLine: () => view.state.doc.lineAt(view.state.selection.main.head).number,
     // The cursor to the next problem after it (or the first), with its

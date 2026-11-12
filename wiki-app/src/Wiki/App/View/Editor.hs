@@ -613,6 +613,9 @@ data State = State
   , cursorAt :: Int
   -- ^ The line the cursor is on, from 1, as CodeMirror last reported:
   -- the preview of a presentation shows the slide it is on.
+  , measures :: Maybe Slides.Measures
+  -- ^ Whether each slide of a presentation fits, as the preview last
+  -- measured it, for the text it showed.
   , oneSlide :: Bool
   -- ^ Whether the preview of a presentation's raw Markdown shows the
   -- cursor's slide alone, rather than the whole deck.
@@ -726,6 +729,29 @@ editingSlides st =
   st.slidesMode && case st.loaded of
     Ready w -> w.page.kind == Kind.Presentation
     _ -> False
+
+-- | Whether the page edited is a presentation: its preview is then
+-- always there, off the screen when it is not shown, measuring the slides.
+isDeck :: State -> Bool
+isDeck st = case st.loaded of
+  Ready w -> w.page.kind == Kind.Presentation
+  _ -> False
+
+-- | The problems of the slides that do not fit, as the preview measured
+-- them for the text last checked: a warning for a slide that may be cut
+-- slightly, an error for one that is cut, over the slide's lines.
+fitProblems :: State -> [Problems.Problem]
+fitProblems st =
+  [ Problems.Problem {from = sp.from, to = sp.to, kind = Problems.SlideFit, severity, message}
+  | isDeck st
+  , (sp, fit) <- zip st.checked.slides (Slides.fitsNow st.measures st.checkedText st.checked.slides)
+  , Just (severity, message) <- [fitProblem fit]
+  ]
+  where
+    fitProblem = \case
+      Slides.Tight -> Just (Problems.Warning, "This slide may be cut slightly when presented: less than half a line is left at its foot, or up to a line goes beyond it.")
+      Slides.Overflowing -> Just (Problems.Error, "This slide is cut when presented: more than a line goes beyond its foot. Move some of it to a slide of its own.")
+      _ -> Nothing
 
 -- | The toolbar's controls of a presentation, or none for a document.
 deckBar :: State -> Maybe DeckBar
@@ -863,6 +889,7 @@ component =
               , slidesMode = True
               , cursorAt = 1
               , oneSlide = False
+              , measures = Nothing
               , selection = Nothing
               , pendingChanges = 0
               , decisions = mempty
@@ -922,7 +949,7 @@ component =
     editing st work =
       [hh|
         <form
-          class="editor-form{% if st.mode == Previewing %} previewing{% end %}{% if st.sideBySide %} side-by-side{% end %}{% if isJust st.conflict %} conflicting{% end %}{% if st.assistantOpen %} assisting{% end %}"
+          class="editor-form{% if st.mode == Previewing %} previewing{% end %}{% if st.sideBySide %} side-by-side{% end %}{% if isJust st.conflict %} conflicting{% end %}{% if st.assistantOpen %} assisting{% end %}{% if isDeck st %} deck{% end %}"
           style={{ "--editor-font-size: " <> fontSize st.fontStep }}
           {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}
           {{ HE.preventingDefault (HE.handler' (EventType "keydown") (keyAction st)) }}
@@ -1341,7 +1368,7 @@ component =
 
     previewPane :: State -> Work -> Maybe (H.ComponentHTML Action Slots m)
     previewPane st work
-      | st.previewMounted =
+      | st.previewMounted || isDeck st =
           Just
             [hh|
               <div class="editor-preview" aria-label="Preview">
@@ -1987,6 +2014,12 @@ component =
       -- failure is kept even for a key the last check has not seen (the
       -- preview may have drawn a text the check has not read yet); only
       -- those in the checked text are marked.
+      -- Whether each slide fits, measured for the text the preview
+      -- shows: marked beside the slides' handles and among the problems.
+      FromPreview (Preview.SlidesMeasured text fits) -> do
+        modify (\st -> st {measures = Just (Slides.measuresFor text fits)})
+        showSlides
+        publishProblems
       FromPreview (Preview.IslandDrawn key out) -> do
         before <- gets (\st -> st.failedIslands)
         let after = case out of
@@ -2046,6 +2079,9 @@ component =
       -- are marked and, slide by slide, folded now, which could not be
       -- done before.
       EditorReady -> do
+        -- The cursor's line from the start: CodeMirror tells it only when
+        -- it changes, and it may start below the title line.
+        gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (cursorLine host) >>= \line -> modify (\st -> st {cursorAt = line}))
         showSlides
         whenM (gets editingSlides) (foldAllBut [])
       DiscardOffered -> do
@@ -2297,7 +2333,8 @@ component =
       scheduleCheck previewDelay
       -- Only a preview visible beside the Markdown follows the typing; one
       -- shown on its own catches up when it is shown.
-      gets (\st -> st.sideBySide) >>= \case
+      -- A presentation's preview, which measures its slides, always does.
+      gets (\st -> st.sideBySide || isDeck st) >>= \case
         True -> schedulePreview
         False -> cancelPreview
 
@@ -2345,7 +2382,8 @@ component =
         Ready w -> do
           spans <- if editingSlides st then currentSlides else pure []
           let fixed = Slides.fixedSlides spans
-          H.liftEffect (markSlides host w.body [(sp.from, i >= fixed) | (i, sp) <- zip [0 ..] spans])
+              fits = Slides.fitsNow st.measures w.body spans
+          H.liftEffect (markSlides host w.body [(sp.from, i >= fixed, Slides.fitName fit) | ((i, sp), fit) <- zip (zip [0 ..] spans) fits])
         _ -> pass
 
     -- Fold every slide but those given, by their indices, and the
@@ -2403,7 +2441,7 @@ component =
     publishProblems :: H.HalogenM State Action Slots ViewOutput m ()
     publishProblems = do
       st <- get
-      let problems = Problems.allProblems st.checked st.failedIslands
+      let problems = sort (Problems.allProblems st.checked st.failedIslands <> fitProblems st)
       traverse_ (\host -> H.liftEffect (showProblems host (problemRanges st.checkedText problems))) st.hostElement
       when (length problems /= st.problemCount) $ modify (\s -> s {problemCount = length problems})
 

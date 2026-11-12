@@ -60,6 +60,7 @@ module Wiki.App.View.Slides
 
     -- * Slides as cards
   , slideCard
+  , fitTitle
   , deckClasses
   )
 where
@@ -102,7 +103,7 @@ import Wiki.App.View.Common
 import Wiki.Core.Markdown (parseMarkdown)
 import Wiki.Core.Page (Page (attachments, body, kind, title), PageSummary)
 import Wiki.Core.PageKind (isPresentation)
-import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), RenderedSlide (..), Slide (..), SlideTitle (..), deckOf, showingStep, themeName)
+import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), Fit (..), RenderedSlide (..), Slide (..), SlideTitle (..), deckOf, fitName, showingStep, themeName)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.Version (Author)
@@ -553,7 +554,7 @@ slideSection pageTitle count n label s html =
       {% if isJust s.title %}
         <header class="slide-title">{{ html.title }}</header>
       {% end %}
-      <div class="slide-body page-body">{{ html.body }}</div>
+      <div class="slide-body page-body">{{ html.body }}<span class="slide-end" aria-hidden="true"></span></div>
       <footer class="slide-footer"><span class="slide-footer-title">{{ pageTitle }}</span><span class="slide-number">{{ position n count }}</span></footer>
     </section>
   |]
@@ -561,19 +562,31 @@ slideSection pageTitle count n label s html =
     titlePage = maybe False (\t -> t.level == 1) s.title
 
 -- | 'slideCard' is a slide shown as a card, as the editor's preview shows
--- it (WP5.97 of docs/PLAN.md): the slide, of its shape and look, and its
--- notes under it. Inside an element with the deck's classes
--- ('deckClasses'), which set the shape and the colours.
-slideCard :: Text -> Int -> Int -> Slide -> RenderedSlide w i -> HH.HTML w i
-slideCard pageTitle count n s html =
+-- it (WP5.97 of docs/PLAN.md): the slide laid out 1024 CSS pixels wide, of
+-- its shape and look, scaled to the card ('slide-scaled'), with whether
+-- its content fits ('Fit') and its notes under it. A card not shown is
+-- laid out all the same, off the pane, so that it is measured. Inside an
+-- element with the deck's classes ('deckClasses'), which set the shape and
+-- the colours.
+slideCard :: Text -> Int -> Int -> Bool -> Fit -> Slide -> RenderedSlide w i -> HH.HTML w i
+slideCard pageTitle count n shown fit s html =
   [hh|
-    <div class="slide-frame" data-slide={{ show n :: Text }}>
-      <div class="slide-slot">{{ slideSection pageTitle count n ("Slide " <> position n count) s html }}</div>
+    <div class="slide-frame slide-fit-{{ fitName fit }}{% if not shown %} slide-offstage{% end %}" data-slide={{ show n :: Text }}>
+      <span class="slide-fit" {{ [attr "title" (fitTitle fit)] }}></span>
+      <div class="slide-scaled"><div class="slide-slot">{{ slideSection pageTitle count n ("Slide " <> position n count) s html }}</div></div>
       {% if not (null s.notes) %}
         <aside class="slide-notes page-body" aria-label="Notes">{{ html.notes }}</aside>
       {% end %}
     </div>
   |]
+
+-- | What a slide's mark of its fit says, on hover.
+fitTitle :: Fit -> Text
+fitTitle = \case
+  Unmeasured -> "Not measured yet"
+  Fits -> "Fits on the slide"
+  Tight -> "May be cut slightly: less than half a line to spare, or up to a line beyond the slide"
+  Overflowing -> "Cut: more than a line beyond the slide"
 
 -- | A deck's classes: its theme and its shape, which set the colours and
 -- the shape of its slides.

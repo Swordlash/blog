@@ -203,7 +203,11 @@ function wiki_islands_fit_frame(frame) {
     const doc = frame.contentDocument;
     const root = doc?.documentElement;
     if (!root) return;
-    const cap = Math.floor(window.innerHeight * 0.8);
+    // On a slide, the slide's body: the frame scales with the slide, as
+    // the rest of it does, and is measured with it (WP5.97).
+    const body = frame.closest(".slide-body");
+    const room = body ? body.clientHeight - parseFloat(getComputedStyle(body).paddingTop) - parseFloat(getComputedStyle(body).paddingBottom) : 0;
+    const cap = room > 0 ? Math.floor(room) : Math.floor(window.innerHeight * 0.8);
     frame.style.height = `${cap}px`;
     const { bottom, boxed, fixed } = wikiFrameExtent(doc);
     // 1. Content placed fixed: the cap.
@@ -227,6 +231,10 @@ function wiki_islands_fit_frame(frame) {
     if (!doc?.documentElement) return;
     observer = new ResizeObserver(measure);
     observer.observe(doc.documentElement);
+    // On a slide, the slide's body too, whose room is the cap: it changes
+    // when the slide is shown or its window resized.
+    const slideBody = frame.closest(".slide-body");
+    if (slideBody) observer.observe(slideBody);
     for (const type of ["load", "toggle", "transitionend", "animationend"]) doc.addEventListener(type, measure, true);
     measure();
   };
