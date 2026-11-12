@@ -1564,7 +1564,10 @@ confirms it against reality and the plan is amended if it does not hold.
     with nothing that depends on the window taking part: fits, yellow
     (less than half a line to spare up to one line cut) or red, grey
     while not measured; the promise is for a projector at least that
-    wide. **Embedding.** `![Caption](page){.presentation}` is the link
+    wide. The room is counted down to the bottom of the body's padding,
+    the edge where the body cuts its text and the slides view counts a
+    cut from (#258: counted to the content edge, 0.57 line higher, the
+    mark was yellow on a slide with 0.78 line to spare). **Embedding.** `![Caption](page){.presentation}` is the link
     until it comes near the window in a browser, then a viewer of the
     slides, drawn in the page; the server's render and adoption ask for
     nothing. What a viewer shows belongs to one reader at one revision
@@ -2063,6 +2066,18 @@ which the wiki pins since #227.
 
 ## Known gaps and notes
 
+- **The editor's tooltips, gutters and panels take the wiki's colours
+  from a base rule (#258).** CodeMirror's own theme gives `.cm-tooltip`,
+  `.cm-gutters` and `.cm-panels` a light grey in either scheme, and the
+  text takes the editor's colour: in the dark scheme a problem's box was
+  nearly white on white. `web/style.css` sets the colours on
+  `.editor-cm .cm-editor .cm-tooltip` itself, and each kind adds only its
+  own; a new kind of tooltip, or a second CodeMirror elsewhere, needs
+  nothing more inside `.editor-cm` and the same rule outside it. The
+  browser specs check a contrast of 4.5 for a problem's box and the
+  completion list in both schemes; hspec-halogen cannot emulate a colour
+  scheme, so the spec copies the dark tokens onto the editor's host. The
+  gutters and panels are not pinned by a test.
 - **A key pair left exportable until a reload (WP5.74b1).** A step that
   holds the vault's key (`withKey`) is not exception-safe: when the
   component running it is unmounted mid-step (the sign-in dialog closed),
