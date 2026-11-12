@@ -332,6 +332,12 @@ preloads backing = describe "what a page carries for the program" $ do
     -- The list of pages has no bodies, so the page shown is carried by
     -- itself, once.
     map snd (Map.keys p.pageAt) `shouldBe` [slugs "markdown-guide"]
+    -- A presentation's page carries itself alone: its viewer is fed with
+    -- the page loaded, and the guide's page above carries no page it
+    -- embeds.
+    (_, deck) <- page r r.public "/s/docs/p/markdown-guide/presentations/"
+    deckLoad <- preloadIn deck
+    map snd (Map.keys deckLoad.pageAt) `shouldBe` [slugs "markdown-guide/presentations"]
     -- The home page at its old address is read at its address now, the
     -- space's.
     (_, home) <- page r r.public "/s/docs/p/tour/"

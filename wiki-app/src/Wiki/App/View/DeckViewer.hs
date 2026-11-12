@@ -9,8 +9,12 @@
 -- A page embeds one with @![Caption](page){.presentation}@
 -- ('Wiki.Core.Markdown.Render.deckEmbed'). The viewer's first render is
 -- the link the embed is without the class, the same HTML, which is what
--- the prerendered page shows; once it has fetched the page, through the
--- reader's own backend, a presentation is shown in its place. Anything
+-- the prerendered page shows. Only in a browser, after the page has been
+-- adopted, does it fetch the page, through the reader's own backend; a
+-- presentation is then shown in the link's place. The server's render and
+-- the static prerender, which run natively, fetch nothing: the link is
+-- what they write, and the page they carry for the program holds no
+-- embedded page. Anything
 -- else (a document, a page the reader may not read, a space they cannot
 -- see, a backend that cannot be reached) leaves the link, with no banner
 -- and no prompt: the reader sees what they would without the class. The
@@ -36,6 +40,7 @@ import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
+import Halogen.JSBits (inBrowser)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (First, Last, State)
@@ -69,9 +74,11 @@ data Input = Input
 
 -- | What the viewer shows.
 data Target
-  = -- | An embedded page, by its link: fetched, and shown if it is a
-    -- presentation the reader may read.
-    Linked PageLink
+  = -- | An embedded page, by its link, and the place of the page that
+    -- embeds it: fetched, and shown if it is a presentation the reader
+    -- may read. What that page has already (its space, its space's list of
+    -- pages) is not asked for again.
+    Linked PageLink Place
   | -- | The page view's own presentation, already loaded, in its place.
     Shown Place Page
 
@@ -156,14 +163,19 @@ component =
         st <- get
         case st.input.target of
           Shown {} -> startWatch
-          Linked embedded -> void . H.fork $ do
-            found <- lift (attempt (fetchDeck st.input.context embedded))
+          -- Only in a browser, once the page has been adopted (a child is
+          -- initialized after the tree's first render): the server's
+          -- render and the static prerender run natively, where the
+          -- viewer is the link and asks the backend for nothing, so the
+          -- page carries no embedded page and adoption repairs nothing.
+          Linked embedded host -> when inBrowser . void . H.fork $ do
+            found <- lift (attempt (fetchDeck st.input.context host embedded))
             handleAction (Fetched (either (const Link) identity found))
       Finalize -> gets (\st -> st.watch) >>= traverse_ stopFits
       Receive new -> case new.target of
         -- The page view's page, as it has it now.
         Shown {} -> modify (\st -> st {input = new, loaded = shownOf new}) >> clampStep
-        Linked _ -> modify (\st -> st {input = new})
+        Linked {} -> modify (\st -> st {input = new})
       Fetched loaded -> do
         modify (\st -> st {loaded})
         startWatch
@@ -208,7 +220,7 @@ component =
 -- it has a presentation to show, and for anything else.
 linkOf :: Input -> H.ComponentHTML Action Slots m
 linkOf input = case input.target of
-  Linked (PageLink route fragment) -> HH.a [HP.href (Router.href input.context.router route <> fragment)] [HH.text input.caption]
+  Linked (PageLink route fragment) _ -> HH.a [HP.href (Router.href input.context.router route <> fragment)] [HH.text input.caption]
   Shown place page -> HH.a [HP.href (Router.href input.context.router (Page (spacePathOfPlace place) place.path))] [HH.text page.title]
 
 -- | What the viewer has from its input alone: the page view's own
@@ -249,20 +261,23 @@ spacePathOfPlace :: Place -> [Slug]
 spacePathOfPlace place = spacePathOf place.context.spaces place.space.id
 
 -- | Fetch an embedded page, as the reader may read it: a presentation is
--- shown, anything else is the link.
-fetchDeck :: (MonadWiki n, MonadNotifications n) => Context -> PageLink -> n Loaded
-fetchDeck context (PageLink route _) = case route of
+-- shown, anything else is the link. Its space is the one the reader's
+-- spaces hold, and a page of the embedding page's own space takes that
+-- page's list of pages: neither is asked for again.
+fetchDeck :: (MonadWiki n, MonadNotifications n) => Context -> Place -> PageLink -> n Loaded
+fetchDeck context host (PageLink route _) = case route of
   Page sp pp -> fetchAt sp pp
   PermanentLink pid _ -> pageLocation pid >>= either (const (pure Link)) (\at -> fetchAt at.space at.page)
   _ -> pure Link
   where
+    known sp = head [s | s <- context.spaces, spacePathOf context.spaces s.id == sp]
     fetchAt sp pp =
-      getSpace sp >>= \case
+      maybe (getSpace sp) (pure . Right) (known sp) >>= \case
         Left _ -> pure Link
         Right space ->
           getPage space.id pp >>= \case
             Right page | isPresentation page.kind -> do
-              pages <- either (const []) identity <$> listPages space.id
+              pages <- if space.id == host.space.id then pure host.pages else either (const []) identity <$> listPages space.id
               addresses <- Body.attachmentAddresses page.attachments
               people <- Body.askPeople (Body.unasked Body.noPeople [page.body])
               let place = Place {context, space, pages, path = pp, attachments = page.attachments, urls = addresses.urls, frames = addresses.frames, people}

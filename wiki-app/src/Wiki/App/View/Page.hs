@@ -442,7 +442,7 @@ component =
           -- highlighted, and its text is where the quotes are looked for.
           rendered = Body.renderedTicking (Tick <$ guard (boxesEnabled st)) (\i -> Map.findWithDefault 0 i st.staging.drawn) (Just embedded) place st.staging.shown
           -- A presentation embedded in the page: a viewer of it.
-          embedded key target caption = HH.slot_ "deck" key DeckViewer.component DeckViewer.Input {context = input.context, target = DeckViewer.Linked target, caption}
+          embedded key target caption = HH.slot_ "deck" key DeckViewer.component DeckViewer.Input {context = input.context, target = DeckViewer.Linked target place, caption}
           text = either (const "") renderedText rendered
           -- The title and who reads the page, on one row, with who wrote
           -- it under them; when the Markdown has its own title, the
