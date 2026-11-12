@@ -33,6 +33,7 @@ import Test.Server.Presence qualified as Presence
 import Test.Server.Rehearsal qualified as Rehearsal
 import Test.Server.Render qualified as Render
 import Test.Server.Settings qualified as Settings
+import Test.Server.Sha256 qualified as Sha256
 import Test.Server.Static qualified as Static
 import Test.Server.Tls qualified as Tls
 import Test.Server.Totp qualified as Totp
@@ -75,6 +76,7 @@ main = secureMain $ do
         WebAuthn.spec
         Metrics.spec
         Compress.spec
+        Sha256.spec
         Tls.keySpec
         WhatsNew.unitSpec
         Opaque.unitSpec

@@ -65,7 +65,6 @@ module Wiki.Server.Vault
   )
 where
 
-import Crypto.Hash.SHA256 qualified as SHA256
 import Crypto.Random (getRandomBytes)
 import Data.ByteString qualified as BS
 import Data.Char (isAsciiLower)
@@ -85,6 +84,7 @@ import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.Vault (Ciphertext (..), CredentialId (..), Item (..), ItemName (..), KeyId (..), Nonce (..), PublicKey (..), Salt (..), Sealed (..), Unlock (..), Vault (..), VaultTag (..), WrappedKey (..), identityItem, itemOf, passkeyWraps, vaultFormat, wrapFor)
 import Wiki.Server.Address (requestOrigin)
+import Wiki.Server.Sha256 (sha256)
 import Wiki.Server.Storage (Storage, reading, writing, writingEither)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (StoredPassword (..), micro, passwordOf)
@@ -215,7 +215,7 @@ vaultProblem v
 -- X25519's 32 bytes.
 keyIdOf :: PublicKey -> Maybe KeyId
 keyIdOf k = case fromBase64Url k.text of
-  Just raw | BS.length raw == 32 -> Just (KeyId (toBase64Url (BS.take 16 (SHA256.hash raw))))
+  Just raw | BS.length raw == 32 -> Just (KeyId (toBase64Url (BS.take 16 (sha256 raw))))
   _ -> Nothing
 
 -- | A user's current public key, if they have one.

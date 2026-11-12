@@ -86,7 +86,6 @@ module Wiki.Server.Storage.Copy
   )
 where
 
-import Crypto.Hash.SHA256 qualified as SHA256
 import Data.ByteString qualified as BS
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List ((\\))
@@ -99,6 +98,7 @@ import Database.Beam.Backend.SQL (BeamSqlBackendCanSerialize, MonadBeam (..), se
 import Database.Beam.Schema.Tables (Columnar' (..), DatabaseEntity (..), DatabaseEntityDescriptor (..), FieldsFulfillConstraint, TableField (..), WithConstraint (..), allBeamValues, changeBeamRep, withConstrainedFields)
 import GHC.Show qualified
 import Protolude
+import Wiki.Server.Sha256 (sha256)
 import Wiki.Server.Storage (CheckProblem (..), TableRead (..), checkConnection)
 import Wiki.Server.Storage.Backend (Backend (..), withTransactionEither)
 import Wiki.Server.Storage.Migrate (migrateWithin)
@@ -340,7 +340,7 @@ digestOf :: (Show a) => a -> Integer
 digestOf = BS.foldl' (\acc w -> acc * 256 + fromIntegral w) 0 . digestBytes
 
 digestBytes :: (Show a) => a -> ByteString
-digestBytes = SHA256.hash . encodeUtf8 . show
+digestBytes = sha256 . encodeUtf8 . show
 
 --------------------------------------------------------------------------------
 -- The tables

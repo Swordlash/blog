@@ -122,6 +122,7 @@ library
         Wiki.Server.SecondFactor
         Wiki.Server.Secret
         Wiki.Server.Session
+        Wiki.Server.Sha256
         Wiki.Server.Static
         Wiki.Server.Version
         Wiki.Server.Storage
@@ -167,7 +168,6 @@ library
         case-insensitive,
         cborg,
         containers,
-        cryptohash-sha256,
         crypton,
         crypton-x509,
         direct-sqlite,
@@ -358,6 +358,7 @@ test-suite wiki-server-test
         Test.Server.Rehearsal
         Test.Server.Render
         Test.Server.Settings
+        Test.Server.Sha256
         Test.Server.Static
         Test.Server.Tls
         Test.Server.Totp
