@@ -18,6 +18,12 @@
 --
 -- Following a notification's link marks it read.
 --
+-- Opening the list fetches it again: a page of an encrypted space is
+-- titled as this tab can decrypt it now ("Wiki.App.Backend.Http"
+-- decrypts such titles), and not as it could when the
+-- list was last fetched, inside a space that asks each time it is opened
+-- and that the reader has left since.
+--
 -- The list closes on a press outside it and on Escape
 -- ("Wiki.App.View.Popup"), and when one of its links is followed.
 module Wiki.App.View.Bell
@@ -65,6 +71,10 @@ data State = State
   -- closes the list.
   , listWatch :: Maybe H.SubscriptionId
   -- ^ The watch for a press outside or Escape, while the list is open.
+  , heard :: [Notification]
+  -- ^ The notifications the live channel told of since the list was last
+  -- fetched: kept when it is fetched again before the server's answer has
+  -- them.
   }
 
 data Action
@@ -85,7 +95,7 @@ component =
       { initialState = \input -> do
           notices <- atOnce notifications
           holder <- H.newRefLabel "notifications"
-          pure State {input, notices, open = False, busy = False, holder, listWatch = Nothing}
+          pure State {input, notices, open = False, busy = False, holder, listWatch = Nothing, heard = []}
       , render
       , eval =
           H.mkEval
@@ -202,12 +212,13 @@ component =
             modify (\st -> st {open = True})
             watch <- gets (\st -> st.holder) >>= (`watchPopup` Close)
             modify (\st -> st {listWatch = watch})
+            reload
       Close -> close
       Heard heard -> case heard of
         -- A notification received twice (a tab that received it, then
         -- fetched it) counts once.
         Live.Notice n -> modify $ \st ->
-          st {notices = fmap (\ns -> if any (\x -> x.id == n.id) ns.items then ns else ns {unread = ns.unread + 1, items = n : ns.items}) <$> st.notices}
+          st {notices = fmap (\ns -> if any (\x -> x.id == n.id) ns.items then ns else ns {unread = ns.unread + 1, items = n : ns.items}) <$> st.notices, heard = n : filter (\x -> x.id /= n.id) st.heard}
         Live.Reopened -> reload
         _ -> pass
       MarkRead i -> marking ReadMark {ids = [i], everything = False}
@@ -228,7 +239,11 @@ component =
     reload :: H.HalogenM State Action Empty output m ()
     reload = do
       notices <- lift notifications
-      modify (\st -> st {notices = Just notices})
+      modify $ \st -> case notices of
+        Right ns ->
+          let missing = [n | n <- st.heard, all (\x -> x.id /= n.id) ns.items]
+           in st {notices = Just (Right ns {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}), heard = missing}
+        Left _ -> st {notices = Just notices}
 
     marking :: ReadMark -> H.HalogenM State Action Empty output m ()
     marking m = do

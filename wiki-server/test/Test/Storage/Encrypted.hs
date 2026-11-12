@@ -55,7 +55,7 @@ import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Backlink (Backlink (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
-import Wiki.Core.Encrypted (Chain (..), Encapsulated (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), VersionTag (..), chainAfter, firstChain)
+import Wiki.Core.Encrypted (Chain (..), Encapsulated (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), VersionTag (..), chainAfter, firstChain, headingOf)
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Notification (Kind (..), Notification (..), PageLocation (..), WatchTarget (..))
@@ -927,6 +927,26 @@ spec backing = describe "encrypted spaces in the storage" $ do
     let body = "{\"id\":\"6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f\",\"parent\":null,\"pageKey\":{\"keyId\":\"a\",\"spaceKeyId\":\"b\",\"wrapped\":{\"nonce\":\"n\",\"key\":\"k\"}},\"content\":{\"tag\":\"t\",\"keyId\":\"a\",\"title\":\"My plain title\",\"body\":\"My plain text\"}}"
     isLeft (eitherDecode body :: Either [Char] NewSealedPage) `shouldBe` True
     isLeft (eitherDecode "{\"content\":{\"title\":\"x\",\"body\":\"y\"}}" :: Either [Char] SealedEdit) `shouldBe` True
+
+  -- #213: the titles under the bell and the stars, asked for by the pages'
+  -- ids alone, encrypted, and only of the pages the caller may view whose
+  -- titles are encrypted.
+  describe "titles of encrypted pages asked for by their ids" $ do
+    it "gives the encrypted titles of pages the caller may view, and nothing of a plain page, a missing one, or one they may not view" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+      made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
+      plainSpace <- privateSpace st p.ada "Plain"
+      plain <- ok =<< as p.ada (createPage plainSpace.id Nothing "Plain title" "Plain text.")
+      given <- ok =<< as p.ada (sealedHeadings [pid, plain.id, PageId "no-such-page"])
+      [(h.page, h.space, h.heading, map (\k -> k.keyId) h.pageKeys) | h <- given] `shouldBe` [(pid, secret.id, headingOf made.content, map (\k -> k.keyId) made.pageKeys)]
+      -- Bob may view neither space: nothing, and nothing said of why.
+      as p.bob (sealedHeadings [pid, plain.id]) `shouldReturn` Right []
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+      map (\h -> h.page) <$> (ok =<< as p.bob (sealedHeadings [pid])) `shouldReturn` [pid]
+      -- At most a hundred at once.
+      as p.ada (sealedHeadings (replicate (maxHeadings + 1) pid)) >>= (`shouldSatisfy` invalid)
 
   -- #213: whether readers confirm each time they open an
   -- encrypted space is the space's administrators' to set, kept by the

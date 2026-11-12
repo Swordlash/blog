@@ -62,6 +62,17 @@ title: Encrypted spaces: a decrypted export, encrypting pages, asking each time
   [Open with a passkey]
   ```
 
+- The bell and your starred pages now show the titles of pages in
+  encrypted spaces, decrypted in your browser, where they said "an
+  encrypted page" before. Where your browser does not hold the space's
+  key, or the space asks for a passkey or your password and you have not
+  opened it, they still say "an encrypted page". Notification mails and
+  the feed always do.
+
+  ```text
+  🔔 Bea Reader replied in a thread of yours · Launch plans
+  ```
+
 ## Other changes
 
 - Signing out now deletes your keys from the device, in every tab, and

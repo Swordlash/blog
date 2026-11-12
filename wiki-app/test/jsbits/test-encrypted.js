@@ -193,6 +193,22 @@ function wikiTestEncServer(request) {
       if (a) return { status: 200, body: a.bytes, headers: { "Content-Type": "application/octet-stream" } };
     }
   }
+  // The encrypted titles of the pages asked for, of those the user reads
+  // whose titles are encrypted; nothing of the others.
+  if (path === "encrypted/headings" && request.method === "POST") {
+    const asked = JSON.parse(request.body).pages;
+    if (asked.length > 100) return wikiTestEncJson(400, { error: "Invalid", text: "At most 100 pages' titles are asked for at once." });
+    wikiTestEncrypted.headingsAsked.push(asked);
+    return wikiTestEncJson(
+      200,
+      asked.flatMap((id) => {
+        const p = wikiTestEncrypted.pages.get(id);
+        const s = p && wikiTestEncrypted.spaces.get(p.space);
+        if (!p || !s || !s.space.encryption || !s.readers.includes(me)) return [];
+        return [{ page: p.id, space: p.space, pageKeys: [p.pageKey, ...(p.olderKeys ?? [])], heading: wikiTestEncHeading(p.versions[p.versions.length - 1].content) }];
+      }),
+    );
+  }
   m = path.match(/^encrypted\/spaces\/([^/]+)(\/.*)?$/);
   if (m) {
     const s = wikiTestEncrypted.spaces.get(decodeURIComponent(m[1]));
@@ -424,7 +440,7 @@ function wikiTestEncServer(request) {
 // as JSON) and its readers (user ids).
 function wiki_test_encrypted_start(space, readers) {
   const s = JSON.parse(space);
-  Object.assign(wikiTestEncrypted, { as: null, spaces: new Map([[s.id, { space: s, readers: JSON.parse(readers), admins: ["user-admin"], leaked: [], grants: [] }]]), directory: new Map(), pages: new Map(), next: 0, created: [], historyWithoutLatest: false, rotations: [], tamperLatest: false, subspaces: [], homes: [] });
+  Object.assign(wikiTestEncrypted, { as: null, spaces: new Map([[s.id, { space: s, readers: JSON.parse(readers), admins: ["user-admin"], leaked: [], grants: [] }]]), directory: new Map(), pages: new Map(), next: 0, created: [], historyWithoutLatest: false, rotations: [], tamperLatest: false, subspaces: [], homes: [], headingsAsked: [] });
   globalThis.wikiTestHandlers = [wikiTestEncServer, ...(globalThis.wikiTestHandlers ?? []).filter((h) => h !== wikiTestEncServer)];
 }
 
@@ -444,6 +460,18 @@ function wiki_test_encrypted_tell_dropped(slot) {
   const other = new BroadcastChannel("wiki-assistant-keys");
   other.postMessage({ dropped: String(slot) });
   other.close();
+}
+
+// The page's title, as the browser shows it in its tab and keeps it in its
+// history.
+function wiki_test_encrypted_document_title() {
+  return document.title;
+}
+
+// What the browser asked the server for titles of, as JSON: each request's
+// list of page ids.
+function wiki_test_encrypted_headings_asked() {
+  return JSON.stringify(wikiTestEncrypted.headingsAsked);
 }
 
 // What a page's editor in another window says to its detached preview

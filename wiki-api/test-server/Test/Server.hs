@@ -382,6 +382,7 @@ stubs =
           , rotate = \_ _ -> refuse NotFound
           , pages = \_ -> refuse NotFound
           , contents = \_ -> refuse NotFound
+          , headings = \_ -> refuse NotFound
           , pageAt = \_ _ -> refuse NotFound
           , createPage = \_ _ -> refuse NotFound
           , save = \_ _ _ -> refuse NotFound

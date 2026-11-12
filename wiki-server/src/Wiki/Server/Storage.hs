@@ -177,6 +177,7 @@ module Wiki.Server.Storage
   , sealedEditComment
   , uploadSealedAttachmentFile
   , sealedPages
+  , sealedHeadings
   , sealedContents
   , sealedPageAt
   , createSealedPage
@@ -1978,6 +1979,11 @@ setSpaceEntry sid e = run Writes (setSpaceEntryTx sid e >>= shown)
 sealedPages :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError [SealedSummary])
 sealedPages = run Reads . sealedPagesTx
 
+-- | The encrypted titles of pages under the bell or starred
+-- ('Wiki.Api.EncryptedApi''s @headings@).
+sealedHeadings :: (MonadIO m) => [PageId] -> StoredWiki m (Either WikiError [E.PageHeading])
+sealedHeadings = run Reads . sealedHeadingsTx
+
 -- | The pages of an encrypted space, with their latest versions encrypted.
 sealedContents :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError [SealedPage])
 sealedContents = run Reads . sealedContentsTx
@@ -3719,6 +3725,34 @@ sealedPagesTx sid = do
     , Just all'@(pk : _) <- [Map.lookup p.id keys]
     , Just content <- [Map.lookup p.id latest]
     ]
+
+-- | The encrypted titles of the pages asked for, by their ids: of those
+-- the caller may view ('canView', as for any page of the space) and that
+-- read encrypted ('sealedAmong'). The others are left out, unnamed: the
+-- answer says nothing of a page the caller may not view, nor of a page
+-- whose title is plain, which the caller reads by the plain routes.
+sealedHeadingsTx :: [PageId] -> Tx [E.PageHeading]
+sealedHeadingsTx pids = do
+  when (length pids > E.maxHeadings) (invalid ("At most " <> show E.maxHeadings <> " pages' titles are asked for at once."))
+  ctx <- ask
+  nodes <- db (pageNodesWithIds pids)
+  let bySpace = Map.fromListWith (<>) [(n.space, [n.id]) | n <- nodes]
+  fmap concat . for (Map.toList bySpace) $ \(sid, ids) -> case Map.lookup sid ctx.spaces of
+    Just s
+      | isJust s.encryption
+      , let chain = chainOf ctx sid
+      , not (null chain)
+      , canView ctx.principal ctx.grants chain -> do
+          sealed <- sealedAmong s ids identity
+          keys <- db (loadSpaceAllPageKeys sid)
+          latest <- db (loadSealedLatest sid)
+          pure
+            [ E.PageHeading {page = p, space = sid, pageKeys = all', heading = headingOf content}
+            | p <- sealed
+            , Just all'@(_ : _) <- [Map.lookup p keys]
+            , Just content <- [Map.lookup p latest]
+            ]
+    _ -> pure []
 
 -- | The pages of an encrypted space with their latest versions, encrypted.
 sealedContentsTx :: SpaceId -> Tx [SealedPage]

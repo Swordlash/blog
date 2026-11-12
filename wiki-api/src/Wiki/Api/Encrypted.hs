@@ -55,6 +55,9 @@ module Wiki.Api.Encrypted
   , StagedPage (..)
   , ConversionCommit (..)
   , SpaceEntry (..)
+  , HeadingsQuery (..)
+  , PageHeading (..)
+  , maxHeadings
   , ConversionProgress (..)
   , notConvertedYet
 
@@ -480,6 +483,32 @@ newtype ConversionCommit = ConversionCommit
 -- password each time.
 newtype SpaceEntry = SpaceEntry
   { entry :: Entry
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'HeadingsQuery': the pages whose encrypted titles a browser asks for,
+-- by their ids alone, at most 'maxHeadings': those under the bell, or
+-- starred.
+newtype HeadingsQuery = HeadingsQuery
+  { pages :: [PageId]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The most pages one 'HeadingsQuery' asks for.
+maxHeadings :: Int
+maxHeadings = 100
+
+-- | 'PageHeading': the encrypted title of a page's latest version, with
+-- every key the page has had, its current one first, so that the browser
+-- opens it with the key it names; and the page's space, whose key opens
+-- the page's.
+data PageHeading = PageHeading
+  { page :: PageId
+  , space :: SpaceId
+  , pageKeys :: [PageKey]
+  , heading :: SealedHeading
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

@@ -99,7 +99,7 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, TexEngine, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
-import Wiki.Api.Encrypted (ConversionCommit, ConversionInfo, ConversionProgress, EncryptSpace, NewEncryptedSubspace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedThreads, SealedVersion, SealedVersionInfo, SpaceEncryption, SpaceEntry, StagedPage, StagedPlain, StagedSealed, StartEncrypting, sealedVersion)
+import Wiki.Api.Encrypted (ConversionCommit, ConversionInfo, ConversionProgress, EncryptSpace, HeadingsQuery, NewEncryptedSubspace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, PageHeading, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedThreads, SealedVersion, SealedVersionInfo, SpaceEncryption, SpaceEntry, StagedPage, StagedPlain, StagedSealed, StartEncrypting, sealedVersion)
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -327,6 +327,11 @@ data EncryptedApi form mode = EncryptedApi
   , contents :: mode :- "spaces" :> Capture "space" SpaceId :> "contents" :> Get '[JSON] [SealedPage]
   -- ^ The space's pages with their latest versions, encrypted: what the
   -- browser's search reads.
+  , headings :: mode :- "headings" :> ReqBody '[JSON] HeadingsQuery :> Post '[JSON] [PageHeading]
+  -- ^ The encrypted titles of the pages asked for, of those the caller may
+  -- view that are read encrypted: a page the caller may not view, one that
+  -- is not there, and one whose title is plain are left out. At most
+  -- 'Wiki.Api.Encrypted.maxHeadings' pages a request.
   , pageAt :: mode :- "spaces" :> Capture "space" SpaceId :> "pages" :> "at" :> CaptureAll "path" Slug :> Get '[JSON] (Versioned SealedPage)
   -- ^ A page by its path of slugs.
   , createPage :: mode :- "spaces" :> Capture "space" SpaceId :> "pages" :> ReqBody '[JSON] NewSealedPage :> PostCreated '[JSON] (Versioned SealedPage)

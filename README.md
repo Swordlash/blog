@@ -846,8 +846,9 @@ How it works:
   Leaving it, for a page outside it or the front page, forgets its key,
   its pages decrypted for the search, its attachments' addresses and your
   confirmation in that tab; a reload asks again too. Outside it, its
-  starred pages are named "an encrypted page", as notifications name
-  them, and a search finds nothing of it. It is a gate in the wiki's own
+  starred pages and its pages under the bell are named "an encrypted
+  page", a search finds nothing of it, and its pages' tabs and history
+  entries are titled by the space alone. It is a gate in the wiki's own
   page, not in its encryption: someone who opens the browser's developer
   tools on a device where your keys are unlocked gets past it. Someone
   who signs in only with a provider, and has no passkey on the device,
@@ -897,7 +898,10 @@ How it works:
 - Comments and attachments are encrypted with the page's key, each bound
   to its page and its own id, which the browser chooses. A comment shows
   for the people it is shown to on any page; those told of it under the
-  bell are told by the page's id, with no title and no excerpt, and a
+  bell are told by the page's id, with no title and no excerpt (the bell
+  shows the title, decrypted in your browser where it holds the space's
+  key and the space does not ask first; the mail and the feed say "an
+  encrypted page"), and a
   mention in it notifies nobody, since the server cannot read it. Editing
   a comment tells nobody. An attachment's bytes are fetched encrypted
   and decrypted in your browser into an address of its own, which the

@@ -97,7 +97,7 @@ import Wiki.Api.Activity (ActivityQuery (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), WikiSettings (..), userQueryOf)
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.ContentPolicy (interactiveSvgPolicy)
-import Wiki.Api.Encrypted (SpaceEntry (..))
+import Wiki.Api.Encrypted (HeadingsQuery (..), SpaceEntry (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Export (documentDisposition, formatMediaType)
@@ -833,6 +833,7 @@ handlers env caller =
           , rotate = \s body -> wiki (rotateSpaceKey s body) $> NoContent
           , pages = wiki . sealedPages
           , contents = wiki . sealedContents
+          , headings = \q -> wiki (sealedHeadings q.pages)
           , pageAt = \s path -> versionedSealed <$> wiki (sealedPageAt s path)
           , createPage = \s new -> versionedSealed <$> wiki (createSealedPage s new)
           , save = \p version edit -> versionedSealed <$> wiki (saveSealedPage p version.time edit)

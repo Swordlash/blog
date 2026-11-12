@@ -67,6 +67,7 @@ import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (EncryptedApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Events (PageEvent (..), ServerMessage (..))
+import Wiki.Api.Notifications (Notifications (..))
 import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Stars (StarredPage (..))
 import Wiki.Api.Types (SessionInfo (..))
@@ -78,6 +79,7 @@ import Wiki.App.Backend.Http (HeldNow (..), HttpEnv, HttpWiki, browserTransport,
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State qualified as M
+import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Browser (unzipFiles)
 import Wiki.App.DecryptedExport (DecryptedExport (..), LeftOut (..))
@@ -89,11 +91,12 @@ import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
-import Wiki.Core.Encrypted (ChainProblem (..), Kept (..), Seen (..))
+import Wiki.Core.Encrypted (ChainProblem (..), Kept (..), Seen (..), encryptedPageTitle)
 import Wiki.Core.Export (readArchive)
 import Wiki.Core.Export qualified as Export
-import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
+import Wiki.Core.Id (AttachmentId (..), NotificationId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Markdown.Box (BoxNumbering (..))
+import Wiki.Core.Notification (Kind (..), Notification (..), PageLocation (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.PageKind qualified as Kind
@@ -102,7 +105,7 @@ import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Entry (..), Space (..))
 import Wiki.Core.User (Standing (..))
-import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..))
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (..))
 
 $( browserJS
      ["jsbits/test-encrypted.js"]
@@ -135,6 +138,8 @@ $( browserJS
      , ("js_member", "wiki_test_encrypted_member", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
      , ("js_tell_dropped", "wiki_test_encrypted_tell_dropped", Safe, [t|JSText -> IO ()|])
      , ("js_live", "wiki_test_encrypted_live", Safe, [t|JSText -> IO ()|])
+     , ("js_document_title", "wiki_test_encrypted_document_title", Safe, [t|IO JSText|])
+     , ("js_headings_asked", "wiki_test_encrypted_headings_asked", Safe, [t|IO JSText|])
      , ("js_decrypted", "wiki_test_encrypted_decrypted", Safe, [t|IO JSText|])
      ]
  )
@@ -1154,6 +1159,69 @@ spec m = do
     say (object ["key" .= key, "closed" .= True])
     eventually (find ui ".live-preview-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "nothing of the page is kept here"))
     find ui ".live-preview-body" >>= textContent >>= (`shouldSatisfy` \t -> not (any (`T.isInfixOf` t) ["Typed behind the gate.", "As saved.", "Previewed"]))
+    unmount ui
+
+  -- #213: the titles under the bell, asked for by the pages' ids alone and
+  -- decrypted where this tab holds the space's key; "an encrypted page"
+  -- where it does not, and behind a gate the reader has not confirmed,
+  -- where nothing of a title is decrypted.
+  it "shows a decrypted title under the bell with the key, an encrypted page without it, and decrypts none behind a gate not confirmed" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Under the bell" "Changed.")
+    let notice =
+          Notification
+            { id = NotificationId "n1"
+            , kind = Changed
+            , page = made.id
+            , thread = Nothing
+            , actor = Author {id = UserId "user-admin", name = "Ada Admin", avatar = Nothing}
+            , title = encryptedPageTitle
+            , excerpt = ""
+            , createdAt = demoNow
+            , read = False
+            , location = Just PageLocation {space = [secretSlug], page = [made.slug]}
+            }
+        bellOf tab = do
+          run tab endPreload
+          void (run tab listSpaces)
+          map (\n -> n.title) . (\ns -> ns.items) <$> (ok =<< run tab notifications)
+    answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 1, items = [notice]}
+    -- The key held: the title, decrypted; and the request named the page
+    -- alone.
+    admin <- as "user-admin"
+    bellOf admin `shouldReturn` ["Under the bell"]
+    headingsAsked <- unsafeIOToPageM (fromJSText <$> js_headings_asked)
+    headingsAsked `shouldBe` decodeUtf8 (toS (encode [[made.id]]))
+    -- A reader with no key pair yet, to whom no key can be shared: what
+    -- the server says.
+    waiting <- as "user-reader"
+    bellOf waiting `shouldReturn` [encryptedPageTitle]
+    -- Behind a gate not confirmed: what the server says, and no title
+    -- decrypted; once confirmed, the title.
+    gated <- as "user-admin"
+    void (ok =<< run gated (setEntry secret.id ConfirmEach))
+    recordDecryptions
+    bellOf gated `shouldReturn` [encryptedPageTitle]
+    filter (T.isInfixOf secret.id.text) <$> decryptedSince `shouldReturn` []
+    stars <- ok =<< run gated starred
+    [s.title | s <- stars, s.page == made.id] `shouldBe` [encryptedPageTitle]
+    run gated (confirmedEntry secret.id)
+    bellOf gated `shouldReturn` ["Under the bell"]
+    -- In the bell itself, outside the space, after the reader left it.
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 1, items = [notice]}
+    ui <- startServerOver m gated (R.Page [secretSlug] [made.slug])
+    eventually (find ui ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Changed."))
+    -- The tab's title names the space alone, which the browser keeps in
+    -- its history.
+    unsafeIOToPageM (fromJSText <$> js_document_title) >>= (`shouldSatisfy` \t -> "Secret" `T.isInfixOf` t && not ("Under the bell" `T.isInfixOf` t))
+    find ui ".wiki-brand" >>= click
+    eventually ((\h -> h.confirmed) <$> unsafeIOToPageM (heldNow gated) `shouldReturn` mempty)
+    find ui ".notifications-toggle" >>= click
+    eventually (find ui ".notification-list .notification-page" >>= (`shouldHaveText` encryptedPageTitle))
+    unsafeIOToPageM (fromJSText <$> js_document_title) >>= (`shouldSatisfy` (not . T.isInfixOf "Under the bell"))
     unmount ui
 
   it "turns asking each time on in the space's permissions, and asks the administrator who turned it on too" $ runPage $ do

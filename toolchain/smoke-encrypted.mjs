@@ -271,6 +271,27 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
   await read(bea.page);
   console.log("ok: a reader granted the space waits for its key, and reads the page, its attachment and its comment once a member's browser has shared it");
 
+  // ---- Under the bell -------------------------------------------------------
+
+  // The reader replies in the administrator's thread: the server tells
+  // the administrator, naming the page "an encrypted page", and her bell
+  // shows the page's title decrypted in her browser. The canary's check
+  // covers what the bell fetched: the notifications and the headings.
+  const reply = bea.page.locator("#app .comments-panel .comment-reply");
+  await reply.locator("textarea").fill(marker("reply"));
+  const replied = bea.page.waitForResponse((r) => r.request().method() === "POST" && /\/api\/v1\/encrypted\/pages\/[^/]+\/threads\/[^/]+\/comments$/.test(new URL(r.url()).pathname), { timeout });
+  await reply.locator("button", { hasText: "Reply" }).click();
+  assert.equal((await replied).status(), 201, "the reader's encrypted reply");
+  await bea.page.locator("#app .comments-panel", { hasText: marker("reply") }).waitFor({ timeout });
+  await read(bea.page);
+  await page.goto(url(pageAddress));
+  await page.locator("#app .page-view .page-body", { hasText: marker("text") }).waitFor({ timeout });
+  await page.locator("#app .notifications-toggle").click();
+  await page.locator("#app .notification-list .notification-page", { hasText: title }).waitFor({ timeout });
+  await read(page);
+  await page.locator("#app .notifications-toggle").click();
+  console.log("ok: the administrator's bell names the page the reader replied on by its title, decrypted in her browser");
+
   // ---- A browser without the keys, unlocked with the password --------------
 
   const { context: elsewhere, page: fresh } = await contextOf();
@@ -407,7 +428,7 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
     const threads = await at(`pages/${encodeURIComponent(imp.id)}/threads`);
     assert.deepEqual(
       threads.map((t) => [t.anchor?.exact, t.comments.map((c) => c.body)]),
-      [[quote, [marker("comment")]]],
+      [[quote, [marker("comment"), marker("reply")]]],
       "the imported comment and the text it quotes",
     );
     assert.match(threads[0].comments[0].author.name, /Ada Admin/, "the imported comment's author");

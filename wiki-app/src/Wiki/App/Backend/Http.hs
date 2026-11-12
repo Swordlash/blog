@@ -120,14 +120,14 @@ import Wiki.Api.Activity (ActivityQuery (..), firstPage)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..), UserQuery (..))
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
-import Wiki.Api.Encrypted (ConversionCommit (..), ConversionInfo (..), ConversionPage (..), EncryptSpace (..), NewEncryptedSubspace (..), NewGrant (..), NewGrants (..), NewSealedComment (..), NewSealedPage (..), NewSealedThread (..), PlainAnchor (..), PlainComment (..), PlainMeta (..), PlainVersion (..), RotatedPage (..), Rotation (..), RotationInfo (..), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedThread (..), SealedThreads (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..), SpaceEntry (..), SpaceKeyStart (..), StagedAnchor (..), StagedComment (..), StagedMeta (..), StagedPage (..), StagedPlain (..), StagedSealed (..), StagedVersion (..), StartEncrypting (..), notConvertedYet)
+import Wiki.Api.Encrypted (ConversionCommit (..), ConversionInfo (..), ConversionPage (..), EncryptSpace (..), HeadingsQuery (..), NewEncryptedSubspace (..), NewGrant (..), NewGrants (..), NewSealedComment (..), NewSealedPage (..), NewSealedThread (..), PageHeading (..), PlainAnchor (..), PlainComment (..), PlainMeta (..), PlainVersion (..), RotatedPage (..), Rotation (..), RotationInfo (..), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedThread (..), SealedThreads (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..), SpaceEntry (..), SpaceKeyStart (..), StagedAnchor (..), StagedComment (..), StagedMeta (..), StagedPage (..), StagedPlain (..), StagedSealed (..), StagedVersion (..), StartEncrypting (..), maxHeadings, notConvertedYet)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Export (dispositionFileName, formatExtension, formatMediaType)
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (searchParameters)
 import Wiki.Api.Links qualified as Links
-import Wiki.Api.Notifications (NotificationsApi (..), Watching (..), searchable)
+import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..), Watching (..), searchable)
 import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), OldPasswordProof (..), PasswordRecord (..), PasswordRecordChange (..), PasswordWrapChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
@@ -163,7 +163,7 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Sour
 import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody)
 import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), Kept (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), Seen (..), VersionTag (..), anchorData, attachmentBytesData, attachmentMetaData, chainAfter, chainProblemText, commentData, encryptedPageTitle, firstChain, gapIn, headingOf, judgeHead, linkedFrom)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..))
-import Wiki.Core.Notification (PageLocation (..), WatchTarget (..))
+import Wiki.Core.Notification (Notification (..), PageLocation (..), WatchTarget (..), withTitle)
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.PageKind (PageKind)
@@ -954,11 +954,11 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
         send (endpoints.notifications.searchPeople letters) <&> \case
           Left NotFound -> Right []
           other -> other
-  notifications = cached (\c -> c.notices) endpoints.notifications.list withNotices
+  notifications = cached (\c -> c.notices) endpoints.notifications.list withNotices >>= either (pure . Left) (fmap Right . withSealedNotices)
   markRead m = do
     result <- send (endpoints.notifications.markRead m)
     when (kept result) (modifyCache (withNotices result))
-    pure result
+    either (pure . Left) (fmap Right . withSealedNotices) result
   watching target = cached (\c -> Map.lookup target c.watches) watch (withWatch target)
     where
       watch = case target of
@@ -1000,36 +1000,67 @@ instance (MonadIO m) => MonadStars (HttpWiki m) where
     either (pure . Left) (fmap Right . withSealedTitles) result
 
 -- | The starred pages with the titles of those in encrypted spaces
--- decrypted. The server holds those titles only encrypted and lists them
--- empty. Each encrypted space with a starred page costs one request, the
--- list of its pages ('sealedListPages'), whose titles are decrypted. A
--- page whose space's key this browser cannot open shows 'unreadable'.
+-- decrypted ('sealedTitles'). The server holds those titles only
+-- encrypted and lists them empty. A page whose title is not decrypted here
+-- (its space's key not held, or behind a gate the reader has not
+-- confirmed) is named as a notification names it ('encryptedPageTitle').
 --
--- Nothing is decrypted while the page the server prerendered is shown
--- (the server cannot decrypt, and the program's first render must match
--- that page), nor in the server's own prerender: the empty titles stay
--- until the next read of the list.
+-- Nothing is decrypted for the program's first render, read at once from
+-- what the server's page carries ('atOnce'), which must match that page,
+-- nor in the server's own prerender: the server cannot decrypt. The next
+-- read, after the first render, decrypts.
 withSealedTitles :: (MonadIO m) => [StarredPage] -> HttpWiki m [StarredPage]
 withSealedTitles stars = do
   env <- HttpWiki ask
-  preloading <- liftIO (readIORef env.preloading)
-  if preloading || env.immediate || null stars
+  if env.cacheOnly || env.immediate || null stars
     then pure stars
     else
       spacesNow >>= \case
         Left _ -> pure stars
         Right spaces -> do
-          let sealed = ordNub [(s.space, k) | s <- stars, Just k <- [encryptionIn s.space spaces]]
-          -- A space behind a gate the reader has not confirmed is not
-          -- decrypted: its pages are named as a notification names them.
-          closed <- Set.fromList . map fst <$> filterM (\(sid, _) -> either (const True) isJust <$> closedGate sid) sealed
-          titles <- Map.fromList . concat <$> for [x | x <- sealed, Set.notMember (fst x) closed] (\(sid, k) -> either (const []) (map (\p -> (p.id, p.title))) <$> sealedListPages sid k)
+          titles <- sealedTitles [s.page | s <- stars, isJust (encryptionIn s.space spaces)]
           pure
             [ if isJust (encryptionIn s.space spaces)
-                then StarredPage {page = s.page, space = s.space, title = if Set.member s.space closed then encryptedPageTitle else Map.findWithDefault unreadable s.page titles, location = s.location}
+                then StarredPage {page = s.page, space = s.space, title = Map.findWithDefault encryptedPageTitle s.page titles, location = s.location}
                 else s
             | s <- stars
             ]
+
+-- | The notifications with the titles of pages of encrypted spaces
+-- decrypted ('sealedTitles'), where this tab can: the server names such a
+-- page by what it is ('encryptedPageTitle'), in the bell as in the mail
+-- and the feed, which stay so. Only those notifications are asked about,
+-- and only when some space is encrypted. Nothing is decrypted for the
+-- program's first render, nor in the server's own prerender, as for the
+-- stars ('withSealedTitles').
+withSealedNotices :: (MonadIO m) => Notifications -> HttpWiki m Notifications
+withSealedNotices ns = do
+  env <- HttpWiki ask
+  encrypted <- either (const False) (any (\s -> isJust s.encryption)) <$> spacesNow
+  let asked = ordNub [n.page | n <- ns.items, n.title == encryptedPageTitle]
+  if env.cacheOnly || env.immediate || not encrypted || null asked
+    then pure ns
+    else do
+      titles <- sealedTitles asked
+      pure Notifications {unread = ns.unread, items = [maybe n (`withTitle` n) (Map.lookup n.page titles) | n <- ns.items]}
+
+-- | The titles of pages of encrypted spaces, decrypted here: asked for by
+-- the pages' ids alone ('EncryptedApi''s @headings@), and opened with the
+-- space's key through 'withSpaceKey', and so 'openKey', the one place keys
+-- are opened: a space whose key this tab cannot hold, or that is behind a
+-- gate the reader has not confirmed here, gives no title. A page whose
+-- title does not open, or that the answer leaves out (a page the reader
+-- may not view, or whose title is plain), gives none either.
+sealedTitles :: (MonadIO m) => [PageId] -> HttpWiki m (Map PageId Text)
+sealedTitles pids = do
+  given <- concat <$> for (chunksOf maxHeadings (ordNub pids)) (\part -> either (const []) identity <$> send (endpoints.encrypted.headings HeadingsQuery {pages = part}))
+  spaces <- either (const []) identity <$> spacesNow
+  let bySpace = Map.fromListWith (<>) [(h.space, [h]) | h <- given]
+  fmap Map.unions . for (Map.toList bySpace) $ \(sid, hs) -> case encryptionIn sid spaces of
+    Nothing -> pure mempty
+    Just current ->
+      either (const mempty) identity
+        <$> withSpaceKey NoRefresh sid current (\key -> Right <$> liftIO (openHeadings key sid [(h.page, h.pageKeys, h.heading) | h <- hs]))
 
 -- | The server's changelog, which changes only when the server is
 -- replaced: cached like the server's settings, so that the page the

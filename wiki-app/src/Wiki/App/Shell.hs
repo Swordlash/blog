@@ -216,6 +216,7 @@ import Wiki.Core.Path (PathError (..), findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), canView, hasGlobalPermission, mayCreateSpace)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (blog, description, encryption, icon, id, name, parent, personalContainer), containerName, pageAt, pagesAt, rootPage, subspacesOf)
+import Wiki.Core.Space qualified as Space
 import Wiki.Core.User (Login (..), User (..))
 
 -- | The shell's input: the router; a route the home page invites a
@@ -1687,6 +1688,7 @@ component =
       demo <- gets (\st -> st.demo)
       lift (attempt (fetchWorld demo)) >>= \case
         Right w -> do
+          modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady, stale = Nothing})
           -- The server says nobody is signed in in this browser: no user's
           -- keys stay on the device, as after a sign-out, even when the
           -- session ended with no tab open. Not from a copy kept offline,
@@ -1694,8 +1696,8 @@ component =
           -- users are its own.
           copy <- gets (\st -> st.offlineCopy)
           network <- gets overNetwork
-          when (isNothing w.asking.user && network && isNothing copy && inBrowser) (lift forgetEveryUsersKeys)
-          modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady, stale = Nothing})
+          -- On a thread of its own, so that nothing shown waits on it.
+          when (isNothing w.asking.user && network && isNothing copy && inBrowser) (void (H.fork (lift forgetEveryUsersKeys)))
           -- A session loaded now may name a newer entry than the page
           -- shown has marked seen.
           whatsNewSeen
@@ -2089,6 +2091,14 @@ crumbs st = case st.route of
 
 documentTitle :: State m -> Text
 documentTitle st | st.route == Home && not (isShut st) && st.session.homePage.title /= "Spaces" = st.session.homePage.title <> " · Wiki"
+-- A page of a space that asks for a passkey or the password each time it
+-- is opened is titled by its space alone: the browser keeps a page's
+-- title in its history and its tabs' lists after the reader has left the
+-- space, where nothing of the space is to stay decrypted.
+documentTitle st
+  | InSpace _ space _ <- st.here
+  , isJust (Space.gateOf st.spaces space.id) =
+      space.name <> " · Wiki"
 documentTitle st = case reverse (map fst (crumbs st)) of
   -- A space that cannot be shown has no name to show either: the content
   -- in its place says why.
