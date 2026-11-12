@@ -56,6 +56,16 @@ title: Presentations, a kind of page
       Hiring [[!pause]] and a new office.
   ```
 
+- The editor says whether each slide fits: a dot beside the slide's
+  handle and on its card in the preview, green, yellow ("may be cut
+  slightly") or red ("cut"), grey until measured. A slide that does not fit
+  is among the page's problems. Every slide is measured as a projector at
+  least 1024 pixels wide shows it.
+
+  ```text
+  ▸ ⠿ ● ## Results          (red: more than a line is cut)
+  ```
+
 - The editor marks in yellow what a page's kind does not read: a pause,
   speaker notes or `[[!style]]` in a document, and in a presentation a
   `##` heading inside a list or a box, which opens no slide.
