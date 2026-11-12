@@ -11,6 +11,7 @@ import Test.Hspec
 import Wiki.Core.Markdown.Folds (Fold (..), spoilerFolds)
 import Wiki.Core.Markdown.Problems
 import Wiki.Core.Markdown.Render (IslandKey (..))
+import Wiki.Core.PageKind (PageKind (..))
 
 -- | The parser's problems of a text, without their messages.
 placed :: Text -> [(Int, Int, ProblemKind)]
@@ -146,8 +147,27 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
       places "$$\\newcommand{\\R}{\\mathbb{R}}$$\n\nThen $\\R$ and $\\R$." `shouldBe` [(("\\R", 0), (3, 3, Formula)), (("\\R", 1), (3, 3, Formula))]
 
     it "turns an island's failure into a problem at its place, and drops one no longer in the text" $ do
-      let checked = checkText "# T\n\n```mermaid\nbad\n```\n\n[[!spoiler]]{a}(A)"
+      let checked = checkText Document "# T\n\n```mermaid\nbad\n```\n\n[[!spoiler]]{a}(A)"
           gone = IslandKey "old\n" 0
           failed = Map.fromList [(IslandKey "bad\n" 0, "Parse error on line 1"), (gone, "Parse error")]
       [(p.from, p.to, p.kind, p.message) | p <- allProblems checked failed]
         `shouldBe` [(3, 5, Diagram, "Parse error on line 1"), (7, 7, Spoiler, "Spoiler “a” is not closed: add [[/spoiler]]{a}")]
+
+  describe "the warnings of a page's kind" $ do
+    let warned kind source = [(p.from, p.severity, p.message) | p <- kindProblems kind source]
+        deck = "# Talk\n\n[[!style]]{theme=dark}\n\n## One\n\n[[!pause]]\n\nMore.\n\n[[!notes]]\nSay so.\n[[/notes]]\n\n{.incremental}\n- a\n- b\n"
+    it "warns of each marker of presentations in a document, and in a presentation of none" $ do
+      map (\(l, sev, _) -> (l, sev)) (warned Document deck) `shouldBe` [(3, Warning), (7, Warning), (11, Warning), (16, Warning)]
+      warned Presentation deck `shouldBe` []
+      -- A page of a kind this program does not know is read as a document.
+      length (warned (OtherKind "calendar") deck) `shouldBe` 4
+    it "warns in a presentation of a heading that opens no slide, below the top level" $ do
+      map (\(l, _, m) -> (l, T.take 33 m)) (warned Presentation "# T\n\n## One\n\n> ## Quoted\n\n- ## In a list\n\n### Deeper is fine\n")
+        `shouldBe` [(5, "A heading of level one or two ope"), (7, "A heading of level one or two ope")]
+      -- A heading spoiler's section is the top level, as a deck reads it.
+      warned Presentation "# T\n\n## [[!spoiler]] Q\n\nA.\n\n## Next\n" `shouldBe` []
+    it "warns in a presentation of a look after the first, and of one not at the top level" $
+      map (\(l, _, m) -> (l, T.take 17 m)) (warned Presentation "[[!style]]{theme=dark}\n\n[[!style]]{theme=light}\n\n> [[!style]]\n")
+        `shouldBe` [(3, "Only the first [["), (5, "[[!style]] is rea")]
+    it "puts the warnings beside the parser's errors when the editor checks a text" $
+      [(p.from, p.severity) | p <- (checkText Document "[[!pause]]\n\n[[!oops]]\n").problems] `shouldBe` [(1, Warning), (3, Error)]

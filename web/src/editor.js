@@ -1452,7 +1452,7 @@ export function attach(textarea, host, original, codeTokens) {
       });
       return found;
     },
-    // The page's problems, as [{from, to, kind, message}] in characters of
+    // The page's problems, as [{from, to, kind, severity, message}] in characters of
     // the text, in place of those shown before. The text may have changed
     // since they were found, so each range is clamped to the text there is.
     problems: (list) => {
@@ -1463,7 +1463,7 @@ export function attach(textarea, host, original, codeTokens) {
         return {
           from: Math.min(from, to),
           to: Math.max(from, to),
-          severity: "error",
+          severity: problem.severity === "warning" ? "warning" : "error",
           source: String(problem.kind ?? ""),
           message: String(problem.message ?? ""),
         };

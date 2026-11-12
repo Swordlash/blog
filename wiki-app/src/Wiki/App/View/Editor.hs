@@ -383,6 +383,7 @@ import Wiki.Core.Page (Page, PageSummary, titleLine, withTitleLine)
 -- Qualified, so that its fields (read with a dot) are not confused with
 -- the work's fields of the same names.
 import Wiki.Core.Page qualified as P
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (GlobalPermission (Administer), Grants (access), hasGlobalPermission)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (encryption, id))
@@ -752,7 +753,7 @@ component =
               , pending = Nothing
               , autosave = Nothing
               , checkWait = Nothing
-              , checked = Problems.checkText ""
+              , checked = Problems.checkText Kind.Document ""
               , checkedText = ""
               , failedIslands = mempty
               , problemCount = 0
@@ -2175,7 +2176,7 @@ component =
         when (delay > 0) $ liftIO (threadDelay delay)
         gets (\st -> st.loaded) >>= \case
           Ready w -> do
-            found <- liftIO (evaluate (force (Problems.checkText w.body)))
+            found <- liftIO (evaluate (force (Problems.checkText w.page.kind w.body)))
             modify $ \st -> keepDrawnFailures st {checkWait = Nothing, checked = found, checkedText = w.body}
             publishProblems
             gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (offerFolds host w.body found.folds))
