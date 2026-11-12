@@ -45,8 +45,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # bash for pipefail: the build pipes find into the compressor.
 SHELL ["/bin/bash", "-eo", "pipefail", "-c"]
 # The bootstrap and its maker install the Debian packages they need
-# themselves (the C toolchain, GMP's and libpq's development files, and
-# pkg-config, which finds libsodium for its bindings), and the maker builds
+# themselves (the C toolchain, GMP's, libpq's and SQLite's development
+# files, and pkg-config, which finds libsodium for its bindings), and the maker builds
 # libsodium from source (toolchain/libsodium.sh), but they download with
 # curl over HTTPS, which needs the CA certificates; and git, for cabal to
 # fetch haskell-halogen at the commit cabal.project pins.
@@ -128,8 +128,8 @@ FROM scratch AS release
 COPY --from=build /out/ /
 
 FROM ${DEBIAN} AS runtime
-# libgmp and libpq (PostgreSQL's client library) are the libraries the
-# binary links beyond glibc (SQLite and libsodium are compiled into it);
+# libgmp, libpq (PostgreSQL's client library) and SQLite's library are the
+# libraries the binary links beyond glibc (libsodium is compiled into it);
 # PostgreSQL's
 # client programs, of the major version of docker-compose.yml's postgres:17,
 # are what a backup and a restore of a PostgreSQL database run (pg_dump
@@ -141,7 +141,7 @@ FROM ${DEBIAN} AS runtime
 # docker-compose.yml).
 # hadolint ignore=DL3008
 RUN apt-get update \
- && apt-get install --yes --no-install-recommends ca-certificates curl libgmp10 libpq5 postgresql-client-17 \
+ && apt-get install --yes --no-install-recommends ca-certificates curl libgmp10 libpq5 libsqlite3-0 postgresql-client-17 \
  && rm -rf /var/lib/apt/lists/*
 # The PDF exports, optionally: the server makes every other document with the
 # pandoc linked into it, and a PDF with xelatex where it finds one, which

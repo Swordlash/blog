@@ -68,8 +68,8 @@
 #     and it can (root or password-less sudo); otherwise it names them and stops.
 #     This script installs those GHC needs (a C toolchain, GMP's development
 #     files, curl and xz); the maker those of the builds (git, pkg-config,
-#     zlib, libpq, ncurses for the wizard, and jq, unzip and zstd for the
-#     wasm sysroot's setup).
+#     zlib, SQLite, libpq, ncurses for the wizard, and jq, unzip and zstd
+#     for the wasm sysroot's setup).
 #
 # Then, for each of cabal.project and cabal-wasm.project that exists in the
 # repository, it runs `cabal build all --only-dependencies` with the flags

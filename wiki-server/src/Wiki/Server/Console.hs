@@ -95,11 +95,12 @@ import Wiki.Server.Guide (installGuide, updateGuide, updateLines)
 import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
 import Wiki.Server.Options (PlaceOptions (..), placeOptions, resolvePlace)
 import Wiki.Server.Secret (Kept, revealed)
-import Wiki.Server.Storage (CheckProblem (..), Checked (..), Migrated (..), Place (..), Storage, TableRead (..), Who (..), checkDatabase, migrateDatabase, readServerSettings, runStoredWikiFrom, withStorageAside)
+import Wiki.Server.Storage (CheckProblem (..), Checked (..), Database (..), Migrated (..), Place (..), Storage, TableRead (..), Who (..), checkDatabase, migrateDatabase, readServerSettings, runStoredWikiFrom, withStorageAside)
 import Wiki.Server.Storage.Audit (consoleAddress, operator)
 import Wiki.Server.Storage.Backup (Restore (..), backupNow, restore)
 import Wiki.Server.Storage.Migrate (OldSchema)
 import Wiki.Server.Storage.Migrate qualified as Migrate
+import Wiki.Server.Storage.SqliteLibrary (SqliteRefused, sqliteLine)
 import Wiki.Server.WaysIn (waysInLines)
 
 -- | A @wiki-server users@ command, on a data directory.
@@ -495,10 +496,15 @@ data CheckOutcome
 -- | Read the whole database as this program does ('Wiki.Server.Storage.checkDatabase').
 runCheck :: PlaceOptions -> IO CheckOutcome
 runCheck options =
-  outcome <$> try @SomeException ((`onPlace` options) (fmap Right . checkDatabase))
+  outcome <$> try @SomeException ((`onPlace` options) (\place -> checkDatabase place >>= traverse (\checked -> (,checked) <$> library place) <&> Right))
   where
+    -- On SQLite, the first line says which SQLite library the program
+    -- runs on ('sqliteLine'), the operating system's.
+    library place = case place.database of
+      SqliteFile _ -> (: []) <$> sqliteLine
+      PostgresAt _ -> pure []
     outcome = \case
-      Right (Right (Right checked)) -> CheckPassed (map line checked.tables <> ["Every table and every record read."] <> waysInLines checked.ways)
+      Right (Right (Right (first', checked))) -> CheckPassed (first' <> map line checked.tables <> ["Every table and every record read."] <> waysInLines checked.ways)
       Right (Right (Left (NotMigrated at known))) ->
         CheckNotMigrated ("The database is at version " <> show at <> " of the schema, and this program reads version " <> show known <> ": run wiki-server migrate first.")
       Right (Right (Left (UnreadableTables tables))) -> CheckUnreadable (map line tables <> ["Some tables did not read (above): this program cannot read the database as it is."])
@@ -507,6 +513,7 @@ runCheck options =
       Right (Left why) -> CheckFailed why
       Left e
         | Just missing <- fromException @Migrate.StepsMissing e -> CheckNotMigrated (toS (displayException missing))
+        | Just refused <- fromException @SqliteRefused e -> CheckFailed (toS (displayException refused))
         | otherwise -> CheckFailed ("The database could not be read: " <> toS (displayException e))
     line t = case t.rows of
       Right n -> t.table <> ": " <> show n <> " rows"

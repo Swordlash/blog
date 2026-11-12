@@ -44,6 +44,7 @@ import Database.SQLite.Simple (Connection (..), Only (..), close, execute, execu
 import Database.SQLite3 qualified as SQLite
 import Protolude hiding (Generic)
 import Wiki.Server.Storage.Schema (PageNodes, Pages (..), WikiDb (..), nodeColumns, wikiDb)
+import Wiki.Server.Storage.SqliteLibrary (refuseOldSqlite)
 
 -- | 'Access' is what a connection may do: write (the storage's one
 -- writer, and a backup's copy), or only read (the storage's readers). A
@@ -57,9 +58,11 @@ data Access = ReadWrite | ReadOnly
 -- connection's lock before it fails, and checks foreign keys. The database
 -- is in WAL mode, which lets a reader read the last committed state while
 -- the writer writes, with @synchronous = NORMAL@, which is safe in WAL
--- mode.
+-- mode. A SQLite library the server cannot run on is refused first
+-- ('refuseOldSqlite'), before the file is opened.
 openSqlite :: Access -> FilePath -> IO Connection
 openSqlite access file = do
+  refuseOldSqlite
   c <- open file
   flip onException (close c) $ do
     execute_ c "PRAGMA busy_timeout = 10000"

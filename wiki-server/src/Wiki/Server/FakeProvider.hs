@@ -24,7 +24,6 @@ module Wiki.Server.FakeProvider
   )
 where
 
-import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson (Value, encode, object, toJSON, (.=))
 import Data.ByteArray.Encoding (Base (..), convertFromBase, convertToBase)
 import Data.ByteString.Char8 qualified as BC
@@ -38,6 +37,7 @@ import Network.Wai (Application, Request (..), responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Protolude
 import Web.FormUrlEncoded (urlEncodeParams)
+import Wiki.Server.Sha256 (sha256)
 
 -- | Whom the provider signs in.
 data Person = Person
@@ -152,7 +152,7 @@ app user spoil issued secretsBy grants counter request respond = do
             | field "client_secret" /= clientSecret && basicSecret /= Just (g.clientId, clientSecret) -> bad "wrong secret"
             | field "client_id" /= g.clientId -> bad "wrong client"
             | field "redirect_uri" /= g.redirectUri -> bad "wrong redirect_uri"
-            | Just c <- g.challenge, decodeUtf8 (convertToBase Base64URLUnpadded (SHA256.hash (encodeUtf8 (field "code_verifier")))) /= c -> bad "wrong code_verifier"
+            | Just c <- g.challenge, decodeUtf8 (convertToBase Base64URLUnpadded (sha256 (encodeUtf8 (field "code_verifier")))) /= c -> bad "wrong code_verifier"
             | otherwise -> do
                 modifyIORef' secretsBy ((if field "client_secret" == clientSecret then "form" else "basic") :)
                 access <- fresh "access"

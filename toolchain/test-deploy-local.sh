@@ -189,7 +189,7 @@ fixture() {
   CABAL_DIR=$case_dir/cabal
   export CABAL_DIR
   mkdir -p "$FAKE_DOCKER"
-  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_TINFO FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_RESTORE_FAIL FAKE_NO_DOCKER \
+  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_TINFO FAKE_NO_SQLITE FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_RESTORE_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
     FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN FAKE_XELATEX_BROKEN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN \
     FAKE_COPY_EXIT FAKE_MOVE_COMPARE_EXIT FAKE_SERVE_PG_FAIL FAKE_PG_UP_FAIL FAKE_REHEARSE_EXIT FAKE_RELOAD_FAIL FAKE_RESTART_PG_FAIL FAKE_RESTART_PG_LOCK FAKE_RESTART_PG_TAMPER FAKE_STOP_PG_FAIL FAKE_SERVE_PG_SILENT \
@@ -485,19 +485,26 @@ case $name in
     esac ;;
   pg_config) printf '/usr/lib/postgresql/17/bin\n' ;;
   cc)
-    # The preprocessor finds every header (gmp.h). A link with -ltinfo,
-    # the wizard's probe, writes its program, unless FAKE_NO_TINFO is set.
-    output= tinfo=
+    # The preprocessor finds every header (gmp.h, a recent enough
+    # sqlite3.h). A link with -ltinfo, the wizard's probe, writes its
+    # program, unless FAKE_NO_TINFO is set; one with -lsqlite3, SQLite's,
+    # unless FAKE_NO_SQLITE is.
+    output= tinfo= sqlite=
     while [ $# -gt 0 ]; do
       case $1 in
         -o) output=$2; shift ;;
         -ltinfo) tinfo=1 ;;
+        -lsqlite3) sqlite=1 ;;
       esac
       shift
     done
     if [ -z "$output" ]; then cat >/dev/null; exit 0; fi
     if [ -n "$tinfo" ] && [ -n "${FAKE_NO_TINFO:-}" ]; then
       printf 'ld: cannot find -ltinfo\n' >&2
+      exit 1
+    fi
+    if [ -n "$sqlite" ] && [ -n "${FAKE_NO_SQLITE:-}" ]; then
+      printf 'sqlite.c:1:10: fatal error: sqlite3.h: No such file or directory\n' >&2
       exit 1
     fi
     printf '#!/bin/sh\n' >"$output"
@@ -2704,13 +2711,13 @@ pass '--bind with another address than 127.0.0.1 implies --http; --https drops a
 fixture native-deps
 out=$case_dir/check
 sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || fail 'the check failed with everything there'
-# Eight items, and the xelatex of the PDF exports, which is not counted;
+# Nine items, and the xelatex of the PDF exports, which is not counted;
 # libsodium is not counted either, since the bootstrap builds it.
-[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check did not report eight items and xelatex ok'
+[ "$(grep -c '^ok ' "$out")" = 10 ] || fail 'the check did not report nine items and xelatex ok'
 assert_contains "$out" "ok       xelatex     working at $case_dir/bin/xelatex (for the PDF exports; not counted)"
 assert_contains "$out" 'ok       zlib        pkg-config --exists zlib'
 assert_contains "$out" '--       libsodium   not needed from the system: the bootstrap builds libsodium 1.0.22 from source (toolchain/libsodium.sh; not counted)'
-assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
+assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
 out=$case_dir/check-no-zlib
 status=0
 FAKE_NO_ZLIB=1 sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || status=$?
@@ -2721,7 +2728,18 @@ assert_contains "$out" 'sudo apt-get install zlib1g-dev'
 assert_contains "$out" 'sudo dnf install zlib-devel'
 assert_contains "$out" 'LIBRARY_PATH, C_INCLUDE_PATH, CPATH'
 assert_contains "$out" 'LD_LIBRARY_PATH'
-[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check without zlib did not report the other seven items and xelatex ok'
+[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check without zlib did not report the other eight items and xelatex ok'
+# SQLite's development files, which wiki-server links since direct-sqlite
+# is built with the system's SQLite.
+assert_contains "$case_dir/check" 'ok       SQLite      sqlite3.h and -lsqlite3, through cc (3.32.0 or later)'
+out=$case_dir/check-no-sqlite
+status=0
+FAKE_NO_SQLITE=1 sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "the check without SQLite exited $status, not 1"
+assert_contains "$out" 'missing  SQLite      cc cannot build a program with sqlite3.h and -lsqlite3 (Debian: libsqlite3-dev; RHEL: sqlite-devel)'
+assert_contains "$out" 'Missing for the native build of wiki-server: SQLite.'
+assert_contains "$out" 'sudo apt-get install libsqlite3-dev'
+assert_contains "$out" 'sudo dnf install sqlite-devel'
 pass 'toolchain/check-native.sh reports each item ok, and names a missing one with its packages and exits 1'
 
 # libpq is found through pg_config on PATH, which postgresql-libpq's build
@@ -2746,7 +2764,7 @@ assert_contains "$out" 'missing  libpq       no pg_config on PATH, though pkg-co
 assert_contains "$out" 'postgresql-libpq runs pg_config when cabal builds it, so pg_config must be on PATH.'
 assert_contains "$out" "PGDG's postgresqlNN-devel, which puts it in /usr/pgsql-NN/bin"
 assert_contains "$out" "PATH=/usr/pgsql-NN/bin:\$PATH sh toolchain/deploy-local.sh"
-[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check without pg_config did not report the other seven items and xelatex ok'
+[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check without pg_config did not report the other eight items and xelatex ok'
 mkdir -p "$case_dir/pgsql-16/bin"
 ln -s "$case_dir/bin/tool" "$case_dir/pgsql-16/bin/pg_config"
 out=$case_dir/check-pg-config-elsewhere
@@ -2769,8 +2787,8 @@ out=$case_dir/check-without-postgres
 sh "$case_dir/repo/toolchain/check-native.sh" --without-postgres >"$out" 2>&1 ||
   fail 'the check --without-postgres failed with everything there'
 assert_contains "$out" 'skipped  libpq       not needed (built without PostgreSQL)'
-assert_contains "$out" 'All 7 items the native build of wiki-server needs are there.'
-[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check --without-postgres did not report seven items and xelatex ok'
+assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
+[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check --without-postgres did not report eight items and xelatex ok'
 assert_lacks "$out" 'missing'
 status=0
 sh "$case_dir/repo/toolchain/check-native.sh" --postgres >"$out" 2>&1 || status=$?
@@ -2790,8 +2808,8 @@ WIKI_TEX_TIMEOUT=2 sh "$case_dir/repo/toolchain/check-native.sh" --without-tex >
   fail 'the check --without-tex failed with everything there'
 [ ! -e "$case_dir/xelatex-ran" ] || fail 'the check --without-tex ran xelatex'
 assert_contains "$out" "--       xelatex     checked by the deploy's TeX step, on the service's PATH (for the PDF exports; not counted)"
-assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
-[ "$(grep -c '^ok ' "$out")" = 8 ] || fail 'the check --without-tex did not report eight items ok'
+assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
+[ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check --without-tex did not report nine items ok'
 assert_lacks "$out" 'PDF exports need xelatex'
 # Without the option the same xelatex is probed, and reported as failing.
 out=$case_dir/check-hanging-tex
@@ -2897,8 +2915,8 @@ FAKE_NO_ZLIB=1 FAKE_BOOTSTRAP_ZLIB=$case_dir/zlib-installed deploy --server --sq
 assert_contains "$out" 'warning: missing for the native build of wiki-server: zlib'
 assert_contains "$out" 'checking again what the native build of wiki-server needs, after the bootstrap'
 # The check after the bootstrap is told, as the first was, that a wiki in
-# SQLite needs no libpq: seven items. Neither check probes xelatex.
-assert_contains "$out" 'All 7 items the native build of wiki-server needs are there.'
+# SQLite needs no libpq: eight items. Neither check probes xelatex.
+assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
 [ "$(grep -c -F -- "--       xelatex     checked by the deploy's TeX step" "$out")" = 2 ] ||
   fail 'the check and the check after the bootstrap did not both leave xelatex to the TeX step'
 assert_lacks "$out" "working at $case_dir/bin/xelatex"

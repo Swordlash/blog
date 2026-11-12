@@ -82,30 +82,20 @@ source-repository-package
   location: https://github.com/Swordlash/opaque-hs
   tag: 3ac875fdf5598c89cd06f23a264a1d2d71a8a942
 
--- network 3.2.10.0 (2026-10) exports getHostName from Network.Socket, which
--- smtp-mail 0.5.0.1 also imports from Network.BSD, so smtp-mail no longer
--- compiles with it (an ambiguous occurrence). Until smtp-mail is fixed, the
--- solver is kept on the network before it.
-constraints: network < 3.2.10
-
 -- As in haskell-halogen's own cabal.project: protolude's upper bounds lag
 -- behind the GHC this builds with. servant's, http-api-data's and
 -- monad-control's (servant-server's) lag behind the QuickCheck, text-iso8601
 -- and transformers-compat everything else here is built with: kept to them,
 -- the solver would take older versions and rebuild aeson, protolude and every
 -- package above them for the API's sake alone. serialise's and cborg's lag behind the base,
--- ghc-prim, containers and time of GHC 9.14: tls needs serialise (over cborg),
+-- containers and time of GHC 9.14: tls needs serialise (over cborg),
 -- and the server's mail (smtp-mail, over crypton-connection and tls) needs tls;
 -- without them the solver falls back to a tls of crypton 1, whose memory
--- package is not the ram the server's crypton 2 speaks. pandoc's crypton
--- (< 2.1) and pandoc-types' QuickCheck (< 2.19) lag behind those the rest is
--- built with: kept to them, linking pandoc into the server (its export)
--- would take an older crypton and tls and rebuild aeson, servant, warp and
--- everything above them a second time, for pandoc's sake alone. pandoc uses
--- crypton for its hashes (MD5, SHA-1), and pandoc-types QuickCheck for its
--- Arbitrary instances.
--- qrcode-core's containers bound lags behind GHC 9.14's (the server draws a
--- second factor's QR code with it, Wiki.Server.Totp).
+-- package is not the ram the server's crypton 2 speaks. pandoc-types'
+-- QuickCheck (< 2.19) lags behind the one the rest is built with: kept to
+-- it, linking pandoc into the server (its export) would hold the whole
+-- plan to QuickCheck 2.18, for pandoc's sake alone. pandoc-types uses
+-- QuickCheck for its Arbitrary instances.
 -- postgresql-simple's bounds on base, template-haskell, containers,
 -- bytestring, aeson and attoparsec lag behind GHC 9.14 and the versions
 -- the rest is built with, and dependent-map's (beam-migrate's, which
@@ -128,15 +118,11 @@ allow-newer:
   http-api-data:text-iso8601,
   monad-control:transformers-compat,
   serialise:base,
-  serialise:ghc-prim,
   serialise:containers,
   serialise:time,
   cborg:base,
-  cborg:ghc-prim,
   cborg:containers,
-  pandoc:crypton,
   pandoc-types:QuickCheck,
-  qrcode-core:containers,
   postgresql-simple:*,
   dependent-map:containers,
   webauthn:base,
@@ -173,6 +159,19 @@ program-options
 -- server fetch it.
 package pandoc
   flags: +embed_data_files -http
+
+-- SQLite is the operating system's, not the copy direct-sqlite bundles:
+-- direct-sqlite 2.3.29 bundles SQLite 3.45.0 (January 2024) and has had no
+-- release since, while a distribution keeps its SQLite patched. With
+-- systemlib, direct-sqlite (under sqlite-simple and beam-sqlite) links
+-- -lsqlite3 and compiles against the system's sqlite3.h, so the machine
+-- that builds wiki-server needs SQLite's development files (Debian's
+-- libsqlite3-dev, RHEL's sqlite-devel) and the one that runs it the
+-- library. The server refuses a library older than it needs, or built
+-- without what it relies on (Wiki.Server.Storage.SqliteLibrary). The wasm
+-- build has no direct-sqlite: the server is not built for the browser.
+package direct-sqlite
+  flags: +systemlib
 
 -- libsodium comes from the toolchain: toolchain/libsodium.sh builds the
 -- release toolchain/pins.env pins as a static library, and its libsodium.pc

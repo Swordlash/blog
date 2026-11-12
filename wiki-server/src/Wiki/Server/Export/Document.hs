@@ -121,7 +121,6 @@ module Wiki.Server.Export.Document
   )
 where
 
-import Crypto.Hash.SHA256 qualified as SHA256
 import Data.ByteString.Builder (byteStringHex, toLazyByteString)
 import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup)
@@ -151,6 +150,7 @@ import Wiki.Core.Page (Page (title))
 import Wiki.Core.Slug (Slug, freshName, headingSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
+import Wiki.Server.Sha256 (sha256)
 
 -- | Where a page is: what its links and embeds are resolved against.
 data Place = Place
@@ -673,7 +673,7 @@ withBoxes source markers edits bars pauses = case family of
           inside = T.drop 1 (T.dropWhile (/= '(') afterName)
        in T.strip (T.dropWhileEnd (/= ')') inside & T.dropEnd 1)
     lines' = T.splitOn "\n" source
-    digest = decodeUtf8 (BSL.toStrict (toLazyByteString (byteStringHex (SHA256.hash (encodeUtf8 source)))))
+    digest = decodeUtf8 (BSL.toStrict (toLazyByteString (byteStringHex (sha256 (encodeUtf8 source)))))
     family = find (not . (`T.isInfixOf` source)) [prefix | n <- [8, 16, 64], let prefix = "wikibox" <> T.take n digest]
     -- The prefix of the marker's line with everything but the quotation
     -- marks (a list item's marker, its number) made spaces, so that the

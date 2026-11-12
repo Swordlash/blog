@@ -27,7 +27,6 @@ module Wiki.Server.Storage.Blobs
   )
 where
 
-import Crypto.Hash.SHA256 qualified as SHA256
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (byteStringHex, toLazyByteString)
 import Data.ByteString.Lazy qualified as BSL
@@ -38,10 +37,11 @@ import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileE
 import System.FilePath ((</>))
 import System.IO (hClose, openBinaryTempFile, withBinaryFile)
 import Wiki.Core.Id (BlobId (..))
+import Wiki.Server.Sha256 (sha256, sha256Finalize, sha256Init, sha256Update)
 
 -- | The blob id of some bytes: their SHA-256, in lowercase hex.
 blobOf :: ByteString -> BlobId
-blobOf = BlobId . decodeUtf8 . BSL.toStrict . toLazyByteString . byteStringHex . SHA256.hash
+blobOf = BlobId . decodeUtf8 . BSL.toStrict . toLazyByteString . byteStringHex . sha256
 
 -- | Where a blob's file is in a directory of blobs; 'Nothing' for an id
 -- that is not a hash, which names no file (and so cannot name one outside
@@ -82,9 +82,9 @@ storeBlobFile dir source = do
         let loop !context !n = do
               chunk <- BS.hGetSome input chunkSize
               if BS.null chunk
-                then pure (SHA256.finalize context, n)
-                else BS.hPut out chunk >> loop (SHA256.update context chunk) (n + fromIntegral (BS.length chunk))
-         in loop SHA256.init 0
+                then pure (sha256Finalize context, n)
+                else BS.hPut out chunk >> loop (sha256Update context chunk) (n + fromIntegral (BS.length chunk))
+         in loop sha256Init 0
   (digest, size) <- (copy <* hClose out) `onException` (hClose out >> removeFile temporary)
   let blob = BlobId (decodeUtf8 (BSL.toStrict (toLazyByteString (byteStringHex digest))))
   case blobFile dir blob of

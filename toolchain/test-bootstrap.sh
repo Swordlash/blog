@@ -309,7 +309,8 @@ pass 'build installs the compilers and Node, and neither Chromium nor fourmolu; 
 # does not recognise alone, and writes the environment file. Then, on
 # Debian or not, it runs toolchain/check-native.sh. What that script checks
 # is faked, so that the result does not depend on the host: cc preprocesses
-# anything and links the terminfo probe unless TINFO_MISSING is set,
+# anything and links the terminfo probe unless TINFO_MISSING is set and
+# SQLite's unless SQLITE_MISSING is,
 # pkg-config knows libpq, and zlib unless ZLIB_MISSING is set, and make and
 # pg_config answer. libsodium is the fixture's, as toolchain/libsodium.sh
 # leaves it, so the maker does not build it.
@@ -318,17 +319,22 @@ rm "$case_dir/bin/node" "$case_dir/bin/npm" "$case_dir/bin/fourmolu" \
   "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME" "$CACHE/INSTALLATION_COMPLETE"
 cat >"$case_dir/bin/cc" <<'EOF'
 #!/bin/sh
-output= tinfo=
+output= tinfo= sqlite=
 while [ $# -gt 0 ]; do
   case $1 in
     -o) output=$2; shift ;;
     -ltinfo) tinfo=1 ;;
+    -lsqlite3) sqlite=1 ;;
   esac
   shift
 done
 if [ -z "$output" ]; then cat >/dev/null; exit 0; fi
 if [ -n "$tinfo" ] && [ -n "${TINFO_MISSING:-}" ]; then
   printf 'cannot find -ltinfo\n' >&2
+  exit 1
+fi
+if [ -n "$sqlite" ] && [ -n "${SQLITE_MISSING:-}" ]; then
+  printf 'sqlite3.h: No such file or directory\n' >&2
   exit 1
 fi
 printf '#!/bin/sh\n' >"$output"
@@ -501,11 +507,11 @@ for name in toolchain/check-native.sh 'maker check native'; do
   out=$case_dir/check-plain
   env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check >"$out" 2>&1 || fail "the check failed: $(cat "$out")"
   assert_contains "$out" 'skipped  terminfo    not needed (for the configuration wizard only: --with-wizard)'
-  assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
+  assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
   out=$case_dir/check-wizard
   env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check --with-wizard >"$out" 2>&1 || fail "the check --with-wizard failed: $(cat "$out")"
   assert_contains "$out" 'ok       terminfo    -ltinfo, through cc (for the configuration wizard)'
-  assert_contains "$out" 'All 9 items the native build of wiki-server and the configuration wizard need are there.'
+  assert_contains "$out" 'All 10 items the native build of wiki-server and the configuration wizard need are there.'
   out=$case_dir/check-wizard-no-tinfo
   status=0
   TINFO_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check --without-postgres --with-wizard >"$out" 2>&1 || status=$?
@@ -513,6 +519,17 @@ for name in toolchain/check-native.sh 'maker check native'; do
   assert_contains "$out" 'missing  terminfo    cc cannot link a program with -ltinfo (the configuration wizard needs it) (Debian: libncurses-dev; RHEL: ncurses-devel)'
   assert_contains "$out" 'Missing for the native build of wiki-server and the configuration wizard: terminfo.'
   pass "$name checks terminfo with --with-wizard only"
+
+  # SQLite's header and library, which wiki-server links: named with
+  # their packages when cc cannot build the probe.
+  assert_contains "$case_dir/check-plain" 'ok       SQLite      sqlite3.h and -lsqlite3, through cc (3.32.0 or later)'
+  out=$case_dir/check-no-sqlite
+  status=0
+  SQLITE_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check --without-postgres >"$out" 2>&1 || status=$?
+  [ "$status" = 1 ] || fail "the check without SQLite exited $status, not 1"
+  assert_contains "$out" 'missing  SQLite      cc cannot build a program with sqlite3.h and -lsqlite3 (Debian: libsqlite3-dev; RHEL: sqlite-devel)'
+  assert_contains "$out" 'Missing for the native build of wiki-server: SQLite.'
+  pass "$name checks SQLite's header and library"
 
   # The xelatex of the PDF exports, through toolchain/check-tex.sh: a line
   # of its own after the commands, ok when the fake typesets the probe, no
@@ -523,7 +540,7 @@ for name in toolchain/check-native.sh 'maker check native'; do
   out=$case_dir/check-tex-working
   env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check >"$out" 2>&1 || fail "the check with a working xelatex failed: $(cat "$out")"
   assert_contains "$out" "ok       xelatex     working at $case_dir/bin/xelatex (for the PDF exports; not counted)"
-  assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
+  assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
   if grep -F 'PDF exports need' "$out" >/dev/null; then fail 'the check with a working xelatex spoke of the PDF exports'; fi
   if [ "$(line_of "$out" 'pkg-config')" -gt "$(line_of "$out" 'xelatex')" ] || [ "$(line_of "$out" 'xelatex')" -gt "$(line_of "$out" 'GMP')" ]; then
     fail 'the xelatex line is not after the commands'
@@ -532,7 +549,7 @@ for name in toolchain/check-native.sh 'maker check native'; do
   out=$case_dir/check-tex-failing
   env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check >"$out" 2>&1 || fail "the check with a failing xelatex failed: $(cat "$out")"
   assert_contains "$out" "no       xelatex     failing at $case_dir/bin/xelatex: It exited 1. (for the PDF exports; not counted)"
-  assert_contains "$out" 'All 8 items the native build of wiki-server needs are there.'
+  assert_contains "$out" 'All 9 items the native build of wiki-server needs are there.'
   assert_contains "$out" "PDF exports need xelatex: $case_dir/bin/xelatex fails (sh toolchain/check-tex.sh says why), so the server would offer no PDFs (the deploy offers TeX Live under the toolchain: sh toolchain/deploy-local.sh --server --texlive)."
   rm "$case_dir/bin/xelatex"
   out=$case_dir/check-tex-none

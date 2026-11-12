@@ -47,7 +47,6 @@ module Wiki.Server.Password
 where
 
 import Crypto.Error (CryptoFailable (..))
-import Crypto.Hash.SHA256 qualified as SHA256
 import Crypto.KDF.Argon2 qualified as Argon2
 import Crypto.Random (getRandomBytes)
 import Data.ByteArray (constEq)
@@ -57,6 +56,7 @@ import Data.Text qualified as T
 import Protolude
 import Text.Show (Show (showsPrec))
 import Wiki.Core.User (Password (..), checkNewPassword)
+import Wiki.Server.Sha256 (sha256)
 
 -- | What a hash is made with: memory in KiB, passes, lanes.
 data Parameters = Parameters
@@ -198,4 +198,4 @@ newPublicId = decodeUtf8 . convertToBase @ByteString Base16 <$> (getRandomBytes 
 -- leaked database signs nobody in, and the id is random and long enough
 -- that a hash without salt or cost is enough.
 tokenHash :: Text -> Text
-tokenHash = decodeUtf8 . convertToBase @ByteString Base16 . SHA256.hash . encodeUtf8
+tokenHash = decodeUtf8 . convertToBase @ByteString Base16 . sha256 . encodeUtf8

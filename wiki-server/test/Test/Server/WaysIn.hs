@@ -10,7 +10,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Database.Beam (insert, insertValues, runInsert, runUpdate, update, val_, (<-.), (==.))
 import Protolude
-import Test.Database (Backing, placeOptionsOf, withConnectionTo)
+import Test.Database (Backing (..), placeOptionsOf, withConnectionTo)
 import Test.Hspec
 import Test.Server.Program (cLocale, placeArgsOf, runBytes, wikiServerProgram)
 import Test.Storage.Fixture (decodableRecord, withPlaceIn)
@@ -22,6 +22,7 @@ import Wiki.Server.Storage (migrateDatabase)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (PasswordColumns (..))
 import Wiki.Server.Storage.Schema
+import Wiki.Server.Storage.SqliteLibrary (sqliteLine)
 import Wiki.Server.WaysIn
 
 unitSpec :: Spec
@@ -189,6 +190,11 @@ spec backing = describe "wiki-server check, the accounts" $ do
       runInsert (insert wikiDb.passkeys (insertValues [PasskeyRow {credential_id = "dora-key", user_id = "u-dora", public_key = "key", algorithm = -7, sign_count = 0, name = "Laptop", created_at = moment, last_used_at = Nothing, wrapped_nonce = Nothing, wrapped_key = Nothing}]))
     runCheck (placeOptionsOf at) >>= \case
       CheckPassed lines' -> do
+        -- On SQLite the first line names the SQLite library; on
+        -- PostgreSQL no line does.
+        case backing of
+          OnSqlite -> sqliteLine >>= \line -> take 1 lines' `shouldBe` [line]
+          _ -> filter ("SQLite" `T.isPrefixOf`) lines' `shouldBe` []
         let summary = dropWhile (/= "Every table and every record read.") lines'
         summary
           `shouldBe` [ "Every table and every record read."

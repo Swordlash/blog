@@ -47,7 +47,6 @@ module Wiki.Server.Guide
 where
 
 import Control.Monad.UUID (generateV4)
-import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict', encode, object, withObject, (.!=), (.:), (.:?), (.=))
 import Data.ByteString.Builder (byteStringHex, toLazyByteString)
 import Data.ByteString.Lazy qualified as BSL
@@ -72,6 +71,7 @@ import Wiki.Core.PageKind (PageKind (..), pageKindName)
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Space (..), pageAtExactly, pagePath, rootPage)
 import Wiki.Server.Import (attach, mergeArchive)
+import Wiki.Server.Sha256 (sha256)
 import Wiki.Server.Storage (Storage, publishing, reading, storageDataDir, writingEither, writingThen)
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, operator)
 import Wiki.Server.Storage.Backend (Backend (..))
@@ -124,7 +124,7 @@ instance FromJSON Installed where
 -- title and text make the same input.
 writtenHash :: Text -> Text -> Text
 writtenHash title body =
-  decodeUtf8 (BSL.toStrict (toLazyByteString (byteStringHex (SHA256.hash (encodeUtf8 (show (T.length title) <> ":" <> title <> body))))))
+  decodeUtf8 (BSL.toStrict (toLazyByteString (byteStringHex (sha256 (encodeUtf8 (show (T.length title) <> ":" <> title <> body))))))
 
 installedKey :: Text
 installedKey = "guide-installed"

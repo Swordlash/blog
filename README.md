@@ -1336,8 +1336,15 @@ prints `ok` or `missing` for each command and library, names the packages of wha
 missing, and can be run by hand (`sh toolchain/check-native.sh`). On Debian or Ubuntu
 (`dpkg-query` on `PATH`) a missing package is only a warning, since the bootstrap
 installs it next, and the check runs again after the bootstrap; elsewhere the deploy
-stops there. SQLite needs nothing: the build compiles its own copy. Nor does
-libsodium: the bootstrap builds the release `toolchain/pins.env` pins
+stops there. SQLite is the system's: `wiki-server` links the machine's SQLite library
+(direct-sqlite built with its flag `systemlib`, in `cabal.project`), not a copy of its
+own, so the machine that builds it needs SQLite's development files and the one that
+runs it the library, 3.32.0 or later. The check builds a one-line program with
+`sqlite3.h` and `-lsqlite3` and refuses an older header; the server says at start which
+SQLite it runs on (`event=sqlite version=…` in its log, and the first line of
+`wiki-server check` on a wiki in SQLite), and refuses one older than 3.32.0, or built
+without what it relies on (`THREADSAFE=0`, `OMIT_WAL`, `OMIT_FOREIGN_KEY`, or fewer
+parameters than SQLite's default of 32766), saying why. libsodium needs nothing: the bootstrap builds the release `toolchain/pins.env` pins
 (`LIBSODIUM_VERSION`) from source, with `toolchain/libsodium.sh`, as a static library
 under the toolchain's directory (`~/.wiki-toolchain/libsodium`, or
 `<prefix>/toolchain/.wiki-toolchain/libsodium`), and the build links it into
@@ -1365,6 +1372,7 @@ then reads `--` and "checked by the deploy's TeX step", and the check waits for 
 | GMP                     | `libgmp-dev`     | `gmp-devel`                                                                      |
 | libpq (PostgreSQL only) | `libpq-dev`      | `libpq-devel`, or PGDG's `postgresqlNN-devel` with `/usr/pgsql-NN/bin` on `PATH` |
 | zlib                    | `zlib1g-dev`     | `zlib-devel`                                                                     |
+| SQLite, 3.32.0 or later | `libsqlite3-dev` | `sqlite-devel`                                                                   |
 | pkg-config              | `pkg-config`     | `pkgconf-pkg-config`                                                             |
 | terminfo (wizard only)  | `libncurses-dev` | `ncurses-devel`                                                                  |
 
@@ -2678,7 +2686,7 @@ from the release `toolchain/pins.env` pins (its checksum checked) into
 is too old for the `opaque-hs` package; Chromium's headless shell where Playwright keeps its
 browsers; and fourmolu, the formatter, into ghcup's bin directory (from its
 release zip, checked against a pinned hash, or built from Hackage where GitHub's
-downloads are refused, as in Claude Code's cloud sessions). Debian packages it needs (GMP's, libpq's and zlib's headers, `zstd`, `jq`
+downloads are refused, as in Claude Code's cloud sessions). Debian packages it needs (GMP's, libpq's, zlib's and SQLite's headers, `zstd`, `jq`
 and a few more) it
 installs with `apt-get` when it runs as root or with password-less `sudo`, and names
 otherwise: the shell script those GHC needs (`build-essential curl libgmp-dev
@@ -3133,7 +3141,7 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
    bootstrap makes the pinned GHC and cabal ghcup's defaults for whoever runs it.
 2. Install, once, the Debian packages the bootstrap and Chromium need, since the
    runner cannot `sudo`. The bootstrap's own are `build-essential curl git jq unzip
-   xz-utils zstd libgmp-dev libpq-dev pkg-config zlib1g-dev` (libsodium it builds from
+   xz-utils zstd libgmp-dev libpq-dev libsqlite3-dev pkg-config zlib1g-dev` (libsodium it builds from
    source). Chromium's are those `npx playwright install-deps
    --dry-run chromium` names in a checkout after `npm ci` (and that the bootstrap
    prints when Chromium does not start); on Ubuntu 24.04 they are `libasound2t64

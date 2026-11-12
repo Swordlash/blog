@@ -41,13 +41,17 @@
 #     no pg_config: libpq is then reported as not needed;
 #   - zlib, for the zlib package, which is built without its bundled copy and
 #     finds the system's zlib through pkg-config (zlib.pc);
+#   - SQLite, for direct-sqlite, which cabal.project builds with its flag
+#     systemlib: it compiles against the system's sqlite3.h and links
+#     -lsqlite3, so the check builds a one-line program that way through the
+#     compiler, and refuses a header older than SQLite 3.32.0, the oldest
+#     the server runs on;
 #   - terminfo, for the configuration wizard only (--with-wizard): vty, the
 #     terminal library under brick, links GHC's terminfo package, which
 #     links -ltinfo (Debian's libncurses-dev, RHEL's ncurses-devel). The
 #     check links a one-line program with -ltinfo through the compiler.
 #
-# SQLite is not an item: direct-sqlite builds its own copy of SQLite. Nor
-# is libsodium: the bootstrap builds the pinned release from source
+# libsodium is not an item: the bootstrap builds the pinned release from source
 # (toolchain/libsodium.sh) as a static library, which the build links into
 # wiki-server, so the machine needs no libsodium to build or to run it. Its
 # line says so, and is not counted.
@@ -89,7 +93,7 @@ for option do
     -h | --help)
       usage
       printf '\nChecks the commands and C libraries the native build of wiki-server needs\n'
-      printf '(cc, make, curl, git, pkg-config, GMP, libpq, zlib), one line each, and exits 1\n'
+      printf '(cc, make, curl, git, pkg-config, GMP, libpq, zlib, SQLite), one line each, and exits 1\n'
       printf 'when one is missing. It installs nothing. libsodium is not needed from the system:\n'
       printf 'the bootstrap builds it from source (toolchain/libsodium.sh). It also says whether the\n'
       printf 'xelatex on PATH typesets the PDF exports (toolchain/check-tex.sh), which is not\n'
@@ -218,6 +222,27 @@ elif pkg-config --exists zlib; then
   report zlib ok "pkg-config --exists zlib"
 else
   lack zlib zlib1g-dev zlib-devel "pkg-config --exists zlib failed"
+fi
+
+# SQLite, as direct-sqlite links it with its flag systemlib (cabal.project):
+# a program with sqlite3.h and -lsqlite3, through the C compiler, then the
+# header's version against the oldest the server runs on, 3.32.0
+# (wiki-server/src/Wiki/Server/Storage/SqliteLibrary.hs says why).
+if ! has cc; then
+  lack SQLite libsqlite3-dev sqlite-devel "not checked: needs cc"
+else
+  probe=$(mktemp -d)
+  trap 'rm -rf "$probe"' EXIT
+  printf '#include <sqlite3.h>\nint main(void) { return sqlite3_libversion_number() > 0 ? 0 : 1; }\n' >"$probe/sqlite.c"
+  if ! cc -o "$probe/sqlite" "$probe/sqlite.c" -lsqlite3 >"$probe/cc.log" 2>&1; then
+    lack SQLite libsqlite3-dev sqlite-devel "cc cannot build a program with sqlite3.h and -lsqlite3"
+  elif ! printf '#include <sqlite3.h>\n#if SQLITE_VERSION_NUMBER < 3032000\n#error older than 3.32.0\n#endif\n' | cc -E -x c - >/dev/null 2>&1; then
+    lack SQLite libsqlite3-dev sqlite-devel "sqlite3.h is older than SQLite 3.32.0, the oldest wiki-server runs on"
+  else
+    report SQLite ok "sqlite3.h and -lsqlite3, through cc (3.32.0 or later)"
+  fi
+  rm -rf "$probe"
+  trap - EXIT
 fi
 
 # libsodium is not the machine's: the bootstrap builds the release

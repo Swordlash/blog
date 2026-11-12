@@ -91,7 +91,6 @@ module Wiki.Server.Oidc
   )
 where
 
-import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson (FromJSON (..), Object, Value (..), eitherDecode, eitherDecodeStrict', withObject, (.:), (.:?))
 import Data.Aeson.Types (Parser, parseEither, parseMaybe, typeMismatch)
 import Data.ByteArray.Encoding (Base (..), convertFromBase, convertToBase)
@@ -112,6 +111,7 @@ import Wiki.Core.User (Email (..), SignInProvider (..))
 import Wiki.Server.Accounts (Claimed (..), Intent)
 import Wiki.Server.Password (newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret, revealed)
+import Wiki.Server.Sha256 (sha256)
 
 --------------------------------------------------------------------------------
 -- Providers
@@ -295,7 +295,7 @@ newSecrets = Secrets <$> newToken <*> newToken <*> newToken
 -- | The PKCE challenge of a verifier: its SHA-256, in URL-safe base64
 -- (@S256@).
 challengeOf :: Text -> Text
-challengeOf verifier = decodeUtf8 (convertToBase Base64URLUnpadded (SHA256.hash (encodeUtf8 verifier)))
+challengeOf verifier = decodeUtf8 (convertToBase Base64URLUnpadded (sha256 (encodeUtf8 verifier)))
 
 -- | Whether the kind supports PKCE. Apple does not say it does, and might
 -- refuse a token request with a verifier it does not expect; the state and
