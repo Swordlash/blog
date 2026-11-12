@@ -393,21 +393,34 @@ function wiki_enc_sealed_error(sealed) {
 }
 
 // An attachment's bytes, fetched from the address given (the server's, of
-// its encrypted bytes), decrypted with a page key and the additional data
-// given, as an object URL of this media type, and one of the link's type
-// (the same URL when the types are one): JSON {url, link}, or {error}. The
-// caller revokes the URLs when the page no longer shows them.
-async function wiki_enc_open_attachment(handle, address, nonce, data, mediaType, linkType) {
+// its encrypted bytes), and decrypted with a page key and the additional
+// data given: an object {opened} holding them, or {error}. No object URL
+// is made here: the caller makes them (wiki_enc_object_urls) once it knows
+// a view still wants them, so that a fetch whose view went away leaves
+// nothing behind but bytes the garbage collector takes.
+async function wiki_enc_open_attachment(handle, address, nonce, data) {
   try {
     const answer = await fetch(address, { credentials: "same-origin" });
     if (!answer.ok) throw new Error(`The attachment could not be read: ${answer.status}.`);
     const opened = await crypto.subtle.decrypt({ name: "AES-GCM", iv: wikiEncFromBase64(nonce), additionalData: wikiEncText(data) }, wikiEncKey(handle), await answer.arrayBuffer());
-    const url = URL.createObjectURL(new Blob([opened], { type: mediaType }));
-    const link = linkType === mediaType ? url : URL.createObjectURL(new Blob([opened], { type: linkType }));
-    return JSON.stringify({ url, link });
+    return { opened };
   } catch (error) {
-    return JSON.stringify({ error: error?.name === "OperationError" ? "This attachment does not open with its page's key." : String(error?.message ?? error) });
+    return { error: error?.name === "OperationError" ? "This attachment does not open with its page's key." : String(error?.message ?? error) };
   }
+}
+
+// Why an attachment did not open ("" when it did).
+function wiki_enc_opened_error(o) {
+  return o.error ?? "";
+}
+
+// Object URLs of an attachment's decrypted bytes: one of this media type,
+// and one of the link's type (the same URL when the types are one), as
+// JSON {url, link}. The caller revokes them when no view shows them.
+function wiki_enc_object_urls(o, mediaType, linkType) {
+  const url = URL.createObjectURL(new Blob([o.opened], { type: mediaType }));
+  const link = linkType === mediaType ? url : URL.createObjectURL(new Blob([o.opened], { type: linkType }));
+  return JSON.stringify({ url, link });
 }
 
 // Let an object URL go.

@@ -291,13 +291,9 @@ data State = State
   -- page of an encrypted space ("Wiki.Core.Encrypted"'s chain of
   -- versions): shown in a banner over the page, which is then not edited
   -- from this tab.
-  , shownOwner :: UrlOwner
-  -- ^ The owner of the addresses of the attachments of the page shown
-  -- ("Wiki.App.Backend"'s 'UrlOwner'): let go when another fetch of the
-  -- page is shown, when the view goes to another page, and when it closes.
-  , pendingOwners :: [UrlOwner]
-  -- ^ The owners of the fetches not answered yet: let go when the view
-  -- goes to another page, so that a late answer makes no addresses.
+  , owners :: Body.Owners
+  -- ^ Who holds the addresses of the page's attachments: the fetch shown,
+  -- and those not answered yet ("Wiki.App.View.Body"'s 'Body.Owners').
   }
 
 -- | An address put on the clipboard: by a click on a heading's or a box's
@@ -352,8 +348,8 @@ component =
         -- render is the page the prerender shows (see "Wiki.App.Shell"),
         -- over a backend that can ('atOnce'); otherwise in 'Initialize'.
         initialState = \input -> do
-          shownOwner <- newUrlOwner
-          loaded <- fromMaybe Loading <$> atOnce (fetch shownOwner input)
+          firstOwner <- newUrlOwner
+          loaded <- fromMaybe Loading <$> atOnce (fetch firstOwner input)
           threads <- case loaded of
             Ready page _ _ _ | commentsHere input -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
             _ -> pure ThreadsLoading
@@ -390,8 +386,7 @@ component =
               , lastBox = Nothing
               , writing = False
               , chainProblem = Nothing
-              , shownOwner
-              , pendingOwners = []
+              , owners = Body.ownersOf firstOwner
               }
       , render
       , eval =
@@ -1210,12 +1205,10 @@ component =
     takeFetched owner loaded = do
       shown <- gets (\st -> pageOf st.loaded)
       case loaded of
-        Ready new _ _ _ | not (takesPage shown new) -> releaseUrls owner $> False
+        Ready new _ _ _ | not (takesPage shown new) -> Body.settleOwned ownersOf' setOwners owner False $> False
         _ -> do
           -- The addresses shown are this fetch's from now on.
-          before <- gets (\st -> st.shownOwner)
-          modify (\st -> st {shownOwner = owner})
-          when (before /= owner) (releaseUrls before)
+          Body.settleOwned ownersOf' setOwners owner True
           adopt loaded
           checkChain
           resolvePeople
@@ -1272,10 +1265,8 @@ component =
     -- own ('UrlOwner'), pending until the answer comes.
     fetchOwned :: H.HalogenM State Action Slots ViewOutput m (UrlOwner, Loaded)
     fetchOwned = do
-      owner <- newUrlOwner
-      modify (\st -> st {pendingOwners = owner : st.pendingOwners})
+      owner <- Body.beginOwned ownersOf' setOwners
       loaded <- gets (\st -> st.input) >>= fetch owner
-      modify (\st -> st {pendingOwners = filter (/= owner) st.pendingOwners})
       pure (owner, loaded)
 
     -- Run what an answer to this fetch does, if it is still the latest
@@ -1284,16 +1275,19 @@ component =
     answering which owner act =
       gets (\st -> (st.visit, st.fetches) == which) >>= \case
         True -> act
-        False -> releaseUrls owner
+        False -> Body.settleOwned ownersOf' setOwners owner False
 
     -- Let go of the addresses of the page shown and of the fetches not
     -- answered yet: the view goes to another page, or closes. A fetch let
     -- go makes no addresses when it is answered.
     letAddressesGo :: H.HalogenM State Action Slots ViewOutput m ()
-    letAddressesGo = do
-      st <- get
-      traverse_ releaseUrls (st.shownOwner : st.pendingOwners)
-      modify (\s -> s {pendingOwners = []})
+    letAddressesGo = Body.releaseOwned ownersOf' setOwners
+
+    ownersOf' :: State -> Body.Owners
+    ownersOf' st = st.owners
+
+    setOwners :: Body.Owners -> State -> State
+    setOwners owners st = st {owners}
 
     -- A fetch of the page begins: its number, with the visit's.
     startFetch :: H.HalogenM State Action Slots ViewOutput m (Int, Int)

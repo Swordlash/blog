@@ -494,9 +494,11 @@ data Way
 
 data State = State
   { input :: Input
-  , urlOwner :: UrlOwner
-  -- ^ The owner of the addresses of the page's attachments
-  -- ("Wiki.App.Backend"'s 'UrlOwner'): the editor, let go when it closes.
+  , owners :: Body.Owners
+  -- ^ Who holds the addresses of the page's attachments
+  -- ("Wiki.App.View.Body"'s 'Body.Owners'): one owner for the editor's
+  -- life, registered before anything is asked under it, and let go when
+  -- it closes.
   , loaded :: Loaded
   , pending :: Maybe H.ForkId
   -- ^ The running wait before the preview follows the work, if any.
@@ -746,7 +748,7 @@ component =
           pure
             State
               { input
-              , urlOwner
+              , owners = Body.ownersOf urlOwner
               , loaded
               , pending = Nothing
               , autosave = Nothing
@@ -1603,7 +1605,7 @@ component =
       -- The waits are killed with the component. The browser's warning and
       -- CodeMirror are not, so they are removed here.
       Finalize -> do
-        gets (\st -> st.urlOwner) >>= releaseUrls
+        Body.releaseOwned (\st -> st.owners) (\owners st -> st {owners})
         H.liftEffect (guardUnload False)
         gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . detachEditor)
         -- This tab no longer edits the page.
@@ -2109,7 +2111,7 @@ component =
     loadWork :: H.HalogenM State Action Slots ViewOutput m ()
     loadWork = do
       input <- gets (\st -> st.input)
-      owner <- gets (\st -> st.urlOwner)
+      owner <- gets (\st -> st.owners.shown)
       Fetched loaded found hasDraft <- fetchWork owner input
       modify (\st -> st {loaded, found, hasDraft, loads = st.loads + 1, conflict = Nothing, changedSince = Nothing})
       syncGuard
@@ -2121,7 +2123,7 @@ component =
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
-      owner <- gets (\st -> st.urlOwner)
+      owner <- gets (\st -> st.owners.shown)
       loaded <- either Failed (\(page, addresses) -> Ready (workOf page addresses)) <$> fetchPage owner input
       modify (\st -> st {loaded, loads = st.loads + 1, conflict = Nothing, changedSince = Nothing})
       syncGuard
@@ -2348,7 +2350,7 @@ component =
     conflicted :: Text -> After -> H.HalogenM State Action Slots ViewOutput m ()
     conflicted why after = do
       input <- gets (\st -> st.input)
-      owner <- gets (\st -> st.urlOwner)
+      owner <- gets (\st -> st.owners.shown)
       fetchPage owner input >>= \case
         Left _ -> modify (\st -> st {problem = Just (Conflict why)})
         Right (theirs, theirAddresses) -> do
@@ -2394,7 +2396,7 @@ component =
           case result of
             Left e -> modify (\st -> st {problem = Just e})
             Right a -> do
-              owner <- gets (\st -> st.urlOwner)
+              owner <- gets (\st -> st.owners.shown)
               url <- attachmentUrl owner a
               download <- attachmentDownloadUrl owner a
               frame <- attachmentFrameUrl a

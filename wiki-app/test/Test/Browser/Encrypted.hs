@@ -77,7 +77,7 @@ import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Encrypted (ChainProblem (..), Kept (..), Seen (..))
-import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
+import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
@@ -407,6 +407,36 @@ spec m = do
     -- No URL of the third page was made after its answer came late.
     filter (\(_, (t, gone)) -> t == "image/svg+xml" && not gone) (Map.toList blobs) `shouldSatisfy` ((== 1) . length)
     unmount ui
+
+  -- The slides closed while a page's attachments are being decrypted: the
+  -- addresses already made are let go with the view, and the one still
+  -- coming makes none.
+  it "lets the slides' attachment URLs go when the slides close while the next attachment is held back" $ runPage $ do
+    unsafeIOToPageM js_watch_blobs
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Deck" "First.")
+    void (ok =<< run env (getPage secret.id [made.slug]))
+    a <- ok =<< run env (uploadAttachment made.id "a.svg" "image/svg+xml" (svgOf 3 "A"))
+    b <- ok =<< run env (uploadAttachment made.id "b.svg" "image/svg+xml" (svgOf 4 "B"))
+    again <- ok =<< run env (getPage secret.id [made.slug])
+    void (ok =<< run env (savePage made.id again.updatedAt "Deck" "## One\n\n![a](attachment:a.svg)\n\n![b](attachment:b.svg)"))
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    holdAt "GET" ("api/v1/attachments/" <> b.id.text <> "/" <> b.id.text)
+    ui <- startServer m (R.PageSlides [secretSlug] [made.slug] 1 1)
+    -- The first attachment's URL is made; the second's bytes are held.
+    let images = (\blobs -> [u | (u, (t, gone)) <- Map.toList blobs, t == "image/svg+xml", not gone]) <$> blobsNow
+    eventually (images >>= (`shouldSatisfy` ((== 1) . length)))
+    firstUrl <- fromMaybe "" . head <$> images
+    unsafeIOToPageM (js_image_width (toJSText firstUrl)) `shouldReturn` 3
+    unmount ui
+    release
+    unsafeIOToPageM (threadDelay 500_000)
+    unsafeIOToPageM (js_image_width (toJSText firstUrl)) `shouldReturn` (-1)
+    blobs <- blobsNow
+    [u | (u, (_, gone)) <- Map.toList blobs, not gone] `shouldBe` []
+    a.id `shouldNotBe` b.id
 
   -- The live channel says only that a page's threads changed: the page
   -- reads them again, and shows another reader's comment, decrypted,

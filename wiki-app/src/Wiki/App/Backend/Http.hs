@@ -146,7 +146,7 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Opaque qualified as Opaque
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
-import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, keepSeen, keyNamed, newPageId, newPageKey, newSpaceKey, newTag, noEncryption, openAttachmentUrl, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openText, openVersionTitles, revokeUrl, rotateKeys, sealBytes, sealContent, sealText, seenOf, shareSpaceKey)
+import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, keepSeen, keyNamed, newPageId, newPageKey, newSpaceKey, newTag, noEncryption, objectUrls, openAttachmentBytes, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openText, openVersionTitles, revokeUrl, rotateKeys, sealBytes, sealContent, sealText, seenOf, shareSpaceKey)
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (browserOnline, forgetReads, offlineCopy)
@@ -2318,22 +2318,27 @@ sealedAttachmentUrls owner aid at =
             at.space
             (pure (Left (Conflict "This space is no longer encrypted.")))
             ( \current -> withSpaceKey NoRefresh at.space current $ \key -> withPageKey key at.space at.page at.key $ \pk ->
-                liftIO (first Invalid <$> openAttachmentUrl pk (Links.links.attachments.content aid (FileName aid.text)) at.nonce (attachmentBytesData at.space at.page at.key.keyId aid) (blobType at.mediaType) (linkType at.mediaType))
+                liftIO (first Invalid <$> openAttachmentBytes pk (Links.links.attachments.content aid (FileName aid.text)) at.nonce (attachmentBytesData at.space at.page at.key.keyId aid))
             )
             >>= \case
               Left _ -> pure none
-              Right (shownAt, linkedAt) -> do
-                let urls = ObjectUrls {shown = shownAt, link = linkedAt}
-                -- The owner may have been let go, or another URL made for
-                -- it, while the bytes were fetched.
-                settled <- atomicHeld $ \now -> case Map.lookup (owner, aid) now.heldUrls of
-                  Just other -> (now, Left other)
+              -- The owner may have been let go, or another URL made for it,
+              -- while the bytes were fetched: the URLs are made only for an
+              -- owner still held, and made and kept with nothing able to
+              -- stop between the two, so that none is made and lost.
+              Right opened -> HttpWiki . ReaderT $ \env -> liftIO . mask_ $ do
+                now <- readIORef env.held
+                case Map.lookup (owner, aid) now.heldUrls of
+                  Just other -> pure other
                   Nothing
-                    | Set.member owner now.heldOwners -> (now {heldUrls = Map.insert (owner, aid) urls now.heldUrls}, Right urls)
-                    | otherwise -> (now, Left none)
-                case settled of
-                  Right made -> pure made
-                  Left instead -> liftIO (revokeUrls urls) $> instead
+                    | not (Set.member owner now.heldOwners) -> pure none
+                    | otherwise ->
+                        objectUrls opened (blobType at.mediaType) (linkType at.mediaType) >>= \case
+                          Left _ -> pure none
+                          Right (shownAt, linkedAt) -> do
+                            let urls = ObjectUrls {shown = shownAt, link = linkedAt}
+                            atomicModifyIORef' env.held (\held -> (held {heldUrls = Map.insert (owner, aid) urls held.heldUrls}, ()))
+                            pure urls
   where
     none = ObjectUrls {shown = "", link = ""}
 

@@ -40,6 +40,13 @@ module Wiki.App.View.Body
   , noAddresses
   , attachmentAddresses
   , linkUrlOf
+
+    -- * Who holds the attachments' addresses
+  , Owners (..)
+  , ownersOf
+  , beginOwned
+  , settleOwned
+  , releaseOwned
   , People (..)
   , noPeople
   , unasked
@@ -144,6 +151,57 @@ attachmentAddresses owner attachments = do
   downloads <- Map.fromList . catMaybes <$> traverse (\a -> fmap (a.id,) <$> attachmentDownloadUrl owner a) attachments
   frames <- Map.fromList . catMaybes <$> traverse (\a -> fmap (a.id,) <$> attachmentFrameUrl a) attachments
   pure Addresses {urls, downloads, frames}
+
+-- | 'Owners' are the owners of attachments' addresses a view holds
+-- ("Wiki.App.Backend"'s 'UrlOwner'): the one whose addresses it shows,
+-- and those of its fetches not answered yet. Every owner a view asks for
+-- is registered here before any address is asked for under it, so that
+-- 'releaseOwned', which the view runs when it goes to another page or
+-- closes, lets go of every address the view made, those of a fetch that
+-- was cut short included. Every view that shows attachments keeps its
+-- owners this way.
+data Owners = Owners
+  { shown :: UrlOwner
+  , pending :: [UrlOwner]
+  }
+
+-- | The owners of a view that shows the addresses of this owner, and has
+-- no fetch out.
+ownersOf :: UrlOwner -> Owners
+ownersOf o = Owners {shown = o, pending = []}
+
+-- | A new owner for a fetch of the view's, registered in its state, through
+-- the field given, before anything is asked under it.
+beginOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m UrlOwner
+beginOwned get' set' = do
+  o <- newUrlOwner
+  modify (\st -> let os = get' st in set' Owners {shown = os.shown, pending = o : os.pending} st)
+  pure o
+
+-- | A fetch answered: its owner is no longer pending. Taken ('True'), its
+-- addresses are the ones the view shows, and those shown before are let
+-- go; dropped ('False'), its own are.
+settleOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> UrlOwner -> Bool -> m ()
+settleOwned get' set' o taken = do
+  before <- gets get'
+  let pending' = filter (/= o) before.pending
+  if taken
+    then do
+      modify (set' Owners {shown = o, pending = pending'})
+      when (before.shown /= o) (releaseUrls before.shown)
+    else do
+      modify (set' Owners {shown = before.shown, pending = pending'})
+      releaseUrls o
+
+-- | Let go of every address the view holds, those of its fetches not
+-- answered included, which then make none. The view goes to another page,
+-- or closes. A new owner takes the place of the one shown.
+releaseOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m ()
+releaseOwned get' set' = do
+  os <- gets get'
+  traverse_ releaseUrls (os.shown : os.pending)
+  fresh <- newUrlOwner
+  modify (set' (ownersOf fresh))
 
 -- | The URL a link to an attachment leads to: its download's, or its own.
 linkUrlOf :: Addresses -> AttachmentId -> Text

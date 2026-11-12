@@ -144,10 +144,11 @@ data State = State
   , view :: H.RefLabel
   , touch :: Maybe (Double, Double)
   -- ^ Where a touch on the slides started.
-  , shownOwner :: UrlOwner
-  -- ^ The owner of the addresses of the attachments of the page shown
-  -- ("Wiki.App.Backend"'s 'UrlOwner'): let go when another fetch is
-  -- shown, when the view goes to another page, and when it closes.
+  , owners :: Body.Owners
+  -- ^ Who holds the addresses of the page's attachments: the fetch shown,
+  -- and those not answered yet ("Wiki.App.View.Body"'s 'Body.Owners'),
+  -- every one of them let go when the view goes to another page or
+  -- closes.
   }
 
 -- | The command a key is for ('commandOf').
@@ -178,8 +179,8 @@ component =
         -- over a backend that can ('atOnce'); otherwise in 'Initialize'.
         initialState = \input -> do
           view <- H.newRefLabel "slides"
-          shownOwner <- newUrlOwner
-          loaded <- fromMaybe Loading <$> atOnce (fetch shownOwner input)
+          firstOwner <- newUrlOwner
+          loaded <- fromMaybe Loading <$> atOnce (fetch firstOwner input)
           let (current, step) = within loaded (input.slide, input.step)
           pure
             State
@@ -194,7 +195,7 @@ component =
               , asked = []
               , view
               , touch = Nothing
-              , shownOwner
+              , owners = Body.ownersOf firstOwner
               }
       , render
       , eval =
@@ -344,7 +345,7 @@ component =
             focusView
             H.raise Loaded
       Finalize -> do
-        gets (\st -> st.shownOwner) >>= releaseUrls
+        Body.releaseOwned ownersOf' setOwners
         H.liftEffect (liftIO exitFullscreen)
       Retry -> do
         modify (\st -> st {loaded = Loading})
@@ -357,7 +358,7 @@ component =
         case () of
           _
             | elsewhere -> do
-                releaseUrls st.shownOwner
+                Body.releaseOwned ownersOf' setOwners
                 modify (\s -> s {loaded = Loading, current = 1, step = 1, notesOpen = False, overview = False, asked = []})
                 load
             | old.context.revision /= input.context.revision -> load
@@ -429,24 +430,28 @@ component =
         Router.redirect input.context.router (documentRoute input.context input.space.id (PageSlides (spacePathOf input.context.spaces input.space.id) input.path n k))
 
     -- Focus into the view, where Tab then finds its controls.
+    ownersOf' :: State -> Body.Owners
+    ownersOf' st = st.owners
+
+    setOwners :: Body.Owners -> State -> State
+    setOwners owners st = st {owners}
+
     focusView :: H.HalogenM State Action Slots ViewOutput m ()
     focusView = gets (\st -> st.view) >>= H.getRef >>= traverse_ (H.liftEffect . liftIO . HTMLElement.focusWithoutScrolling . coerce)
 
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
-      owner <- newUrlOwner
+      owner <- Body.beginOwned ownersOf' setOwners
       loaded <- fetch owner input
       -- Only if the requested page is still the one to show: another
       -- navigation may have overtaken this load, whose addresses are then
       -- let go.
       now <- gets (\st -> st.input)
       if now.space.id /= input.space.id || now.path /= input.path
-        then releaseUrls owner
+        then Body.settleOwned ownersOf' setOwners owner False
         else do
-          before <- gets (\st -> st.shownOwner)
-          modify (\st -> st {shownOwner = owner})
-          releaseUrls before
+          Body.settleOwned ownersOf' setOwners owner True
           modify $ \st ->
             let (current, step) = within loaded (if null st.asked then (now.slide, now.step) else (st.current, st.step))
              in st {loaded, current, step}

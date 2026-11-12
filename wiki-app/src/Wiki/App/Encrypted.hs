@@ -45,7 +45,9 @@ module Wiki.App.Encrypted
   , newTag
   , openText
   , sealBytes
-  , openAttachmentUrl
+  , Opened
+  , openAttachmentBytes
+  , objectUrls
   , revokeUrl
 
     -- * The versions this browser has seen
@@ -87,7 +89,9 @@ $( browserJS
      , ("js_sealed_nonce", "wiki_enc_sealed_nonce", Safe, [t|JSVal -> IO JSText|])
      , ("js_sealed_bytes", "wiki_enc_sealed_bytes", Safe, [t|JSVal -> IO JSVal|])
      , ("js_sealed_error", "wiki_enc_sealed_error", Safe, [t|JSVal -> IO JSText|])
-     , ("js_open_attachmentPromise", "wiki_enc_open_attachment", Safe, [t|Int -> JSText -> JSText -> JSText -> JSText -> JSText -> IO (Promise JSText)|])
+     , ("js_open_attachmentPromise", "wiki_enc_open_attachment", Safe, [t|Int -> JSText -> JSText -> JSText -> IO (Promise JSVal)|])
+     , ("js_opened_error", "wiki_enc_opened_error", Safe, [t|JSVal -> IO JSText|])
+     , ("js_object_urls", "wiki_enc_object_urls", Safe, [t|JSVal -> JSText -> JSText -> IO JSText|])
      , ("js_revoke", "wiki_enc_revoke", Safe, [t|JSText -> IO ()|])
      , ("js_keep_seen", "wiki_enc_keep_seen", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
      ]
@@ -111,8 +115,8 @@ js_space_key_rotate a1 a2 a3 a4 a5 a6 = if inBrowser then wait =<< js_space_key_
 js_seal_bytes :: Int -> JSVal -> JSText -> IO JSVal
 js_seal_bytes a1 a2 a3 = if inBrowser then wait =<< js_seal_bytesPromise a1 a2 a3 else pure inert
 
-js_open_attachment :: Int -> JSText -> JSText -> JSText -> JSText -> JSText -> IO JSText
-js_open_attachment a1 a2 a3 a4 a5 a6 = if inBrowser then wait =<< js_open_attachmentPromise a1 a2 a3 a4 a5 a6 else pure inert
+js_open_attachment :: Int -> JSText -> JSText -> JSText -> IO JSVal
+js_open_attachment a1 a2 a3 a4 = if inBrowser then wait =<< js_open_attachmentPromise a1 a2 a3 a4 else pure inert
 
 js_page_key_new :: Int -> JSText -> IO JSText
 js_page_key_new a1 a2 = if inBrowser then wait =<< js_page_key_newPromise a1 a2 else pure inert
@@ -399,15 +403,28 @@ sealBytes (PageKeyRef k) bytes data' = whenHere $ do
       pure (Right (nonce, out))
     else pure (Left why)
 
--- | An attachment's bytes, fetched from its address on the server,
+-- | 'Opened' is an attachment's bytes, decrypted, held in the page: no
+-- object URL is made of them until 'objectUrls' is asked, so that bytes
+-- nobody wants any more are only garbage.
+newtype Opened = Opened JSVal
+
+-- | An attachment's bytes, fetched from its address on the server, and
 -- decrypted with its page key and the additional data they were encrypted
--- with, as two object URLs, which 'revokeUrl' lets go: one of the media
--- type given, which the page shows, and one of the type given for a link
--- to it (the same URL when the two types are one).
-openAttachmentUrl :: PageKeyRef -> Text -> Nonce -> Text -> Text -> Text -> IO (Either Text (Text, Text))
-openAttachmentUrl (PageKeyRef k) address nonce data' mediaType linkType = whenHere $ do
-  answer <- evaluate . fromJSText =<< js_open_attachment k (toJSText address) (toJSText nonce.text) (toJSText data') (toJSText mediaType) (toJSText linkType)
-  pure (answered (\o -> (,) <$> o .: "url" <*> o .: "link") answer)
+-- with.
+openAttachmentBytes :: PageKeyRef -> Text -> Nonce -> Text -> IO (Either Text Opened)
+openAttachmentBytes (PageKeyRef k) address nonce data' = whenHere $ do
+  opened <- evaluate =<< js_open_attachment k (toJSText address) (toJSText nonce.text) (toJSText data')
+  why <- fromJSText <$> js_opened_error opened
+  pure (if why == "" then Right (Opened opened) else Left why)
+
+-- | Two object URLs of an attachment's decrypted bytes, which 'revokeUrl'
+-- lets go: one of the media type given, which the page shows, and one of
+-- the type given for a link to it (the same URL when the two types are
+-- one).
+objectUrls :: Opened -> Text -> Text -> IO (Either Text (Text, Text))
+objectUrls (Opened o) mediaType linkType
+  | inBrowser = answered (\x -> (,) <$> x .: "url" <*> x .: "link") . fromJSText <$> js_object_urls o (toJSText mediaType) (toJSText linkType)
+  | otherwise = pure (Left noEncryption)
 
 -- | Let an object URL go.
 revokeUrl :: Text -> IO ()
