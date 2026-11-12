@@ -35,6 +35,7 @@ import Test.Browser.Avatars qualified as Avatars
 import Test.Browser.Personal qualified as Personal
 import Test.Browser.Policy qualified as Policy
 import Test.Browser.Problems qualified as Problems
+import Test.Browser.DeckViewer qualified as DeckViewer
 import Test.Browser.Folds qualified as Folds
 import Test.Browser.SlideEditor qualified as SlideEditor
 import Test.Browser.Providers qualified as Providers
@@ -94,6 +95,7 @@ spec = do
   describe "Problems marked in the editor" (Problems.spec BrowserDOM)
   describe "Spoilers folded in the editor" (Folds.spec BrowserDOM)
   describe "A presentation in the editor" (SlideEditor.spec BrowserDOM)
+  describe "A presentation embedded in a page" (DeckViewer.spec BrowserDOM)
   describe "Wiki.App.Browser" Entries.spec
   describe "Room to write in" (Workspace.spec BrowserDOM)
   describe "Wiki.App.View.Source" (Source.spec BrowserDOM)

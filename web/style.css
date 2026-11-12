@@ -2563,6 +2563,59 @@ body:has(.slides-view) {
   transform-origin: 0 0;
 }
 
+/* A presentation's viewer in a page (Wiki.App.View.DeckViewer): the
+   slide shown as the preview's card, scaled to the viewer's width, with
+   its controls under it. The fit and the speaker notes are the editor's,
+   not shown here. Printed, the slide alone, whole. */
+.deck-embed {
+  display: block;
+  max-width: 48rem;
+  margin: 1rem 0;
+  outline: none;
+}
+
+.deck-embed:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.page-deck .deck-embed {
+  max-width: none;
+}
+
+.deck-embed .slide-frame {
+  margin-bottom: 0.5rem;
+}
+
+.deck-embed .slide-fit,
+.deck-embed .slide-notes {
+  display: none;
+}
+
+.deck-embed-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.deck-embed-position {
+  min-width: 4rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.deck-embed-present {
+  margin-left: auto;
+}
+
+@media print {
+  .deck-embed-controls,
+  .deck-embed .slide-offstage {
+    display: none;
+  }
+}
+
 /* Whether a card's content fits: a dot at its corner, grey until
    measured, green, yellow or red. */
 .slide-fit {

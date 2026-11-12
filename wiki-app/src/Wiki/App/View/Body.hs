@@ -327,23 +327,26 @@ rendered
   => Place
   -> Text
   -> Either Md.ParseError [H.ComponentHTML action slots m]
-rendered = renderedTicking Nothing (const 0)
+rendered = renderedTicking Nothing (const 0) Nothing
 
 -- | 'rendered', with the page's task boxes enabled when @onTick@ is given:
 -- a change of a box gives it the task's index and whether the box is now
 -- ticked ("Wiki.Core.Markdown.Tasks"). Only the page view does, for a
 -- reader who may edit the page; anywhere else the boxes are disabled.
 -- @drawn@ says how many times each box was drawn anew (the renderer's
--- 'Md.taskDrawn').
+-- 'Md.taskDrawn'). @deck@ draws a page embedded with the class
+-- @presentation@ ('Md.deckEmbed'): the page view draws a viewer
+-- ("Wiki.App.View.DeckViewer"); without it the embed is its link.
 renderedTicking
   :: forall action slots m
    . (MonadIslands m, MonadUUID m, HasIslands slots)
   => Maybe (Int -> Bool -> action)
   -> (Int -> Int)
+  -> Maybe (Md.IslandKey -> PageLink -> Text -> H.ComponentHTML action slots m)
   -> Place
   -> Text
   -> Either Md.ParseError [H.ComponentHTML action slots m]
-renderedTicking onTick drawn place = Md.renderMarkdown (options place) {Md.taskBoxes = onTick, Md.taskDrawn = drawn}
+renderedTicking onTick drawn deck place = Md.renderMarkdown (options place) {Md.taskBoxes = onTick, Md.taskDrawn = drawn, Md.deckEmbed = deck}
 
 -- | 'article', from the result of 'rendered' (and the source, shown if it
 -- could not be parsed).
@@ -467,6 +470,8 @@ islandOptionsWith island ctx spaceOwn =
     , Md.tikz = \k source -> island k (Islands.Tikz source)
     , Md.htmlBlock = \k _ height document -> island k (Islands.HtmlFrame height document)
     , Md.svgFrame = Just (\k frame -> island k (Islands.SvgFrame frame))
+    , -- Only the page view draws a presentation's viewer ('renderedTicking').
+      Md.deckEmbed = Nothing
     , Md.resolveLink = const Md.Unresolved
     , Md.pageHref = \(PageLink route fragment) -> Router.href ctx.router route <> fragment
     , Md.boxes = ctx.session.boxes

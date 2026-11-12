@@ -159,6 +159,7 @@ import Wiki.App.Route (Against (..), Route (..), pageRoute)
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Comments qualified as CommentsView
 import Wiki.App.View.Common
+import Wiki.App.View.DeckViewer qualified as DeckViewer
 import Wiki.App.View.Export qualified as ExportView
 import Wiki.App.View.Star qualified as StarView
 import Wiki.App.View.Ticking (Clearing (..), Staging (..), TickNote (..))
@@ -202,7 +203,7 @@ data Input = Input
   -- ^ The tab's live channel, on a backend that has one.
   }
 
-type Slots = Body.IslandSlots .+ ("comments" .== H.Slot (Const Void) CommentsView.Output CommentsView.Placement) .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("star" .== H.Slot (Const Void) Void ()) .+ ("export" .== H.Slot (Const Void) Void ())
+type Slots = Body.IslandSlots .+ ("deck" .== H.Slot (Const Void) Void Md.IslandKey) .+ ("deckView" .== H.Slot (Const Void) Void ()) .+ ("comments" .== H.Slot (Const Void) CommentsView.Output CommentsView.Placement) .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("star" .== H.Slot (Const Void) Void ()) .+ ("export" .== H.Slot (Const Void) Void ())
 
 -- | The page's threads, as far as they have been loaded.
 data Threads
@@ -431,6 +432,7 @@ component =
                 <> toList (templateNote page)
                 <> titleRow
                 <> toList (postInfo input page)
+                <> [viewerOf place page | deck]
                 <> [textAndPanel st place rendered text page contents]
                 <> [ticksBar st]
                 <> attachments page addresses
@@ -438,7 +440,9 @@ component =
           place = placeOf input page addresses st.people.found
           -- Rendered once: the article shows it with its quotes
           -- highlighted, and its text is where the quotes are looked for.
-          rendered = Body.renderedTicking (Tick <$ guard (boxesEnabled st)) (\i -> Map.findWithDefault 0 i st.staging.drawn) place st.staging.shown
+          rendered = Body.renderedTicking (Tick <$ guard (boxesEnabled st)) (\i -> Map.findWithDefault 0 i st.staging.drawn) (Just embedded) place st.staging.shown
+          -- A presentation embedded in the page: a viewer of it.
+          embedded key target caption = HH.slot_ "deck" key DeckViewer.component DeckViewer.Input {context = input.context, target = DeckViewer.Linked target, caption}
           text = either (const "") renderedText rendered
           -- The title and who reads the page, on one row, with who wrote
           -- it under them; when the Markdown has its own title, the
@@ -615,6 +619,12 @@ component =
           {{ button "Cancel" (Open Viewing) }}
         </form>
       |]
+
+    -- A presentation's viewer, above the page shown as a document (WP5.97
+    -- of docs/PLAN.md), fed with the page the view has loaded.
+    viewerOf :: Body.Place -> Page -> H.ComponentHTML Action Slots m
+    viewerOf place page =
+      [hh|<div class="page-deck">{{ HH.slot_ "deckView" () DeckViewer.component DeckViewer.Input {context = place.context, target = DeckViewer.Shown place page, caption = page.title} }}</div>|]
 
     -- The page's text, its quotes highlighted, with the current selection
     -- and the panel of inline threads beside it.

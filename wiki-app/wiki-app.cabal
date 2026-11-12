@@ -127,6 +127,7 @@ library
       Wiki.App.View.BoxKindForm
       Wiki.App.View.Comments
       Wiki.App.View.Common
+      Wiki.App.View.DeckViewer
       Wiki.App.View.Diff
       Wiki.App.View.Directory
       Wiki.App.View.Editor
@@ -399,6 +400,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Comments
       Test.Browser.Contents
       Test.Browser.CopyCode
+      Test.Browser.DeckViewer
       Test.Browser.Editor
       Test.Browser.Emoji
       Test.Browser.Entries
