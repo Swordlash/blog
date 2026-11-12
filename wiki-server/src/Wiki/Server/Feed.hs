@@ -363,6 +363,7 @@ notificationTitle n = case n.kind of
   Replied -> n.actor.name <> " replied in a thread of yours on " <> n.title
   Commented -> n.actor.name <> " commented on " <> n.title
   Changed -> n.actor.name <> " changed " <> n.title
+  KeyToRenew -> n.actor.name <> " removed a reader of " <> n.title <> ": its key must be renewed"
 
 --------------------------------------------------------------------------------
 -- A post as HTML

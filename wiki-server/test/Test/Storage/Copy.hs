@@ -340,7 +340,7 @@ everyTable = do
     , PublicKeyRow {key_id = "copy-old-key", user_id = "copy-u1", public_key = "old", created_at = time 0, retired_at = Just (time 1), retired_because = Just "replaced"}
     ]
   row wikiDb.key_grants [KeyGrantRow {resource_kind = "space", resource_id = "copy-sealed", key_id = "copy-space-key", recipient = "copy-u1", recipient_key_id = "copy-key", enc = "enc", sealed = "sealed", created_at = time 1}]
-  row wikiDb.page_keys [PageKeyRow {page_id = "copy-late", key_id = "copy-page-key", space_key_id = "copy-space-key", nonce = "nonce", wrapped = "wrapped"}]
+  row wikiDb.page_keys [PageKeyRow {page_id = "copy-late", key_id = "copy-page-key", space_key_id = "copy-space-key", nonce = "nonce", wrapped = "wrapped", current = True}]
   row wikiDb.sealed_versions [SealedVersionRow {page_id = "copy-page", updated_at = time 1, tag = "tag", key_id = "copy-page-key", title_nonce = "n1", title = "t", body_nonce = "n2", body = "b", chain_number = Just 2, previous_tag = Just "earlier-tag"}]
   row wikiDb.settings [SettingRow {key = "copy-setting", value = "ünïcode ✓"}]
   row wikiDb.sign_in_providers [ProviderRow {name = "copy-github", position = 0, kind = "github", client_id = "copy-client", issuer = Nothing, secret = Nothing}]

@@ -849,9 +849,23 @@ there notify nobody: the server cannot read them.
 What the server still sees: the space's name (shown in the list of
 spaces), the shape of its tree of pages, how large each page is, when and
 by whom pages are saved, who the members are, and their public keys. Not
-the titles, texts or histories. Removing a member does not change the
-space's key yet: someone removed who kept the key can still read what the
-server stores, the pages written before and after. A password reset that
+the titles, texts or histories.
+
+Removing a reader gives the space a new key (WP5.74b3). A reader stops
+being one when their grant, their group's grant or their membership of the
+group goes, when their account is disabled or removed, or when a password
+reset retires their key pair. Until the key is renewed, nothing more can
+be written in the space: the server refuses it, saying why, and the
+space's administrators are told once, under the bell. The browser of an
+administrator of the space who holds the key renews it whenever it opens
+the space, at once when that administrator made the change: a new key,
+sealed to every reader, every page's key wrapped again with it, and a new
+key for each page, which what is written next is encrypted with. The
+browser opens all of it before it sends it, and sends nothing if any of
+it does not open. Someone removed who kept the old key can still read,
+with a copy of what the server stores, what was written before, and
+nothing written after. One renewal carries at most 20,000 keys of pages
+and 5,000 readers; a larger space is refused with a message. A password reset that
 deletes your keys takes away your access to encrypted spaces until another
 member opens them and shares the key with your new key pair; a space no
 other member can read is lost. What you read is decrypted in your browser,

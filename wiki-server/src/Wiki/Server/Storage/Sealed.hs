@@ -14,12 +14,16 @@ module Wiki.Server.Storage.Sealed
   , grantsOfKey
   , insertGrant
   , deleteSpaceGrants
+  , deleteGrantsOfSpace
   , currentPublicKeys
 
     -- * Pages
   , insertPageKey
   , loadPageKey
+  , loadPageKeys
   , loadSpacePageKeys
+  , loadSpaceAllPageKeys
+  , replacePageKeys
   , insertSealedVersion
   , loadSealedVersion
   , loadSealedLatest
@@ -88,6 +92,11 @@ deleteSpaceGrants sids =
   unless (null sids) $
     runDelete (delete wikiDb.key_grants (\g -> g.resource_kind ==. val_ spaceKind &&. g.resource_id `in_` map (\s -> val_ s.text) sids))
 
+-- | Delete every grant of every key of a space: a rotation of its key
+-- makes them again, of the new key alone.
+deleteGrantsOfSpace :: (Backend be) => SpaceId -> Db be ()
+deleteGrantsOfSpace sid = runDelete (delete wikiDb.key_grants (\g -> g.resource_kind ==. val_ spaceKind &&. g.resource_id ==. val_ sid.text))
+
 -- | The current public key of each of these users who has one, with its id.
 currentPublicKeys :: (Backend be) => [UserId] -> Db be (Map UserId (KeyId, PublicKey))
 currentPublicKeys users
@@ -99,28 +108,48 @@ currentPublicKeys users
 --------------------------------------------------------------------------------
 -- Pages
 
--- | Store a page's key.
+-- | Store a page's key, the one its next version is encrypted with.
 insertPageKey :: (Backend be) => PageId -> PageKey -> Db be ()
-insertPageKey pid k =
-  runInsert . insert wikiDb.page_keys $
-    insertValues [PageKeyRow {page_id = pid.text, key_id = k.keyId.text, space_key_id = k.spaceKeyId.text, nonce = k.wrapped.nonce.text, wrapped = k.wrapped.key.text}]
+insertPageKey pid k = runInsert . insert wikiDb.page_keys $ insertValues [pageKeyRow pid True k]
+
+pageKeyRow :: PageId -> Bool -> PageKey -> PageKeys Identity
+pageKeyRow pid current k = PageKeyRow {page_id = pid.text, key_id = k.keyId.text, space_key_id = k.spaceKeyId.text, nonce = k.wrapped.nonce.text, wrapped = k.wrapped.key.text, current}
 
 pageKeyOf :: PageKeys Identity -> PageKey
 pageKeyOf r = PageKey {keyId = KeyId r.key_id, spaceKeyId = KeyId r.space_key_id, wrapped = WrappedKey {nonce = Nonce r.nonce, key = Ciphertext r.wrapped}}
 
--- | A page's key, if the page has one (if it is a page of an encrypted
--- space).
+-- | A page's current key, if the page has one (if it is a page of an
+-- encrypted space).
 loadPageKey :: (Backend be) => PageId -> Db be (Maybe PageKey)
-loadPageKey pid = fmap pageKeyOf <$> runSelectReturningOne (select (filter_ (\k -> k.page_id ==. val_ pid.text) (all_ wikiDb.page_keys)))
+loadPageKey pid = fmap pageKeyOf <$> runSelectReturningOne (select (filter_ (\k -> k.page_id ==. val_ pid.text &&. k.current) (all_ wikiDb.page_keys)))
 
--- | The keys of a space's pages, by page.
+-- | Every key a page has had, its current one first: the versions written
+-- before a rotation of its space's key are encrypted with older ones.
+loadPageKeys :: (Backend be) => PageId -> Db be [PageKey]
+loadPageKeys pid = do
+  rows <- runSelectReturningList (select (filter_ (\k -> k.page_id ==. val_ pid.text) (all_ wikiDb.page_keys)))
+  pure (map pageKeyOf (sortOn (\r -> (not r.current, r.key_id)) rows))
+
+-- | The current keys of a space's pages, by page.
 loadSpacePageKeys :: (Backend be) => SpaceId -> Db be (Map PageId PageKey)
-loadSpacePageKeys sid = do
+loadSpacePageKeys sid = Map.mapMaybe head <$> loadSpaceAllPageKeys sid
+
+-- | Every key of each page of a space, by page, each page's current key
+-- first.
+loadSpaceAllPageKeys :: (Backend be) => SpaceId -> Db be (Map PageId [PageKey])
+loadSpaceAllPageKeys sid = do
   rows <- runSelectReturningList . select $ do
     k <- all_ wikiDb.page_keys
     _ <- join_ wikiDb.pages (\p -> p.id ==. k.page_id &&. p.space_id ==. val_ sid.text)
     pure k
-  pure (Map.fromList [(PageId r.page_id, pageKeyOf r) | r <- rows])
+  pure (map pageKeyOf . sortOn (\r -> (not r.current, r.key_id)) <$> Map.fromListWith (<>) [(PageId r.page_id, [r]) | r <- rows])
+
+-- | Replace every key of a page: the keys it had, wrapped again by a new
+-- space key, and its new current key.
+replacePageKeys :: (Backend be) => PageId -> PageKey -> [PageKey] -> Db be ()
+replacePageKeys pid current older = do
+  runDelete (delete wikiDb.page_keys (\k -> k.page_id ==. val_ pid.text))
+  runInsert . insert wikiDb.page_keys $ insertValues (pageKeyRow pid True current : map (pageKeyRow pid False) older)
 
 -- | Store a version's ciphertexts, beside its row of @page_versions@.
 insertSealedVersion :: (Backend be) => PageId -> UTCTime -> SealedContent -> Db be ()

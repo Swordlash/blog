@@ -56,10 +56,12 @@ import Wiki.Api.Security (ResetToken (..), VerificationToken (..), resetLifetime
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Email (..), parseEmail)
+import Wiki.Core.Version (namedAuthor)
 import Wiki.Server.Opaque (storedRecordOf)
 import Wiki.Server.Password (newToken, tokenHash)
 import Wiki.Server.Storage (Storage, readServerSettings, reading, writing, writingEither)
 import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Renewal (noticeRenewals)
 import Wiki.Server.Storage.Rows (insertResetToken, micro, noPasswordToSet, providerNames, replaceRecord, resetsSince)
 import Wiki.Server.Storage.Schema (wikiDb)
 import Wiki.Server.Storage.Schema qualified as S
@@ -236,6 +238,9 @@ resetPassword st now token new = do
               True -> pure (Left (Invalid noPasswordHere))
               False -> do
                 replaceRecord now u stored
+                -- A reset that retires the user's key pair makes the keys
+                -- of the encrypted spaces sealed to it due for renewal.
+                noticeRenewals (namedAuthor u "A password reset") now
                 runUpdate (update wikiDb.reset_tokens (\r -> r.used_at <-. val_ (Just (micro now))) (\r -> r.user_id ==. val_ uid &&. isNothing_ r.used_at))
                 pure (Right ())
       Nothing -> pure (Left NotFound)

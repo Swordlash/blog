@@ -94,6 +94,9 @@ $( browserJS
      , ("js_drop_version", "wiki_test_encrypted_drop_version", Safe, [t|JSText -> Int -> IO ()|])
      , ("js_seen_at", "wiki_test_encrypted_seen_at", Safe, [t|JSText -> JSText -> Int -> IO ()|])
      , ("js_history_without_latest", "wiki_test_encrypted_history_without_latest", Safe, [t|Bool -> IO ()|])
+     , ("js_remove_reader", "wiki_test_encrypted_remove_reader", Safe, [t|JSText -> IO ()|])
+     , ("js_rotations", "wiki_test_encrypted_rotations", Safe, [t|IO JSText|])
+     , ("js_tamper_latest", "wiki_test_encrypted_tamper_latest", Safe, [t|Bool -> IO ()|])
      ]
  )
 
@@ -419,6 +422,77 @@ spec m = do
     unsafeIOToPageM (seenOf u pid) `shouldReturn` Just (Seen 3 "t3")
     seenAt' u pid (Seen 4 "t4") `shouldReturn` KeptNow
     unsafeIOToPageM (seenOf u pid) `shouldReturn` Just (Seen 4 "t4")
+
+  it "renews the key when a reader is removed, and the removed reader's tab, with the old key, opens nothing written after" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Plans" "Before the removal.")
+    unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
+    void (ok =<< run env (listPages secret.id))
+    readerTab <- as "user-reader"
+    void (ok =<< run readerTab (getPage secret.id [made.slug]))
+    unsafeIOToPageM (js_remove_reader (toJSText ("user-reader" :: Text)))
+    -- The administrator's browser renews the key when it opens the space.
+    admin <- as "user-admin"
+    void (ok =<< run admin (listPages secret.id))
+    rotations <- unsafeIOToPageM (fromJSText <$> js_rotations)
+    (T.count "\"recipient\"" rotations, "user-reader" `T.isInfixOf` rotations) `shouldBe` (1, False)
+    page <- ok =<< run admin (getPage secret.id [made.slug])
+    void (ok =<< run admin (savePage made.id page.updatedAt "Plans" "After the removal."))
+    -- The removed reader's tab still holds the old key, and the server
+    -- still answers it: what was written after does not open with it.
+    run readerTab (getPage secret.id [made.slug]) >>= (`shouldSatisfy` isLeft)
+    -- What was written before still opens for the administrator.
+    first' <- ok =<< run admin (getVersion made.id made.updatedAt)
+    first'.body `shouldBe` "Before the removal."
+
+  it "refuses a save while the key must be renewed, saying why, until an administrator's browser renews it" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Plans" "First.")
+    unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
+    unsafeIOToPageM (js_many_readers 1)
+    void (ok =<< run env (listPages secret.id))
+    unsafeIOToPageM (js_remove_reader (toJSText ("user-many-0" :: Text)))
+    -- The reader, who does not administer the space, is told why.
+    readerTab <- as "user-reader"
+    page <- ok =<< run readerTab (getPage secret.id [made.slug])
+    run readerTab (savePage made.id page.updatedAt "Plans" "Not yet.")
+      >>= ( `shouldSatisfy`
+              \case
+                Left (Invalid why) -> "key must be renewed" `T.isInfixOf` why
+                _ -> False
+          )
+    -- The administrator opens the space, and the key is renewed.
+    admin <- as "user-admin"
+    void (ok =<< run admin (listPages secret.id))
+    readerAgain <- as "user-reader"
+    page' <- ok =<< run readerAgain (getPage secret.id [made.slug])
+    (\p -> p.body) <$> (ok =<< run readerAgain (savePage made.id page'.updatedAt "Plans" "Now.")) `shouldReturn` "Now."
+
+  it "sends no new key when a wrap it would send does not open" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    void (ok =<< run env (createPage secret.id Nothing "One" "First page."))
+    void (ok =<< run env (createPage secret.id Nothing "Two" "Second page."))
+    unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
+    void (ok =<< run env (listPages secret.id))
+    unsafeIOToPageM (js_remove_reader (toJSText ("user-reader" :: Text)))
+    -- The server lists each page with another page's latest title: the
+    -- page key wrapped again does not open it.
+    unsafeIOToPageM (js_tamper_latest True)
+    admin <- as "user-admin"
+    void (run admin (listPages secret.id))
+    unsafeIOToPageM (js_tamper_latest False)
+    unsafeIOToPageM (fromJSText <$> js_rotations) `shouldReturn` "[]"
+    -- The server gives a public key for the administrator that is not
+    -- hers: her own new grant does not open.
+    unsafeIOToPageM (js_foreign_key (toJSText ("user-admin" :: Text)))
+    again <- as "user-admin"
+    void (run again (listPages secret.id))
+    unsafeIOToPageM (fromJSText <$> js_rotations) `shouldReturn` "[]"
+    sent <- asked
+    [r.url | r <- sent, "/rotation" `T.isSuffixOf` r.url, r.method == "POST"] `shouldBe` []
 
   it "offers no comments, attachments or kept draft in an encrypted space's page and editor" $ runPage $ do
     env <- encryptedSpace "user-admin"

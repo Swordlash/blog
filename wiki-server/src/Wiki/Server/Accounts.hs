@@ -152,11 +152,13 @@ import Wiki.Core.Audit (Actor (..), Subject (..))
 import Wiki.Core.Id (InvitationId (..), UserId (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Subject (SubjectUser))
 import Wiki.Core.User (Email (..), Login (..), Password (..), User (..), parseLogin)
+import Wiki.Core.Version (namedAuthor)
 import Wiki.Server.Opaque (Proof (..), storedRecordOf)
 import Wiki.Server.Password (SessionToken (..), checkNewPassword, newPublicId, newToken, tokenHash, verifyPassword)
 import Wiki.Server.Storage (Storage, readServerSettings, readSettings, reading, recordHere, writing, writingEither)
 import Wiki.Server.Storage.Audit (Recorded (..), consoleAddress, insertAudit, operator)
 import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Renewal (noticeRenewals)
 import Wiki.Server.Storage.Rows (IdentityRow (..), StoredPassword (..), StoredRecord, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, loadAccountByLogin, loadAccountsWithAdministrators, loadPasswordByLogin, micro, noPasswordToSet, passwordOf, pendingInvitation, providerNames, refreshIdentity, replaceRecord, setGlobalGrant, storeRecord, totpEnabled, updateDisabled)
 import Wiki.Server.Storage.Schema (wikiDb)
 import Wiki.Server.Storage.Schema qualified as S
@@ -241,6 +243,11 @@ changeAccount st u action detail change = writingEither st $ do
     Just a -> do
       change
       fromConsole action a.user detail
+      -- Disabling an account, or giving it a password (which may retire its
+      -- key pair), may make a reader of an encrypted space one no longer:
+      -- the space's administrators are told its key must be renewed.
+      now <- liftIO getCurrentTime
+      noticeRenewals (namedAuthor (UserId "~administrator") "The server's console") now
       maybe (Left NotFound) Right <$> loadAccount u
 
 -- | Record what the console did to a user.

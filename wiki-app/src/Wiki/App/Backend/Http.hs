@@ -112,7 +112,7 @@ import Wiki.Api.Activity (ActivityQuery (..), firstPage)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..), UserQuery (..))
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
-import Wiki.Api.Encrypted (EncryptSpace (..), NewGrant (..), NewGrants (..), NewSealedPage (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..))
+import Wiki.Api.Encrypted (EncryptSpace (..), NewGrant (..), NewGrants (..), NewSealedPage (..), RotatedPage (..), Rotation (..), RotationInfo (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..))
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Export (dispositionFileName, formatExtension, formatMediaType)
@@ -131,7 +131,7 @@ import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Assistant (KeyRef, MonadAssistant, deviceKeyIO, forgetHeld, wrapForPassword)
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..), Rewrap (..))
-import Wiki.App.Backend (Document (..), ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), withOwnUser)
+import Wiki.App.Backend (Document (..), ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), sessionPrincipal, withOwnUser)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), keyStateText)
@@ -143,7 +143,7 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Opaque qualified as Opaque
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
-import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, keepSeen, newPageId, newPageKey, newSpaceKey, noEncryption, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openTitle, openVersionTitles, sealContent, seenOf, shareSpaceKey)
+import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, keepSeen, newPageId, newPageKey, newSpaceKey, noEncryption, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openVersionTitles, rotateKeys, sealContent, seenOf, shareSpaceKey)
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (browserOnline, forgetReads, offlineCopy)
@@ -157,6 +157,7 @@ import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.Path (ancestry, pathOf)
+import Wiki.Core.Permission (canAdministerSpace)
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), searchPlain)
 import Wiki.Core.Search qualified as Search
 import Wiki.Core.Slug (Slug)
@@ -560,7 +561,16 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- Not cached: it is read when the space's permissions are opened, which
   -- the server never prerenders, and read again after every change there.
   spaceAccess sid = send (endpoints.spaces.access sid)
-  setSpaceGrant sid subject permission granted = write_ (endpoints.spaces.setGrant sid SpaceGrantChange {subject, permission, granted})
+
+  -- Removing a reader of an encrypted space makes its key due for renewal:
+  -- an administrator who holds the key renews it at once, here.
+  setSpaceGrant sid subject permission granted = do
+    result <- write_ (endpoints.spaces.setGrant sid SpaceGrantChange {subject, permission, granted})
+    encrypted <- (\c -> isJust (c.spaces >>= encryptionIn sid)) <$> readCache
+    when (isRight result && not granted && encrypted) $
+      -- Opening the key renews it too ('openKey').
+      send (endpoints.encrypted.space sid) >>= traverse_ (\e -> ifM (isJust . Map.lookup sid . (\h -> h.heldKeys) <$> readHeld) (renewIfDue sid e) (void (openKey NoRefresh sid e.keyId)))
+    pure result
   moveSpace sid parent = write (endpoints.spaces.move sid SpaceMove {parent})
   deleteSpace sid = write_ (endpoints.spaces.delete sid)
   setSpaceOrder sid children order = write (endpoints.spaces.setOrder sid SpaceOrder {children, order})
@@ -586,12 +596,14 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- cannot read the text of the pages there.
   pageBacklinks pid = pageContent (\c -> Map.lookup pid c.backlinks) (endpoints.pages.backlinks pid) (withBacklinks pid)
   createPage sid parent title body =
-    encryptedFetched sid (write (getResponse <$> endpoints.spaces.createPage sid NewPage {parent, title, body})) (sealedCreatePage sid parent title body)
+    encryptedFetched sid (write (getResponse <$> endpoints.spaces.createPage sid NewPage {parent, title, body})) (\current -> renewingThen sid (freshKey sid current >>= sealedCreatePage sid parent title body))
       >>= keepingSpaces (\p -> [(p.id, p.space)])
   savePage pid base title body =
     sealedPage pid >>= \case
       Nothing -> plainPageWrite pid (write (getResponse <$> endpoints.pages.save pid (PageVersion base) PageEdit {title, body}))
-      Just (sid, k) -> sealedSavePage sid pid k base title body
+      -- The page's key as held when the save is sent: a renewal of the
+      -- space's key gives the page a new one.
+      Just (sid, _) -> renewingThen sid (sealedPage pid >>= maybe (pure (Left (Conflict inEncryptedSpace))) (\(_, k) -> sealedSavePage sid pid k base title body))
   movePage pid space parent = write (endpoints.pages.move pid PageMove {space, parent})
   setPageTemplate pid template = write (endpoints.pages.template pid PageTemplate {template})
   deletePage pid = write_ (endpoints.pages.delete pid)
@@ -1367,6 +1379,10 @@ data Held = Held
   -- ^ What this tab found wrong with the versions the server sent of a
   -- page ('checkHead', "Wiki.Core.Encrypted"'s chain of versions). A page
   -- with a problem is not saved from this tab, until a reload.
+  , heldPageKeys :: Map PageId [PageKey]
+  -- ^ Every key of each page of an encrypted space read here, its current
+  -- one first: its versions written before a rotation of its space's key
+  -- are encrypted with older ones.
   , heldLowest :: Map PageId (UTCTime, (VersionTag, Maybe Chain))
   -- ^ The oldest version, checked by its decryption, of the last page of a
   -- page's history listed here: the next page, asked for before it, must
@@ -1374,7 +1390,7 @@ data Held = Held
   }
 
 noneHeld :: Held
-noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldLowest = mempty}
+noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldLowest = mempty}
 
 -- | Let go of what is held of encrypted spaces for the user who was signed
 -- in: the keys the page holds are forgotten, and the pages decrypted with
@@ -1400,6 +1416,15 @@ forgetFound = modifyHeld (\h -> h {heldFound = mempty})
 -- | Remember pages of an encrypted space read here.
 rememberPages :: (MonadIO m) => SpaceId -> [(PageId, PageKey)] -> HttpWiki m ()
 rememberPages sid ps = modifyHeld (\h -> h {heldPages = Map.union (Map.fromList [(p, (sid, k)) | (p, k) <- ps]) h.heldPages})
+
+-- | Remember every key of a page read here, its current one first.
+rememberPageKeys :: (MonadIO m) => PageId -> [PageKey] -> HttpWiki m ()
+rememberPageKeys pid keys = unless (null keys) (modifyHeld (\h -> h {heldPageKeys = Map.insert pid keys h.heldPageKeys}))
+
+-- | Every key of a page this tab knows, the one given first: the current
+-- key, and the others read with the page.
+keysOfPage :: (MonadIO m) => PageId -> PageKey -> HttpWiki m [PageKey]
+keysOfPage pid k = (\h -> k : filter (\x -> x.keyId /= k.keyId) (Map.findWithDefault [] pid h.heldPageKeys)) <$> readHeld
 
 -- | Remember the spaces of the pages a read or a write returned
 -- ('heldSpaces'), and return the result unchanged.
@@ -1454,6 +1479,11 @@ encryptedOr sid plain sealed =
               sealed k
             _ -> pure refused
         other -> pure other
+
+-- | The space's current key id: the one given, or the one a renewal made
+-- since.
+freshKey :: (MonadIO m) => SpaceId -> KeyId -> HttpWiki m KeyId
+freshKey sid given = maybe given fst . Map.lookup sid . (\h -> h.heldKeys) <$> readHeld
 
 -- | 'encryptedOr' for a write, which sends a title and a text, with the
 -- list of spaces fetched first ('freshSpaces'), so that no plain text is
@@ -1516,8 +1546,9 @@ openKey refresh sid current =
       Map.lookup sid . (\h -> h.heldKeys) <$> readHeld >>= \case
         Just (k, key) | k == current -> do
           when (refresh == Refresh) $
-            ((\s -> s.user) <$> session) >>= traverse_ (\u -> send (endpoints.encrypted.space sid) >>= traverse_ (shareFrom u))
-          pure (Right (Right key))
+            ((\s -> s.user) <$> session) >>= traverse_ (\u -> send (endpoints.encrypted.space sid) >>= traverse_ (\e -> renewIfDue sid e >> shareFrom u e))
+          -- The key held now: a renewal just made gives a new one.
+          Right . Right . maybe key snd . Map.lookup sid . (\h -> h.heldKeys) <$> readHeld
         _ ->
           ((\s -> s.user) <$> session) >>= \case
             Nothing -> pure (Right (Left SignInFirst))
@@ -1537,13 +1568,94 @@ openKey refresh sid current =
                         Left _ -> pure (Right (Left KeysLocked))
                         Right key -> do
                           modifyHeld (\h -> h {heldKeys = Map.insert sid (g.keyId, key) h.heldKeys})
-                          pure (Right (Right key))
+                          renewIfDue sid e
+                          Right . Right . maybe key snd . Map.lookup sid . (\h -> h.heldKeys) <$> readHeld
   where
     shareFrom u e = for_ (ownGrant e) (\g -> unless (null e.pending) (void (withDeviceKey u (\idKey -> sharePending idKey sid g e))))
     -- The user's grant of the space's current key. The server lists only
     -- that one; a grant of another key would open a key the space no
     -- longer uses, and would be held under the wrong id.
     ownGrant e = mfilter (\g -> g.keyId == e.keyId) e.grant
+
+-- | Renew the space's key when the server says it is due and the user may
+-- administer the space ('renewKey'): what an administrator's browser does
+-- whenever it opens the space's key. A renewal that fails is left for the
+-- next opening; the writes refused meanwhile say why.
+renewIfDue :: (MonadIO m) => SpaceId -> SpaceEncryption -> HttpWiki m ()
+renewIfDue sid e = when e.rotationDue (whenM (mayAdministerHere sid) (void (renewKey sid e)))
+
+-- | Whether the signed-in user may administer the space, by the session's
+-- grants and the list of spaces: the only ones who may renew its key.
+mayAdministerHere :: (MonadIO m) => SpaceId -> HttpWiki m Bool
+mayAdministerHere sid = do
+  s <- session
+  spacesNow <&> \case
+    Right spaces -> canAdministerSpace (sessionPrincipal s) s.grants (fromMaybe [] (ancestry (\i -> find (\x -> x.id == i) spaces) sid))
+    Left _ -> False
+
+-- | Give the space a new key ("Wiki.Api.Encrypted"'s 'Rotation'): from the
+-- user's own grant of the current one ('SpaceEncryption'), sealed to every
+-- reader the server lists, every page key wrapped again and a new one for
+-- each page. The browser opens all of it before it sends it
+-- ('rotateKeys'); a key that does not open sends nothing. The new key is
+-- then the one held here, and each page's new key the one it is saved
+-- with.
+renewKey :: (MonadIO m) => SpaceId -> SpaceEncryption -> HttpWiki m (Either WikiError ())
+renewKey sid e =
+  ((\s -> s.user) <$> session) >>= \case
+    Nothing -> pure (Left (Invalid (keyStateText SignInFirst)))
+    Just u -> case mfilter (\g -> g.keyId == e.keyId) e.grant of
+      Nothing -> pure (Left (Invalid "You do not hold this space's key, so you cannot renew it: another administrator of the space who holds it can."))
+      Just g ->
+        send (endpoints.encrypted.rotation sid) >>= \case
+          Left err -> pure (Left err)
+          Right info ->
+            withDeviceKey u (\idKey -> liftIO (rotateKeys idKey sid g u.id info.readers info.pages)) >>= \case
+              Nothing -> pure (Left (Invalid (keyStateText KeysLocked)))
+              Just (Left why) -> pure (Left (Invalid why))
+              Just (Right (key, rotation)) ->
+                write_ (endpoints.encrypted.rotate sid rotation) >>= \case
+                  Left err -> liftIO (forgetSpaceKey key) $> Left err
+                  Right () -> do
+                    was <- Map.lookup sid . (\h -> h.heldKeys) <$> readHeld
+                    traverse_ (liftIO . forgetSpaceKey . snd) was
+                    modifyHeld $ \h ->
+                      h
+                        { heldKeys = Map.insert sid (rotation.keyId, key) h.heldKeys
+                        , heldPages = Map.union (Map.fromList [(p.page, (sid, p.current)) | p <- rotation.pages]) h.heldPages
+                        , heldPageKeys = Map.union (Map.fromList [(p.page, p.current : p.rewrapped) | p <- rotation.pages]) h.heldPageKeys
+                        , heldFound = Map.delete sid h.heldFound
+                        }
+                    pure (Right ())
+
+-- | Whether a write was refused because the space's key must be renewed
+-- first ("Wiki.Server.Storage"'s refusal while a rotation is due).
+renewalRefused :: Either WikiError a -> Bool
+renewalRefused = \case
+  Left (Conflict why) -> "key must be renewed" `T.isInfixOf` why
+  _ -> False
+
+-- | A write of a page of an encrypted space, renewed and sent once more
+-- when the space's key must be renewed first and this user may renew it;
+-- otherwise the refusal says why, as an error rather than a conflict with
+-- another edit.
+renewingThen :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError a) -> HttpWiki m (Either WikiError a)
+renewingThen sid sending =
+  sending >>= \case
+    r | renewalRefused r -> do
+      may <- mayAdministerHere sid
+      renewed <-
+        if may
+          then send (endpoints.encrypted.space sid) >>= either (pure . Left) (renewKey sid)
+          else pure (Left (Invalid ""))
+      case renewed of
+        Right () -> sending
+        Left _ -> pure (either (Left . Invalid . errorText) Right r)
+    r -> pure r
+  where
+    errorText = \case
+      Conflict why -> why
+      other -> show other
 
 -- | 'Refresh': whether 'openKey' asks the server for the readers waiting
 -- for a key held already. A list of the space's pages does (the shell
@@ -1650,7 +1762,7 @@ withUser step = ((\s -> s.user) <$> session) >>= traverse_ step
 -- ('linkedFrom'): the history is read a page at a time until it reaches
 -- the version read, or ends. Then the latest is the version seen, unless
 -- something was wrong, which is recorded instead.
-checkHead :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> PageKey -> VersionTag -> Maybe Chain -> HttpWiki m ()
+checkHead :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> VersionTag -> Maybe Chain -> HttpWiki m ()
 checkHead key sid pid k tag chain = withUser $ \u -> do
   seen <- liftIO (seenOf u.id pid)
   verdict <- case (judgeHead seen tag chain, seen) of
@@ -1670,7 +1782,7 @@ checkHead key sid pid k tag chain = withUser $ \u -> do
 -- their tags and chains checked by the decryption. A version whose title
 -- does not open is not the browser's, and is a problem; a history that
 -- cannot be read is read no further.
-historyDown :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> PageKey -> Int -> Int -> Maybe UTCTime -> [(VersionTag, Maybe Chain)] -> HttpWiki m (Either ChainProblem [(VersionTag, Maybe Chain)])
+historyDown :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> Int -> Int -> Maybe UTCTime -> [(VersionTag, Maybe Chain)] -> HttpWiki m (Either ChainProblem [(VersionTag, Maybe Chain)])
 historyDown key sid pid k down size before got =
   send (endpoints.encrypted.versions pid (VersionTime <$> before) (Just size)) >>= \case
     Left _ -> pure (Right got)
@@ -1688,17 +1800,17 @@ historyDown key sid pid k down size before got =
 -- | The tag and chain of the version a save is made on top of: the one
 -- read here, or else that version fetched, and checked by the decryption
 -- of its title.
-baseHead :: (MonadIO m) => SpaceId -> PageId -> PageKeyRef -> UTCTime -> HttpWiki m (Either WikiError (VersionTag, Maybe Chain))
-baseHead sid pid pk base =
+baseHead :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> UTCTime -> HttpWiki m (Either WikiError (VersionTag, Maybe Chain))
+baseHead key sid pid keys base =
   Map.lookup pid . (\h -> h.heldHeads) <$> readHeld >>= \case
     Just (at, tag, chain) | at == base -> pure (Right (tag, chain))
     _ ->
       send (endpoints.encrypted.version pid (VersionTime base)) >>= \case
         Left e -> pure (Left e)
         Right v ->
-          liftIO (openTitle pk sid pid (headingOf v.content)) <&> \case
-            Left why -> Left (Invalid why)
-            Right _ -> Right (v.content.tag, v.content.chain)
+          liftIO (openVersionTitles key sid pid keys [headingOf v.content]) <&> \case
+            [Just _] -> Right (v.content.tag, v.content.chain)
+            _ -> Left (Invalid "The version this edit began from does not open with the page's keys: open the page again.")
 
 -- | A page of an encrypted space, decrypted.
 pageFrom :: SealedPage -> Text -> Text -> Page
@@ -1750,13 +1862,19 @@ sealedGetPage sid path current =
     Left e -> pure (Left e)
     Right p -> withSpaceKey NoRefresh sid current $ \key -> do
       rememberPages sid [(p.id, p.pageKey)]
-      opened <- withPageKey key sid p.id p.pageKey $ \pk ->
+      rememberPageKeys p.id p.pageKeys
+      keys <- keysOfPage p.id p.pageKey
+      -- The latest version is encrypted with the page's current key, or,
+      -- when nothing was saved since its space's key was renewed, with the
+      -- one before.
+      let contentKey = fromMaybe p.pageKey (find (\x -> x.keyId == p.content.keyId) keys)
+      opened <- withPageKey key sid p.id contentKey $ \pk ->
         liftIO (openContent pk sid p.id p.content) <&> bimap Invalid (uncurry (pageFrom p))
       -- The version opened, so its tag and chain are the ones it was
       -- encrypted with: checked against what this browser read before.
       when (isRight opened) $ do
         rememberHeads [(p.id, (p.updatedAt, p.content.tag, p.content.chain))]
-        checkHead key sid p.id p.pageKey p.content.tag p.content.chain
+        checkHead key sid p.id keys p.content.tag p.content.chain
       pure opened
 
 sealedCreatePage :: (MonadIO m) => SpaceId -> Maybe PageId -> Text -> Text -> KeyId -> HttpWiki m (Either WikiError Page)
@@ -1780,7 +1898,8 @@ sealedSavePage sid pid k base title body =
       -- Not on top of versions this tab found wrong: the reader is shown
       -- why, and reloads.
       lift (Map.lookup pid . (\h -> h.heldProblems) <$> readHeld) >>= traverse_ (throwError . Invalid . chainProblemText)
-      (tag, chain) <- ExceptT (baseHead sid pid pk base)
+      keys <- lift (keysOfPage pid k)
+      (tag, chain) <- ExceptT (baseHead key sid pid keys base)
       content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid k.keyId (chainAfter tag chain) (T.strip title) body))
       saved <- ExceptT (write (getResponse <$> endpoints.encrypted.save pid (PageVersion base) SealedEdit {content}))
       lift (savedHead pid saved.updatedAt content)
@@ -1791,8 +1910,9 @@ sealedVersions sid pid k q =
   send (endpoints.encrypted.versions pid (VersionTime <$> q.before) (mfilter (/= versionsPageSize) (Just q.limit))) >>= \case
     Left e -> pure (Left e)
     Right listed -> encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
-      withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> do
-        opened <- liftIO (for listed (\v -> rightToMaybe <$> openTitle pk sid pid v.heading))
+      withSpaceKey NoRefresh sid current $ \key -> do
+        keys <- keysOfPage pid k
+        opened <- liftIO (openVersionTitles key sid pid keys [v.heading | v <- listed])
         -- The versions whose titles opened are those whose tags and chains
         -- are the browser's: each must follow on the next one, and the
         -- latest of them on the oldest of the page of the history listed
@@ -1809,8 +1929,10 @@ sealedVersion sid pid k at =
   send (endpoints.encrypted.version pid (VersionTime at)) >>= \case
     Left e -> pure (Left e)
     Right v -> encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
-      withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk ->
-        liftIO (openContent pk sid pid v.content) <&> bimap Invalid (\(title, body) -> Version {page = pid, updatedAt = v.updatedAt, title, body, author = v.author})
+      withSpaceKey NoRefresh sid current $ \key -> do
+        keys <- keysOfPage pid k
+        withPageKey key sid pid (fromMaybe k (find (\x -> x.keyId == v.content.keyId) keys)) $ \pk ->
+          liftIO (openContent pk sid pid v.content) <&> bimap Invalid (\(title, body) -> Version {page = pid, updatedAt = v.updatedAt, title, body, author = v.author})
 
 -- | The search over the encrypted spaces whose keys this browser holds or
 -- can open, in the browser: each space's pages are fetched and decrypted

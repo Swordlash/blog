@@ -911,23 +911,26 @@ instance Table KeyGrants where
     deriving anyclass (Beamable)
   primaryKey r = KeyGrantKey r.resource_kind r.resource_id r.key_id r.recipient_key_id
 
--- | The key of a page of an encrypted space (@page_keys@), encrypted with
--- the space's key @space_key_id@.
+-- | A key of a page of an encrypted space (@page_keys@), encrypted with
+-- the space's key @space_key_id@. A page has every key it has had, one a
+-- rotation of the space's key (migration @0017-space-key-rotation@);
+-- @current@ marks the one its next version is encrypted with.
 data PageKeys f = PageKeyRow
   { page_id :: Columnar f Text
   , key_id :: Columnar f Text
   , space_key_id :: Columnar f Text
   , nonce :: Columnar f Text
   , wrapped :: Columnar f Text
+  , current :: Columnar f Bool
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)
 
 instance Table PageKeys where
-  newtype PrimaryKey PageKeys f = PageKeyKey (Columnar f Text)
+  data PrimaryKey PageKeys f = PageKeyKey (Columnar f Text) (Columnar f Text)
     deriving stock (Generic)
     deriving anyclass (Beamable)
-  primaryKey r = PageKeyKey r.page_id
+  primaryKey r = PageKeyKey r.page_id r.key_id
 
 -- | A version of a page of an encrypted space, encrypted
 -- (@sealed_versions@), beside its row of 'PageVersions', whose title and

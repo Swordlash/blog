@@ -215,6 +215,74 @@ async function wiki_enc_open(handle, nonce, ciphertext, data) {
   }
 }
 
+// Give a space a new key (Wiki.Api.Encrypted's Rotation), from this
+// device's private key (a handle) and the user's own grant of the current
+// key (JSON {enc, sealed, info}): a new key, its id appended to infoPrefix,
+// sealed to every reader (JSON [{user, keyId, publicKey}], the user
+// included); every key of every page (JSON [{page, keys: [{keyId, nonce,
+// wrapped, data}], newData, latest: {keyId, nonce, ciphertext, data}}])
+// opened with the current key and wrapped again with the new one; and a new
+// key for every page, its id appended to newData.
+//
+// Nothing is returned unless what would be sent opens: the user's own new
+// grant is opened with this device's private key, and the key it gives,
+// not the one made here, opens every new wrap; the page key the latest
+// version of each page is encrypted with, opened so, decrypts that
+// version's title. JSON {handle, keyId, grants, pages: [{page, current,
+// rewrapped}]}, the handle the new key opened from the grant; or {error}.
+async function wiki_enc_space_key_rotate(identity, grant, infoPrefix, me, recipients, pages) {
+  const raws = [];
+  const forget = (raw) => {
+    raws.push(raw);
+    return raw;
+  };
+  try {
+    const own = JSON.parse(grant);
+    const current = await wikiEncImport(forget(await wikiEncOpenGrant(identity, own.enc, own.sealed, own.info)));
+    const fresh = forget(crypto.getRandomValues(new Uint8Array(32)));
+    const made = await wikiEncImport(fresh);
+    const keyId = wiki_enc_random_id();
+    const info = infoPrefix + keyId;
+    const grants = [];
+    for (const r of JSON.parse(recipients)) {
+      if ((await wikiEncKeyId(r.publicKey)) !== r.keyId) throw new Error("A reader's public key is not the one its id names: the key was not renewed.");
+      const g = await wikiEncSealTo(r.publicKey, info, fresh);
+      grants.push({ recipient: r.user, recipientKeyId: r.keyId, enc: g.enc, sealed: g.sealed });
+    }
+    const mine = grants.find((g) => g.recipient === me);
+    if (mine === undefined) throw new Error("The new key would not be sealed to you: it was not renewed.");
+    // The key the user's own new grant gives: what checks every wrap below.
+    const opened = await wikiEncImport(forget(await wikiEncOpenGrant(identity, mine.enc, mine.sealed, info)));
+    const wrap = async (raw, data) => {
+      const nonce = crypto.getRandomValues(new Uint8Array(12));
+      const wrapped = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: wikiEncText(data) }, made, raw);
+      return { nonce: wikiEncToBase64(nonce), wrapped: wikiEncToBase64(wrapped) };
+    };
+    const reopen = async (w, data) => await wikiEncImport(forget(new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: wikiEncFromBase64(w.nonce), additionalData: wikiEncText(data) }, opened, wikiEncFromBase64(w.wrapped)))));
+    const out = [];
+    for (const p of JSON.parse(pages)) {
+      if (!p.keys.some((k) => k.keyId === p.latest.keyId)) throw new Error("A page's latest version is not encrypted with any of its keys: the key was not renewed, and nothing was sent.");
+      const rewrapped = [];
+      for (const k of p.keys) {
+        const raw = forget(new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: wikiEncFromBase64(k.nonce), additionalData: wikiEncText(k.data) }, current, wikiEncFromBase64(k.wrapped))));
+        const w = await wrap(raw, k.data);
+        const again = await reopen(w, k.data);
+        if (k.keyId === p.latest.keyId) await wikiEncOpenText(again, p.latest.nonce, p.latest.ciphertext, p.latest.data);
+        rewrapped.push({ keyId: k.keyId, nonce: w.nonce, wrapped: w.wrapped });
+      }
+      const newId = wiki_enc_random_id();
+      const w = await wrap(forget(crypto.getRandomValues(new Uint8Array(32))), p.newData + newId);
+      await reopen(w, p.newData + newId);
+      out.push({ page: p.page, current: { keyId: newId, nonce: w.nonce, wrapped: w.wrapped }, rewrapped });
+    }
+    return JSON.stringify({ handle: wikiEncHandle(opened), keyId, grants, pages: out });
+  } catch (error) {
+    return JSON.stringify({ error: error?.name === "OperationError" ? "A key of the space would not open with the new key: it was not renewed, and nothing was sent." : String(error?.message ?? error) });
+  } finally {
+    for (const raw of raws) raw.fill(0);
+  }
+}
+
 // Decrypt many pages at once, as a list of a space's pages or the search
 // needs: JSON [{pageKey: {nonce, wrapped, data}, fields: [{nonce,
 // ciphertext, data}]}], each page's key opened with the space's key and

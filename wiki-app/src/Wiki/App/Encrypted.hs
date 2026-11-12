@@ -23,6 +23,7 @@ module Wiki.App.Encrypted
   , newSpaceKey
   , openSpaceKey
   , shareSpaceKey
+  , rotateKeys
 
     -- * A page's key and content
   , PageKeyRef (..)
@@ -51,7 +52,7 @@ import Data.Map.Strict qualified as Map
 import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Protolude hiding (wait)
-import Wiki.Api.Encrypted (NewGrant (..), PendingMember (..))
+import Wiki.Api.Encrypted (NewGrant (..), PendingMember (..), RotatedPage (..), Rotation (..), RotationPage (..))
 import Wiki.App.Assistant (KeyRef, heldHandle)
 import Wiki.Core.Encrypted
 import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
@@ -65,6 +66,7 @@ $( browserJS
      , ("js_space_key_newPromise", "wiki_enc_space_key_new", Safe, [t|JSText -> JSText -> IO (Promise JSText)|])
      , ("js_space_key_openPromise", "wiki_enc_space_key_open", Safe, [t|Int -> JSText -> JSText -> JSText -> IO (Promise JSText)|])
      , ("js_space_key_sharePromise", "wiki_enc_space_key_share", Safe, [t|Int -> JSText -> JSText -> JSText -> JSText -> IO (Promise JSText)|])
+     , ("js_space_key_rotatePromise", "wiki_enc_space_key_rotate", Safe, [t|Int -> JSText -> JSText -> JSText -> JSText -> JSText -> IO (Promise JSText)|])
      , ("js_page_key_newPromise", "wiki_enc_page_key_new", Safe, [t|Int -> JSText -> IO (Promise JSText)|])
      , ("js_page_key_openPromise", "wiki_enc_page_key_open", Safe, [t|Int -> JSText -> JSText -> JSText -> IO (Promise JSText)|])
      , ("js_sealPromise", "wiki_enc_seal", Safe, [t|Int -> JSText -> JSText -> IO (Promise JSText)|])
@@ -87,6 +89,9 @@ js_space_key_open a1 a2 a3 a4 = if inBrowser then wait =<< js_space_key_openProm
 
 js_space_key_share :: Int -> JSText -> JSText -> JSText -> JSText -> IO JSText
 js_space_key_share a1 a2 a3 a4 a5 = if inBrowser then wait =<< js_space_key_sharePromise a1 a2 a3 a4 a5 else pure inert
+
+js_space_key_rotate :: Int -> JSText -> JSText -> JSText -> JSText -> JSText -> IO JSText
+js_space_key_rotate a1 a2 a3 a4 a5 a6 = if inBrowser then wait =<< js_space_key_rotatePromise a1 a2 a3 a4 a5 a6 else pure inert
 
 js_page_key_new :: Int -> JSText -> IO JSText
 js_page_key_new a1 a2 = if inBrowser then wait =<< js_page_key_newPromise a1 a2 else pure inert
@@ -174,6 +179,38 @@ shareSpaceKey idKey sid g waiting = whenHere $ do
   answer <- evaluate . fromJSText =<< js_space_key_share (heldHandle idKey) (toJSText g.enc.text) (toJSText g.sealed.text) (toJSText (grantInfo sid g.keyId)) (json recipients)
   pure (answered (.: "grants") answer)
 
+-- | A new key for a space ('Wiki.Api.Encrypted.Rotation'), made from the
+-- user's own grant of the current key, opened with this device's private
+-- key: sealed to every reader given (the user among them), every key of
+-- every page wrapped again with it, and a new key for each page. The
+-- browser opens what it would send before it answers
+-- (@wiki_enc_space_key_rotate@): the user's own new grant, every new
+-- wrap with the key that grant gives, and each page's latest title with
+-- its key wrapped again; if any does not open, the answer is why, and
+-- nothing is to be sent. The result is the new key, held here, and the
+-- rotation to send.
+rotateKeys :: KeyRef -> SpaceId -> KeyGrant -> UserId -> [PendingMember] -> [RotationPage] -> IO (Either Text (SpaceKey, Rotation))
+rotateKeys idKey sid g me readers pages = whenHere $ do
+  let own = object ["enc" .= g.enc, "sealed" .= g.sealed, "info" .= grantInfo sid g.keyId]
+      recipients = [object ["user" .= m.user, "keyId" .= m.keyId, "publicKey" .= m.publicKey] | m <- readers]
+      item p =
+        object
+          [ "page" .= p.page
+          , "keys" .= [object ["keyId" .= k.keyId, "nonce" .= k.wrapped.nonce, "wrapped" .= k.wrapped.key, "data" .= pageKeyData sid p.page k.keyId] | k <- p.keys]
+          , "newData" .= pageKeyData sid p.page (KeyId "")
+          , "latest" .= object ["keyId" .= p.latest.keyId, "nonce" .= p.latest.title.nonce, "ciphertext" .= p.latest.title.ciphertext, "data" .= contentData sid p.page p.latest.keyId p.latest.tag p.latest.chain TitleField]
+          ]
+  answer <- evaluate . fromJSText =<< js_space_key_rotate (heldHandle idKey) (json own) (toJSText (grantInfo sid (KeyId ""))) (toJSText me.text) (json recipients) (json (map item pages))
+  pure . flip answered answer $ \o -> do
+    held <- o .: "handle"
+    keyId <- o .: "keyId"
+    grants <- o .: "grants"
+    rotated <- o .: "pages"
+    let pageKey x = withObject "PageKey" (\k -> (\i n w -> PageKey {keyId = i, spaceKeyId = keyId, wrapped = WrappedKey n w}) <$> k .: "keyId" <*> k .: "nonce" <*> k .: "wrapped") x
+        rotatedPage x = withObject "RotatedPage" (\r -> RotatedPage <$> r .: "page" <*> (r .: "current" >>= pageKey) <*> (r .: "rewrapped" >>= traverse pageKey)) x
+    ps <- traverse rotatedPage rotated
+    pure (SpaceKey held, Rotation {from = g.keyId, keyId, grants, pages = ps})
+
 -- | Let the page forget a space's key.
 forgetSpaceKey :: SpaceKey -> IO ()
 forgetSpaceKey (SpaceKey k) = when inBrowser (js_forget k)
@@ -247,15 +284,24 @@ openHeadings :: SpaceKey -> SpaceId -> [(PageId, PageKey, SealedHeading)] -> IO 
 openHeadings space sid pages =
   openMany space sid [(pid, k, [(TitleField, h.tag, h.keyId, h.chain, h.title)]) | (pid, k, h) <- pages] <&> Map.mapMaybe (\case [Just t] -> Just t; _ -> Nothing)
 
--- | Decrypt the titles of many versions of one page at once: the title of
+-- | Decrypt the titles of many versions of one page at once, each with the
+-- key of the page's it names (one of the page's keys given): the title of
 -- each version, 'Nothing' for one that does not open. A run of versions
 -- whose titles all open is a run whose tags and chains are the browser's.
-openVersionTitles :: SpaceKey -> SpaceId -> PageId -> PageKey -> [SealedHeading] -> IO [Maybe Text]
-openVersionTitles space sid pid k headings =
-  openMany space sid [(pid, k, [(TitleField, h.tag, h.keyId, h.chain, h.title) | h <- headings])] <&> \opened ->
-    case Map.lookup pid opened of
-      Just titles | length titles == length headings -> titles
-      _ -> map (const Nothing) headings
+openVersionTitles :: SpaceKey -> SpaceId -> PageId -> [PageKey] -> [SealedHeading] -> IO [Maybe Text]
+openVersionTitles space sid pid keys headings = do
+  let keyOf h = find (\k -> k.keyId == h.keyId) keys
+      items = [(pid, k, [(TitleField, h.tag, h.keyId, h.chain, h.title)]) | h <- headings, Just k <- [keyOf h]]
+  opened <- openItems space sid items
+  let go hs os = case hs of
+        [] -> []
+        h : rest -> case keyOf h of
+          Nothing -> Nothing : go rest os
+          Just _ -> case os of
+            [Just t] : more -> Just t : go rest more
+            _ : more -> Nothing : go rest more
+            [] -> Nothing : go rest []
+  pure (go headings opened)
 
 -- | Decrypt the titles and texts of many pages of a space at once: the
 -- title and text of each page whose content opens.
@@ -267,9 +313,15 @@ openPages space sid pages =
 -- each page, 'Nothing' for one that does not open. Natively, or without
 -- WebCrypto, nothing opens.
 openMany :: SpaceKey -> SpaceId -> [(PageId, PageKey, [(Field, VersionTag, KeyId, Maybe Chain, Sealed)])] -> IO (Map PageId [Maybe Text])
-openMany (SpaceKey space) sid pages =
+openMany space sid pages = Map.fromList . zip [pid | (pid, _, _) <- pages] <$> openItems space sid pages
+
+-- | 'openMany''s work, in the order of the items given: the fields of each,
+-- 'Nothing' for one that does not open; none at all natively, without
+-- WebCrypto, or when the browser's answer cannot be read.
+openItems :: SpaceKey -> SpaceId -> [(PageId, PageKey, [(Field, VersionTag, KeyId, Maybe Chain, Sealed)])] -> IO [[Maybe Text]]
+openItems (SpaceKey space) sid pages =
   encryptionHere >>= \case
-    False -> pure mempty
+    False -> pure []
     True -> do
       let item (pid, k, fields) =
             object
@@ -278,8 +330,8 @@ openMany (SpaceKey space) sid pages =
               ]
       answer <- evaluate . fromJSText =<< js_open_many space (json (map item pages))
       pure $ case eitherDecodeStrict (encodeUtf8 answer) of
-        Right opened | length opened == length pages -> Map.fromList (zip [pid | (pid, _, _) <- pages] opened)
-        _ -> mempty
+        Right opened | length opened == length pages -> opened
+        _ -> []
 
 --------------------------------------------------------------------------------
 -- The versions this browser has seen

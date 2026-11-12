@@ -1,6 +1,6 @@
 ---
 pr: 251
-title: Encrypted spaces catch a page rolled back by the server
+title: Encrypted spaces: a rolled-back page caught, a new key on removal
 ---
 
 ## New features
@@ -21,6 +21,18 @@ title: Encrypted spaces catch a page rolled back by the server
   encryption, so the server cannot change either. A browser that never
   read the page cannot tell, and versions saved before this change are
   not numbered.
+
+- Removing someone from an encrypted space now gives it a new key, so
+  that nothing written after can be read with the key they kept. If you
+  administer the space and hold its key, your browser does it as you
+  remove them; otherwise the space's administrators are told under the
+  bell, and the next one to open the space renews it. Until then, a save
+  says why it cannot be made:
+
+  ```text
+  This space's key must be renewed before anything more is written in
+  it: someone who held the key can no longer read the space.
+  ```
 
 ## Other changes
 

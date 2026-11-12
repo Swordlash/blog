@@ -166,6 +166,8 @@ module Wiki.Server.Storage
   , spaceEncryption
   , encryptSpace
   , grantSpaceKey
+  , rotationInfo
+  , rotateSpaceKey
   , sealedPages
   , sealedContents
   , sealedPageAt
@@ -216,7 +218,7 @@ import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invite
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 -- Imported without their fields, which pages' and spaces' share; the
 -- qualified import brings the fields.
-import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedPage, PendingMember (PendingMember), SealedEdit, SealedPage (SealedPage), SealedSummary (SealedSummary), SealedVersion (SealedVersion), SealedVersionInfo (SealedVersionInfo), SpaceEncryption (SpaceEncryption))
+import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedPage, PendingMember (PendingMember), RotatedPage (..), Rotation (..), RotationInfo (RotationInfo), RotationPage (RotationPage), SealedEdit, SealedPage (SealedPage), SealedSummary (SealedSummary), SealedVersion (SealedVersion), SealedVersionInfo (SealedVersionInfo), SpaceEncryption (SpaceEncryption), maxRotatedGrants, maxRotatedKeys)
 import Wiki.Api.Encrypted qualified as E
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
@@ -301,8 +303,9 @@ import Wiki.Server.Storage.Comments qualified as Comments
 import Wiki.Server.Storage.Layout (Database (..), PgDatabase (..), PgPrograms, attachmentsDir, backupsDir, defaultDatabase, defaultPgPrograms, postgresAt, temporaryDir)
 import Wiki.Server.Storage.Migrate (databaseVersion, knownVersion, migrateSaying, schemaVersion)
 import Wiki.Server.Storage.Notifications qualified as Notifications
+import Wiki.Server.Storage.Renewal (noticeRenewals, readersIn, renewalDue)
 import Wiki.Server.Storage.Rows
-import Wiki.Server.Storage.Sealed (currentPublicKeys, deleteSpaceGrants, grantsOfKey, insertGrant, insertPageKey, insertSealedVersion, loadPageKey, loadSealedLatest, loadSealedVersion, loadSpacePageKeys, setSpaceKey, spaceKind)
+import Wiki.Server.Storage.Sealed (currentPublicKeys, deleteGrantsOfSpace, deleteSpaceGrants, grantsOfKey, insertGrant, insertPageKey, insertSealedVersion, loadPageKey, loadPageKeys, loadSealedLatest, loadSealedVersion, loadSpaceAllPageKeys, loadSpacePageKeys, replacePageKeys, setSpaceKey, spaceKind)
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
 import Wiki.Server.Storage.Stars qualified as Stars
 import Wiki.Server.WaysIn (AccountWays (..), WaysIn, brokenCredentials, brokenLogins, waysIn)
@@ -1771,6 +1774,15 @@ encryptSpace sid = run Writes . (shown <=< encryptSpaceTx sid)
 grantSpaceKey :: (MonadIO m) => SpaceId -> NewGrants -> StoredWiki m (Either WikiError ())
 grantSpaceKey sid = run Writes . grantSpaceKeyTx sid
 
+-- | What a rotation of an encrypted space's key needs, for one of its
+-- administrators.
+rotationInfo :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError RotationInfo)
+rotationInfo = run Reads . rotationInfoTx
+
+-- | Give an encrypted space a new key ('Wiki.Api.Encrypted.Rotation').
+rotateSpaceKey :: (MonadIO m) => SpaceId -> Rotation -> StoredWiki m (Either WikiError ())
+rotateSpaceKey sid = run Writes . rotateSpaceKeyTx sid
+
 -- | The pages of an encrypted space, with their encrypted titles.
 sealedPages :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError [SealedSummary])
 sealedPages = run Reads . sealedPagesTx
@@ -2329,6 +2341,7 @@ setSpaceGrantTx sid subject permission granted = do
     SubjectUser u -> maybe ("user " <> u.text) (\x -> "user " <> x.login.text) <$> db (loadUser u)
     SubjectGroup g -> maybe ("group " <> g.text) (\x -> "group " <> x.name) . find (\x -> x.id == g) <$> db loadGroups
   record (if granted then "space.grant" else "space.revoke") (spaceSubject sp) [("to", grantee), ("permission", permissionText permission)]
+  noticeNow
 
 -- | A permission on a space, as the log writes it.
 permissionText :: SpacePermission -> Text
@@ -2360,6 +2373,7 @@ setSpaceSealedTx sid sealed = do
     for_ ctx.creator $ \u ->
       db (insertGrants Grants {global = [], spaces = [SpaceGrant {space = sid, subject = SubjectUser u, permission = AdministerSpace}], access = Open})
   record "space.sealed" (spaceSubject s') [("sealed", yesNo sealed)]
+  noticeNow
   pure s'
 
 renameSpaceTx :: SpaceId -> Text -> Tx Space
@@ -3029,13 +3043,34 @@ readersOf c = do
   users <- db loadUsers
   (disabled, _) <- db loadAccountFlags
   membership <- db loadMembership
-  let spaceGrantsOnly = Grants {global = [], spaces = ctx.grants.spaces, access = ctx.grants.access}
-  pure
-    [ u.id
-    | u <- users
-    , not (u.id `Set.member` disabled)
-    , canView (Just (Permission.principal membership u.id)) spaceGrantsOnly c
-    ]
+  pure (readersIn ctx.grants membership users disabled c)
+
+-- | Whether a rotation of the space's key is due
+-- ("Wiki.Server.Storage.Renewal"): a grant of its current key to someone
+-- who can no longer read it, or to a public key that is no longer its
+-- user's.
+rotationDueTx :: SpaceId -> [Space] -> KeyId -> Tx Bool
+rotationDueTx sid c k = readersOf c >>= \readers -> db (renewalDue sid k readers)
+
+-- | 'Conflict' while a rotation of the space's key is due: nothing is
+-- sealed under a key that someone who can no longer read the space holds.
+requireNoRenewal :: SpaceId -> [Space] -> KeyId -> Tx ()
+requireNoRenewal sid c k = whenM (rotationDueTx sid c k) (failWith (Conflict renewalRefusal))
+
+-- | Why a write in an encrypted space is refused while its key must be
+-- renewed, and who renews it.
+renewalRefusal :: Text
+renewalRefusal = "This space's key must be renewed before anything more is written in it: someone who held the key can no longer read the space. An administrator of the space who holds the key renews it by opening the space, and then this can be done again."
+
+-- | Tell the administrators of the encrypted spaces whose keys must now be
+-- renewed ("Wiki.Server.Storage.Renewal"'s 'noticeRenewals'): what a
+-- write that may make a reader one no longer does at its end.
+noticeNow :: Tx ()
+noticeNow = do
+  ctx <- ask
+  for_ ctx.author $ \actor -> do
+    time <- now
+    db (noticeRenewals (maybe (namedAuthor actor actor.text) authorOf ctx.user) time)
 
 -- | An encrypted space's key as the caller sees it ('SpaceEncryption').
 spaceEncryptionTx :: SpaceId -> Tx SpaceEncryption
@@ -3047,6 +3082,7 @@ spaceEncryptionTx sid = do
   grants <- db (grantsOfKey spaceKind sid.text k)
   readers <- readersOf c
   keys <- db (currentPublicKeys (ordNub (toList me <> readers)))
+  due <- db (renewalDue sid k readers)
   let current u = fst <$> Map.lookup u keys
       granted u = any (\g -> g.recipient == u && Just g.recipientKeyId == current u) grants
       mine = me >>= \u -> find (\g -> g.recipient == u && Just g.recipientKeyId == current u) grants
@@ -3056,6 +3092,7 @@ spaceEncryptionTx sid = do
       , grant = mine
       , pending = if isJust mine then [PendingMember {user = u, keyId = kid, publicKey = pk} | u <- readers, Just (kid, pk) <- [Map.lookup u keys], not (granted u)] else []
       , waiting = if isJust mine then [u | u <- readers, not (Map.member u keys)] else []
+      , rotationDue = due
       }
 
 -- | Turn a space encrypted ('Wiki.Api.EncryptedApi''s @encrypt@).
@@ -3119,6 +3156,7 @@ grantSpaceKeyTx sid req = do
     invalid ("At most " <> show maxGrantsAtOnce <> " grants are made at once.")
   unless (req.keyId == k) $
     failWith (Conflict "The space's key has changed since: open the space again.")
+  requireNoRenewal sid c k
   grants <- db (grantsOfKey spaceKind sid.text k)
   keys <- db (currentPublicKeys (ordNub (me : map (\g -> g.recipient) req.grants)))
   let current u = fst <$> Map.lookup u keys
@@ -3144,6 +3182,86 @@ grantSpaceKeyTx sid req = do
 outOfChain :: Text
 outOfChain = "This version does not follow on the page's latest one: reload the page, and save again."
 
+-- | What a rotation of the space's key needs ('rotationInfo'): its readers
+-- with a public key, and every key of every page, with the title of the
+-- page's latest version. For one who may administer the space: the only
+-- ones who may rotate its key.
+rotationInfoTx :: SpaceId -> Tx RotationInfo
+rotationInfoTx sid = do
+  (s, c) <- findSpace sid
+  requireView c
+  requireAdminister c
+  k <- requireEncrypted s
+  readers <- readersOf c
+  keys <- db (currentPublicKeys readers)
+  allKeys <- db (loadSpaceAllPageKeys sid)
+  latest <- db (loadSealedLatest sid)
+  pure
+    RotationInfo
+      { keyId = k
+      , readers = [PendingMember {user = u, keyId = kid, publicKey = pk} | u <- readers, Just (kid, pk) <- [Map.lookup u keys]]
+      , pages = [RotationPage {page = pid, keys = ks, latest = headingOf content} | (pid, ks) <- Map.toList allKeys, Just content <- [Map.lookup pid latest]]
+      }
+
+-- | Give an encrypted space a new key ('Wiki.Api.Encrypted.Rotation'):
+-- sealed to every reader with a current public key, every key of every
+-- page wrapped again with it, and a new key for every page, which its
+-- next version is encrypted with. Every grant of an older key goes. Only
+-- from one who may administer the space and holds its current key: a
+-- rotation rewrites every page key's wrap and every grant at once, and
+-- the server cannot check that a wrap opens, so it is taken only from
+-- those who could delete the space anyway. A rotation that leaves out a
+-- reader, a page or one of its keys, or names one there is not, is
+-- refused; so is one larger than 'maxRotatedKeys' or 'maxRotatedGrants'.
+rotateSpaceKeyTx :: SpaceId -> Rotation -> Tx ()
+rotateSpaceKeyTx sid r = do
+  ctx <- ask
+  (s, c) <- findSpace sid
+  requireAdminister c
+  k <- requireEncrypted s
+  me <- maybe (failWith Forbidden) pure ctx.author
+  unless (r.from == k) $
+    failWith (Conflict "The space's key has changed since: open the space again.")
+  when (length r.grants > maxRotatedGrants || sum [1 + length p.rewrapped | p <- r.pages] > maxRotatedKeys) $
+    invalid ("This space is too large for its key to be renewed in one request: at most " <> show maxRotatedGrants <> " readers and " <> show maxRotatedKeys <> " keys of pages.")
+  grants <- db (grantsOfKey spaceKind sid.text k)
+  mine <- db (currentPublicKeys [me])
+  -- Only one who holds the current key: one who has read the space.
+  require (any (\g -> g.recipient == me && Just g.recipientKeyId == (fst <$> Map.lookup me mine)) grants)
+  unless (holdsBytes keyIdBytes r.keyId.text && r.keyId /= k) $
+    invalid "The space's new key needs a new id of its length."
+  -- Sealed to every reader with a current public key, once, and to nobody
+  -- else.
+  readers <- readersOf c
+  keys <- db (currentPublicKeys readers)
+  let expected = Map.fromList [(u, kid) | u <- readers, Just (kid, _) <- [Map.lookup u keys]]
+      sent = Map.fromList [(g.recipient, g.recipientKeyId) | g <- r.grants]
+  unless (length r.grants == Map.size sent && sent == expected) $
+    failWith (Conflict "The space's readers, or their public keys, have changed since the new key was made: open the space again.")
+  for_ r.grants $ \g -> checkGrantParts r.keyId g.enc g.sealed
+  -- Every key of every page, wrapped again, and a new one for each page.
+  stored <- db (loadSpaceAllPageKeys sid)
+  let sentPages = Map.fromList [(p.page, p) | p <- r.pages]
+  unless (length r.pages == Map.size sentPages && Map.keysSet sentPages == Map.keysSet stored) $
+    failWith (Conflict "The space's pages have changed since the new key was made: open the space again.")
+  for_ r.pages $ \p -> do
+    let old = Map.findWithDefault [] p.page stored
+        ids = map (\x -> x.keyId)
+    unless (sort (ids p.rewrapped) == sort (ids old)) $
+      failWith (Conflict "A page's keys have changed since the new key was made: open the space again.")
+    unless (all (\x -> x.spaceKeyId == r.keyId) (p.current : p.rewrapped) && p.current.keyId `notElem` ids old) $
+      invalid "Every key of a page is wrapped by the space's new key, and each page has a new one."
+    for_ (p.current : p.rewrapped) $ \x ->
+      unless (holdsBytes keyIdBytes x.keyId.text && holdsBytes nonceBytes x.wrapped.nonce.text && holdsBytes sealedKeyBytes x.wrapped.key.text) $
+        invalid "This is not a key this wiki keeps: a part of a page's key is not of its length."
+  time <- now
+  db $ do
+    for_ r.pages $ \p -> replacePageKeys p.page p.current p.rewrapped
+    deleteGrantsOfSpace sid
+    for_ r.grants $ \g -> insertGrant spaceKind sid.text time KeyGrant {keyId = r.keyId, recipient = g.recipient, recipientKeyId = g.recipientKeyId, enc = g.enc, sealed = g.sealed}
+    setSpaceKey sid r.keyId
+  record "space.key-renewed" (spaceSubject s) [("key", r.keyId.text), ("readers", show (length r.grants)), ("pages", show (length r.pages))]
+
 -- | What a notification names a page of an encrypted space by, in the
 -- bell, the feed and the mail: not its title, which the server cannot
 -- read, but what it is.
@@ -3159,6 +3277,7 @@ sealedPageOf :: Page -> Tx SealedPage
 sealedPageOf p = do
   pk <- db (loadPageKey p.id) >>= maybe (failWith (Conflict "This page has no key: it is not a page of an encrypted space.")) pure
   content <- db (loadSealedVersion p.id p.updatedAt) >>= maybe (failWith NotFound) pure
+  pageKeys <- db (loadPageKeys p.id)
   w <- withWriters p
   pure
     SealedPage
@@ -3173,6 +3292,7 @@ sealedPageOf p = do
       , content
       , createdBy = w.createdBy
       , updatedBy = w.updatedBy
+      , pageKeys
       }
 
 -- | The pages of an encrypted space with their encrypted titles.
@@ -3198,12 +3318,12 @@ sealedContentsTx sid = do
   requireView c
   _ <- requireEncrypted s
   summaries <- db (loadPageSummaries sid)
-  keys <- db (loadSpacePageKeys sid)
+  keys <- db (loadSpaceAllPageKeys sid)
   latest <- db (loadSealedLatest sid)
   pure
-    [ SealedPage {id = p.id, space = p.space, parent = p.parent, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, pageKey = pk, content, createdBy = Nothing, updatedBy = Nothing}
+    [ SealedPage {id = p.id, space = p.space, parent = p.parent, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, pageKey = pk, content, createdBy = Nothing, updatedBy = Nothing, pageKeys = all'}
     | p <- sortOn (\x -> (x.createdAt, x.id)) summaries
-    , Just pk <- [Map.lookup p.id keys]
+    , Just all'@(pk : _) <- [Map.lookup p.id keys]
     , Just content <- [Map.lookup p.id latest]
     ]
 
@@ -3238,6 +3358,7 @@ createSealedPageTx sid new = do
   -- before versions were chained sends none, and is told to reload.
   unless (new.content.chain == Just firstChain) $
     failWith (Conflict outOfChain)
+  requireNoRenewal sid c k
   nodes <- db (childPages sid new.parent)
   random <- T.take 12 . T.filter (/= '-') <$> newId
   time <- now
@@ -3277,8 +3398,13 @@ saveSealedPageTx pid base edit = do
   c <- asks (`chainOf` p.space)
   requireEdit c
   s <- fst <$> findSpace p.space
-  _ <- requireEncrypted s
+  k <- requireEncrypted s
+  requireNoRenewal p.space c k
   pk <- db (loadPageKey pid) >>= maybe (failWith (Conflict "This page has no key: it is not a page of an encrypted space.")) pure
+  -- A version encrypted with an older key of the page's, from a tab that
+  -- read the page before its space's key was renewed.
+  when (edit.content.keyId /= pk.keyId) $
+    failWith (Conflict "This page's key has changed since it was opened: the space's key was renewed. Open the page again.")
   checkSealedParts pk edit.content
   when (p.updatedAt /= base) $
     failWith (Conflict "The page has been saved by someone else since this edit began.")
@@ -3455,6 +3581,9 @@ changeAccountTx action detail u change = do
   user <- findUser u
   db change
   record action (userSubject user) detail
+  -- Disabling an account, or setting its password (which may retire its
+  -- key pair), may make a reader of an encrypted space one no longer.
+  noticeNow
   db (loadAccount u) >>= maybe (failWith NotFound) pure
 
 -- | Create a user who signs in with an OPAQUE record, as an administrator
@@ -3622,6 +3751,7 @@ deleteGroupTx gid = do
   g <- findGroup gid
   db (deleteGroupRows gid)
   record "group.delete" (groupSubject gid g.name) []
+  noticeNow
 
 -- | Put a user in a group, or take them out; doing either twice changes
 -- nothing.
@@ -3632,6 +3762,7 @@ setMemberTx member gid u = do
   user <- findUser u
   db ((if member then insertMember else deleteMember) gid u)
   record (if member then "group.member-add" else "group.member-remove") (groupSubject gid g.name) [("user", user.login.text)]
+  noticeNow
 
 --------------------------------------------------------------------------------
 -- Whom the wiki lets in
@@ -3801,6 +3932,7 @@ removeUserTx u = do
   personal <- asks (\x -> find (\s -> s.owner == Just u) (Map.elems x.spaces))
   db (deleteUserRows u (formerAuthor user.login.text))
   record "user.remove" (userSubject user) [("personal space", "deleted") | isJust personal]
+  noticeNow
 
 --------------------------------------------------------------------------------
 -- Comments

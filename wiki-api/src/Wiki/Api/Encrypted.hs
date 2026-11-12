@@ -19,6 +19,14 @@ module Wiki.Api.Encrypted
   , NewGrant (..)
   , NewGrants (..)
 
+    -- * A new key for a space
+  , RotationInfo (..)
+  , RotationPage (..)
+  , Rotation (..)
+  , RotatedPage (..)
+  , maxRotatedKeys
+  , maxRotatedGrants
+
     -- * Pages
   , SealedSummary (..)
   , SealedPage (..)
@@ -59,6 +67,12 @@ data SpaceEncryption = SpaceEncryption
   -- ^ The readers of the space without a public key yet (they have not
   -- signed in since the wiki gave its users keys), who cannot be given
   -- the key until they do. Empty for a reader who holds no grant.
+  , rotationDue :: Bool
+  -- ^ Whether the key must be renewed before anything more is written in
+  -- the space: someone who holds it can no longer read the space (a reader
+  -- removed, disabled or deleted, or a public key retired), and nothing
+  -- is sealed under it until an administrator of the space who holds it
+  -- renews it ('Rotation').
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -102,6 +116,65 @@ data NewGrants = NewGrants
   deriving anyclass (FromJSON, ToJSON)
 
 --------------------------------------------------------------------------------
+-- A new key for a space
+
+-- | 'RotationInfo': what a browser needs to give a space a new key: the
+-- current key's id, the readers to seal the new one to (each with a
+-- current public key), and each page's keys with its latest version's
+-- title, which the browser decrypts with a page key wrapped again before
+-- it sends it, to check the new wrap.
+data RotationInfo = RotationInfo
+  { keyId :: KeyId
+  , readers :: [PendingMember]
+  , pages :: [RotationPage]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'RotationPage': a page's keys, its current one first, and its latest
+-- version's title.
+data RotationPage = RotationPage
+  { page :: PageId
+  , keys :: [PageKey]
+  , latest :: SealedHeading
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'Rotation': a space's new key, from the current one ('from'): sealed
+-- to every reader, and every page's keys wrapped again with it, with a
+-- new key for each page.
+data Rotation = Rotation
+  { from :: KeyId
+  , keyId :: KeyId
+  , grants :: [NewGrant]
+  , pages :: [RotatedPage]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'RotatedPage': a page's new key, which its next version is encrypted
+-- with, and its keys so far, each wrapped again by the space's new key.
+data RotatedPage = RotatedPage
+  { page :: PageId
+  , current :: PageKey
+  , rewrapped :: [PageKey]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The most page keys one rotation carries, its new keys and those
+-- wrapped again together: some 3 MB of JSON. The server reads a request's
+-- JSON whole, with no limit of its own, so a rotation sets this one; a
+-- space with more keys than this is refused, with a message saying so.
+maxRotatedKeys :: Int
+maxRotatedKeys = 20000
+
+-- | The most readers one rotation seals the new key to: some 1 MB.
+maxRotatedGrants :: Int
+maxRotatedGrants = 5000
+
+--------------------------------------------------------------------------------
 -- Pages
 
 -- | 'SealedSummary': a page of an encrypted space in a list of its pages:
@@ -134,6 +207,10 @@ data SealedPage = SealedPage
   , content :: SealedContent
   , createdBy :: Maybe Author
   , updatedBy :: Maybe Author
+  , pageKeys :: [PageKey]
+  -- ^ Every key the page has had, its current one ('pageKey') first: its
+  -- versions written before a rotation of its space's key are encrypted
+  -- with older ones.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

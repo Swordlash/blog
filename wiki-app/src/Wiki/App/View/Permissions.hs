@@ -149,7 +149,7 @@ component =
           {% if isJust space.encryption %}
             <div class="permissions-encrypted">
               <p class="permissions-intro encrypted-note">Encrypted: the titles and texts of this space's pages, and their histories, are encrypted in its members' browsers, and the server cannot read them. Its name stays readable, to whoever sees it in the list of spaces. Each reader granted here gets the space's key from a member's browser, the next time a member opens the space.</p>
-              <p class="permissions-intro encrypted-removal">Removing someone here does not change the space's key yet: whoever was removed and kept the key can still read the pages written before, and after, with a copy of what the server stores.</p>
+              <p class="permissions-intro encrypted-removal">Removing someone here gives the space a new key: your browser makes it at once if you hold the key, or another administrator's does when they next open the space, and until then nothing more can be written in it. Whoever was removed and kept the old key can still read what was written before, with a copy of what the server stores, but nothing written after.</p>
             </div>
           {% end %}
           {% if encryptable %}

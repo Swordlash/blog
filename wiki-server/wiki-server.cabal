@@ -142,6 +142,7 @@ library
         Wiki.Server.Storage.Migrate.CodeStep
         Wiki.Server.Storage.Rows
         Wiki.Server.Storage.Schema
+        Wiki.Server.Storage.Renewal
         Wiki.Server.Storage.Sealed
         Wiki.Server.Storage.Sqlite
         Wiki.Server.Storage.Stars

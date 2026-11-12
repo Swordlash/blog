@@ -226,6 +226,7 @@ kindName = \case
   Replied -> "replied"
   Commented -> "commented"
   Changed -> "changed"
+  KeyToRenew -> "renew-key"
 
 readKind :: Text -> Maybe Kind
 readKind t = find ((== t) . kindName) [minBound .. maxBound]

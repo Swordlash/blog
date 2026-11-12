@@ -99,7 +99,7 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, TexEngine, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
-import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedPage, SealedEdit, SealedPage, SealedSummary, SealedVersion, SealedVersionInfo, SpaceEncryption, sealedVersion)
+import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedPage, Rotation, RotationInfo, SealedEdit, SealedPage, SealedSummary, SealedVersion, SealedVersionInfo, SpaceEncryption, sealedVersion)
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -300,6 +300,17 @@ data EncryptedApi mode = EncryptedApi
   -- with a current public key, and only of the current key
   -- ('Wiki.Api.Error.Conflict' for an older one). A grant there already is
   -- left as it is.
+  , rotation :: mode :- "spaces" :> Capture "space" SpaceId :> "rotation" :> Get '[JSON] RotationInfo
+  -- ^ What a rotation of the space's key needs: the readers with a public
+  -- key, and every key of every page with its latest version's title. Only
+  -- for a caller who may administer the space.
+  , rotate :: mode :- "spaces" :> Capture "space" SpaceId :> "rotation" :> ReqBody '[JSON] Rotation :> PostNoContent
+  -- ^ Give the space a new key: sealed to every reader, every page key
+  -- wrapped again with it, and a new key for every page. Only from a
+  -- caller who may administer the space and holds its current key; a
+  -- rotation that leaves out a reader or a page key, or names one there
+  -- is not, is refused, and so is one of a space too large for one
+  -- request ('Wiki.Api.Encrypted.maxRotatedKeys').
   , pages :: mode :- "spaces" :> Capture "space" SpaceId :> "pages" :> Get '[JSON] [SealedSummary]
   -- ^ The space's pages with their encrypted titles, in the order they
   -- were made.

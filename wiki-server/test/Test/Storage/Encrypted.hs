@@ -42,21 +42,21 @@ import Wiki.Core.Backlink (Backlink (..))
 import Wiki.Core.Encrypted (Chain (..), Encapsulated (..), KeyGrant (..), PageKey (..), SealedContent (..), SealedHeading (..), VersionTag (..), chainAfter, firstChain)
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Id (PageId (..), SpaceId, UserId (..))
-import Wiki.Core.Notification (Notification (..), WatchTarget (..))
+import Wiki.Core.Notification (Kind (..), Notification (..), WatchTarget (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Permission (Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (mkSlug, slugText)
 import Wiki.Core.Space (Space (..), SpaceProfile (..))
 import Wiki.Core.Space qualified as Space
-import Wiki.Core.User (Password (..), User (..))
+import Wiki.Core.User (Group (..), Password (..), User (..))
 import Wiki.Core.Vault
 import Wiki.Core.Version (VersionsQuery (..))
 import Wiki.Server.Accounts (createAccount)
 import Wiki.Server.Import (intoEncrypted)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Rows (SitemapNode (..))
-import Wiki.Server.Storage.Schema (KeyGrants (..), PageLinks (..), Pages (..), PublicKeys (..), SealedVersions (..), Vaults (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (KeyGrants (..), PageKeys (..), PageLinks (..), Pages (..), PublicKeys (..), SealedVersions (..), Vaults (..), WikiDb (..), wikiDb)
 import Wiki.Server.Vault (keyIdOf, storeVault)
 import Wiki.Server.WebAuthn (toBase64Url)
 
@@ -219,6 +219,185 @@ spec backing = describe "encrypted spaces in the storage" $ do
     saved.content.chain `shouldBe` Just (Chain 1 (Just (contentOf 'a').tag))
     third <- ok =<< as p.ada (saveSealedPage pid saved.updatedAt SealedEdit {content = savedOn chained 'c'})
     third.content.chain `shouldBe` Just (Chain 2 (Just chained.tag))
+
+  -- A new key when a reader is removed (WP5.74b3 of docs/PLAN.md, item 2):
+  -- every way a reader stops being one makes a rotation due, and while it
+  -- is due nothing is sealed under the key, and the space's administrators
+  -- are told once.
+  describe "a new key when a reader stops being one" $ do
+    let ways :: [(Text, Storage -> People -> Space -> IO ())]
+        ways =
+          [ ("a grant removed", \st p s -> void (ok =<< runStoredWiki st (AsUser p.ada) (setSpaceGrant s.id (SubjectUser p.bob) View False)))
+          ,
+            ( "a group's member removed"
+            , \st p s -> do
+                g <- byGroup st p s
+                void (ok =<< runStoredWiki st Administrator (removeMember g.id p.bob))
+            )
+          ,
+            ( "a group's grant removed"
+            , \st p s -> do
+                g <- byGroup st p s
+                void (ok =<< runStoredWiki st (AsUser p.ada) (setSpaceGrant s.id (SubjectGroup g.id) View False))
+            )
+          ,
+            ( "a group deleted"
+            , \st p s -> do
+                g <- byGroup st p s
+                void (ok =<< runStoredWiki st Administrator (deleteGroup g.id))
+            )
+          , ("an account disabled", \st p _ -> void (ok =<< runStoredWiki st Administrator (setDisabled p.bob True)))
+          ,
+            ( "an account removed"
+            , \st p _ -> do
+                void (ok =<< runStoredWiki st Administrator (setDisabled p.bob True))
+                void (ok =<< runStoredWiki st Administrator (removeUser p.bob))
+            )
+          ,
+            ( "an administrator's own grant withdrawn"
+            , \st p s -> do
+                -- Bob administers the space; his grant to view it goes, and
+                -- with it his grant to administer it.
+                void (ok =<< runStoredWiki st (AsUser p.ada) (setSpaceGrant s.id (SubjectUser p.bob) AdministerSpace True))
+                void (ok =<< runStoredWiki st (AsUser p.ada) (setSpaceGrant s.id (SubjectUser p.bob) View False))
+                void (ok =<< runStoredWiki st (AsUser p.ada) (setSpaceGrant s.id (SubjectUser p.bob) AdministerSpace False))
+            )
+          ,
+            ( "a key pair retired by a reset"
+            , \st p _ -> do
+                now <- getCurrentTime
+                writing st (runUpdate (update wikiDb.public_keys (\k -> mconcat [k.retired_at <-. val_ (Just now), k.retired_because <-. val_ (Just "reset")]) (\k -> k.user_id ==. val_ p.bob.text)))
+            )
+          ]
+    for_ ways $ \(way, change) ->
+      it ("is due after " <> toS way <> ", refuses every sealed write until then, and tells the administrators once") $ withEncrypted backing $ \st p secret -> do
+        let as :: UserId -> StoredWiki IO a -> IO a
+            as u = runStoredWiki st (AsUser u)
+            pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+        made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
+        -- Bob reads the space and holds its key.
+        void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+        ok =<< as p.ada (grantSpaceKey secret.id (grantsOf [newGrant p.bob p.bobKey]))
+        (\x -> x.rotationDue) <$> (ok =<< as p.ada (spaceEncryption secret.id)) `shouldReturn` False
+        change st p secret
+        (\x -> x.rotationDue) <$> (ok =<< as p.ada (spaceEncryption secret.id)) `shouldReturn` True
+        as p.ada (createSealedPage secret.id (newPage otherId Nothing 'b')) >>= (`shouldSatisfy` renewalRefused)
+        as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = savedOn (contentOf 'a') 'c'}) >>= (`shouldSatisfy` renewalRefused)
+        as p.ada (grantSpaceKey secret.id (grantsOf [newGrant p.dan p.danKey])) >>= (`shouldSatisfy` \r -> renewalRefused r || invalid r)
+        -- Told once, under the bell: a reset outside the storage's
+        -- transactions (played here by a row changed) tells nobody itself.
+        told <- ok =<< as p.ada notifications
+        length [n | n <- told.items, n.kind == KeyToRenew] `shouldBe` (if way == "a key pair retired by a reset" then 0 else 1)
+        -- The rotation lifts it.
+        rotateAs st p.ada secret
+        (\x -> x.rotationDue) <$> (ok =<< as p.ada (spaceEncryption secret.id)) `shouldReturn` False
+
+    it "takes a rotation that seals the new key to every reader and wraps every page key again, and keeps the old versions readable" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+      made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.dan) View True))
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.dan) View False))
+      rotateAs st p.ada secret
+      e <- ok =<< as p.ada (spaceEncryption secret.id)
+      grants <- reading st (runSelectReturningList (select (all_ wikiDb.key_grants)))
+      -- The new key's grants alone, to the readers: Ada and Bob.
+      sort [(g.key_id, g.recipient) | g <- grants] `shouldBe` sort [(e.keyId.text, p.ada.text), (e.keyId.text, p.bob.text)]
+      read' <- ok =<< as p.ada (sealedPageAt secret.id [made.slug])
+      -- The page's old key, wrapped again, and a new current one.
+      map (\k -> k.keyId) read'.pageKeys `shouldBe` [read'.pageKey.keyId, pageKeyOf.keyId]
+      all (\k -> k.spaceKeyId == e.keyId) read'.pageKeys `shouldBe` True
+      read'.content `shouldBe` contentOf 'a'
+      -- The next version is encrypted with the page's new key: one with
+      -- the old is refused.
+      as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = savedOn (contentOf 'a') 'c'}) >>= (`shouldSatisfy` conflict)
+      let underNew = chainedAs (Just (chainAfter (contentOf 'a').tag (Just firstChain))) (contentUnder read'.pageKey.keyId 'c')
+      saved <- ok =<< as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = underNew})
+      saved.content.keyId `shouldBe` read'.pageKey.keyId
+      first' <- ok =<< as p.ada (sealedVersionAt pid made.updatedAt)
+      first'.content `shouldBe` contentOf 'a'
+
+    it "refuses a rotation from one who may not make it, or that leaves out or adds a reader or a key" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+      void (ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a')))
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) Edit True))
+      ok =<< as p.ada (grantSpaceKey secret.id (grantsOf [newGrant p.bob p.bobKey]))
+      info <- ok =<< as p.ada (rotationInfo secret.id)
+      let good = rotationOf 1 info
+          rotation from' grants pages = Rotation {from = from', keyId = good.keyId, grants, pages}
+          withGrants gs = rotation good.from gs good.pages
+          withPages = rotation good.from good.grants
+          onePage f = withPages [f x | x <- good.pages]
+          rotated (x :: RotatedPage) current rewrapped = RotatedPage {page = x.page, current, rewrapped}
+          refused r = as p.ada (rotateSpaceKey secret.id r)
+      -- A reader who holds the key but does not administer the space; an
+      -- administrator who does not hold it.
+      as p.bob (rotateSpaceKey secret.id good) `shouldReturn` Left Forbidden
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.dan) AdministerSpace True))
+      runStoredWiki st (AsUser p.dan) (rotateSpaceKey secret.id (rotationOf 1 info)) >>= (`shouldSatisfy` \r -> r == Left Forbidden || conflict r)
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.dan) AdministerSpace False))
+      -- Not from the current key; a reader left out, a non-reader added, a
+      -- reader's other public key.
+      refused (rotation (KeyId (bytes16 'q')) good.grants good.pages) >>= (`shouldSatisfy` conflict)
+      refused (withGrants (filter (\g -> g.recipient /= p.bob) good.grants)) >>= (`shouldSatisfy` conflict)
+      refused (withGrants (good.grants <> [newGrant p.dan p.danKey])) >>= (`shouldSatisfy` conflict)
+      refused (withGrants [if g.recipient == p.bob then newGrant p.bob p.danKey else g | g <- good.grants]) >>= (`shouldSatisfy` conflict)
+      -- A page left out, a page's key left out, a new key under an old
+      -- id, a key wrapped by another space key.
+      refused (withPages []) >>= (`shouldSatisfy` conflict)
+      refused (onePage (\x -> rotated x x.current [])) >>= (`shouldSatisfy` conflict)
+      refused (onePage (\x -> rotated x pageKeyOf {spaceKeyId = good.keyId} x.rewrapped)) >>= (`shouldSatisfy` invalid)
+      refused (onePage (\x -> rotated x PageKey {keyId = x.current.keyId, spaceKeyId = spaceKey, wrapped = x.current.wrapped} x.rewrapped)) >>= (`shouldSatisfy` invalid)
+      -- Too large for one request.
+      refused (withPages (replicate (maxRotatedKeys + 1) (fromMaybe (panic "no page") (head good.pages)))) >>= (`shouldSatisfy` invalid)
+      -- Nothing changed; the good one is taken.
+      (\x -> x.keyId) <$> (ok =<< as p.ada (spaceEncryption secret.id)) `shouldReturn` spaceKey
+      ok =<< refused good
+      (\x -> x.keyId) <$> (ok =<< as p.ada (spaceEncryption secret.id)) `shouldReturn` good.keyId
+
+    -- The invariant over random sequences of changes to who reads the
+    -- space, each followed by a rotation when one is due: after it, no
+    -- grant of the current key names someone who is not a reader with
+    -- that public key, and every page key is wrapped by the current key.
+    it "keeps every grant of the current key with a reader, over random sequences of changes and rotations" $ do
+      for_ [1 .. 3 :: Int] $ \seed -> withEncrypted backing $ \st p secret -> do
+        let as :: UserId -> StoredWiki IO a -> IO a
+            as u = runStoredWiki st (AsUser u)
+        void (ok =<< as p.ada (createSealedPage secret.id (newPage (PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f") Nothing 'a')))
+        g <- ok =<< runStoredWiki st Administrator (createGroup "Readers")
+        void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectGroup g.id) View True))
+        let steps =
+              [ void (as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+              , void (as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View False))
+              , void (runStoredWiki st Administrator (addMember g.id p.dan))
+              , void (runStoredWiki st Administrator (removeMember g.id p.dan))
+              , void (runStoredWiki st Administrator (addMember g.id p.bob))
+              , void (runStoredWiki st Administrator (removeMember g.id p.bob))
+              , void (runStoredWiki st Administrator (setDisabled p.dan True))
+              , void (runStoredWiki st Administrator (setDisabled p.dan False))
+              , void (as p.ada (setSpaceGrant secret.id (SubjectUser p.cyd) View True))
+              ]
+            shares = do
+              e <- ok =<< as p.ada (spaceEncryption secret.id)
+              unless (null e.pending || e.rotationDue) $
+                ok =<< as p.ada (grantSpaceKey secret.id NewGrants {keyId = e.keyId, grants = [newGrant m.user m.keyId | m <- e.pending]})
+        for_ (take 25 (randomPicks seed (length steps))) $ \i -> do
+          fromMaybe pass (atMay steps i)
+          shares
+          due <- (\x -> x.rotationDue) <$> (ok =<< as p.ada (spaceEncryption secret.id))
+          when due (rotateAs st p.ada secret)
+          e <- ok =<< as p.ada (spaceEncryption secret.id)
+          e.rotationDue `shouldBe` False
+          info <- ok =<< as p.ada (rotationInfo secret.id)
+          grants <- reading st (runSelectReturningList (select (filter_ (\x -> x.key_id ==. val_ e.keyId.text) (all_ wikiDb.key_grants))))
+          let readers = Map.fromList [(m.user.text, m.keyId.text) | m <- info.readers]
+          [(x.recipient, x.recipient_key_id) | x <- grants, Map.lookup x.recipient readers /= Just x.recipient_key_id] `shouldBe` []
+          keys <- reading st (runSelectReturningList (select (all_ wikiDb.page_keys)))
+          [x.key_id | x <- keys, x.space_key_id /= e.keyId.text] `shouldBe` []
 
   -- Backlinks (WP5.88 of docs/PLAN.md): the server cannot read what an
   -- encrypted page links to, so its pages have no list and are in none.
@@ -487,6 +666,58 @@ newPage pid parent c = NewSealedPage {id = pid, parent, pageKey = pageKeyOf, con
 
 otherId :: PageId
 otherId = PageId "0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70"
+
+--------------------------------------------------------------------------------
+-- Rotations
+
+-- | Bob reads the space through a group: the group's grant, and Bob in it,
+-- in place of his own grant.
+byGroup :: Storage -> People -> Space -> IO Group
+byGroup st p s = do
+  g <- ok =<< runStoredWiki st Administrator (createGroup "Readers")
+  void (ok =<< runStoredWiki st Administrator (addMember g.id p.bob))
+  void (ok =<< runStoredWiki st (AsUser p.ada) (setSpaceGrant s.id (SubjectGroup g.id) View True))
+  void (ok =<< runStoredWiki st (AsUser p.ada) (setSpaceGrant s.id (SubjectUser p.bob) View False))
+  pure g
+
+-- | A rotation as a browser would send it, from what the server lists: a
+-- new key (its id made of the number given), sealed to every reader, every
+-- page key wrapped again, and a new key for each page, of made-up bytes.
+rotationOf :: Int -> RotationInfo -> Rotation
+rotationOf n info =
+  Rotation
+    { from = info.keyId
+    , keyId = newKey
+    , grants = [newGrant m.user m.keyId | m <- info.readers]
+    , pages =
+        [ RotatedPage {page = x.page, current = pageKeyOf {keyId = KeyId (numbered (n * 1000 + i)), spaceKeyId = newKey}, rewrapped = [k {spaceKeyId = newKey} | k <- x.keys]}
+        | (i, x) <- zip [1 ..] info.pages
+        ]
+    }
+  where
+    newKey = KeyId (numbered n)
+
+-- | 16 bytes in base64url, made of a number.
+numbered :: Int -> Text
+numbered n = toBase64Url (BS.pack (map (\i -> fromIntegral ((toInteger n `div` (256 ^ i)) `mod` 256)) [0 .. 15 :: Int]))
+
+-- | Rotate the space's key as someone, as their browser would.
+rotateAs :: Storage -> UserId -> Space -> IO ()
+rotateAs st u s = do
+  info <- ok =<< runStoredWiki st (AsUser u) (rotationInfo s.id)
+  used <- reading st (length <$> runSelectReturningList (select (all_ wikiDb.page_keys)))
+  ok =<< runStoredWiki st (AsUser u) (rotateSpaceKey s.id (rotationOf (100 + used) info))
+
+-- | So many numbers below a bound, from a seed: a linear congruential
+-- generator, so that a sequence that fails is the same on the next run.
+randomPicks :: Int -> Int -> [Int]
+randomPicks seed bound = map (\x -> (x `div` 65536) `mod` bound) (drop 1 (iterate (\x -> (x * 1103515245 + 12345) `mod` 2147483648) seed))
+
+-- | Whether a write was refused while the space's key must be renewed.
+renewalRefused :: Either WikiError a -> Bool
+renewalRefused = \case
+  Left (Conflict why) -> "key must be renewed" `T.isInfixOf` why
+  _ -> False
 
 --------------------------------------------------------------------------------
 -- Refusals
