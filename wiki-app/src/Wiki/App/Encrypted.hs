@@ -40,6 +40,14 @@ module Wiki.App.Encrypted
   , forgetSpaceKey
   , forgetPageKey
 
+    -- * Comments and attachments
+  , sealText
+  , newTag
+  , openText
+  , sealBytes
+  , openAttachmentUrl
+  , revokeUrl
+
     -- * The versions this browser has seen
   , seenOf
   , keepSeen
@@ -50,7 +58,7 @@ import Data.Aeson (Object, ToJSON (..), eitherDecodeStrict, encode, object, with
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
-import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits (Inert (..), JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJSText, inBrowser, toJSBytes, toJSText)
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Protolude hiding (wait)
 import Wiki.Api.Encrypted (NewGrant (..), PendingMember (..), RotatedPage (..), Rotation (..), RotationPage (..))
@@ -75,6 +83,12 @@ $( browserJS
      , ("js_open_manyPromise", "wiki_enc_open_many", Safe, [t|Int -> JSText -> IO (Promise JSText)|])
      , ("js_forget", "wiki_enc_forget", Safe, [t|Int -> IO ()|])
      , ("js_seen", "wiki_enc_seen", Safe, [t|JSText -> JSText -> IO JSText|])
+     , ("js_seal_bytesPromise", "wiki_enc_seal_bytes", Safe, [t|Int -> JSVal -> JSText -> IO (Promise JSVal)|])
+     , ("js_sealed_nonce", "wiki_enc_sealed_nonce", Safe, [t|JSVal -> IO JSText|])
+     , ("js_sealed_bytes", "wiki_enc_sealed_bytes", Safe, [t|JSVal -> IO JSVal|])
+     , ("js_sealed_error", "wiki_enc_sealed_error", Safe, [t|JSVal -> IO JSText|])
+     , ("js_open_attachmentPromise", "wiki_enc_open_attachment", Safe, [t|Int -> JSText -> JSText -> JSText -> JSText -> IO (Promise JSText)|])
+     , ("js_revoke", "wiki_enc_revoke", Safe, [t|JSText -> IO ()|])
      , ("js_keep_seen", "wiki_enc_keep_seen", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
      ]
  )
@@ -93,6 +107,12 @@ js_space_key_share a1 a2 a3 a4 a5 = if inBrowser then wait =<< js_space_key_shar
 
 js_space_key_rotate :: Int -> JSText -> JSText -> JSText -> JSText -> JSText -> IO JSText
 js_space_key_rotate a1 a2 a3 a4 a5 a6 = if inBrowser then wait =<< js_space_key_rotatePromise a1 a2 a3 a4 a5 a6 else pure inert
+
+js_seal_bytes :: Int -> JSVal -> JSText -> IO JSVal
+js_seal_bytes a1 a2 a3 = if inBrowser then wait =<< js_seal_bytesPromise a1 a2 a3 else pure inert
+
+js_open_attachment :: Int -> JSText -> JSText -> JSText -> JSText -> IO JSText
+js_open_attachment a1 a2 a3 a4 a5 = if inBrowser then wait =<< js_open_attachmentPromise a1 a2 a3 a4 a5 else pure inert
 
 js_page_key_new :: Int -> JSText -> IO JSText
 js_page_key_new a1 a2 = if inBrowser then wait =<< js_page_key_newPromise a1 a2 else pure inert
@@ -341,6 +361,55 @@ openItems (SpaceKey space) sid pages =
       pure $ case eitherDecodeStrict (encodeUtf8 answer) of
         Right opened | length opened == length pages -> opened
         _ -> []
+
+--------------------------------------------------------------------------------
+-- Comments and attachments
+
+-- | Encrypt text with a page key and the additional data given (a
+-- comment's, an anchor's, an attachment's name and type): a new random
+-- nonce, and the ciphertext.
+sealText :: PageKeyRef -> Text -> Text -> IO (Either Text Sealed)
+sealText (PageKeyRef k) text data' = whenHere $ do
+  answer <- evaluate . fromJSText =<< js_seal k (toJSText text) (toJSText data')
+  pure (answered (\o -> Sealed <$> o .: "nonce" <*> o .: "ciphertext") answer)
+
+-- | A new random tag, 16 bytes in base64url: a comment's at each writing
+-- of it, which its additional data names ('commentData').
+newTag :: IO VersionTag
+newTag = whenHere (Right . VersionTag . fromJSText <$> js_random_id) <&> either (const (VersionTag "")) identity
+
+-- | Decrypt text with a page key and the additional data it was encrypted
+-- with.
+openText :: PageKeyRef -> Sealed -> Text -> IO (Either Text Text)
+openText (PageKeyRef k) s data' = whenHere $ do
+  answer <- evaluate . fromJSText =<< js_open k (toJSText s.nonce.text) (toJSText s.ciphertext.text) (toJSText data')
+  pure (answered (.: "text") answer)
+
+-- | Encrypt an attachment's bytes with a page key and the additional data
+-- given: the nonce, and the encrypted bytes, a new nonce each time.
+sealBytes :: PageKeyRef -> ByteString -> Text -> IO (Either Text (Nonce, ByteString))
+sealBytes (PageKeyRef k) bytes data' = whenHere $ do
+  plain <- toJSBytes bytes
+  sealed <- evaluate =<< js_seal_bytes k plain (toJSText data')
+  why <- fromJSText <$> js_sealed_error sealed
+  if why == ""
+    then do
+      nonce <- Nonce . fromJSText <$> js_sealed_nonce sealed
+      out <- fromJSBytes =<< js_sealed_bytes sealed
+      pure (Right (nonce, out))
+    else pure (Left why)
+
+-- | An attachment's bytes, fetched from its address on the server,
+-- decrypted with its page key and the additional data they were encrypted
+-- with, as an object URL of its media type, which 'revokeUrl' lets go.
+openAttachmentUrl :: PageKeyRef -> Text -> Nonce -> Text -> Text -> IO (Either Text Text)
+openAttachmentUrl (PageKeyRef k) address nonce data' mediaType = whenHere $ do
+  answer <- evaluate . fromJSText =<< js_open_attachment k (toJSText address) (toJSText nonce.text) (toJSText data') (toJSText mediaType)
+  pure (answered (.: "url") answer)
+
+-- | Let an object URL go.
+revokeUrl :: Text -> IO ()
+revokeUrl url = when inBrowser (js_revoke (toJSText url))
 
 --------------------------------------------------------------------------------
 -- The versions this browser has seen

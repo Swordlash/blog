@@ -1,9 +1,20 @@
 ---
 pr: 251
-title: Encrypted spaces: a rolled-back page caught, a new key on removal
+title: Encrypted spaces: comments, attachments, rollbacks caught, new keys
 ---
 
 ## New features
+
+- Pages of an encrypted space now have comments and attachments, both
+  encrypted in your browser like the page: the server keeps the
+  comments, the text they quote, and the files with their names, only as
+  ciphertext. Select text on the page and choose **Comment**, or attach
+  a file in the editor, as on any page. For example, select "the launch
+  date" in a page, choose **Comment** and write "Moved to Tuesday?": your
+  browser encrypts both before they are sent. Those watching the page are
+  told under the bell that you commented on "an encrypted page", without
+  the comment's text. A mention in such a comment notifies nobody, since
+  the server cannot read it.
 
 - In an encrypted space, your browser now notices when the server sends
   a page older than the one you read before, another version under the
@@ -37,6 +48,7 @@ title: Encrypted spaces: a rolled-back page caught, a new key on removal
 ## Other changes
 
 - The server's smoke test now encrypts a space, writes a page in it,
-  shares its key with a reader and unlocks it in a browser without the
-  keys, and checks that what the space protects is found nowhere in the
-  server's files, its database or what it sends.
+  attaches a file and comments on it, shares its key with a reader and
+  unlocks it in a browser without the keys, and checks that what the
+  space protects is found nowhere in the server's files, its database or
+  what it sends.

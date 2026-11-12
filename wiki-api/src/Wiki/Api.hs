@@ -99,7 +99,7 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, TexEngine, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
-import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedPage, Rotation, RotationInfo, SealedEdit, SealedPage, SealedSummary, SealedVersion, SealedVersionInfo, SpaceEncryption, sealedVersion)
+import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedVersion, SealedVersionInfo, SpaceEncryption, sealedVersion)
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -109,7 +109,7 @@ import Wiki.Api.Security (CurrentPassword, EmailChange, EmailState, OneTimeCode,
 import Wiki.Api.ServerSettings (HomePage, MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.Api.Stars (StarsApi (..))
 import Wiki.Api.Types
-import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
+import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply, SealedAttachmentUpload)
 import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, PublicKeyEntry, RegistrationOptions, RegistrationResponse, StoredVault, VaultChange)
 import Wiki.Api.Version (PageVersion, VersionTime, pageVersion)
 import Wiki.Api.WhatsNew (WhatsNew)
@@ -268,7 +268,7 @@ data WikiApi form mode = WikiApi
   , assistant :: mode :- "assistant" :> NamedRoutes AssistantApi
   -- ^ The writing assistant's keys across devices: the vault and the
   -- passkeys that unlock it ("Wiki.Api.Vault").
-  , encrypted :: mode :- "encrypted" :> NamedRoutes EncryptedApi
+  , encrypted :: mode :- "encrypted" :> NamedRoutes (EncryptedApi form)
   -- ^ Encrypted spaces: their keys, and their pages as ciphertext
   -- ("Wiki.Api.Encrypted").
   }
@@ -282,7 +282,7 @@ data WikiApi form mode = WikiApi
 -- page the caller may not view is 'Wiki.Api.Error.NotFound'. A plain space
 -- or page given to these routes is 'Wiki.Api.Error.Conflict', as an
 -- encrypted one given to the plain routes is.
-data EncryptedApi mode = EncryptedApi
+data EncryptedApi form mode = EncryptedApi
   { space :: mode :- "spaces" :> Capture "space" SpaceId :> Get '[JSON] SpaceEncryption
   -- ^ The space's current key id, the caller's grant of it, and who waits
   -- for one.
@@ -330,6 +330,23 @@ data EncryptedApi mode = EncryptedApi
   -- ^ A page of the page's history, latest first, as for a plain page.
   , version :: mode :- "pages" :> Capture "page" PageId :> "versions" :> Capture "version" VersionTime :> Get '[JSON] SealedVersion
   -- ^ One version, by its time.
+  , threads :: mode :- "pages" :> Capture "page" PageId :> "threads" :> Get '[JSON] [SealedThread]
+  -- ^ The page's comment threads, their anchors and comments encrypted.
+  , openThread :: mode :- "pages" :> Capture "page" PageId :> "threads" :> ReqBody '[JSON] NewSealedThread :> PostCreated '[JSON] SealedThread
+  -- ^ A new thread, with its first comment, encrypted with the page's
+  -- current key. Its id and its comment's are chosen by the browser (UUIDs),
+  -- since their additional data names them.
+  , reply :: mode :- "pages" :> Capture "page" PageId :> "threads" :> Capture "thread" CommentThreadId :> "comments" :> ReqBody '[JSON] NewSealedComment :> PostCreated '[JSON] SealedCommentInfo
+  -- ^ A reply in a thread, encrypted with the page's current key.
+  , editComment :: mode :- "pages" :> Capture "page" PageId :> "threads" :> Capture "thread" CommentThreadId :> "comments" :> Capture "comment" CommentId :> ReqBody '[JSON] SealedCommentEdit :> Put '[JSON] SealedCommentInfo
+  -- ^ A comment written again, encrypted with the page's current key.
+  -- Deleting a comment or a thread and resolving a thread carry no text,
+  -- and go by the plain routes ('CommentsApi').
+  , upload :: mode :- "pages" :> Capture "page" PageId :> "attachments" :> MultipartForm form (SealedAttachmentUpload form) :> PostCreated '[JSON] SealedAttachment
+  -- ^ An attachment, its bytes encrypted in the browser, its name and media
+  -- type encrypted with them. Its bytes are served, encrypted, by the
+  -- plain route of an attachment's bytes, and it is deleted by the plain
+  -- route ('AttachmentsApi').
   }
   deriving stock (Generic)
 

@@ -939,6 +939,7 @@ component =
         CommentsView.Reload -> loadThreads
       Heard heard -> do
         here <- gets (\st -> st.watching)
+        encrypted <- gets (\st -> isJust st.input.space.encryption)
         case heard of
           Live.Heard page (Editing editors) | Just page == here -> modify (\st -> st {editors})
           Live.Heard page (Reading readers) | Just page == here -> modify (\st -> st {readers}) >> resolveAvatars
@@ -950,11 +951,17 @@ component =
               gets busy >>= \case
                 True -> modify (\st -> st {changed = True})
                 False -> H.raise (Changed Nothing)
+          -- A thread of an encrypted page changed: the event carries no
+          -- text, so the threads are read again and decrypted.
+          Live.Heard page ThreadsChanged | Just page == here -> loadThreads
           Live.Heard page event | Just page == here -> modify (\st -> st {threads = applied event st.threads}) >> resolvePeople
           -- The server's answer to the subscription: the threads as they
           -- are now, replacing what was shown, including whatever changed
           -- since the page was read (or the channel was lost). A focused
           -- thread that no longer exists is unfocused.
+          -- A page of an encrypted space: the server's answer has none of
+          -- its threads, which are read and decrypted.
+          Live.Replaced page _ | Just page == here, encrypted -> loadThreads
           Live.Replaced page threads | Just page == here -> do
             modify $ \st ->
               st
@@ -1591,12 +1598,12 @@ unsaved st = not (Map.null st.staging.ticks)
 ticksFirst :: WikiError
 ticksFirst = Invalid "Save or discard the ticked tasks first."
 
--- | Whether the page has comments: not on the wiki's home page, and not in
--- an encrypted space, whose comments are not encrypted yet. A comment on
--- a selection quotes the page's text, which the server must not read
--- there.
+-- | Whether the page has comments: not on the wiki's home page, and not on
+-- an old version. In an encrypted space the backend encrypts a comment,
+-- and the text a comment on a selection quotes, before either is sent
+-- ("Wiki.App.Backend.Http").
 commentsHere :: Input -> Bool
-commentsHere input = not (homeSpace input.context input.space.id) && isNothing input.space.encryption && isNothing input.version
+commentsHere input = not (homeSpace input.context input.space.id) && isNothing input.version
 
 mayCommentHere :: State -> Bool
 mayCommentHere st = commentsHere st.input && mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space.id)

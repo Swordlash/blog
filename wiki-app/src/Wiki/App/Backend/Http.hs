@@ -88,7 +88,9 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 import Control.Monad.Primitive (PrimMonad)
 import Control.Monad.UUID (MonadUUID (..))
-import Data.Aeson (eitherDecode)
+import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, eitherDecodeStrict', encode, object, withObject, (.:), (.=))
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -112,7 +114,7 @@ import Wiki.Api.Activity (ActivityQuery (..), firstPage)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..), UserQuery (..))
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
-import Wiki.Api.Encrypted (EncryptSpace (..), NewGrant (..), NewGrants (..), NewSealedPage (..), RotatedPage (..), Rotation (..), RotationInfo (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..))
+import Wiki.Api.Encrypted (EncryptSpace (..), NewGrant (..), NewGrants (..), NewSealedComment (..), NewSealedPage (..), NewSealedThread (..), RotatedPage (..), Rotation (..), RotationInfo (..), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedThread (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..))
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Export (dispositionFileName, formatExtension, formatMediaType)
@@ -125,7 +127,7 @@ import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), OneTimeCode (.
 import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Stars (StarredPage (..), Starring (..), StarsApi (..))
 import Wiki.Api.Types
-import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
+import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..), SealedAttachmentUpload (..), SealedUpload (..))
 import Wiki.Api.Vault (PublicKeyEntry (..), VaultChange (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
@@ -143,16 +145,17 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Opaque qualified as Opaque
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
-import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, keepSeen, keyNamed, newPageId, newPageKey, newSpaceKey, noEncryption, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openVersionTitles, rotateKeys, sealContent, seenOf, shareSpaceKey)
+import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, keepSeen, keyNamed, newPageId, newPageKey, newSpaceKey, newTag, noEncryption, openAttachmentUrl, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openText, openVersionTitles, revokeUrl, rotateKeys, sealBytes, sealContent, sealText, seenOf, shareSpaceKey)
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (browserOnline, forgetReads, offlineCopy)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.Vault (identitySlot)
-import Wiki.Core.Attachment (Attachment)
-import Wiki.Core.Comment (Thread (..))
-import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), Kept (..), KeyGrant (..), PageKey (..), SealedContent (..), SealedHeading (..), Seen (..), VersionTag, chainAfter, chainProblemText, firstChain, gapIn, headingOf, judgeHead, linkedFrom)
-import Wiki.Core.Id (PageId (..), SpaceId)
+import Wiki.Core.Anchor (Anchor)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..), parseFileName, uploadedMimeType)
+import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody)
+import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), Kept (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), Seen (..), VersionTag (..), anchorData, attachmentBytesData, attachmentMetaData, chainAfter, chainProblemText, commentData, firstChain, gapIn, headingOf, judgeHead, linkedFrom)
+import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId)
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
@@ -163,7 +166,7 @@ import Wiki.Core.Search qualified as Search
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Password (..), Standing (..), User (..), checkNewPassword)
-import Wiki.Core.Vault (KeyId)
+import Wiki.Core.Vault (KeyId, Nonce)
 import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..), maxVersionsPageSize, versionsPageSize)
 
 -- | The HTTP backend's state: where requests go, and the cache.
@@ -610,17 +613,28 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   setPageTemplate pid template = write (endpoints.pages.template pid PageTemplate {template})
   deletePage pid = write_ (endpoints.pages.delete pid)
 
-  -- An attachment of a page of an encrypted space is not sent: the server
-  -- would keep its bytes, which are not encrypted yet.
+  -- An attachment of a page of an encrypted space is encrypted here, its
+  -- bytes and its name and media type, and sent as ciphertext
+  -- ('sealedUpload'); never as plain bytes, even to be refused.
   uploadAttachment pid name mediaType bytes =
-    plainPageWrite pid (write (withBoundary (endpoints.pages.upload pid) AttachmentUpload {name, mediaType, payload = toS bytes}))
+    sealedPage pid >>= \case
+      Nothing -> plainPageWrite pid (write (withBoundary (endpoints.pages.upload pid) AttachmentUpload {name, mediaType, payload = toS bytes}))
+      Just (sid, _) -> renewingThen sid (sealedPage pid >>= maybe (pure (Left (Conflict inEncryptedSpace))) (\(_, k) -> sealedUpload sid pid k name mediaType bytes))
   deleteAttachment aid = write_ (endpoints.attachments.delete aid)
 
   -- The server serves an attachment's bytes at an API address, which the
-  -- program can build without a request.
-  attachmentUrl = pure . Links.attachmentUrl
+  -- program can build without a request. An attachment of an encrypted
+  -- page is fetched from there, encrypted, and decrypted here into an
+  -- object URL ('sealedAttachmentUrl').
+  attachmentUrl a =
+    Map.lookup a.id . (\h -> h.heldAttachments) <$> readHeld >>= \case
+      Nothing -> pure (Links.attachmentUrl a)
+      Just held -> sealedAttachmentUrl a.id held
 
-  -- Only where the frame can reach the server: see 'frameUrlIn'.
+  -- Only where the frame can reach the server: see 'frameUrlIn'. An
+  -- interactive SVG of an encrypted page is shown as the image, as on an
+  -- offline copy (decision 73): a frame loads its address from the server,
+  -- which holds only its ciphertext.
   attachmentFrameUrl a = HttpWiki $ do
     env <- ask
     liftIO $ do
@@ -628,7 +642,8 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
       online <- browserOnline
       copy <- if inBrowser then offlineCopy else pure Nothing
       preloading <- readIORef env.preloading
-      pure (frameUrlIn FrameReach {secure, online, keptCopy = isJust copy && preloading} a)
+      sealed <- Map.member a.id . (\h -> h.heldAttachments) <$> readIORef env.held
+      pure (guard (not sealed) *> frameUrlIn FrameReach {secure, online, keptCopy = isJust copy && preloading} a)
 
   -- The document's address answers with its bytes, or with the API's
   -- refusal, which 'send' reads as any other ("Wiki.App.Backend.Http.Client").
@@ -797,22 +812,37 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
 -- applies its result to the cached threads instead of emptying the cache
 -- (see "Wiki.App.Backend.Http.Cache").
 instance (MonadIO m) => MonadComments (HttpWiki m) where
-  -- A page of an encrypted space has no comments yet: the server refuses
-  -- them, and none is asked for.
+  -- A page of an encrypted space has its comments encrypted: its threads
+  -- are read and written through the encrypted routes, their anchors and
+  -- comments encrypted here, and never sent as plain text, even to be
+  -- refused. Deleting and resolving carry no text, and go by the plain
+  -- routes.
   listThreads pid =
     sealedPage pid >>= \case
-      Just _ -> pure (Right [])
+      Just (sid, _) -> sealedListThreads sid pid
       Nothing -> cached (\c -> Map.lookup pid c.threads) (endpoints.comments pid).list (withThreads pid)
-
-  -- No comment write is sent for a page of an encrypted space: a new
-  -- thread carries the quoted text of the page, and a comment is as
-  -- private as the page it is on.
-  openThread pid anchor body = commentWrite pid ThreadOpened ((endpoints.comments pid).open NewThread {anchor, body})
-  reply pid tid body = commentWrite pid CommentAdded ((endpoints.comments pid).reply tid CommentText {body})
-  editComment pid tid cid body = commentWrite pid CommentEdited ((endpoints.comments pid).edit tid cid CommentText {body})
+  openThread pid anchor body =
+    sealedPage pid >>= \case
+      Just (sid, _) -> renewingThen sid (sealedOpenThread sid pid anchor body)
+      Nothing -> commentWrite pid ThreadOpened ((endpoints.comments pid).open NewThread {anchor, body})
+  reply pid tid body =
+    sealedPage pid >>= \case
+      Just (sid, _) -> renewingThen sid (sealedComment sid pid tid Nothing body)
+      Nothing -> commentWrite pid CommentAdded ((endpoints.comments pid).reply tid CommentText {body})
+  editComment pid tid cid body =
+    sealedPage pid >>= \case
+      Just (sid, _) -> renewingThen sid (sealedComment sid pid tid (Just cid) body)
+      Nothing -> commentWrite pid CommentEdited ((endpoints.comments pid).edit tid cid CommentText {body})
   deleteComment pid tid cid = commentWrite_ pid (CommentDeleted tid cid) ((endpoints.comments pid).deleteComment tid cid)
   deleteThread pid tid = commentWrite_ pid (ThreadDeleted tid) ((endpoints.comments pid).delete tid)
-  setResolved pid tid resolved = commentWrite pid (\t -> ThreadResolved t.id t.resolved) ((endpoints.comments pid).resolve tid ThreadResolution {resolved})
+  setResolved pid tid resolved =
+    sealedPage pid >>= \case
+      Just (sid, _) ->
+        send ((endpoints.comments pid).resolve tid ThreadResolution {resolved}) >>= \case
+          Left e -> pure (Left e)
+          -- The thread as the server answers it has no text: read again.
+          Right _ -> sealedListThreads sid pid <&> (>>= maybe (Left NotFound) Right . find (\t -> t.id == tid))
+      Nothing -> commentWrite pid (\t -> ThreadResolved t.id t.resolved) ((endpoints.comments pid).resolve tid ThreadResolution {resolved})
 
 -- | A write to a page's comments, whose result is applied to the page's
 -- cached threads. Refused here for a page of an encrypted space
@@ -826,7 +856,9 @@ commentWrite pid event endpoint = do
 -- | The same, for a write whose response has no body.
 commentWrite_ :: (MonadIO m) => PageId -> PageEvent -> HttpWiki IO NoContent -> HttpWiki m (Either WikiError ())
 commentWrite_ pid event endpoint = do
-  result <- plainPageWrite pid (send_ endpoint)
+  -- A deletion carries no text: sent for a page of an encrypted space too.
+  encrypted <- isJust <$> sealedPage pid
+  result <- if encrypted then send_ endpoint else plainPageWrite pid (send_ endpoint)
   modifyCache (afterComment pid (event <$ result))
   pure result
 
@@ -1385,6 +1417,12 @@ data Held = Held
   -- ^ Every key of each page of an encrypted space read here, its current
   -- one first: its versions written before a rotation of its space's key
   -- are encrypted with older ones.
+  , heldAttachments :: Map AttachmentId SealedAt
+  -- ^ The attachments of pages of encrypted spaces read here, with what
+  -- decrypts their bytes ('sealedAttachmentUrl').
+  , heldUrls :: Map AttachmentId (PageId, Text)
+  -- ^ The object URLs made of those attachments' bytes, decrypted, by the
+  -- page they were made for: let go when another page's are made.
   , heldLowest :: Map PageId (UTCTime, (VersionTag, Maybe Chain))
   -- ^ The oldest version, checked by its decryption, of the last page of a
   -- page's history listed here: the next page, asked for before it, must
@@ -1392,7 +1430,19 @@ data Held = Held
   }
 
 noneHeld :: Held
-noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldLowest = mempty}
+noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldLowest = mempty}
+
+-- | Where the bytes of an attachment of an encrypted page are, and what
+-- decrypts them: its space and page, the key of its page's that encrypts
+-- them, the nonce, and its media type.
+data SealedAt = SealedAt
+  { space :: SpaceId
+  , page :: PageId
+  , key :: PageKey
+  , nonce :: Nonce
+  , name :: FileName
+  , mediaType :: Text
+  }
 
 -- | Let go of what is held of encrypted spaces for the user who was signed
 -- in: the keys the page holds are forgotten, and the pages decrypted with
@@ -1401,14 +1451,19 @@ noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, hel
 -- encrypted (or not at all), never as plain text.
 forgetHeldOf :: HttpEnv -> IO ()
 forgetHeldOf env = do
-  was <- atomicModifyIORef' env.held (\h -> (h {heldKeys = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldLowest = mempty}, h))
+  was <- atomicModifyIORef' env.held (\h -> (h {heldKeys = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldLowest = mempty, heldAttachments = mempty, heldUrls = mempty}, h))
   traverse_ (forgetSpaceKey . snd) (Map.elems was.heldKeys)
+  traverse_ (revokeUrl . snd) (Map.elems was.heldUrls)
 
 modifyHeld :: (MonadIO m) => (Held -> Held) -> HttpWiki m ()
 modifyHeld f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.held (\h -> (f h, ()))))
 
 readHeld :: (MonadIO m) => HttpWiki m Held
 readHeld = HttpWiki (ask >>= \env -> liftIO (readIORef env.held))
+
+-- | Change what is held and read something of it, in one step.
+atomicHeld :: (MonadIO m) => (Held -> (Held, a)) -> HttpWiki m a
+atomicHeld f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.held f))
 
 -- | Forget the pages decrypted for the search: a write may have changed
 -- them.
@@ -1834,7 +1889,11 @@ baseHead key sid pid keys base =
 
 -- | A page of an encrypted space, decrypted.
 pageFrom :: SealedPage -> Text -> Text -> Page
-pageFrom p title body =
+pageFrom p = pageWith p []
+
+-- | 'pageFrom', with the page's attachments, decrypted.
+pageWith :: SealedPage -> [Attachment] -> Text -> Text -> Page
+pageWith p attachments title body =
   Page
     { id = p.id
     , space = p.space
@@ -1842,7 +1901,7 @@ pageFrom p title body =
     , title
     , slug = p.slug
     , body
-    , attachments = []
+    , attachments
     , createdAt = p.createdAt
     , updatedAt = p.updatedAt
     , position = p.position
@@ -1893,9 +1952,10 @@ sealedGetPage sid path current =
         -- renewed, an older one.
         opened <- case keyNamed p.content.keyId p.pageKeys of
           Nothing -> pure (Left (Invalid "This page's latest version names no key of the page's."))
-          Just contentKey ->
+          Just contentKey -> do
+            attachments <- openAttachments key sid p.id p.pageKeys p.attachments
             withPageKey key sid p.id contentKey $ \pk ->
-              liftIO (openContent pk sid p.id p.content) <&> bimap Invalid (uncurry (pageFrom p))
+              liftIO (openContent pk sid p.id p.content) <&> bimap Invalid (uncurry (pageWith p attachments))
         -- The version opened, so its tag and chain are the ones it was
         -- encrypted with: checked against what this browser read before.
         when (isRight opened) $ do
@@ -1968,7 +2028,8 @@ sealedSavePage sid pid k base title body =
       content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid k.keyId (chainAfter tag chain) (T.strip title) body))
       saved <- ExceptT (write (getResponse <$> endpoints.encrypted.save pid (PageVersion base) SealedEdit {content}))
       lift (savedHead pid saved.updatedAt content)
-      pure (pageFrom saved (T.strip title) body)
+      attachments <- lift (openAttachments key sid pid saved.pageKeys saved.attachments)
+      pure (pageWith saved attachments (T.strip title) body)
 
 sealedVersions :: (MonadIO m) => SpaceId -> PageId -> PageKey -> VersionsQuery -> HttpWiki m (Either WikiError [VersionInfo])
 sealedVersions sid pid k q =
@@ -2011,6 +2072,154 @@ sealedVersion sid pid k at =
               withPageKey key sid pid vk $ \pk ->
                 liftIO (openContent pk sid pid v.content) <&> bimap Invalid (\(title, body) -> Version {page = pid, updatedAt = v.updatedAt, title, body, author = v.author})
           pure (opened, isRight opened)
+
+-- | The attachments of a page of an encrypted space, their names and media
+-- types decrypted, each with the key of its page's it names; one that does
+-- not open is left out. Each is remembered with what decrypts its bytes.
+openAttachments :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> [SealedAttachment] -> HttpWiki m [Attachment]
+openAttachments key sid pid keys sealed = fmap catMaybes . for sealed $ \a -> case keyNamed a.meta.keyId keys of
+  Nothing -> pure Nothing
+  Just k -> do
+    opened <- withPageKey key sid pid k $ \pk -> liftIO (first Invalid <$> openText pk a.meta.meta (attachmentMetaData sid pid k.keyId a.id))
+    case opened >>= first (Invalid . toS) . eitherDecodeStrict' . encodeUtf8 of
+      Right (AttachmentMeta name mediaType) | Right n <- parseFileName name -> do
+        modifyHeld (\h -> h {heldAttachments = Map.insert a.id SealedAt {space = sid, page = pid, key = k, nonce = a.meta.bytesNonce, name = n, mediaType} h.heldAttachments})
+        -- Its size without AES-GCM's tag: the file's own.
+        pure (Just Attachment {id = a.id, name = n, mediaType = uploadedMimeType mediaType, size = fromIntegral (max 0 (a.size - 16)), source = SourceBlob (BlobId a.id.text)})
+      _ -> pure Nothing
+
+-- | An attachment's name and media type, as they are encrypted together.
+data AttachmentMeta = AttachmentMeta Text Text
+
+instance ToJSON AttachmentMeta where
+  toJSON (AttachmentMeta name mediaType) = object ["name" .= name, "mediaType" .= mediaType]
+
+instance FromJSON AttachmentMeta where
+  parseJSON = withObject "AttachmentMeta" $ \o -> AttachmentMeta <$> o .: "name" <*> o .: "mediaType"
+
+-- | An attachment of a page of an encrypted space: its bytes and its name
+-- and media type encrypted here with the page's current key, under an id
+-- chosen here, and sent as ciphertext. One of the same name on the page is
+-- replaced, which only this browser can tell.
+sealedUpload :: (MonadIO m) => SpaceId -> PageId -> PageKey -> Text -> Text -> ByteString -> HttpWiki m (Either WikiError Attachment)
+sealedUpload sid pid k name mediaType bytes =
+  encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+    withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> runExceptT $ do
+      n <- either (throwError . Invalid) pure (parseFileName name)
+      aid <- AttachmentId . (\p -> p.text) <$> ExceptT (first Invalid <$> liftIO newPageId)
+      meta <- ExceptT (first Invalid <$> liftIO (sealText pk (decodeUtf8 (BSL.toStrict (encode (AttachmentMeta n.text mediaType)))) (attachmentMetaData sid pid k.keyId aid)))
+      (nonce, sealedBytes) <- ExceptT (first Invalid <$> liftIO (sealBytes pk bytes (attachmentBytesData sid pid k.keyId aid)))
+      held <- lift ((\h -> h.heldAttachments) <$> readHeld)
+      let replaces = head [i | (i, at) <- Map.toList held, at.page == pid, at.name == n]
+      _ <- ExceptT (write (withBoundary (endpoints.encrypted.upload pid) SealedAttachmentUpload {sealed = SealedUpload {id = aid, meta = SealedMeta {keyId = k.keyId, meta, bytesNonce = nonce}, replaces}, payload = toS sealedBytes}))
+      lift (modifyHeld (\h -> h {heldAttachments = Map.insert aid SealedAt {space = sid, page = pid, key = k, nonce, name = n, mediaType} h.heldAttachments}))
+      pure Attachment {id = aid, name = n, mediaType = uploadedMimeType mediaType, size = fromIntegral (BS.length bytes), source = SourceBlob (BlobId aid.text)}
+
+-- | The bytes of an attachment of an encrypted page, fetched encrypted
+-- from the server's address of them and decrypted here, as an object URL;
+-- the URLs made for another page's attachments are let go first, since
+-- the page view shows one page. An attachment whose bytes do not open has
+-- no address (@""@).
+sealedAttachmentUrl :: (MonadIO m) => AttachmentId -> SealedAt -> HttpWiki m Text
+sealedAttachmentUrl aid at =
+  Map.lookup aid . (\h -> h.heldUrls) <$> readHeld >>= \case
+    Just (_, url) -> pure url
+    Nothing -> do
+      others <- atomicHeld (\h -> let (gone, here) = Map.partition (\(p, _) -> p /= at.page) h.heldUrls in (h {heldUrls = here}, Map.elems gone))
+      liftIO (traverse_ (revokeUrl . snd) others)
+      encryptedOr
+        at.space
+        (pure (Left (Conflict "This space is no longer encrypted.")))
+        ( \current -> withSpaceKey NoRefresh at.space current $ \key -> withPageKey key at.space at.page at.key $ \pk ->
+            liftIO (first Invalid <$> openAttachmentUrl pk (Links.links.attachments.content aid (FileName aid.text)) at.nonce (attachmentBytesData at.space at.page at.key.keyId aid) at.mediaType)
+        )
+        >>= \case
+          Right url -> modifyHeld (\h -> h {heldUrls = Map.insert aid (at.page, url) h.heldUrls}) $> url
+          Left _ -> pure ""
+
+-- | A page's threads, in an encrypted space: their anchors and comments
+-- decrypted, each with the key of its page's it names.
+sealedListThreads :: (MonadIO m) => SpaceId -> PageId -> HttpWiki m (Either WikiError [Thread])
+sealedListThreads sid pid =
+  encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+    readingSealed NoRefresh sid current $ \key ->
+      send (endpoints.encrypted.threads pid) >>= \case
+        Left e -> pure (Left e, True)
+        Right listed -> do
+          keys <- fromMaybe [] . Map.lookup pid . (\h -> h.heldPageKeys) <$> readHeld
+          opened <- for listed (openThreadWith key sid pid keys)
+          pure (Right (catMaybes opened), all isJust opened)
+
+-- | A thread of an encrypted page, decrypted; 'Nothing' when its anchor or
+-- one of its comments does not open.
+openThreadWith :: forall m. (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> SealedThread -> HttpWiki m (Maybe Thread)
+openThreadWith key sid pid keys t = do
+  anchor <- case t.anchor of
+    Nothing -> pure (Right Nothing)
+    Just a -> withNamed a.keyId $ \pk -> liftIO (openText pk a.anchor (anchorData sid pid a.keyId t.id)) <&> (>>= bimap (toS :: [Char] -> Text) Just . eitherDecodeStrict' . encodeUtf8)
+  comments <- for t.comments (openCommentWith key sid pid keys)
+  pure $ case (anchor, sequence comments) of
+    (Right a, Just cs) | t.anchored == isJust a -> Just Thread {id = t.id, page = pid, anchor = a, resolved = t.resolved, createdAt = t.createdAt, comments = cs}
+    _ -> Nothing
+  where
+    withNamed :: KeyId -> (PageKeyRef -> HttpWiki m (Either Text b)) -> HttpWiki m (Either WikiError b)
+    withNamed k step = case keyNamed k keys of
+      Nothing -> pure (Left (Invalid "No key of the page's opens it."))
+      Just pageKey -> withPageKey key sid pid pageKey (fmap (first Invalid) . step)
+
+-- | A comment of an encrypted page, decrypted.
+openCommentWith :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> SealedCommentInfo -> HttpWiki m (Maybe Comment)
+openCommentWith key sid pid keys c = case keyNamed c.content.keyId keys of
+  Nothing -> pure Nothing
+  Just pageKey ->
+    rightToMaybe
+      <$> withPageKey key sid pid pageKey (\pk -> liftIO (first Invalid <$> openText pk c.content.body (commentData sid pid c.content.keyId c.thread c.id c.content.tag)))
+      <&> fmap (\body -> Comment {id = c.id, thread = c.thread, author = c.author, body, createdAt = c.createdAt, editedAt = c.editedAt})
+
+-- | A comment encrypted with a page's current key, under a new tag: its
+-- text checked first, as the server checks a plain one.
+sealCommentText :: PageKeyRef -> SpaceId -> PageId -> KeyId -> CommentThreadId -> CommentId -> Text -> IO (Either Text SealedComment)
+sealCommentText pk sid pid k tid cid body = case checkCommentBody body of
+  Left why -> pure (Left why)
+  Right checked -> do
+    tag <- newTag
+    fmap (\s -> SealedComment {keyId = k, tag, body = s}) <$> sealText pk checked (commentData sid pid k tid cid tag)
+
+-- | A new thread of an encrypted page, its anchor and first comment
+-- encrypted here, under ids chosen here.
+sealedOpenThread :: (MonadIO m) => SpaceId -> PageId -> Maybe Anchor -> Text -> HttpWiki m (Either WikiError Thread)
+sealedOpenThread sid pid anchor body =
+  sealedPage pid >>= \case
+    Nothing -> pure (Left (Conflict inEncryptedSpace))
+    Just (_, k) ->
+      encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+        withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> runExceptT $ do
+          tid <- CommentThreadId . (\p -> p.text) <$> ExceptT (first Invalid <$> liftIO newPageId)
+          cid <- CommentId . (\p -> p.text) <$> ExceptT (first Invalid <$> liftIO newPageId)
+          sealedAnchor <- for anchor $ \a -> SealedAnchor k.keyId <$> ExceptT (first Invalid <$> liftIO (sealText pk (decodeUtf8 (BSL.toStrict (encode a))) (anchorData sid pid k.keyId tid)))
+          content <- ExceptT (first Invalid <$> liftIO (sealCommentText pk sid pid k.keyId tid cid body))
+          made <- ExceptT (send (endpoints.encrypted.openThread pid NewSealedThread {id = tid, anchor = sealedAnchor, comment = NewSealedComment {id = cid, content}}))
+          pure Thread {id = tid, page = pid, anchor, resolved = False, createdAt = made.createdAt, comments = [Comment {id = cid, thread = tid, author = x.author, body = fromMaybe body (checkedBody body), createdAt = x.createdAt, editedAt = x.editedAt} | x <- take 1 made.comments]}
+
+-- | A comment as the server keeps it: checked, as 'checkCommentBody' gives it.
+checkedBody :: Text -> Maybe Text
+checkedBody = rightToMaybe . checkCommentBody
+
+-- | A reply in a thread of an encrypted page, or a comment written again
+-- (with its id), encrypted here.
+sealedComment :: (MonadIO m) => SpaceId -> PageId -> CommentThreadId -> Maybe CommentId -> Text -> HttpWiki m (Either WikiError Comment)
+sealedComment sid pid tid editing body =
+  sealedPage pid >>= \case
+    Nothing -> pure (Left (Conflict inEncryptedSpace))
+    Just (_, k) ->
+      encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+        withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> runExceptT $ do
+          cid <- maybe (CommentId . (\p -> p.text) <$> ExceptT (first Invalid <$> liftIO newPageId)) pure editing
+          content <- ExceptT (first Invalid <$> liftIO (sealCommentText pk sid pid k.keyId tid cid body))
+          made <- ExceptT $ case editing of
+            Nothing -> send (endpoints.encrypted.reply pid tid NewSealedComment {id = cid, content})
+            Just _ -> send (endpoints.encrypted.editComment pid tid cid SealedCommentEdit {content})
+          pure Comment {id = cid, thread = tid, author = made.author, body = fromMaybe body (checkedBody body), createdAt = made.createdAt, editedAt = made.editedAt}
 
 -- | The search over the encrypted spaces whose keys this browser holds or
 -- can open, in the browser: each space's pages are fetched and decrypted

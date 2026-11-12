@@ -27,6 +27,14 @@ module Wiki.Api.Encrypted
   , maxRotatedKeys
   , maxRotatedGrants
 
+    -- * Comments and attachments
+  , SealedThread (..)
+  , SealedCommentInfo (..)
+  , NewSealedThread (..)
+  , NewSealedComment (..)
+  , SealedCommentEdit (..)
+  , SealedAttachment (..)
+
     -- * Pages
   , SealedSummary (..)
   , SealedPage (..)
@@ -42,8 +50,8 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Version (PageVersion (..))
-import Wiki.Core.Encrypted (Encapsulated, KeyGrant, PageKey, SealedContent, SealedHeading)
-import Wiki.Core.Id (PageId, SpaceId, UserId)
+import Wiki.Core.Encrypted (Encapsulated, KeyGrant, PageKey, SealedAnchor, SealedComment, SealedContent, SealedHeading, SealedMeta)
+import Wiki.Core.Id (AttachmentId, CommentId, CommentThreadId, PageId, SpaceId, UserId)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Vault (Ciphertext, KeyId, PublicKey)
 import Wiki.Core.Version (Author)
@@ -175,6 +183,73 @@ maxRotatedGrants :: Int
 maxRotatedGrants = 5000
 
 --------------------------------------------------------------------------------
+-- Comments and attachments
+
+-- | 'SealedThread': a comment thread of a page of an encrypted space: whether
+-- it is about a quote of the page ('anchored') and that quote, encrypted,
+-- and its comments, encrypted, oldest first.
+data SealedThread = SealedThread
+  { id :: CommentThreadId
+  , page :: PageId
+  , anchored :: Bool
+  , anchor :: Maybe SealedAnchor
+  , resolved :: Bool
+  , createdAt :: UTCTime
+  , comments :: [SealedCommentInfo]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'SealedCommentInfo': a comment of a thread, its text encrypted, with who
+-- wrote it and when.
+data SealedCommentInfo = SealedCommentInfo
+  { id :: CommentId
+  , thread :: CommentThreadId
+  , author :: Author
+  , createdAt :: UTCTime
+  , editedAt :: Maybe UTCTime
+  , content :: SealedComment
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'NewSealedThread': a new thread, with its id, its anchor (none for a
+-- thread about the whole page) and its first comment.
+data NewSealedThread = NewSealedThread
+  { id :: CommentThreadId
+  , anchor :: Maybe SealedAnchor
+  , comment :: NewSealedComment
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'NewSealedComment': a new comment, with its id.
+data NewSealedComment = NewSealedComment
+  { id :: CommentId
+  , content :: SealedComment
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'SealedCommentEdit': a comment written again.
+newtype SealedCommentEdit = SealedCommentEdit
+  { content :: SealedComment
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'SealedAttachment': an attachment of a page of an encrypted space: its
+-- id, the size of its encrypted bytes, and its name and media type,
+-- encrypted, with the nonce of its bytes.
+data SealedAttachment = SealedAttachment
+  { id :: AttachmentId
+  , size :: Int
+  , meta :: SealedMeta
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+--------------------------------------------------------------------------------
 -- Pages
 
 -- | 'SealedSummary': a page of an encrypted space in a list of its pages:
@@ -215,6 +290,8 @@ data SealedPage = SealedPage
   -- ^ Every key the page has had, its current one ('pageKey') first: its
   -- versions written before a rotation of its space's key are encrypted
   -- with older ones.
+  , attachments :: [SealedAttachment]
+  -- ^ Its attachments, in their order.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

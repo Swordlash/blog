@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveAnyClass #-}
+
 -- | Upload forms: what the API's multipart forms carry, an attachment's
 -- file or an archive to import.
 --
@@ -25,6 +27,9 @@ module Wiki.Api.Upload
   ( -- * Attachments
     AttachmentUpload (..)
   , attachmentPart
+  , SealedAttachmentUpload (..)
+  , SealedUpload (..)
+  , sealedPart
 
     -- * Archives
   , ArchiveUpload (..)
@@ -34,12 +39,19 @@ module Wiki.Api.Upload
   )
 where
 
-import Data.Aeson (eitherDecodeStrict', encode)
+import Data.Aeson
+  ( FromJSON
+  , ToJSON
+  , eitherDecodeStrict'
+  , encode
+  )
 import Data.ByteString.Lazy qualified as BSL
 import Data.Type.Equality (type (~))
 import Protolude
 import Servant.Multipart.API (FileData (..), FromMultipart (..), Input (..), Mem, MultipartData (..), MultipartResult, Tmp, ToMultipart (..), lookupFile, lookupInput)
 import Wiki.Api.Import (ImportChoices)
+import Wiki.Core.Encrypted (SealedMeta)
+import Wiki.Core.Id (AttachmentId)
 
 -- | 'AttachmentUpload': a file to attach to a page, with
 -- @uploadAttachment@'s name, media type and bytes, sent as the form's one
@@ -75,6 +87,45 @@ instance (tag ~ form) => ToMultipart tag (AttachmentUpload form) where
     MultipartData
       { inputs = []
       , files = [FileData {fdInputName = attachmentPart, fdFileName = u.name, fdFileCType = u.mediaType, fdPayload = u.payload}]
+      }
+
+-- | 'SealedAttachmentUpload': an attachment of a page of an encrypted space
+-- (WP5.74b3 of docs/PLAN.md): its bytes encrypted in the browser, sent as
+-- the form's file part named 'attachmentPart', and, as JSON in the text
+-- part named 'sealedPart', its id, chosen by the browser, its name and
+-- media type, encrypted, with the nonce of its bytes, and the attachment
+-- it replaces, if any (one of the same name, which only the browser can
+-- tell). The file part's name and media type say nothing of the file.
+data SealedAttachmentUpload tag = SealedAttachmentUpload
+  { sealed :: SealedUpload
+  , payload :: MultipartResult tag
+  }
+
+-- | The text part of a 'SealedAttachmentUpload'.
+data SealedUpload = SealedUpload
+  { id :: AttachmentId
+  , meta :: SealedMeta
+  , replaces :: Maybe AttachmentId
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The name of the text part of a 'SealedAttachmentUpload'.
+sealedPart :: Text
+sealedPart = "sealed"
+
+instance (tag ~ form) => FromMultipart tag (SealedAttachmentUpload form) where
+  fromMultipart form = do
+    file <- lookupFile attachmentPart form
+    text <- lookupInput sealedPart form
+    sealed <- eitherDecodeStrict' (encodeUtf8 text)
+    pure SealedAttachmentUpload {sealed, payload = fdPayload file}
+
+instance (tag ~ form) => ToMultipart tag (SealedAttachmentUpload form) where
+  toMultipart u =
+    MultipartData
+      { inputs = [Input {iName = sealedPart, iValue = decodeUtf8 (BSL.toStrict (encode u.sealed))}]
+      , files = [FileData {fdInputName = attachmentPart, fdFileName = "sealed", fdFileCType = "application/octet-stream", fdPayload = u.payload}]
       }
 
 -- | 'ArchiveUpload': an archive ("Wiki.Core.Export", zipped) for an

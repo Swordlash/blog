@@ -18,6 +18,12 @@
 -- space plain. The whole wiki's export leaves an encrypted space out, an
 -- import into one is refused, and the sitemap lists its pages, by their
 -- random slugs, to its members only.
+--
+-- Comments, the text they quote, and attachments' names and bytes are
+-- kept as the browser encrypted them, under ids it chose and the page's
+-- current key, with no text in the rows other paths read; those told of a
+-- comment get no title, excerpt or mention; and what was written before
+-- a renewal is read under the older key it names.
 module Test.Storage.Encrypted (spec) where
 
 import Data.Aeson (eitherDecode)
@@ -28,6 +34,8 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Database.Beam (all_, delete, filter_, runDelete, runSelectReturningList, runUpdate, select, update, val_, (<-.), (==.))
 import Protolude
+import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Database (Backing)
 import Test.Hspec
 import Test.Storage.Fixture (demoArchive, ok, withPlaceIn)
@@ -36,15 +44,17 @@ import Wiki.Api.Encrypted
 import Wiki.Api.Notifications (Notifications (..))
 import Wiki.Api.Opaque (PasswordRecord (..))
 import Wiki.Api.Opaque qualified as Opaque
+import Wiki.Api.Upload (SealedUpload (..))
 import Wiki.Api.Vault (NewPublicKey (..), VaultChange (..))
 import Wiki.App.Backend (MonadWiki (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Backlink (Backlink (..))
-import Wiki.Core.Encrypted (Chain (..), Encapsulated (..), KeyGrant (..), PageKey (..), SealedContent (..), SealedHeading (..), VersionTag (..), chainAfter, firstChain)
+import Wiki.Core.Encrypted (Chain (..), Encapsulated (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), VersionTag (..), chainAfter, firstChain)
 import Wiki.Core.Export qualified as Export
-import Wiki.Core.Id (PageId (..), SpaceId, UserId (..))
+import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId, UserId (..))
 import Wiki.Core.Notification (Kind (..), Notification (..), WatchTarget (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Permission (Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
@@ -61,7 +71,7 @@ import Wiki.Server.Opaque (defaultStretch)
 import Wiki.Server.Reset (ResetMail (..), requestReset, resetPassword, setEmail, verifyEmail)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Rows (SitemapNode (..), StoredRecord (..))
-import Wiki.Server.Storage.Schema (KeyGrants (..), PageKeys (..), PageLinks (..), Pages (..), PublicKeys (..), SealedVersions (..), Vaults (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (Comments (..), KeyGrants (..), PageKeys (..), PageLinks (..), Pages (..), PublicKeys (..), SealedVersions (..), Threads (..), Vaults (..), WikiDb (..), wikiDb)
 import Wiki.Server.Vault (keyIdOf, storeVault)
 import Wiki.Server.WebAuthn (toBase64Url)
 
@@ -494,6 +504,140 @@ spec backing = describe "encrypted spaces in the storage" $ do
     -- Deleting a page and moving it among its siblings need no text.
     ok =<< as p.ada (deletePage pid)
 
+  -- Item 1 of WP5.74b3: comments, their anchors, and attachments' names
+  -- and bytes, kept as the browser encrypted them.
+  describe "comments and attachments" $ do
+    let pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+        tid = CommentThreadId "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
+        cid = CommentId "2b3c4d5e-6f7a-4b2c-9d3e-4f5a6b7c8d9e"
+        rid = CommentId "3c4d5e6f-7a8b-4c3d-8e4f-5a6b7c8d9e0f"
+        aid = AttachmentId "4d5e6f7a-8b9c-4d4e-9f5a-6b7c8d9e0f1a"
+        bid = AttachmentId "5e6f7a8b-9c0d-4e5f-8a6b-7c8d9e0f1a2b"
+        pageKeyId = KeyId (bytes16 'p')
+        newThreadAs t k = NewSealedThread {id = t, anchor = Just (anchorUnder k 'q'), comment = NewSealedComment {id = cid, content = commentUnder k 'c'}}
+
+    it "keeps a thread, its anchor and its comments as ciphertext, under ids the browser chose, and reads them back" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+      void (ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a')))
+      made <- ok =<< as p.ada (openSealedThread pid (newThreadAs tid pageKeyId))
+      (made.id, made.anchored, made.anchor, map (\c -> (c.id, c.content)) made.comments) `shouldBe` (tid, True, Just (anchorUnder pageKeyId 'q'), [(cid, commentUnder pageKeyId 'c')])
+      replied <- ok =<< as p.ada (sealedReply pid tid NewSealedComment {id = rid, content = commentUnder pageKeyId 'r'})
+      replied.content `shouldBe` commentUnder pageKeyId 'r'
+      edited <- ok =<< as p.ada (sealedEditComment pid tid rid SealedCommentEdit {content = commentUnder pageKeyId 'e'})
+      (edited.content, isJust edited.editedAt) `shouldBe` (commentUnder pageKeyId 'e', True)
+      listed <- ok =<< as p.ada (sealedThreads pid)
+      map (\t -> (t.id, map (\c -> c.content) t.comments)) listed `shouldBe` [(tid, [commentUnder pageKeyId 'c', commentUnder pageKeyId 'e'])]
+      -- The rows every other path reads hold no text of them.
+      threadRows <- reading st (runSelectReturningList (select (all_ wikiDb.threads)))
+      [(r.quote, r.prefix, r.suffix) | r <- threadRows] `shouldBe` [(Just "", Just "", Just "")]
+      commentRows <- reading st (runSelectReturningList (select (all_ wikiDb.comments)))
+      map (\r -> r.body) commentRows `shouldBe` ["", ""]
+      -- An id that is not a UUID, an id used already, another key than the
+      -- page's current one, a ciphertext of the wrong length: refused.
+      as p.ada (openSealedThread pid (newThreadAs (CommentThreadId "my-thread") pageKeyId)) >>= (`shouldSatisfy` invalid)
+      as p.ada (openSealedThread pid (newThreadAs tid pageKeyId)) >>= (`shouldSatisfy` conflict)
+      as p.ada (sealedReply pid tid NewSealedComment {id = rid, content = commentUnder pageKeyId 'r'}) >>= (`shouldSatisfy` conflict)
+      as p.ada (sealedReply pid tid NewSealedComment {id = CommentId otherId.text, content = commentUnder (KeyId (bytes16 'o')) 'r'}) >>= (`shouldSatisfy` conflict)
+      as p.ada (sealedReply pid tid NewSealedComment {id = CommentId otherId.text, content = SealedComment {keyId = pageKeyId, tag = VersionTag (letters 16 'r'), body = Sealed (Nonce (bytes 12)) (Ciphertext (bytes 8))}}) >>= (`shouldSatisfy` invalid)
+      -- Someone else may not write another's comment again.
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) Edit True))
+      as p.bob (sealedEditComment pid tid rid SealedCommentEdit {content = commentUnder pageKeyId 'x'}) >>= (`shouldSatisfy` isLeft)
+      -- The plain routes that carry a comment's text still refuse; those
+      -- that carry none (resolving, deleting) are taken.
+      as p.ada (listThreads pid) >>= (`shouldSatisfy` refusedAsEncrypted)
+      as p.ada (openThread pid Nothing "A comment") >>= (`shouldSatisfy` refusedAsEncrypted)
+      as p.ada (reply pid tid "A reply") >>= (`shouldSatisfy` refusedAsEncrypted)
+      as p.ada (editComment pid tid cid "Again") >>= (`shouldSatisfy` refusedAsEncrypted)
+      void (ok =<< as p.ada (setResolved pid tid True))
+      map (\t -> t.resolved) <$> (ok =<< as p.ada (sealedThreads pid)) `shouldReturn` [True]
+      ok =<< as p.ada (deleteComment pid tid rid)
+      map (\t -> length t.comments) <$> (ok =<< as p.ada (sealedThreads pid)) `shouldReturn` [1]
+      ok =<< as p.ada (deleteThread pid tid)
+      (ok =<< as p.ada (sealedThreads pid)) `shouldReturn` []
+      sealedRows <- reading st (length <$> runSelectReturningList (select (all_ wikiDb.sealed_comments)))
+      sealedRows `shouldBe` 0
+      -- A plain space's pages have no encrypted threads.
+      plain <- ok =<< as p.ada (createSpace Nothing "Plain")
+      plainPage <- ok =<< as p.ada (createPage plain.id Nothing "Plain page" "Plain text.")
+      as p.ada (sealedThreads plainPage.id) >>= (`shouldSatisfy` conflict)
+      as p.ada (openSealedThread plainPage.id (newThreadAs (CommentThreadId otherId.text) pageKeyId)) >>= (`shouldSatisfy` conflict)
+
+    it "tells of a comment by the page's id alone, with no title, excerpt or mention" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+      void (ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a')))
+      void (ok =<< as p.bob (setWatching (WatchSpace secret.id) True))
+      earlier <- length . (\n -> n.items) <$> (ok =<< as p.bob notifications)
+      void (ok =<< as p.ada (openSealedThread pid (newThreadAs tid pageKeyId)))
+      told <- drop earlier . reverse . (\n -> n.items) <$> (ok =<< as p.bob notifications)
+      [(n.page, n.thread, n.title, n.excerpt) | n <- told] `shouldBe` [(pid, Just tid, "an encrypted page", "")]
+
+    it "keeps an attachment's name and bytes as ciphertext, under an id the browser chose, and replaces the one it names" $ withEncrypted backing $ \st p secret -> withSystemTempDirectory "sealed-attachment" $ \dir -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          file = dir </> "upload"
+          ciphertext = BS.replicate 40 7
+      BS.writeFile file ciphertext
+      made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
+      stored <- ok =<< as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = aid, meta = metaUnder pageKeyId 'm', replaces = Nothing} file)
+      (stored.id, stored.size, stored.meta) `shouldBe` (aid, 40, metaUnder pageKeyId 'm')
+      -- Its row has its id for a name and no media type of the file's.
+      (row, path) <- ok =<< as p.ada (attachmentFile aid)
+      (row.name.text, row.mediaType.text) `shouldBe` (aid.text, "application/octet-stream")
+      traverse BS.readFile path `shouldReturn` Just ciphertext
+      listed <- ok =<< as p.ada (sealedPageAt secret.id [made.slug])
+      map (\a -> (a.id, a.meta)) listed.attachments `shouldBe` [(aid, metaUnder pageKeyId 'm')]
+      -- Another, replacing the first.
+      void (ok =<< as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = bid, meta = metaUnder pageKeyId 'n', replaces = Just aid} file))
+      map (\a -> a.id) . (\x -> x.attachments) <$> (ok =<< as p.ada (sealedPageAt secret.id [made.slug])) `shouldReturn` [bid]
+      -- An id that is not a UUID, an id used already, another key, an
+      -- attachment replaced that is not the page's: refused.
+      as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = AttachmentId "photo.png", meta = metaUnder pageKeyId 'm', replaces = Nothing} file) >>= (`shouldSatisfy` invalid)
+      as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = bid, meta = metaUnder pageKeyId 'm', replaces = Nothing} file) >>= (`shouldSatisfy` conflict)
+      as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = aid, meta = metaUnder (KeyId (bytes16 'o')) 'm', replaces = Nothing} file) >>= (`shouldSatisfy` conflict)
+      as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = aid, meta = metaUnder pageKeyId 'm', replaces = Just (AttachmentId otherId.text)} file) >>= (`shouldSatisfy` invalid)
+      -- A reader who may not edit uploads nothing.
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+      as p.bob (uploadSealedAttachmentFile pid SealedUpload {id = aid, meta = metaUnder pageKeyId 'm', replaces = Nothing} file) >>= (`shouldSatisfy` isLeft)
+      -- The plain upload still refuses; deleting needs no text.
+      as p.ada (uploadAttachment pid "a.txt" "text/plain" "bytes") >>= (`shouldSatisfy` refusedAsEncrypted)
+      ok =<< as p.ada (deleteAttachment bid)
+      (\x -> x.attachments) <$> (ok =<< as p.ada (sealedPageAt secret.id [made.slug])) `shouldReturn` []
+
+    -- A comment and an attachment name the key of their page's they are
+    -- encrypted with. A renewal gives the page a new current key and keeps
+    -- the older ones, wrapped again: what was written before is read with
+    -- the older key it names, which the page's keys still list.
+    it "reads a comment and an attachment written before a renewal under the key they name, and takes new ones only under the new key" $ withEncrypted backing $ \st p secret -> withSystemTempDirectory "sealed-attachment" $ \dir -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          file = dir </> "upload"
+      BS.writeFile file (BS.replicate 40 7)
+      made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
+      void (ok =<< as p.ada (openSealedThread pid (newThreadAs tid pageKeyId)))
+      void (ok =<< as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = aid, meta = metaUnder pageKeyId 'm', replaces = Nothing} file))
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+      ok =<< as p.ada (grantSpaceKey secret.id (grantsOf [newGrant p.bob p.bobKey]))
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View False))
+      -- Nothing is written while the key must be renewed.
+      as p.ada (sealedReply pid tid NewSealedComment {id = rid, content = commentUnder pageKeyId 'r'}) >>= (`shouldSatisfy` renewalRefused)
+      as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = bid, meta = metaUnder pageKeyId 'n', replaces = Nothing} file) >>= (`shouldSatisfy` renewalRefused)
+      rotateAs st p.ada secret
+      page <- ok =<< as p.ada (sealedPageAt secret.id [made.slug])
+      let keyIds = map (\k -> k.keyId) page.pageKeys
+      page.pageKey.keyId `shouldNotBe` pageKeyId
+      pageKeyId `shouldSatisfy` (`elem` keyIds)
+      map (\a -> a.meta.keyId) page.attachments `shouldBe` [pageKeyId]
+      threads <- ok =<< as p.ada (sealedThreads pid)
+      [(t.anchor, map (\c -> c.content.keyId) t.comments) | t <- threads] `shouldBe` [(Just (anchorUnder pageKeyId 'q'), [pageKeyId])]
+      -- New ones are taken under the page's new key only.
+      as p.ada (sealedReply pid tid NewSealedComment {id = rid, content = commentUnder pageKeyId 'r'}) >>= (`shouldSatisfy` conflict)
+      void (ok =<< as p.ada (sealedReply pid tid NewSealedComment {id = rid, content = commentUnder page.pageKey.keyId 'r'}))
+      as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = bid, meta = metaUnder pageKeyId 'n', replaces = Nothing} file) >>= (`shouldSatisfy` conflict)
+      void (ok =<< as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = bid, meta = metaUnder page.pageKey.keyId 'n', replaces = Nothing} file))
+
   it "tells a watcher of the space that a page was saved, by its id alone, with no title or excerpt" $ withEncrypted backing $ \st p secret -> do
     let as :: UserId -> StoredWiki IO a -> IO a
         as u = runStoredWiki st (AsUser u)
@@ -707,6 +851,23 @@ savedOn previous c = chainedAs (Just (chainAfter previous.tag previous.chain)) (
 -- | A version with another chain.
 chainedAs :: Maybe Chain -> SealedContent -> SealedContent
 chainedAs chain x = SealedContent {tag = x.tag, keyId = x.keyId, chain, title = x.title, body = x.body}
+
+-- | A comment encrypted with a page key, its ciphertexts made of a letter.
+commentUnder :: KeyId -> Char -> SealedComment
+commentUnder k c = SealedComment {keyId = k, tag = VersionTag (letters 16 c), body = Sealed (Nonce (letters 12 c)) (Ciphertext (letters 60 c))}
+
+-- | An anchor encrypted with a page key, made of a letter.
+anchorUnder :: KeyId -> Char -> SealedAnchor
+anchorUnder k c = SealedAnchor {keyId = k, anchor = Sealed (Nonce (letters 12 c)) (Ciphertext (letters 50 c))}
+
+-- | An attachment's name and media type encrypted with a page key, and the
+-- nonce of its bytes, made of a letter.
+metaUnder :: KeyId -> Char -> SealedMeta
+metaUnder k c = SealedMeta {keyId = k, meta = Sealed (Nonce (letters 12 c)) (Ciphertext (letters 40 c)), bytesNonce = Nonce (letters 12 c)}
+
+-- | So many bytes of a letter, in base64url.
+letters :: Int -> Char -> Text
+letters n c = toBase64Url (BS.replicate n (fromIntegral (ord c)))
 
 newPage :: PageId -> Maybe PageId -> Char -> NewSealedPage
 newPage pid parent c = NewSealedPage {id = pid, parent, pageKey = pageKeyOf, content = contentOf c}

@@ -13,20 +13,24 @@
 -- with the unlock offered, and reading it once the key is there.
 --
 -- What must never reach the server is checked in the requests the page
--- sent: no attachment, comment or draft of an encrypted page; no plain
+-- sent: no draft of an encrypted page, and no plain comment, text it
+-- quotes, attachment name or attachment bytes; no plain
 -- page written by a tab that listed the spaces before the space was
 -- encrypted; no space key sealed to a public key this device does not
 -- hold; no grant to a reader whose public key is listed under another id;
 -- and no search request limited to an encrypted space. The page and the
--- editor of an encrypted page offer no comments, no attachments and no
--- draft kept on leaving. A key held already is shared with readers who
+-- editor of an encrypted page offer comments and attachments, encrypted
+-- in the browser, and no draft kept on leaving; one file uploaded twice is
+-- two ciphertexts. A key held already is shared with readers who
 -- came since, in parts of at most 500 grants, and the search finds a page
 -- written since its last search once the space's pages are listed again.
 --
 -- The chain of versions (WP5.74b3): a page the server rolls back to an
 -- older version than this browser read, or forks, or whose history it
 -- leaves a version out of, is shown with what is wrong, under a banner
--- and without "Edit", and nothing is saved on top of it.
+-- and without "Edit", and nothing is saved on top of it. A renewal of the
+-- space's key leaves what was written before (pages, comments,
+-- attachments) readable with the older page keys their ciphertexts name.
 --
 -- Over the backend over HTTP, with the test's server in fetch's place
 -- ("Test.Browser.Http") and the server of encrypted spaces played beside
@@ -37,7 +41,9 @@
 module Test.Browser.Encrypted (spec) where
 
 import Control.Monad.UUID (MonadUUID)
-import Data.Aeson (encode)
+import Data.Aeson (Value (..), decodeStrict', encode)
+import Data.Aeson.KeyMap qualified as KM
+import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
 import Halogen.JSBits.Promise (Promise (..), wait)
@@ -66,6 +72,8 @@ import Wiki.App.Encrypted (keepSeen, seenOf)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route qualified as R
 import Wiki.Core.Anchor (Anchor (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
+import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Encrypted (ChainProblem (..), Kept (..), Seen (..))
 import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Markdown.Box (BoxNumbering (..))
@@ -97,8 +105,17 @@ $( browserJS
      , ("js_remove_reader", "wiki_test_encrypted_remove_reader", Safe, [t|JSText -> IO ()|])
      , ("js_rotations", "wiki_test_encrypted_rotations", Safe, [t|IO JSText|])
      , ("js_tamper_latest", "wiki_test_encrypted_tamper_latest", Safe, [t|Bool -> IO ()|])
+     , ("js_attachment_bytes", "wiki_test_encrypted_attachment_bytes", Safe, [t|IO JSText|])
+     , ("js_image_widthPromise", "wiki_test_encrypted_image_width", Safe, [t|JSText -> IO (Promise Int)|])
      ]
  )
+
+js_image_width :: JSText -> IO Int
+js_image_width a = if inBrowser then wait =<< js_image_widthPromise a else pure inert
+
+-- | An image of so many pixels' width, as SVG, with a word in it.
+svgOf :: Int -> Text -> ByteString
+svgOf width word = encodeUtf8 ("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" <> show width <> "\" height=\"1\"><title>" <> word <> "</title></svg>")
 
 js_key_pair :: JSText -> IO ()
 js_key_pair a = if inBrowser then wait =<< js_key_pairPromise a else pure inert
@@ -214,17 +231,55 @@ spec m = do
     eventually (find ui ".page-tree" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Behind the lock"))
     length <$> findAll ui ".encrypted-space" `shouldReturn` 0
 
-  it "sends nothing of an encrypted page for an attachment, a comment or a draft" $ runPage $ do
+  -- Item 1 of WP5.74b3: a comment, the text it quotes, and an
+  -- attachment's name and bytes are encrypted in the browser, and only
+  -- their ciphertext is sent and stored. A draft is still not sent.
+  it "encrypts a comment, its anchor, an attachment's name and bytes, sends none as plain text, and reads them back" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
     made <- ok =<< run env (createPage secret.id Nothing "Secret plans" "The launch is on Tuesday.")
     read' <- ok =<< run env (getPage secret.id [made.slug])
-    run env (uploadAttachment made.id "plans.txt" "text/plain" "Tuesday, attached") >>= (`shouldSatisfy` isLeft)
-    run env (openThread made.id (Just Anchor {exact = "launch", prefix = "The ", suffix = " is on"}) "A comment on Tuesday") >>= (`shouldSatisfy` isLeft)
-    run env (saveDraft made.id read'.updatedAt "Secret plans" "A draft about Tuesday") >>= (`shouldSatisfy` isLeft)
+    attached <- ok =<< run env (uploadAttachment made.id "plans-for-tuesday.svg" "image/svg+xml" (svgOf 7 "Tuesday, attached"))
+    let anchor = Anchor {exact = "launch", prefix = "The ", suffix = " is on"}
+    thread <- ok =<< run env (openThread made.id (Just anchor) "A comment on Thursday")
+    replied <- ok =<< run env (reply made.id thread.id "A reply on Friday")
+    void (ok =<< run env (editComment made.id thread.id replied.id "Edited on Saturday"))
+    run env (saveDraft made.id read'.updatedAt "Secret plans" "A draft about Sunday") >>= (`shouldSatisfy` isLeft)
+    -- Read back, decrypted, in a new tab.
+    other <- as "user-admin"
+    page <- ok =<< run other (getPage secret.id [made.slug])
+    map (\a -> (a.id, a.name.text, a.mediaType.text, a.size)) page.attachments `shouldBe` [(attached.id, "plans-for-tuesday.svg", "image/svg+xml", fromIntegral (BS.length (svgOf 7 "Tuesday, attached")))]
+    threads <- ok =<< run other (listThreads made.id)
+    map (\t -> (t.anchor, map (\c -> c.body) t.comments)) threads `shouldBe` [(Just anchor, ["A comment on Thursday", "Edited on Saturday"])]
+    url <- run other (attachmentFrameUrl (fromMaybe attached (head page.attachments)))
+    url `shouldBe` Nothing
+    address <- run other (attachmentUrl (fromMaybe attached (head page.attachments)))
+    address `shouldSatisfy` T.isPrefixOf "blob:"
+    -- The decrypted bytes, loaded as the page loads an image.
+    unsafeIOToPageM (js_image_width (toJSText address)) `shouldReturn` 7
+    -- Nothing of them in what was sent, nor in what the server stored.
+    let words' = ["Tuesday", "Thursday", "Friday", "Saturday", "Sunday", "launch", "plans-for"]
     sent <- asked
-    [r.url | r <- sent, any (`T.isInfixOf` r.url) ["/attachments", "/threads", "/draft"]] `shouldBe` []
-    [r.url | r <- sent, any (`T.isInfixOf` r.body) ["Tuesday", "launch", "Secret plans"]] `shouldBe` []
+    [r.url | r <- sent, any (`T.isInfixOf` r.url) ["/draft"]] `shouldBe` []
+    [r.url | r <- sent, any (`T.isInfixOf` r.url) ["/threads", "/attachments"], r.method /= "GET", not ("api/v1/encrypted/" `T.isPrefixOf` r.url)] `shouldBe` []
+    [(r.url, w) | r <- sent, w <- words', w `T.isInfixOf` r.body || w `T.isInfixOf` r.url] `shouldBe` []
+    stored <- unsafeIOToPageM (fromJSText <$> js_stored)
+    filter (`T.isInfixOf` stored) words' `shouldBe` []
+
+  -- The blob store keeps each upload's bytes under their hash: the same
+  -- file uploaded twice is encrypted under a new nonce each time, so the
+  -- server cannot tell it from two different files of one size.
+  it "stores the same file uploaded twice as two different ciphertexts" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Plans" "Twice.")
+    void (ok =<< run env (getPage secret.id [made.slug]))
+    void (ok =<< run env (uploadAttachment made.id "one.txt" "text/plain" "The same bytes"))
+    void (ok =<< run env (uploadAttachment made.id "two.txt" "text/plain" "The same bytes"))
+    stored <- unsafeIOToPageM (fromJSText <$> js_attachment_bytes)
+    case decodeStrict' (encodeUtf8 stored) :: Maybe [Text] of
+      Just [a, b] -> a `shouldNotBe` b
+      other -> panic ("two attachments expected, got " <> show other)
 
   it "writes encrypted, and sends no plain text, in a tab that listed the spaces before the space was encrypted" $ runPage $ do
     stale <- encryptedSpace "user-admin"
@@ -455,6 +510,8 @@ spec m = do
     void (ok =<< run env (encryptSpace secret.id))
     made <- ok =<< run env (createPage secret.id Nothing "Untouched" "A zebra crossing.")
     resaved <- ok =<< run env (savePage made.id made.updatedAt "Untouched" "A zebra crossing, twice.")
+    attached <- ok =<< run env (uploadAttachment made.id "zebra.svg" "image/svg+xml" (svgOf 5 "Stripes."))
+    void (ok =<< run env (openThread made.id Nothing "Before the renewal."))
     unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
     void (ok =<< run env (listPages secret.id))
     -- A tab of the administrator's open before the renewal, holding the key.
@@ -478,9 +535,27 @@ spec m = do
           (label, first'.body) `shouldBe` (label, "A zebra crossing.")
           hits <- run tab (searchPages ((searchQuery "zebra") {space = Just secret.id, includeSubspaces = True}))
           (label, map (\h -> h.page) hits) `shouldBe` (label, [made.id])
+          -- The comment and the attachment are under the older page key,
+          -- which their ciphertext names.
+          threads <- ok =<< run tab (listThreads made.id)
+          (label, map (\t -> map (\c -> c.body) t.comments) threads) `shouldBe` (label, [["Before the renewal."]])
+          page' <- ok =<< run tab (getPage secret.id [made.slug])
+          (label, map (\a -> a.name.text) page'.attachments) `shouldBe` (label, ["zebra.svg"])
+          address <- run tab (attachmentUrl (fromMaybe attached (head page'.attachments)))
+          width <- unsafeIOToPageM (js_image_width (toJSText address))
+          (label, width) `shouldBe` (label, 5)
     fresh <- as "user-admin"
     readsAll ("a new tab" :: Text) fresh
     readsAll "a tab open before the renewal" before
+    -- A reply written after the renewal is under the page's new key.
+    threads <- ok =<< run fresh (listThreads made.id)
+    for_ (head threads) $ \t -> void (ok =<< run fresh (reply made.id t.id "After the renewal."))
+    stored <- unsafeIOToPageM (fromJSText <$> js_stored)
+    let keysOf = case decodeStrict' (encodeUtf8 stored) of
+          Just (Object o) -> [k | Just (Array ps) <- [KM.lookup "pages" o], Object p <- toList ps, Just (Array ts) <- [KM.lookup "threads" p], Object t <- toList ts, Just (Array cs) <- [KM.lookup "comments" t], Object c <- toList cs, Just (Object content) <- [KM.lookup "content" c], Just (String k) <- [KM.lookup "keyId" content]]
+          _ -> []
+    length (ordNub keysOf) `shouldBe` 2
+    map (\t -> map (\c -> c.body) t.comments) <$> (ok =<< run before (listThreads made.id)) `shouldReturn` [["Before the renewal.", "After the renewal."]]
     resaved.updatedAt `shouldSatisfy` (> made.updatedAt)
 
   it "renews the key at once when the administrator revokes a reader in the permissions dialog" $ runPage $ do
@@ -547,7 +622,7 @@ spec m = do
     sent <- asked
     [r.url | r <- sent, "/rotation" `T.isSuffixOf` r.url, r.method == "POST"] `shouldBe` []
 
-  it "offers no comments, attachments or kept draft in an encrypted space's page and editor" $ runPage $ do
+  it "offers comments and attachments, and no kept draft, in an encrypted space's page and editor" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
     made <- ok =<< run env (createPage secret.id Nothing "Secret plans" "The launch is on Tuesday.")
@@ -555,13 +630,12 @@ spec m = do
     answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
     ui <- startServer m (R.Page [secretSlug] [made.slug])
     eventually (find ui ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Tuesday"))
-    length <$> findAll ui ".comments-toggle" `shouldReturn` 0
-    length <$> findAll ui ".comments-panel" `shouldReturn` 0
+    eventually (length <$> findAll ui ".comments-toggle" >>= (`shouldSatisfy` (> 0)))
     unmount ui
     editor <- startServer m (R.EditPage [secretSlug] [made.slug])
     text <- editorText editor
-    length <$> findAll editor ".editor-attach" `shouldReturn` 0
-    length <$> findAll editor ".tool[aria-label='Image or attachment']" `shouldReturn` 0
+    length <$> findAll editor ".editor-attach" `shouldReturn` 1
+    length <$> findAll editor ".tool[aria-label='Image or attachment']" `shouldReturn` 1
     typeText text " More."
     find editor ".editor-cancel" >>= click
     question <- find editor ".editor-cancel-confirm"

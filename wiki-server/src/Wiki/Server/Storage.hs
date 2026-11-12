@@ -169,6 +169,11 @@ module Wiki.Server.Storage
   , grantSpaceKey
   , rotationInfo
   , rotateSpaceKey
+  , sealedThreads
+  , openSealedThread
+  , sealedReply
+  , sealedEditComment
+  , uploadSealedAttachmentFile
   , sealedPages
   , sealedContents
   , sealedPageAt
@@ -219,7 +224,7 @@ import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invite
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 -- Imported without their fields, which pages' and spaces' share; the
 -- qualified import brings the fields.
-import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedPage, PendingMember (PendingMember), RotatedPage (..), Rotation (..), RotationInfo (RotationInfo), RotationPage (RotationPage), SealedEdit, SealedPage (SealedPage), SealedSummary (SealedSummary), SealedVersion (SealedVersion), SealedVersionInfo (SealedVersionInfo), SpaceEncryption (SpaceEncryption), maxRotatedGrants, maxRotatedKeys)
+import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedComment (..), NewSealedPage, NewSealedThread (..), PendingMember (PendingMember), RotatedPage (..), Rotation (..), RotationInfo (RotationInfo), RotationPage (RotationPage), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit, SealedPage (SealedPage), SealedSummary (SealedSummary), SealedThread (..), SealedVersion (SealedVersion), SealedVersionInfo (SealedVersionInfo), SpaceEncryption (SpaceEncryption), maxRotatedGrants, maxRotatedKeys)
 import Wiki.Api.Encrypted qualified as E
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
@@ -231,6 +236,7 @@ import Wiki.Api.ServerSettings (HomePage, MailSettingsOf (..), ProviderSettingsO
 import Wiki.Api.ServerSettings qualified as SS
 import Wiki.Api.Stars (StarredPage (StarredPage), maxStars)
 import Wiki.Api.Stars qualified as Star
+import Wiki.Api.Upload (SealedUpload (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -239,7 +245,7 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Backlinks (counted)
 import Wiki.Core.Access (Access (..), accessName)
-import Wiki.Core.Anchor (Anchor, checkAnchor)
+import Wiki.Core.Anchor (Anchor (..), checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), parseFileName, uploadedMimeType)
 import Wiki.Core.Audit (Actor (..))
 import Wiki.Core.Audit qualified as Audit
@@ -248,7 +254,7 @@ import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentBody, formerAuthor, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (KeyGrant), PageKey (..), SealedContent (..), VersionTag (..), chainAfter, encapsulatedBytes, firstChain, headingOf, keyIdBytes, maxBodyCiphertext, maxTitleCiphertext, nonceBytes, sealedKeyBytes)
+import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (KeyGrant), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedMeta (..), VersionTag (..), chainAfter, encapsulatedBytes, firstChain, headingOf, keyIdBytes, maxAnchorCiphertext, maxBodyCiphertext, maxCommentCiphertext, maxMetaCiphertext, maxTitleCiphertext, nonceBytes, sealedKeyBytes)
 import Wiki.Core.Encrypted qualified as CE
 import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, checkLogins, rootedArchive, threadsAmong, withoutHomeDocument)
 import Wiki.Core.Export qualified as Export
@@ -306,7 +312,7 @@ import Wiki.Server.Storage.Migrate (databaseVersion, knownVersion, migrateSaying
 import Wiki.Server.Storage.Notifications qualified as Notifications
 import Wiki.Server.Storage.Renewal (noticeRenewals, readersIn, renewalDue)
 import Wiki.Server.Storage.Rows
-import Wiki.Server.Storage.Sealed (currentPublicKeys, deleteGrantsOfSpace, deleteSpaceGrants, grantsOfKey, insertGrant, insertPageKey, insertSealedVersion, loadPageKey, loadPageKeys, loadSealedLatest, loadSealedVersion, loadSpaceAllPageKeys, replacePageKeys, setSpaceKey, spaceKind)
+import Wiki.Server.Storage.Sealed (currentPublicKeys, deleteGrantsOfSpace, deleteSpaceGrants, grantsOfKey, insertGrant, insertPageKey, insertSealedAttachment, insertSealedComment, insertSealedThread, insertSealedVersion, loadPageKey, loadPageKeys, loadSealedAnchors, loadSealedComments, loadSealedLatest, loadSealedMetas, loadSealedVersion, loadSpaceAllPageKeys, replacePageKeys, replaceSealedComment, setSpaceKey, spaceKind)
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
 import Wiki.Server.Storage.Stars qualified as Stars
 import Wiki.Server.WaysIn (AccountWays (..), WaysIn, brokenCredentials, brokenLogins, waysIn)
@@ -1719,9 +1725,13 @@ editorOf st who pid =
 threadsThen :: Storage -> Who -> PageId -> (([Thread], Maybe Author) -> IO ()) -> IO (Either WikiError ([Thread], Maybe Author))
 threadsThen st who pid = transactThen st who ReadsOnWriter $ do
   p <- findNode pid
-  requireView =<< chainOfPage p
+  c <- chainOfPage p
+  requireView c
   home <- asks (\x -> Home.isHomePage x.server.homePage pid)
-  threads <- if home then pure [] else listThreadsTx pid
+  -- A page of an encrypted space has its threads encrypted: the browser
+  -- reads them from their own route, and is told only that they changed
+  -- ('ThreadsChanged'). Its subscription answers with none.
+  threads <- if home || any (\s -> isJust s.encryption) c then pure [] else listThreadsTx pid
   readingAs <- asks (\x -> x.user) <&> \u -> authorOf <$> mfilter (\v -> v.id /= administratorId) u
   pure (threads, readingAs)
 
@@ -1789,6 +1799,29 @@ rotationInfo = run Reads . rotationInfoTx
 -- | Give an encrypted space a new key ('Wiki.Api.Encrypted.Rotation').
 rotateSpaceKey :: (MonadIO m) => SpaceId -> Rotation -> StoredWiki m (Either WikiError ())
 rotateSpaceKey sid = run Writes . rotateSpaceKeyTx sid
+
+-- | The threads of a page of an encrypted space, encrypted.
+sealedThreads :: (MonadIO m) => PageId -> StoredWiki m (Either WikiError [SealedThread])
+sealedThreads = run Reads . sealedThreadsTx
+
+-- | A new thread of a page of an encrypted space, published once committed.
+openSealedThread :: (MonadIO m) => PageId -> NewSealedThread -> StoredWiki m (Either WikiError SealedThread)
+openSealedThread pid = commenting . openSealedThreadTx pid
+
+-- | A reply in a thread of a page of an encrypted space.
+sealedReply :: (MonadIO m) => PageId -> CommentThreadId -> NewSealedComment -> StoredWiki m (Either WikiError SealedCommentInfo)
+sealedReply pid tid = commenting . sealedReplyTx pid tid
+
+-- | A comment of a page of an encrypted space written again.
+sealedEditComment :: (MonadIO m) => PageId -> CommentThreadId -> CommentId -> SealedCommentEdit -> StoredWiki m (Either WikiError SealedCommentInfo)
+sealedEditComment pid tid cid = commenting . sealedEditCommentTx pid tid cid
+
+-- | An attachment of a page of an encrypted space, its encrypted bytes in a
+-- file, as 'uploadAttachmentFile'.
+uploadSealedAttachmentFile :: (MonadIO m) => PageId -> SealedUpload -> FilePath -> StoredWiki m (Either WikiError SealedAttachment)
+uploadSealedAttachmentFile pid up file = do
+  size <- liftIO (getFileSize file)
+  run Writes (uploadSealedAttachmentTx pid up size (\dir -> fst <$> storeBlobFile dir file))
 
 -- | The pages of an encrypted space, with their encrypted titles.
 sealedPages :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError [SealedSummary])
@@ -3288,6 +3321,7 @@ sealedPageOf p = do
   pk <- db (loadPageKey p.id) >>= maybe (failWith (Conflict "This page has no key: it is not a page of an encrypted space.")) pure
   content <- db (loadSealedVersion p.id p.updatedAt) >>= maybe (failWith NotFound) pure
   pageKeys <- db (loadPageKeys p.id)
+  metas <- db (loadSealedMetas p.id)
   w <- withWriters p
   pure
     SealedPage
@@ -3303,6 +3337,7 @@ sealedPageOf p = do
       , createdBy = w.createdBy
       , updatedBy = w.updatedBy
       , pageKeys
+      , attachments = [SealedAttachment {id = a.id, size = fromIntegral a.size, meta} | a <- p.attachments, Just meta <- [Map.lookup a.id metas]]
       }
 
 -- | The pages of an encrypted space with their encrypted titles.
@@ -3331,7 +3366,7 @@ sealedContentsTx sid = do
   keys <- db (loadSpaceAllPageKeys sid)
   latest <- db (loadSealedLatest sid)
   pure
-    [ SealedPage {id = p.id, space = p.space, parent = p.parent, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, pageKey = pk, content, createdBy = Nothing, updatedBy = Nothing, pageKeys = all'}
+    [ SealedPage {id = p.id, space = p.space, parent = p.parent, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, pageKey = pk, content, createdBy = Nothing, updatedBy = Nothing, pageKeys = all', attachments = []}
     | p <- sortOn (\x -> (x.createdAt, x.id)) summaries
     , Just all'@(pk : _) <- [Map.lookup p.id keys]
     , Just content <- [Map.lookup p.id latest]
@@ -3961,12 +3996,19 @@ commentAuthor u name avatar
 -- checks come in the order the class's Haddock gives.
 discussion :: PageId -> Tx ([Space], [Thread])
 discussion pid = do
+  (c, ts) <- discussionOf pid
+  requirePlain "A comment" c
+  pure (c, ts)
+
+-- | 'discussion' for what carries no text of a comment (deleting one,
+-- deleting or resolving a thread): in an encrypted space too.
+discussionOf :: PageId -> Tx ([Space], [Thread])
+discussionOf pid = do
   p <- findNode pid
   c <- chainOfPage p
   requireView c
   home <- asks (\x -> Home.isHomePage x.server.homePage pid)
   when home (failWith NotFound)
-  requirePlain "A comment" c
   ts <- db (Comments.loadThreads commentAuthor pid)
   pure (c, ts)
 
@@ -4045,7 +4087,7 @@ editCommentTx pid tid cid body = do
 -- thread: deleting it deletes the thread, if nobody has replied.
 deleteCommentTx :: PageId -> CommentThreadId -> CommentId -> Tx ((), PageId, PageEvent)
 deleteCommentTx pid tid cid = do
-  (c, ts) <- discussion pid
+  (c, ts) <- discussionOf pid
   t <- threadIn ts tid
   old <- commentIn t cid
   ctx <- ask
@@ -4057,7 +4099,7 @@ deleteCommentTx pid tid cid = do
 
 deleteThreadTx :: PageId -> CommentThreadId -> Tx ((), PageId, PageEvent)
 deleteThreadTx pid tid = do
-  (c, ts) <- discussion pid
+  (c, ts) <- discussionOf pid
   t <- threadIn ts tid
   ctx <- ask
   require (mayDeleteThread ctx.principal ctx.grants c t)
@@ -4066,13 +4108,186 @@ deleteThreadTx pid tid = do
 
 setResolvedTx :: PageId -> CommentThreadId -> Bool -> Tx (Thread, PageId, PageEvent)
 setResolvedTx pid tid resolved = do
-  (c, ts) <- discussion pid
+  (c, ts) <- discussionOf pid
   t <- threadIn ts tid
   _ <- commenter c
-  when (isNothing t.anchor) $
+  -- In an encrypted space the quote is encrypted, and the thread's row says
+  -- only whether it has one.
+  anchored <-
+    if any (\s -> isJust s.encryption) c
+      then maybe False fst . Map.lookup tid <$> db (loadSealedAnchors pid)
+      else pure (isJust t.anchor)
+  unless anchored $
     invalid "A thread about the whole page is not resolved: only one about a quote of it is."
   db (Comments.updateResolved tid resolved)
-  pure (t {resolved}, pid, ThreadResolved tid resolved)
+  pure (Thread {id = t.id, page = t.page, anchor = t.anchor, resolved, createdAt = t.createdAt, comments = t.comments}, pid, ThreadResolved tid resolved)
+
+--------------------------------------------------------------------------------
+-- Comments and attachments in an encrypted space
+
+-- | A page of an encrypted space for a write of a comment or an
+-- attachment: its chain, its space's current key, checked not due for
+-- renewal, and the page's current key, which what is written is encrypted
+-- with.
+sealedTarget :: PageId -> Tx ([Space], PageKey)
+sealedTarget pid = do
+  p <- findNode pid
+  c <- chainOfPage p
+  s <- fst <$> findSpace p.space
+  k <- requireEncrypted s
+  requireNoRenewal p.space c k
+  pk <- db (loadPageKey pid) >>= maybe (failWith (Conflict "This page has no key: it is not a page of an encrypted space.")) pure
+  pure (c, pk)
+
+-- | 'Invalid' unless an id the browser chose is a UUID.
+requireUuid :: Text -> Text -> Tx ()
+requireUuid what i = when (isNothing (UUID.fromText i)) (invalid (what <> "'s id is a UUID."))
+
+-- | 'Invalid' unless a ciphertext is encrypted with the page's current key
+-- and is of its lengths.
+checkSealedText :: PageKey -> KeyId -> Sealed -> Int -> Tx ()
+checkSealedText pk k s most = do
+  unless (k == pk.keyId) $
+    failWith (Conflict "This page's key has changed since it was opened: the space's key was renewed. Open the page again.")
+  unless (holdsBytes nonceBytes s.nonce.text && boundedBytes 16 most s.ciphertext.text) $
+    invalid "This is not a ciphertext this wiki keeps: a nonce or a text is not of its length."
+
+-- | A thread of a page of an encrypted space as the browser reads it: its
+-- rows, its anchor and its comments' texts, encrypted.
+sealedThreadOf :: Map CommentThreadId (Bool, Maybe SealedAnchor) -> Map CommentId SealedComment -> Thread -> Maybe SealedThread
+sealedThreadOf anchors texts t = do
+  (anchored, anchor) <- Map.lookup t.id anchors
+  pure
+    SealedThread
+      { id = t.id
+      , page = t.page
+      , anchored
+      , anchor
+      , resolved = t.resolved
+      , createdAt = t.createdAt
+      , comments = [SealedCommentInfo {id = x.id, thread = t.id, author = x.author, createdAt = x.createdAt, editedAt = x.editedAt, content} | x <- t.comments, Just content <- [Map.lookup x.id texts]]
+      }
+
+-- | The threads of a page of an encrypted space, encrypted.
+sealedThreadsTx :: PageId -> Tx [SealedThread]
+sealedThreadsTx pid = do
+  (c, ts) <- discussionOf pid
+  _ <- maybe (failWith (Conflict "This space is not encrypted.")) pure (find (\s -> isJust s.encryption) c)
+  anchors <- db (loadSealedAnchors pid)
+  texts <- db (loadSealedComments pid)
+  pure (mapMaybe (sealedThreadOf anchors texts) ts)
+
+-- | A thread of a page of an encrypted space, read again: the result of a
+-- write.
+sealedThreadNow :: PageId -> CommentThreadId -> Tx SealedThread
+sealedThreadNow pid tid = sealedThreadsTx pid >>= maybe (failWith NotFound) pure . find (\t -> t.id == tid)
+
+-- | A new thread of a page of an encrypted space, with its first comment.
+-- Those told of it are told by the page's id, with no title, excerpt or
+-- mention, which the server cannot read; the page's live channel hears
+-- that its threads changed, and nothing of them.
+openSealedThreadTx :: PageId -> NewSealedThread -> Tx (SealedThread, PageId, PageEvent)
+openSealedThreadTx pid new = do
+  (c, _) <- discussionOf pid
+  u <- commenter c
+  (_, pk) <- sealedTarget pid
+  requireUuid "A thread" new.id.text
+  requireUuid "A comment" new.comment.id.text
+  db (Comments.threadPage new.id) >>= traverse_ (\_ -> failWith (Conflict "A thread with this id exists already."))
+  whenM (db (Comments.commentExists new.comment.id)) (failWith (Conflict "A comment with this id exists already."))
+  for_ new.anchor $ \a -> checkSealedText pk a.keyId a.anchor maxAnchorCiphertext
+  checkSealedComment pk new.comment.content
+  time <- now
+  db $ do
+    -- The thread's row has an empty quote when the thread has one, which
+    -- is encrypted beside it: a thread about a quote may be resolved, and
+    -- the row says so.
+    Comments.insertThread new.id pid (Anchor {exact = "", prefix = "", suffix = ""} <$ new.anchor) time
+    insertSealedThread new.id pk.keyId new.anchor
+    Comments.insertComment new.comment.id new.id u "" time
+    insertSealedComment new.comment.id new.comment.content
+  t <- sealedThreadNow pid new.id
+  p <- findNode pid
+  tellTx pid p.space encryptedTitle (Just new.id) "" (CommentedIn new.id [u]) mempty
+  pure (t, pid, ThreadsChanged)
+
+-- | 'checkSealedText' for a comment, with its tag.
+checkSealedComment :: PageKey -> SealedComment -> Tx ()
+checkSealedComment pk x = do
+  checkSealedText pk x.keyId x.body maxCommentCiphertext
+  unless (holdsBytes keyIdBytes x.tag.text) $
+    invalid "This is not a comment this wiki keeps: its tag is not of its length."
+
+-- | A reply in a thread of a page of an encrypted space.
+sealedReplyTx :: PageId -> CommentThreadId -> NewSealedComment -> Tx (SealedCommentInfo, PageId, PageEvent)
+sealedReplyTx pid tid new = do
+  (c, ts) <- discussionOf pid
+  before <- threadIn ts tid
+  u <- commenter c
+  (_, pk) <- sealedTarget pid
+  requireUuid "A comment" new.id.text
+  whenM (db (Comments.commentExists new.id)) (failWith (Conflict "A comment with this id exists already."))
+  checkSealedComment pk new.content
+  time <- now
+  db $ do
+    Comments.insertComment new.id tid u "" time
+    insertSealedComment new.id new.content
+  made <- sealedThreadNow pid tid >>= maybe (failWith NotFound) pure . find (\x -> x.id == new.id) . (\t -> t.comments)
+  p <- findNode pid
+  tellTx pid p.space encryptedTitle (Just tid) "" (CommentedIn tid (ordNub (map (\x -> x.author.id) before.comments <> [u]))) mempty
+  pure (made, pid, ThreadsChanged)
+
+-- | A comment of a page of an encrypted space written again. Nobody is told:
+-- an edit tells only of the mentions it adds, which the server cannot read.
+sealedEditCommentTx :: PageId -> CommentThreadId -> CommentId -> SealedCommentEdit -> Tx (SealedCommentInfo, PageId, PageEvent)
+sealedEditCommentTx pid tid cid edit = do
+  (_, ts) <- discussionOf pid
+  old <- threadIn ts tid >>= (`commentIn` cid)
+  ctx <- ask
+  require (mayEditComment ctx.principal old)
+  (_, pk) <- sealedTarget pid
+  checkSealedComment pk edit.content
+  time <- now
+  db $ do
+    Comments.updateCommentBody cid "" time
+    replaceSealedComment cid edit.content
+  edited <- sealedThreadNow pid tid >>= maybe (failWith NotFound) pure . find (\x -> x.id == cid) . (\t -> t.comments)
+  pure (edited, pid, ThreadsChanged)
+
+-- | An attachment of a page of an encrypted space: its bytes, encrypted in
+-- the browser, of this size, which the last argument stores in the blob
+-- directory given to it; its name and media type, encrypted. Its row is
+-- named by its id and of the type @application/octet-stream@: nothing of
+-- the file is in it but its size. Each upload is encrypted under a new
+-- nonce, so the blob store, which keeps one file for identical bytes,
+-- keeps two uploads of one file as two files. The attachment it replaces
+-- (one of the same name, which only the browser can tell) goes, if it is
+-- one of the page's.
+uploadSealedAttachmentTx :: PageId -> SealedUpload -> Integer -> (FilePath -> IO BlobId) -> Tx SealedAttachment
+uploadSealedAttachmentTx pid up size store = do
+  p <- findNode pid
+  c <- chainOfPage p
+  requireEditPage c pid
+  (_, pk) <- sealedTarget pid
+  requireUuid "An attachment" up.id.text
+  checkSealedText pk up.meta.keyId up.meta.meta maxMetaCiphertext
+  unless (holdsBytes nonceBytes up.meta.bytesNonce.text) $
+    invalid "This is not an attachment this wiki keeps: its nonce is not of its length."
+  when (size > fromIntegral maxAttachmentSize + 16) $
+    invalid ("An attachment can be at most " <> show (maxAttachmentSize `div` (1024 * 1024)) <> " MB.")
+  page <- findPage pid
+  when (any (\a -> a.id == up.id) page.attachments) $ failWith (Conflict "An attachment with this id exists already.")
+  for_ up.replaces $ \old ->
+    unless (any (\a -> a.id == old) page.attachments) $ invalid "The attachment replaced is not one of the page's."
+  dir <- asks (\x -> x.blobs)
+  blob <- liftIO (store dir)
+  name <- either invalid pure (parseFileName up.id.text)
+  let attachment = Attachment {id = up.id, name, mediaType = uploadedMimeType "application/octet-stream", size = fromIntegral size, source = SourceBlob blob}
+  db $ do
+    traverse_ deleteAttachmentRow up.replaces
+    replaceAttachment pid attachment
+    insertSealedAttachment up.id up.meta
+  pure SealedAttachment {id = up.id, size = fromIntegral size, meta = up.meta}
 
 --------------------------------------------------------------------------------
 -- Notifications

@@ -79,11 +79,20 @@ module Wiki.Core.Encrypted
   , headingOf
   , Field (..)
 
+    -- * Comments and attachments
+  , SealedComment (..)
+  , SealedAnchor (..)
+  , SealedMeta (..)
+
     -- * What each key and ciphertext is bound to
   , grantInfo
   , pageKeyData
   , fieldData
   , contentData
+  , commentData
+  , anchorData
+  , attachmentMetaData
+  , attachmentBytesData
 
     -- * Lengths
   , nonceBytes
@@ -92,14 +101,18 @@ module Wiki.Core.Encrypted
   , sealedKeyBytes
   , maxTitleCiphertext
   , maxBodyCiphertext
+  , maxCommentCiphertext
+  , maxAnchorCiphertext
+  , maxMetaCiphertext
   )
 where
 
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.:?), (.=))
+import Data.Text qualified as T
 import Protolude
 import Text.Show (Show (showsPrec))
-import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
-import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Sealed (..), WrappedKey (..))
+import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..), UserId (..))
+import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), Sealed (..), WrappedKey (..))
 
 --------------------------------------------------------------------------------
 -- Bytes as the browser writes them
@@ -387,6 +400,68 @@ data Field = TitleField | BodyField
   deriving stock (Eq, Show)
 
 --------------------------------------------------------------------------------
+-- Comments and attachments
+
+-- | 'SealedComment': a comment's Markdown, encrypted with the key of its
+-- page's that 'keyId' names (the page's current key when it was written:
+-- one from before a renewal of the space's key stays that one), under a
+-- tag the browser picks at each writing of it ('commentData').
+data SealedComment = SealedComment
+  { keyId :: KeyId
+  , tag :: VersionTag
+  , body :: Sealed
+  }
+  deriving stock (Eq, Generic)
+
+instance Show SealedComment where
+  showsPrec _ _ rest = "SealedComment <ciphertext>" <> rest
+
+instance ToJSON SealedComment where
+  toJSON c = object ["keyId" .= c.keyId, "tag" .= c.tag, "body" .= c.body]
+
+instance FromJSON SealedComment where
+  parseJSON = withObject "SealedComment" $ \o -> SealedComment <$> o .: "keyId" <*> o .: "tag" <*> o .: "body"
+
+-- | 'SealedAnchor': the quote a thread is about, with its context
+-- ("Wiki.Core.Anchor"'s 'Wiki.Core.Anchor.Anchor' as JSON), encrypted with
+-- the key of its page's that 'keyId' names ('anchorData').
+data SealedAnchor = SealedAnchor
+  { keyId :: KeyId
+  , anchor :: Sealed
+  }
+  deriving stock (Eq, Generic)
+
+instance Show SealedAnchor where
+  showsPrec _ _ rest = "SealedAnchor <ciphertext>" <> rest
+
+instance ToJSON SealedAnchor where
+  toJSON a = object ["keyId" .= a.keyId, "anchor" .= a.anchor]
+
+instance FromJSON SealedAnchor where
+  parseJSON = withObject "SealedAnchor" $ \o -> SealedAnchor <$> o .: "keyId" <*> o .: "anchor"
+
+-- | 'SealedMeta': an attachment's name and media type (JSON @{name,
+-- mediaType}@), encrypted with the key of its page's that 'keyId' names
+-- ('attachmentMetaData'), and the nonce its bytes are encrypted with under
+-- the same key ('attachmentBytesData'). The bytes themselves are the
+-- attachment's blob.
+data SealedMeta = SealedMeta
+  { keyId :: KeyId
+  , meta :: Sealed
+  , bytesNonce :: Nonce
+  }
+  deriving stock (Eq, Generic)
+
+instance Show SealedMeta where
+  showsPrec _ _ rest = "SealedMeta <ciphertext>" <> rest
+
+instance ToJSON SealedMeta where
+  toJSON m = object ["keyId" .= m.keyId, "meta" .= m.meta, "bytesNonce" .= m.bytesNonce]
+
+instance FromJSON SealedMeta where
+  parseJSON = withObject "SealedMeta" $ \o -> SealedMeta <$> o .: "keyId" <*> o .: "meta" <*> o .: "bytesNonce"
+
+--------------------------------------------------------------------------------
 -- What each key and ciphertext is bound to
 
 -- | HPKE's @info@ for the grant of a space's key: the kind of key, the
@@ -429,6 +504,24 @@ contentData sid pid k tag chain field = case chain of
       <> " "
       <> fieldName field
 
+-- | The additional data of a comment's text: the space, the page, the page
+-- key, the thread, the comment and the tag of this writing of it.
+commentData :: SpaceId -> PageId -> KeyId -> CommentThreadId -> CommentId -> VersionTag -> Text
+commentData sid pid k tid cid tag = T.unwords ["wiki-comment/1", sid.text, pid.text, k.text, tid.text, cid.text, tag.text]
+
+-- | The additional data of a thread's anchor: the space, the page, the
+-- page key and the thread.
+anchorData :: SpaceId -> PageId -> KeyId -> CommentThreadId -> Text
+anchorData sid pid k tid = T.unwords ["wiki-anchor/1", sid.text, pid.text, k.text, tid.text]
+
+-- | The additional data of an attachment's name and media type.
+attachmentMetaData :: SpaceId -> PageId -> KeyId -> AttachmentId -> Text
+attachmentMetaData sid pid k aid = T.unwords ["wiki-attachment-meta/1", sid.text, pid.text, k.text, aid.text]
+
+-- | The additional data of an attachment's bytes.
+attachmentBytesData :: SpaceId -> PageId -> KeyId -> AttachmentId -> Text
+attachmentBytesData sid pid k aid = T.unwords ["wiki-attachment/1", sid.text, pid.text, k.text, aid.text]
+
 -- | A field's name in the additional data.
 fieldName :: Field -> Text
 fieldName = \case
@@ -464,3 +557,17 @@ maxTitleCiphertext = 8 * 1024
 -- some 6 MiB of Markdown.
 maxBodyCiphertext :: Int
 maxBodyCiphertext = 8 * 1024 * 1024
+
+-- | The longest encrypted comment, in base64url characters: a comment of
+-- 20,000 characters ('Wiki.Core.Comment.maxCommentLength') of up to four
+-- bytes each, and the tag.
+maxCommentCiphertext :: Int
+maxCommentCiphertext = 128 * 1024
+
+-- | The longest encrypted anchor: a quote and its context.
+maxAnchorCiphertext :: Int
+maxAnchorCiphertext = 128 * 1024
+
+-- | The longest encrypted name and media type of an attachment.
+maxMetaCiphertext :: Int
+maxMetaCiphertext = 8 * 1024

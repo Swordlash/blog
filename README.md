@@ -776,8 +776,10 @@ encryption to a page served over plain HTTP, and the panel says so there.
 ### Encrypted spaces
 
 Over `wiki-server`, a private space can be **encrypted**: the titles and
-texts of its pages, and their histories, are encrypted in its members'
-browsers, and the server keeps only ciphertext it cannot read. In the
+texts of its pages, their histories, their comments (with the text each
+quotes) and their attachments (names, types and bytes) are encrypted in
+its members' browsers, and the server keeps only ciphertext it cannot
+read. In the
 space's settings, under **Permissions**, **Encrypt this space…** turns a
 space encrypted. Only a private space with nothing written in it yet can be
 (a new space's untouched home page is deleted with it), and an encrypted
@@ -814,7 +816,8 @@ How it works:
   so, and cannot be edited in that tab until it is reloaded. What this
   does not catch: an older version sent to a browser that never read the
   page; a page the server hides or deletes altogether; and comments or
-  attachments sent as they were before. What your browser remembers is
+  attachments the server leaves out or sends as they were before (each
+  one opens only as itself, on its own page, but has no version number). What your browser remembers is
   in its storage for this site, and nothing in it is secret: clearing the
   browser's data for the wiki forgets it, and with it the protection
   against an older version on that device. Versions written before this
@@ -827,6 +830,19 @@ How it works:
   since. A search limited to an encrypted space is not sent to the server
   at all. That suits small spaces, the kind encrypted spaces are for; a
   space of thousands of pages makes that first search slow.
+- Comments and attachments are encrypted with the page's key, each bound
+  to its page and its own id, which the browser chooses. A comment shows
+  for the people it is shown to on any page; those told of it under the
+  bell are told by the page's id, with no title and no excerpt, and a
+  mention in it notifies nobody, since the server cannot read it. Editing
+  a comment tells nobody. An attachment's bytes are fetched encrypted
+  and decrypted in your browser into a link of its own, let go when you
+  leave the page; an interactive SVG is shown as an image there, as on a
+  copy kept offline. Each upload is encrypted afresh, so the server
+  cannot tell one file uploaded twice from two files of one size. The
+  server sees how many comments a thread has, who wrote each and when,
+  whether a thread quotes the page and is resolved, and each
+  attachment's size.
 - The writing assistant works in encrypted pages as in any other (the
   owner's decision, 2026-11-09): what you ask it about, the page or the
   selection, is sent to the assistant's provider, as in any page. It is
@@ -834,22 +850,21 @@ How it works:
 
 What the server does with a page's text cannot be done in an encrypted
 space, and is refused there with the reason: the server's search, PDF and
-Word exports, feeds and link previews, comments and attachments, drafts,
-templates, moving a page in or out (a page moves within the space as
-usual), importing an archive into it, subspaces, and making it public.
-The page and the editor do not offer comments, attachments or exports
-there, and your browser sends none of them, nor a page's text by the
-plain routes, even to be refused. No draft is kept, on the server or in
+Word exports, feeds and link previews, drafts, templates, moving a page in
+or out (a page moves within the space as usual), importing an archive into
+it, subspaces, and making it public. The page does not offer exports
+there, and your browser sends no page's text, comment or attachment by
+the plain routes, even to be refused. No draft is kept, on the server or in
 your browser: **Cancel** with unsaved changes offers to discard them or
 to go on editing. A whole-wiki export leaves encrypted spaces out, and a
 whole-wiki archive is imported with every space plain. Notifications of
-a change in an encrypted space carry no title and no excerpt, and mentions
-there notify nobody: the server cannot read them.
+a change in an encrypted space carry no title and no excerpt.
 
 What the server still sees: the space's name (shown in the list of
 spaces), the shape of its tree of pages, how large each page is, when and
-by whom pages are saved, who the members are, and their public keys. Not
-the titles, texts or histories.
+by whom pages are saved and commented on, how many comments and
+attachments a page has and their sizes, who the members are, and their
+public keys. Not the titles, texts, histories, comments or attachments.
 
 Removing a reader gives the space a new key (WP5.74b3). A reader stops
 being one when their grant, their group's grant or their membership of the
@@ -864,7 +879,10 @@ key for each page, which what is written next is encrypted with. The
 browser opens all of it before it sends it, and sends nothing if any of
 it does not open. Someone removed who kept the old key can still read,
 with a copy of what the server stores, what was written before, and
-nothing written after. One renewal carries at most 20,000 keys of pages
+nothing written after. A comment or an attachment names the key of its
+page's it was encrypted with, and the renewal keeps every older key of a
+page, wrapped again, so what was written before is read with the key it
+names. One renewal carries at most 20,000 keys of pages
 and 5,000 readers; a larger space is refused with a message. A password reset that
 deletes your keys takes away your access to encrypted spaces until another
 member opens them and shares the key with your new key pair; a space no

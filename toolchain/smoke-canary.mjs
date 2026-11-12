@@ -36,13 +36,18 @@ export function marker(place) {
 }
 
 // Record every request a browser context sends and every answer it gets,
-// as text, for the check.
+// as text, for the check. An object URL (blob:) is the browser's own
+// memory, never the network: the decrypted bytes of an encrypted
+// attachment are read from one, and are not counted.
 export function watch(context) {
+  const local = (url) => url.startsWith("blob:");
   context.on("request", (request) => {
+    if (local(request.url())) return;
     const body = request.postDataBuffer();
     seen.push({ what: `request ${request.method()} ${request.url()}`, bytes: Buffer.concat([Buffer.from(request.url()), body ?? Buffer.alloc(0)]) });
   });
   context.on("response", async (response) => {
+    if (local(response.url())) return;
     try {
       seen.push({ what: `answer to ${response.request().method()} ${response.url()}`, bytes: await response.body() });
     } catch {

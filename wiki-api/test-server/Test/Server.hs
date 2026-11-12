@@ -383,6 +383,11 @@ stubs =
           , save = \_ _ _ -> refuse NotFound
           , versions = \_ _ _ -> refuse NotFound
           , version = \_ _ -> refuse NotFound
+          , threads = \_ -> refuse NotFound
+          , openThread = \_ _ -> refuse NotFound
+          , reply = \_ _ _ -> refuse NotFound
+          , editComment = \_ _ _ _ -> refuse NotFound
+          , upload = \_ _ -> refuse NotFound
           }
     }
 

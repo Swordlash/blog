@@ -27,6 +27,15 @@ module Wiki.Server.Storage.Sealed
   , insertSealedVersion
   , loadSealedVersion
   , loadSealedLatest
+
+    -- * Comments and attachments
+  , insertSealedThread
+  , loadSealedAnchors
+  , insertSealedComment
+  , replaceSealedComment
+  , loadSealedComments
+  , insertSealedAttachment
+  , loadSealedMetas
   )
 where
 
@@ -34,12 +43,12 @@ import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Database.Beam (all_, delete, filter_, in_, insert, insertValues, isNothing_, join_, runDelete, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (&&.), (<-.), (==.))
 import Protolude
-import Wiki.Core.Encrypted (Chain (..), Encapsulated (..), KeyGrant (..), PageKey (..), SealedContent (..), VersionTag (..))
-import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
+import Wiki.Core.Encrypted (Chain (..), Encapsulated (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedMeta (..), VersionTag (..))
+import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), PublicKey (..), Sealed (..), WrappedKey (..))
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (markSpaceLinks, micro)
-import Wiki.Server.Storage.Schema (KeyGrants (..), PageKeys (..), Pages (..), PublicKeys (..), SealedVersions (..), Spaces (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (Attachments (..), Comments (..), KeyGrants (..), PageKeys (..), Pages (..), PublicKeys (..), SealedAttachments (..), SealedComments (..), SealedThreads (..), SealedVersions (..), Spaces (..), Threads (..), WikiDb (..), wikiDb)
 
 --------------------------------------------------------------------------------
 -- Spaces
@@ -193,3 +202,63 @@ loadSealedLatest sid = do
     _ <- join_ wikiDb.pages (\p -> p.id ==. v.page_id &&. p.updated_at ==. v.updated_at &&. p.space_id ==. val_ sid.text)
     pure v
   pure (Map.fromList [(PageId r.page_id, contentOf r) | r <- rows])
+
+--------------------------------------------------------------------------------
+-- Comments and attachments
+
+-- | Store a thread's anchor, encrypted, beside its row of @threads@: none
+-- for a thread about the whole page.
+insertSealedThread :: (Backend be) => CommentThreadId -> KeyId -> Maybe SealedAnchor -> Db be ()
+insertSealedThread tid k anchor =
+  runInsert . insert wikiDb.sealed_threads $
+    insertValues [SealedThreadRow {thread_id = tid.text, key_id = maybe k.text (\a -> a.keyId.text) anchor, anchored = isJust anchor, anchor_nonce = (\a -> a.anchor.nonce.text) <$> anchor, anchor = (\a -> a.anchor.ciphertext.text) <$> anchor}]
+
+-- | The threads of a page with an encrypted row, by thread: whether each is
+-- about a quote, and the quote, encrypted.
+loadSealedAnchors :: (Backend be) => PageId -> Db be (Map CommentThreadId (Bool, Maybe SealedAnchor))
+loadSealedAnchors pid = do
+  rows <- runSelectReturningList . select $ do
+    s <- all_ wikiDb.sealed_threads
+    _ <- join_ wikiDb.threads (\t -> t.id ==. s.thread_id &&. t.page_id ==. val_ pid.text)
+    pure s
+  pure (Map.fromList [(CommentThreadId r.thread_id, (r.anchored, SealedAnchor (KeyId r.key_id) <$> (Sealed <$> (Nonce <$> r.anchor_nonce) <*> (Ciphertext <$> r.anchor)))) | r <- rows])
+
+sealedCommentRow :: CommentId -> SealedComment -> SealedComments Identity
+sealedCommentRow cid c = SealedCommentRow {comment_id = cid.text, key_id = c.keyId.text, tag = c.tag.text, nonce = c.body.nonce.text, body = c.body.ciphertext.text}
+
+-- | Store a comment's text, encrypted, beside its row of @comments@.
+insertSealedComment :: (Backend be) => CommentId -> SealedComment -> Db be ()
+insertSealedComment cid c = runInsert . insert wikiDb.sealed_comments $ insertValues [sealedCommentRow cid c]
+
+-- | A comment's text written again, encrypted.
+replaceSealedComment :: (Backend be) => CommentId -> SealedComment -> Db be ()
+replaceSealedComment cid c = do
+  runDelete (delete wikiDb.sealed_comments (\r -> r.comment_id ==. val_ cid.text))
+  insertSealedComment cid c
+
+-- | The encrypted texts of a page's comments, by comment.
+loadSealedComments :: (Backend be) => PageId -> Db be (Map CommentId SealedComment)
+loadSealedComments pid = do
+  rows <- runSelectReturningList . select $ do
+    s <- all_ wikiDb.sealed_comments
+    c <- join_ wikiDb.comments (\c -> c.id ==. s.comment_id)
+    _ <- join_ wikiDb.threads (\t -> t.id ==. c.thread_id &&. t.page_id ==. val_ pid.text)
+    pure s
+  pure (Map.fromList [(CommentId r.comment_id, SealedComment {keyId = KeyId r.key_id, tag = VersionTag r.tag, body = Sealed (Nonce r.nonce) (Ciphertext r.body)}) | r <- rows])
+
+-- | Store an attachment's name and media type, encrypted, and the nonce of
+-- its bytes, beside its row of @attachments@.
+insertSealedAttachment :: (Backend be) => AttachmentId -> SealedMeta -> Db be ()
+insertSealedAttachment aid m =
+  runInsert . insert wikiDb.sealed_attachments $
+    insertValues [SealedAttachmentRow {attachment_id = aid.text, key_id = m.keyId.text, meta_nonce = m.meta.nonce.text, meta = m.meta.ciphertext.text, bytes_nonce = m.bytesNonce.text, staged_blob = Nothing}]
+
+-- | The encrypted names and media types of a page's attachments, by
+-- attachment.
+loadSealedMetas :: (Backend be) => PageId -> Db be (Map AttachmentId SealedMeta)
+loadSealedMetas pid = do
+  rows <- runSelectReturningList . select $ do
+    s <- all_ wikiDb.sealed_attachments
+    _ <- join_ wikiDb.attachments (\a -> a.id ==. s.attachment_id &&. a.page_id ==. val_ pid.text)
+    pure s
+  pure (Map.fromList [(AttachmentId r.attachment_id, SealedMeta {keyId = KeyId r.key_id, meta = Sealed (Nonce r.meta_nonce) (Ciphertext r.meta), bytesNonce = Nonce r.bytes_nonce}) | r <- rows])

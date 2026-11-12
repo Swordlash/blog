@@ -55,7 +55,38 @@ function wikiTestEncSealed(p) {
     createdBy: null,
     updatedBy: null,
     pageKeys: [p.pageKey, ...(p.olderKeys ?? [])],
+    attachments: (p.attachments ?? []).map((a) => ({ id: a.id, size: a.bytes.length, meta: a.meta })),
   };
+}
+
+// The parts of a multipart form (Wiki.Api.Upload), by name: each part's
+// bytes as a string of one character per byte.
+function wikiTestEncParts(request) {
+  const type = Object.entries(request.headers).find(([k]) => k.toLowerCase() === "content-type")?.[1] ?? "";
+  const boundary = type.match(/boundary=([^;]+)/)?.[1];
+  const body = atob(request.bytes);
+  const parts = {};
+  for (const chunk of body.split(`--${boundary}`).slice(1, -1)) {
+    const at = chunk.indexOf("\r\n\r\n");
+    const name = chunk.slice(0, at).match(/name="([^"]*)"/)?.[1];
+    parts[name] = chunk.slice(at + 4, chunk.length - 2);
+  }
+  return parts;
+}
+
+// Whether what the browser sent is what the server takes: ids that are
+// UUIDs, a comment's tag of 16 bytes, nonces of 12 (Wiki.Server.Storage's
+// checks of a comment, an anchor or an attachment).
+function wikiTestEncTakes({ ids = [], tags = [], nonces = [] }) {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return ids.every((i) => uuid.test(i)) && tags.every((t) => /^[A-Za-z0-9_-]{22}$/.test(t)) && nonces.every((n) => /^[A-Za-z0-9_-]{16}$/.test(n));
+}
+
+const wikiTestEncNotTaken = { error: "Invalid", text: "This is not what the server takes: an id, a tag or a nonce is not of its form." };
+
+// A comment as the encrypted routes answer it (Wiki.Api.Encrypted).
+function wikiTestEncComment(thread, id, content, author, createdAt) {
+  return { id, thread, author: { id: author, name: author, avatar: null }, createdAt, editedAt: null, content };
 }
 
 // A version's heading, as the lists of pages and of versions carry it.
@@ -129,6 +160,14 @@ function wikiTestEncServer(request) {
     const id = decodeURIComponent(plain[1]);
     const s = wikiTestEncrypted.spaces.get(id) ?? wikiTestEncrypted.spaces.get(wikiTestEncrypted.pages.get(id)?.space);
     if (s && s.space.encryption && s.readers.includes(me)) return wikiTestEncJson(409, { error: "Conflict", text: "This page is in an encrypted space." });
+  }
+  // An attachment's bytes, as the server keeps them: encrypted.
+  m = path.match(/^attachments\/([^/]+)\/([^/]+)$/);
+  if (m && request.method === "GET") {
+    for (const p of wikiTestEncrypted.pages.values()) {
+      const a = (p.attachments ?? []).find((x) => x.id === decodeURIComponent(m[1]));
+      if (a) return { status: 200, body: a.bytes, headers: { "Content-Type": "application/octet-stream" } };
+    }
   }
   m = path.match(/^encrypted\/spaces\/([^/]+)(\/.*)?$/);
   if (m) {
@@ -256,6 +295,51 @@ function wikiTestEncServer(request) {
       const listed = all.filter((v, i) => !(i === 0 && wikiTestEncrypted.historyWithoutLatest) && (before === null || Date.parse(v.updatedAt) < Date.parse(before)));
       return wikiTestEncJson(200, listed.slice(0, limit));
     }
+    // Threads and comments, kept as the browser sends them: the server
+    // never reads them.
+    p.threads ??= [];
+    p.attachments ??= [];
+    if (rest === "/threads" && request.method === "GET") return wikiTestEncJson(200, p.threads);
+    if (rest === "/threads" && request.method === "POST") {
+      if (wikiTestEncDue(s)) return wikiTestEncJson(409, wikiTestEncRenewal);
+      const asked = JSON.parse(request.body);
+      if (!wikiTestEncTakes({ ids: [asked.id, asked.comment.id], tags: [asked.comment.content.tag], nonces: [asked.comment.content.body.nonce, ...(asked.anchor ? [asked.anchor.anchor.nonce] : [])] })) return wikiTestEncJson(400, wikiTestEncNotTaken);
+      const createdAt = wikiTestEncNow();
+      const thread = { id: asked.id, page: p.id, anchored: asked.anchor !== null, anchor: asked.anchor, resolved: false, createdAt, comments: [wikiTestEncComment(asked.id, asked.comment.id, asked.comment.content, me, createdAt)] };
+      p.threads.push(thread);
+      return wikiTestEncJson(201, thread);
+    }
+    const replying = rest.match(/^\/threads\/([^/]+)\/comments(?:\/([^/]+))?$/);
+    if (replying) {
+      const thread = p.threads.find((t) => t.id === decodeURIComponent(replying[1]));
+      if (!thread) return wikiTestEncJson(404, { error: "NotFound" });
+      if (wikiTestEncDue(s)) return wikiTestEncJson(409, wikiTestEncRenewal);
+      const asked = JSON.parse(request.body);
+      if (!wikiTestEncTakes({ ids: asked.id ? [asked.id] : [], tags: [asked.content.tag], nonces: [asked.content.body.nonce] })) return wikiTestEncJson(400, wikiTestEncNotTaken);
+      if (replying[2] === undefined && request.method === "POST") {
+        const comment = wikiTestEncComment(thread.id, asked.id, asked.content, me, wikiTestEncNow());
+        thread.comments.push(comment);
+        return wikiTestEncJson(201, comment);
+      }
+      const comment = thread.comments.find((c) => c.id === decodeURIComponent(replying[2]));
+      if (comment && request.method === "PUT") {
+        Object.assign(comment, { content: asked.content, editedAt: wikiTestEncNow() });
+        return wikiTestEncJson(200, comment);
+      }
+      return wikiTestEncJson(404, { error: "NotFound" });
+    }
+    // An attachment: its name and media type, and its bytes, encrypted;
+    // kept under the id the browser chose, replacing the one it names.
+    if (rest === "/attachments" && request.method === "POST") {
+      if (wikiTestEncDue(s)) return wikiTestEncJson(409, wikiTestEncRenewal);
+      const parts = wikiTestEncParts(request);
+      const sealed = JSON.parse(parts.sealed);
+      if (!wikiTestEncTakes({ ids: [sealed.id], nonces: [sealed.meta.meta.nonce, sealed.meta.bytesNonce] })) return wikiTestEncJson(400, wikiTestEncNotTaken);
+      const bytes = Uint8Array.from(parts.file, (c) => c.charCodeAt(0));
+      p.attachments = p.attachments.filter((a) => a.id !== sealed.replaces);
+      p.attachments.push({ id: sealed.id, meta: sealed.meta, bytes });
+      return wikiTestEncJson(201, { id: sealed.id, size: bytes.length, meta: sealed.meta });
+    }
     const v = rest.match(/^\/versions\/(.+)$/);
     if (v && request.method === "GET") {
       const time = decodeURIComponent(v[1]);
@@ -382,8 +466,28 @@ async function wiki_test_encrypted_unlock_device(user) {
 
 // Everything the server stored of the space's pages and grants, as one
 // text: what a test searches for a plain title or text.
+// What the server stored, as JSON: an attachment's bytes as a string of
+// one character per byte, so that a word of them in plain text shows.
 function wiki_test_encrypted_stored() {
-  return JSON.stringify({ pages: [...wikiTestEncrypted.pages.values()], spaces: [...wikiTestEncrypted.spaces.values()], created: wikiTestEncrypted.created });
+  const pages = [...wikiTestEncrypted.pages.values()].map((p) => ({ ...p, attachments: (p.attachments ?? []).map((a) => ({ ...a, bytes: String.fromCharCode(...a.bytes) })) }));
+  return JSON.stringify({ pages, spaces: [...wikiTestEncrypted.spaces.values()], created: wikiTestEncrypted.created });
+}
+
+// The bytes the server stored for each attachment, in base64, as JSON.
+function wiki_test_encrypted_attachment_bytes() {
+  return JSON.stringify([...wikiTestEncrypted.pages.values()].flatMap((p) => (p.attachments ?? []).map((a) => a.bytes.toBase64())));
+}
+
+// The width of the image at a URL the page made (an object URL), as an
+// <img> loads it, or -1 if it does not load. The page's policy lets images
+// come from object URLs, and not fetches.
+async function wiki_test_encrypted_image_width(url) {
+  return await new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve(image.naturalWidth);
+    image.onerror = () => resolve(-1);
+    image.src = url;
+  });
 }
 
 // Take WebCrypto away, as a page over plain HTTP has none, or give it back.

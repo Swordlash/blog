@@ -363,3 +363,55 @@ function wiki_enc_keep_seen(user, page, seen) {
     return "now";
   }
 }
+
+// Encrypt bytes (an attachment's, a Uint8Array) with a page key and the
+// additional data given: an object {nonce, bytes}, the bytes encrypted, or
+// {error}. A new random nonce each time, so that two uploads of one file
+// are two different ciphertexts.
+async function wiki_enc_seal_bytes(handle, bytes, data) {
+  try {
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const sealed = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: wikiEncText(data) }, wikiEncKey(handle), bytes);
+    return { nonce: wikiEncToBase64(nonce), bytes: new Uint8Array(sealed) };
+  } catch (error) {
+    return { error: String(error?.message ?? error) };
+  }
+}
+
+// The parts of what wiki_enc_seal_bytes gave: its nonce, its bytes, and
+// why it failed ("" when it did not).
+function wiki_enc_sealed_nonce(sealed) {
+  return sealed.nonce ?? "";
+}
+
+function wiki_enc_sealed_bytes(sealed) {
+  return sealed.bytes ?? new Uint8Array(0);
+}
+
+function wiki_enc_sealed_error(sealed) {
+  return sealed.error ?? "";
+}
+
+// An attachment's bytes, fetched from the address given (the server's, of
+// its encrypted bytes), decrypted with a page key and the additional data
+// given, as an object URL of this media type: JSON {url}, or {error}. The
+// caller revokes the URL when the page no longer shows it.
+async function wiki_enc_open_attachment(handle, address, nonce, data, mediaType) {
+  try {
+    const answer = await fetch(address, { credentials: "same-origin" });
+    if (!answer.ok) throw new Error(`The attachment could not be read: ${answer.status}.`);
+    const opened = await crypto.subtle.decrypt({ name: "AES-GCM", iv: wikiEncFromBase64(nonce), additionalData: wikiEncText(data) }, wikiEncKey(handle), await answer.arrayBuffer());
+    return JSON.stringify({ url: URL.createObjectURL(new Blob([opened], { type: mediaType })) });
+  } catch (error) {
+    return JSON.stringify({ error: error?.name === "OperationError" ? "This attachment does not open with its page's key." : String(error?.message ?? error) });
+  }
+}
+
+// Let an object URL go.
+function wiki_enc_revoke(url) {
+  try {
+    URL.revokeObjectURL(url);
+  } catch {
+    // Not an object URL: nothing to let go.
+  }
+}

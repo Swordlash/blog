@@ -115,6 +115,11 @@ data PageEvent
   | -- | The page was saved: the time of its new version. A tab showing an
     -- older version fetches the page again.
     PageChanged UTCTime
+  | -- | The page's threads changed: a thread opened, a comment added or
+    -- edited, on a page of an encrypted space, whose comments the server
+    -- holds only encrypted and tells nothing of. A tab showing the page
+    -- reads its threads again.
+    ThreadsChanged
   | -- | An event of a type this program does not know, from a newer
     -- server. It changes nothing.
     Unknown Text
@@ -131,6 +136,7 @@ instance ToJSON PageEvent where
     Editing editors -> object ["type" .= ("editing" :: Text), "editors" .= editors]
     Reading readers -> object ["type" .= ("readers" :: Text), "readers" .= readers]
     PageChanged at -> object ["type" .= ("page-changed" :: Text), "updatedAt" .= at]
+    ThreadsChanged -> object ["type" .= ("threads-changed" :: Text)]
     Unknown kind -> object ["type" .= kind]
 
 instance FromJSON PageEvent where
@@ -145,6 +151,7 @@ instance FromJSON PageEvent where
       "editing" -> Editing <$> o .: "editors"
       "readers" -> Reading <$> o .: "readers"
       "page-changed" -> PageChanged <$> o .: "updatedAt"
+      "threads-changed" -> pure ThreadsChanged
       other -> pure (Unknown other)
 
 -- | A page's threads after an event. The application applies events to the
@@ -162,6 +169,7 @@ applyEvent = \case
   Editing _ -> identity
   Reading _ -> identity
   PageChanged _ -> identity
+  ThreadsChanged -> identity
   Unknown _ -> identity
 
 -- | 'Readers' is who reads a page, as a connection is told: the first

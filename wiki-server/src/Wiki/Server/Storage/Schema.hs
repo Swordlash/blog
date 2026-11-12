@@ -66,6 +66,9 @@ module Wiki.Server.Storage.Schema
   , KeyGrants (..)
   , PageKeys (..)
   , SealedVersions (..)
+  , SealedThreads (..)
+  , SealedComments (..)
+  , SealedAttachments (..)
 
     -- * Settings and the log
   , Settings (..)
@@ -818,6 +821,18 @@ deriving stock instance Eq (SealedVersions Identity)
 
 deriving stock instance Show (SealedVersions Identity)
 
+deriving stock instance Eq (SealedThreads Identity)
+
+deriving stock instance Show (SealedThreads Identity)
+
+deriving stock instance Eq (SealedComments Identity)
+
+deriving stock instance Show (SealedComments Identity)
+
+deriving stock instance Eq (SealedAttachments Identity)
+
+deriving stock instance Show (SealedAttachments Identity)
+
 deriving stock instance Eq (EmailVerifications Identity)
 
 deriving stock instance Show (EmailVerifications Identity)
@@ -959,6 +974,65 @@ instance Table SealedVersions where
     deriving anyclass (Beamable)
   primaryKey r = SealedVersionKey r.page_id r.updated_at
 
+-- | A thread's anchor in an encrypted space, encrypted (@sealed_threads@,
+-- migration @0018-sealed-comments-and-attachments@), beside its row of
+-- 'Threads', which has no quote: none for a thread about the whole page.
+data SealedThreads f = SealedThreadRow
+  { thread_id :: Columnar f Text
+  , key_id :: Columnar f Text
+  , anchored :: Columnar f Bool
+  , anchor_nonce :: Columnar f (Maybe Text)
+  , anchor :: Columnar f (Maybe Text)
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table SealedThreads where
+  newtype PrimaryKey SealedThreads f = SealedThreadKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = SealedThreadKey r.thread_id
+
+-- | A comment's text in an encrypted space, encrypted (@sealed_comments@),
+-- beside its row of 'Comments', whose body is empty.
+data SealedComments f = SealedCommentRow
+  { comment_id :: Columnar f Text
+  , key_id :: Columnar f Text
+  , tag :: Columnar f Text
+  , nonce :: Columnar f Text
+  , body :: Columnar f Text
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table SealedComments where
+  newtype PrimaryKey SealedComments f = SealedCommentKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = SealedCommentKey r.comment_id
+
+-- | An attachment's name and media type in an encrypted space, encrypted,
+-- and the nonce of its bytes (@sealed_attachments@), beside its row of
+-- 'Attachments', named by its id, whose blob holds the encrypted bytes.
+-- @staged_blob@ is the blob of an attachment encrypted while its space is
+-- being encrypted, not yet in its row's place.
+data SealedAttachments f = SealedAttachmentRow
+  { attachment_id :: Columnar f Text
+  , key_id :: Columnar f Text
+  , meta_nonce :: Columnar f Text
+  , meta :: Columnar f Text
+  , bytes_nonce :: Columnar f Text
+  , staged_blob :: Columnar f (Maybe Text)
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table SealedAttachments where
+  newtype PrimaryKey SealedAttachments f = SealedAttachmentKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = SealedAttachmentKey r.attachment_id
+
 --------------------------------------------------------------------------------
 -- The database
 
@@ -998,6 +1072,9 @@ data WikiDb f = WikiDb
   , key_grants :: f (TableEntity KeyGrants)
   , page_keys :: f (TableEntity PageKeys)
   , sealed_versions :: f (TableEntity SealedVersions)
+  , sealed_threads :: f (TableEntity SealedThreads)
+  , sealed_comments :: f (TableEntity SealedComments)
+  , sealed_attachments :: f (TableEntity SealedAttachments)
   }
   deriving stock (Generic)
   deriving anyclass (Database be)
