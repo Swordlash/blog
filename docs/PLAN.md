@@ -1601,7 +1601,7 @@ decision 58); #188 (emojis: the
 done and closed: WP5.86, #236; the owner, 2026-11-11: Slack's names that
 GitHub's list does not have are not needed); #189 (backlinks, done: decision 71, #239); #196 (done: decision 72, #238); #200 (done: decision 73, #249: an interactive SVG in a frame
 that runs scripts and shares no origin, the frame the plugins will run
-in); #204's TODO lists (done: decision 74, #243; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3), started 2026-11-11 at night, with the editor's folding (WP5.96) and #191 (WP5.97) beside it by the owner's word, ahead of #187. Then the three large ones, in the owner's order of
+in); #204's TODO lists (done: decision 74, #243; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3), started 2026-11-11 at night, with the editor's folding (WP5.96) and #191 (WP5.97) beside it by the owner's word, ahead of #187. WP5.96 is done (#252). Then the three large ones, in the owner's order of
 2026-11-11: #187 (autocompletion); #191 (presentations, which bring the
 notion of a kind of page); and last #186 (plugins: decision 69, WP5.84
 first), with #190 (table views) and #204's calendar after it as plugins.
@@ -1630,13 +1630,8 @@ which the wiki pins since #227.
   device's own key, was weighed and left: its cost is a new layer of
   keys, and what it adds is narrow. Built in stages on one branch, a
   design first, the stored formats before the rest.
-- **WP5.96 The editor folds spoilers (the owner, 2026-11-11: "edytor
-  powinien też pozwalać zwijać spoilery", before the presentations).** In
-  the source editor a spoiler block and a section whose heading is a
-  spoiler can be folded and unfolded, with CodeMirror's own folding. The
-  presentations' editor mode shows slides this way.
 - **WP5.97 Presentations as a kind of page (#191; the owner's answers of
-  2026-11-11; one pull request, on WP5.96).** A page has a kind, stored:
+  2026-11-11; one pull request, #253, on WP5.96's folding, which is merged: #252).** A page has a kind, stored:
   a document or a presentation. "New page" offers the two kinds, and a
   document's templates come after choosing "Document" (the owner: the
   other templates leave the menu's first level). The presentation's
@@ -2602,6 +2597,22 @@ needs. Each was true when its package merged; check before relying on one.
   listener is attached is the guess). wiki-core's `HtmlCost` timing test
   ("elements nested deep") failed twice in whole-suite runs on the shared
   machine and passed alone.
+- **The editor's folding (WP5.96, #252).** In the source editor a block
+  spoiler and a section whose heading is a spoiler fold, by CodeMirror's
+  own folding fed with ranges the wiki's parser names
+  (`Wiki.Core.Markdown.Folds`; every block carries the first and last
+  line of its source, `Ast.parseWithSpans`). A fold belongs to its first
+  line: a line break put anywhere in that line opens it, and so does any
+  edit inside it. Left: a heading in a quotation, a list or a box gets no
+  fold (the parser gives no lines there); a text with `\r` gets none (the
+  parser and CodeMirror count its lines differently); folds do not
+  survive a reload; fold-all is not offered (AltGr sends Ctrl+Alt on
+  Windows, and its keys would catch typed brackets).
+- **A browser spec that depends on its neighbours.** Emoji's "inserts the
+  emoji chosen in the toolbar's menu" fails when run in one group with the
+  editor's other specs and passes alone, on `main` as on every branch
+  (Enter in the empty emoji search is expected to be prevented and is
+  not); CI's sharding happens to pass it. Nobody has looked for the cause.
 
 ## Assumptions
 
