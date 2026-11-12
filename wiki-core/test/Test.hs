@@ -35,6 +35,7 @@ import Test.Path qualified as Path
 import Test.Permission qualified as Permission
 import Test.Permission.Writes qualified as Writes
 import Test.Search qualified as Search
+import Test.SlideRows qualified as SlideRows
 import Test.Slides qualified as Slides
 import Test.Slug qualified as Slug
 import Test.Space qualified as Space
@@ -49,6 +50,7 @@ main = hspec . parallel $ do
   Ast.spec
   Box.spec
   Slides.spec
+  SlideRows.spec
   Edit.spec
   Tikz.spec
   Math.spec

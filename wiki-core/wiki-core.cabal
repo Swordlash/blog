@@ -102,6 +102,7 @@ library
       Wiki.Core.Path
       Wiki.Core.Permission
       Wiki.Core.Search
+      Wiki.Core.SlideRows
       Wiki.Core.Slides
       Wiki.Core.Slug
       Wiki.Core.Space
@@ -190,6 +191,7 @@ test-suite wiki-core-test
       Test.Permission
       Test.Permission.Writes
       Test.Search
+      Test.SlideRows
       Test.Slides
       Test.Slug
       Test.Space
