@@ -159,6 +159,7 @@ library
       Wiki.App.View.Security
       Wiki.App.View.Server
       Wiki.App.View.SignIn
+      Wiki.App.View.SlideRow
       Wiki.App.View.Slides
       Wiki.App.View.History
       Wiki.App.View.HomeIcon

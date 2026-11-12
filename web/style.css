@@ -2647,18 +2647,15 @@ body:has(.slides-view) {
   box-shadow: 0 0 0 2px var(--background);
 }
 
-.slide-fit-fits,
-.cm-wiki-fit-fits {
+.slide-fit-fits {
   --fit-colour: #1a7f37;
 }
 
-.slide-fit-tight,
-.cm-wiki-fit-tight {
+.slide-fit-tight {
   --fit-colour: #bf8700;
 }
 
-.slide-fit-overflowing,
-.cm-wiki-fit-overflowing {
+.slide-fit-overflowing {
   --fit-colour: #cf222e;
 }
 
@@ -3610,53 +3607,90 @@ body:has(.slides-view) {
   font-size: 0.85rem;
 }
 
-/* A slide's controls at the start of its first line in the editor: the
-   handle it is dragged by, and the button that opens or closes it. Where
-   a dragged slide would go is marked by a line above the slide it would go
-   before, or below the last line. */
-.cm-wiki-slide-controls {
-  display: inline-flex;
-  gap: 0.15rem;
-  margin-right: 0.3rem;
-  user-select: none;
-  vertical-align: baseline;
+/* A presentation edited slide by slide (WP5.103): the master, the
+   CodeMirror over the whole text, and the textarea before it are hidden,
+   and the slides are a list of rows, each a header and, while it is open,
+   a CodeMirror of its own over the slide's Markdown, as tall as its text. */
+.editor-form.slides .editor-source > .editor-cm,
+.editor-form.slides .editor-source > .editor-text {
+  display: none;
 }
 
-.cm-wiki-slide-handle {
-  cursor: grab;
-  color: var(--muted);
+.editor-slides {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.cm-wiki-slide-toggle {
-  padding: 0 0.2rem;
-  border: 0;
-  background: none;
-  color: var(--muted);
+.slide-row-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--text);
   font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
-.cm-wiki-slide-toggle:hover,
-.cm-wiki-slide-handle:hover {
-  color: var(--accent);
+.slide-row.open > .slide-row-toggle {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
-.cm-wiki-slide-fit {
-  display: inline-block;
-  align-self: center;
-  width: 0.55em;
-  height: 0.55em;
-  margin: 0 0.2rem;
+.slide-row-toggle:disabled {
+  cursor: default;
+  color: var(--muted);
+}
+
+.slide-row-toggle:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.slide-row-number {
+  min-width: 1.6rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.slide-row-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slide-row-fit {
+  width: 0.6rem;
+  height: 0.6rem;
   border-radius: 50%;
   background: var(--fit-colour, #8c959f);
 }
 
-.cm-wiki-slide-drop {
-  box-shadow: inset 0 2px 0 var(--accent);
+.slide-row-part,
+.slide-row-problems {
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
-.cm-wiki-slide-drop-end {
-  box-shadow: inset 0 -2px 0 var(--accent);
+.slide-row-problems {
+  color: #cf222e;
+}
+
+.editor-slides .editor-cm .cm-editor {
+  height: auto;
+  min-height: 2.5rem;
+  border-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  resize: none;
 }
 
 .editor-slides-mode [aria-pressed="true"],

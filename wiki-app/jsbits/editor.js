@@ -71,6 +71,11 @@ function wiki_editor_slides_mode(host, on) {
   host.wikiEditor?.slidesMode?.(on);
 }
 
+// The editor's undo (true) or redo (false), on the master's history.
+function wiki_editor_history(host, undoing) {
+  host.wikiEditor?.history?.(undoing);
+}
+
 // The rows' list keeps what had the focus in it (a row's text, a row's
 // header), so that the focus can be given back when the list's patch moved
 // that element, which loses the focus in the browser.
