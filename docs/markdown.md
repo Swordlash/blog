@@ -487,6 +487,14 @@ On the page, where nothing is presented, a pause shows nothing and an `increment
 
 Everything a page shows a slide shows: formulas set with the macros defined on the slides before them, diagrams, pictures, code, tables, images and the HTML a page may hold.
 
+### Editing a presentation
+
+The editor shows a presentation slide by slide: each slide folded to its first line, but the one the cursor is on. Each slide's first line starts with a button that opens or closes it; opening one closes the others, and with Ctrl (Cmd on a Mac) held the others stay open. Each slide but the title slide (and what comes before the first heading) has a handle beside its button: dragged onto another slide's lines, the slide goes there, its whole text, blank lines included, as one edit that one undo takes back. Alt+Up and Alt+Down move the slide the cursor is on one place up or down. "New slide" adds a `##` heading at the end, its title selected, to be typed over. A move adds nothing to the text but line breaks where two slides would run together: after a last slide that does not end with one, and before a slide whose title is underlined with `---`, which the line above would otherwise take as its own. A move that would put other slides inside a fence or a box left open at the end of a slide is not made.
+
+"Raw" shows the Markdown as it is, unfolded; "Slides" goes back. The browser remembers the choice. Neither changes a byte of the text: folding is how the text is shown. A text with carriage returns (`\r`) has no slides to fold or move in the editor, which says so; it is edited as written.
+
+The preview shows the slide the cursor is on, as a card of the deck's shape and look, with its notes under it and every step shown; with "Raw", the whole deck, or the cursor's slide alone with "One slide".
+
 Presenting, the right arrow, Space and PageDown show the next step of the slide and then the next slide; the left arrow and PageUp hide the last step shown, or go back to the slide before, whole. Home and End go to the first slide and the last, **f** fills the screen (Escape leaves it), **n** shows the notes and **o** every slide, whole, to pick one; on a touch screen, swipe. A step appears in place, with a short fade (none where the system asks for reduced motion): the content shown already does not move. The slide and the step shown are in the address (`?slide=3&step=2`), so a reload or a link comes back to them. "Print" puts one slide on each page, whole, the page the slide's shape, so that the browser's "Save as PDF" keeps the deck as a file; with "with notes" ticked, each slide is printed on its own A4 page above its notes, and with "each step on its own page" ticked, a slide with steps takes a page for each step.
 
 ### Exported as documents

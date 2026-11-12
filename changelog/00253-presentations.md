@@ -41,6 +41,21 @@ title: Presentations, a kind of page
   quotation; a line `{.incremental}` just before a list shows its items one
   at a time, as `[[!incremental]]` does. The Beamer export shows the same
   steps.
+- The editor shows a presentation slide by slide: every slide folded to
+  its first line but the one being written. A slide's button opens it
+  (and closes the others, unless Ctrl or Cmd is held); its handle drags it
+  to another place, and Alt+Up and Alt+Down move the slide the cursor is
+  in. "New slide" adds one at the end. The preview beside the text shows
+  the slide the cursor is on, as it will be presented. "Raw" shows the
+  Markdown unfolded, with the whole deck in the preview; the browser
+  remembers which.
+
+  ```text
+  ▸ ⠿ ## Where we are …      (folded: click ▸ to open it)
+  ▾ ⠿ ## Next quarter        (open: the cursor is here)
+      Hiring [[!pause]] and a new office.
+  ```
+
 - The editor marks in yellow what a page's kind does not read: a pause,
   speaker notes or `[[!style]]` in a document, and in a presentation a
   `##` heading inside a list or a box, which opens no slide.
