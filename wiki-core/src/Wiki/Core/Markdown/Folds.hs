@@ -15,11 +15,16 @@
 --   last line: a section of the page, so not one of a heading inside a
 --   block spoiler or a @div@, which is no section of the page.
 --
--- A section ends just before the next heading of the same or a higher
--- level, or at the end of the page or of the block spoiler or @div@ the
--- heading is in, without the blank lines at its end. A setext heading
--- (its text on one line, @===@ or @---@ under it) folds from its
--- underline, the line the parser places it at. An inline spoiler,
+-- A section starts at its heading's first line and ends just before the
+-- first line of the next heading of the same or a higher level, or at the
+-- end of the page or of the block spoiler or @div@ the heading is in,
+-- without the blank lines at its end. A heading's lines are the parser's
+-- ('A.parseWithSpans'): a setext heading (its title on one line or more,
+-- @===@ or @---@ under it) starts at its title's first line, which stays
+-- in sight when it is folded; the rest of its title and its underline
+-- fold with the section. A setext heading is never a heading spoiler: its
+-- first line, starting with @[[!spoiler]]@, is a marker line. An inline
+-- spoiler,
 -- @||hidden||@, lies within a line and cannot fold. A heading inside a
 -- quotation, a box or a list item has no fold: its lines carry the
 -- quotation's or the item's prefix, and the parser does not say where
