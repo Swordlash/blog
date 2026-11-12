@@ -9,7 +9,7 @@
 // for a card not measured yet. The measure is taken again, a frame later, whenever the cards
 // change (a render, an island drawn: a MutationObserver), a child of a body
 // changes size (an image or a diagram loaded: a ResizeObserver), an image
-// loads, or a font arrives, and the pane's width sets the cards' scale
+// loads or fails, or a font arrives or fails, and the pane's width sets the cards' scale
 // (--slide-scale).
 const wikiFitWatches = new Map();
 const wikiFitSchedules = new Set();
@@ -110,8 +110,13 @@ function wiki_fit_watch(root, callback) {
     schedule();
   });
   changes.observe(root, { subtree: true, childList: true, characterData: true });
+  // Every outcome of what a measure waits on measures again: an image
+  // loaded or failed (a failed one is complete, and has the size of its
+  // box), a font arrived or failed.
   root.addEventListener("load", schedule, true);
+  root.addEventListener("error", schedule, true);
   document.fonts?.addEventListener("loadingdone", schedule);
+  document.fonts?.addEventListener("loadingerror", schedule);
   observe();
   schedule();
   wikiFitSchedules.add(schedule);
@@ -123,7 +128,9 @@ function wiki_fit_watch(root, callback) {
     sizes.disconnect();
     changes.disconnect();
     root.removeEventListener("load", schedule, true);
+    root.removeEventListener("error", schedule, true);
     document.fonts?.removeEventListener("loadingdone", schedule);
+    document.fonts?.removeEventListener("loadingerror", schedule);
   });
   return id;
 }

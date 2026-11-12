@@ -318,6 +318,14 @@ spec m = do
         press "ArrowRight"
       unmount shown
 
+  it "measures a slide whose image fails to load: it is not left unmeasured" $ runPage $ do
+    let failing = T.intercalate "\n\n" ["# Deck", "## Lost", "Above it.", "![Lost](data:image/png;base64,AAAA){width=600 height=600}"]
+    (_, _) <- openDeck failing
+    eventually $ do
+      found <- editorFits
+      length found `shouldBe` 2
+      found `shouldSatisfy` notElem "unmeasured"
+
   it "measures a deck of fifty slides, and a slide again after a keystroke" $ runPage $ do
     let fifty = T.intercalate "\n\n" ("# Fifty" : concat [["## Slide " <> show n, "A first paragraph.", "A second one.", "$x^" <> show n <> "$"] | n <- [1 .. 49 :: Int]])
     unsafeIOToPageM js_fit_log_start
