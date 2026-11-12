@@ -69,8 +69,9 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
 
     it "finds, from the same parse, the problems and islands the parser and the islands' places find apart, and the spoilers' folds" $ do
       let source = "# T\n\n> [!]\n\n[[!spoiler]]{a}(A)\n$x$\n[[/spoiler]]{a}\n\n## [[!spoiler]] Q\n\nAnswer $y$.\n\n[[!pause]] x\n"
-          checked = checkText source
-      checked.problems `shouldBe` parserProblems source
+          checked = checkText Document source
+      checked.problems `shouldBe` sort (parserProblems source <> kindProblems Document source)
+      (checkText Presentation source).problems `shouldBe` sort (parserProblems source <> kindProblems Presentation source)
       checked.islands `shouldBe` islandPlaces source
       checked.folds `shouldBe` spoilerFolds source
       map (\f -> (f.from, f.to)) checked.folds `shouldBe` [(5, 7), (9, 13)]
