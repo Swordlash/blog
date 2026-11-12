@@ -24,7 +24,8 @@ globalThis.wikiFitRelease = () => {
 };
 
 // How far what a slide shows goes beyond where it may: its body's content
-// below and beside the body's room, and the title, the body and the footer
+// below and beside the body's room (down to the bottom of the body's
+// padding, where the body cuts it), and the title, the body and the footer
 // below and beside the slide's own box (a title that wraps to more lines
 // than the slide has, an unbroken word in a heading). In lines of the
 // body's text, at the layout's own size; null for a slide not laid out, or
@@ -38,9 +39,12 @@ function wikiFitOf(slide) {
   const k = rect.height / body.offsetHeight;
   const style = getComputedStyle(body);
   const line = (parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.4) * k;
-  // The body's content against its room, a child's bottom margin, which
-  // shows nothing, left out.
-  const bottom = rect.bottom - (parseFloat(style.paddingBottom) + parseFloat(style.borderBottomWidth)) * k;
+  // The body's content against the edge it is cut at. The body hides what
+  // runs out of its padding box (overflow: hidden), so content in its
+  // bottom padding is shown, not cut: the room goes down to the padding's
+  // bottom, the edge the slides view cuts at. A child's bottom margin,
+  // which shows nothing, is left out.
+  const bottom = rect.bottom - parseFloat(style.borderBottomWidth) * k;
   let lowest = -Infinity;
   for (const child of body.children) {
     if (child.classList.contains("slide-end")) continue;
@@ -75,7 +79,7 @@ function wikiFitMeasure(root) {
     // diagrams were drawn then.
     if (Array.isArray(globalThis.wikiFitLog)) {
       const diagrams = slide.querySelectorAll(".wiki-mermaid");
-      globalThis.wikiFitLog.push({ slide: found.length, below: fit ? fit[0] : null, diagrams: diagrams.length, drawn: slide.querySelectorAll(".wiki-mermaid svg").length });
+      globalThis.wikiFitLog.push({ slide: found.length, below: fit ? fit[0] : null, wider: fit ? fit[1] : null, diagrams: diagrams.length, drawn: slide.querySelectorAll(".wiki-mermaid svg").length });
     }
   }
   return found;
