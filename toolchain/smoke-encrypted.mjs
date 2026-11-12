@@ -111,9 +111,12 @@ export async function encryptedSpaces({ browser, url, origin, data, timeout, eve
   // ---- A page in two versions ----------------------------------------------
 
   const title = marker("title");
-  // A word the search looks for, which is no marker: a search page's
-  // address carries its words to the server when the page is loaded, as
-  // any address does, and the test loads one.
+  // A word the search looks for, which is no marker. The search page's
+  // address carries its words, and loading it sends them to the server,
+  // which searches the plain spaces with them: the server learns what a
+  // reader searched for, though never the encrypted pages nor which of
+  // them matched (the README's "What the server still sees"). A marker
+  // searched for would be found there by the canary, rightly.
   const searchWord = `zebracrossing${Date.now()}`;
   await page.goto(url("/s/smoke-secret/"));
   await page.locator("#app .space-view .actions a", { hasText: "New page" }).click();
@@ -161,34 +164,24 @@ export async function encryptedSpaces({ browser, url, origin, data, timeout, eve
   // ---- An attachment and a comment ----------------------------------------
 
   // The file attached in the editor, read back, decrypted, from the page.
-  // The image behind an attachment's link on the page: the link is an
-  // object URL of the bytes, decrypted, which loads as an image of its
-  // width (the page's policy lets images, not fetches, read object URLs).
+  // The file behind an attachment's link on the page: the link leads to an
+  // object URL of the bytes, decrypted, which an SVG's link downloads
+  // (application/octet-stream), never opens as a document; downloaded as a
+  // reader saves it, its bytes are the file's, which the canary's
+  // read-back must find.
   const attachmentIn = async (p) => {
     const link = p.locator("#app .page-view .attachments a", { hasText: fileName });
     await link.waitFor({ timeout });
     await eventually(async () => assert.match((await link.getAttribute("href")) ?? "", /^blob:/), "the attachment's decrypted link");
-    const width = await link.evaluate(
-      (a) =>
-        new Promise((done) => {
-          const image = new Image();
-          image.onload = () => done(image.naturalWidth);
-          image.onerror = () => done(-1);
-          image.src = a.href;
-        }),
-    );
-    // Downloaded from the link, as a reader saves it: the file's bytes,
-    // decrypted, which the canary's read-back must find.
+    assert.equal(await link.getAttribute("download"), fileName, "the link's download name");
     const downloading = p.waitForEvent("download", { timeout });
     await link.click();
-    const saved = await (await downloading).path();
-    const bytes = await readFile(saved, "utf8");
-    assert.equal(bytes, fileBytes, "the attachment's bytes, downloaded");
+    const bytes = await readFile(await (await downloading).path(), "utf8");
     shown.push(bytes);
-    return width;
+    return bytes;
   };
   await page.goto(url(pageAddress));
-  assert.equal(await attachmentIn(page), 7, "the attachment's bytes, decrypted");
+  assert.equal(await attachmentIn(page), fileBytes, "the attachment's bytes, decrypted");
   // Text selected on the page, commented on: the comment and the text it
   // quotes encrypted in the browser.
   const quote = marker("quote");
@@ -244,7 +237,7 @@ export async function encryptedSpaces({ browser, url, origin, data, timeout, eve
   }, "the reader given the key");
   await bea.page.goto(url(pageAddress));
   await bea.page.locator("#app .page-view .page-body", { hasText: marker("text") }).waitFor({ timeout });
-  assert.equal(await attachmentIn(bea.page), 7, "the attachment's bytes, decrypted for the reader");
+  assert.equal(await attachmentIn(bea.page), fileBytes, "the attachment's bytes, decrypted for the reader");
   await commentIn(bea.page);
   await read(bea.page);
   console.log("ok: a reader granted the space waits for its key, and reads the page, its attachment and its comment once a member's browser has shared it");
@@ -280,7 +273,7 @@ export async function encryptedSpaces({ browser, url, origin, data, timeout, eve
     await p.locator("#app .space-view", { hasText: title }).waitFor({ timeout });
     await p.goto(url(pageAddress));
     await p.locator("#app .page-view .page-body", { hasText: word }).waitFor({ timeout });
-    assert.equal(await attachmentIn(p), 7, `${who}: the attachment's bytes after the new key`);
+    assert.equal(await attachmentIn(p), fileBytes, `${who}: the attachment's bytes after the new key`);
     await commentIn(p);
     await p.locator("#app .page-view .actions a", { hasText: "History" }).click();
     await p.locator("#app .history-view", { hasText: marker("older version") }).waitFor({ timeout });

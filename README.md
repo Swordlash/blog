@@ -836,12 +836,14 @@ How it works:
   bell are told by the page's id, with no title and no excerpt, and a
   mention in it notifies nobody, since the server cannot read it. Editing
   a comment tells nobody. An attachment's bytes are fetched encrypted
-  and decrypted in your browser into a link of its own, let go when
-  another page's attachments are opened or you sign out; an interactive
-  SVG is shown as an image there, as on a copy kept offline. A file of a
-  type the wiki does not show in the browser (anything but images, video,
-  audio and plain text) is downloaded from that link, never opened as a
-  page. Each upload is encrypted afresh, so the server
+  and decrypted in your browser into an address of its own, which the
+  view showing the page holds and lets go when it shows another page or
+  closes (or you sign out): an hour of reading keeps only the attachments
+  of the pages open. An interactive SVG is shown as an image there, as on
+  a copy kept offline. A link to an attachment follows the server's rule
+  for plain ones: images, video, sound and plain text may open in the
+  browser; anything else, an SVG among them, is downloaded, never opened
+  as a page. Each upload is encrypted afresh, so the server
   cannot tell one file uploaded twice from two files of one size. The
   server sees how many comments a thread has, who wrote each and when,
   whether a thread quotes the page and is resolved, and each
@@ -868,6 +870,9 @@ spaces), the shape of its tree of pages, how large each page is, when and
 by whom pages are saved and commented on, how many comments and
 attachments a page has and their sizes, who the members are, and their
 public keys. Not the titles, texts, histories, comments or attachments.
+The words searched for reach the server too: the search page's address
+carries them, and the server searches the plain spaces with them. It
+never sees the encrypted pages, nor which of them matched.
 
 Removing a reader gives the space a new key (WP5.74b3). A reader stops
 being one when their grant, their group's grant or their membership of the

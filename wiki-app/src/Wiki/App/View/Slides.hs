@@ -86,7 +86,7 @@ import Web.UIEvent.KeyboardEvent (KeyboardEvent)
 import Web.UIEvent.KeyboardEvent qualified as KeyboardEvent
 import Web.UIEvent.TouchEvent (TouchEvent (..))
 import Web.UIEvent.TouchEvent qualified as TouchEvent
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), UrlOwner, WikiError)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
@@ -144,6 +144,10 @@ data State = State
   , view :: H.RefLabel
   , touch :: Maybe (Double, Double)
   -- ^ Where a touch on the slides started.
+  , shownOwner :: UrlOwner
+  -- ^ The owner of the addresses of the attachments of the page shown
+  -- ("Wiki.App.Backend"'s 'UrlOwner'): let go when another fetch is
+  -- shown, when the view goes to another page, and when it closes.
   }
 
 -- | The command a key is for ('commandOf').
@@ -174,7 +178,8 @@ component =
         -- over a backend that can ('atOnce'); otherwise in 'Initialize'.
         initialState = \input -> do
           view <- H.newRefLabel "slides"
-          loaded <- fromMaybe Loading <$> atOnce (fetch input)
+          shownOwner <- newUrlOwner
+          loaded <- fromMaybe Loading <$> atOnce (fetch shownOwner input)
           let (current, step) = within loaded (input.slide, input.step)
           pure
             State
@@ -189,6 +194,7 @@ component =
               , asked = []
               , view
               , touch = Nothing
+              , shownOwner
               }
       , render
       , eval =
@@ -206,7 +212,7 @@ component =
       Loading -> [hh|<p class="loading">Loading…</p>|]
       Failed e -> failureView e Retry
       Ready page addresses deck people ->
-        let place = Body.Place {context = st.input.context, space = st.input.space, pages = st.input.pages, path = st.input.path, attachments = page.attachments, urls = addresses.urls, frames = addresses.frames, people}
+        let place = Body.Place {context = st.input.context, space = st.input.space, pages = st.input.pages, path = st.input.path, attachments = page.attachments, urls = addresses.urls, downloads = addresses.downloads, frames = addresses.frames, people}
             count = length deck.slides
             -- The slide shown at its step; every other slide whole. The
             -- copies for printing come after the slides in the document
@@ -337,7 +343,9 @@ component =
           _ -> do
             focusView
             H.raise Loaded
-      Finalize -> H.liftEffect (liftIO exitFullscreen)
+      Finalize -> do
+        gets (\st -> st.shownOwner) >>= releaseUrls
+        H.liftEffect (liftIO exitFullscreen)
       Retry -> do
         modify (\st -> st {loaded = Loading})
         load
@@ -349,6 +357,7 @@ component =
         case () of
           _
             | elsewhere -> do
+                releaseUrls st.shownOwner
                 modify (\s -> s {loaded = Loading, current = 1, step = 1, notesOpen = False, overview = False, asked = []})
                 load
             | old.context.revision /= input.context.revision -> load
@@ -426,16 +435,23 @@ component =
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
-      loaded <- fetch input
+      owner <- newUrlOwner
+      loaded <- fetch owner input
       -- Only if the requested page is still the one to show: another
-      -- navigation may have overtaken this load.
+      -- navigation may have overtaken this load, whose addresses are then
+      -- let go.
       now <- gets (\st -> st.input)
-      when (now.space.id == input.space.id && now.path == input.path) $ do
-        modify $ \st ->
-          let (current, step) = within loaded (if null st.asked then (now.slide, now.step) else (st.current, st.step))
-           in st {loaded, current, step}
-        focusView
-        H.raise Loaded
+      if now.space.id /= input.space.id || now.path /= input.path
+        then releaseUrls owner
+        else do
+          before <- gets (\st -> st.shownOwner)
+          modify (\st -> st {shownOwner = owner})
+          releaseUrls before
+          modify $ \st ->
+            let (current, step) = within loaded (if null st.asked then (now.slide, now.step) else (st.current, st.step))
+             in st {loaded, current, step}
+          focusView
+          H.raise Loaded
 
 -- | The slides' keys pressed anywhere on the page, as commands.
 --
@@ -513,12 +529,12 @@ exitFullscreen = do
 -- attachments, and as slides; or the reason it cannot be shown. Markdown
 -- that cannot be parsed (which CommonMark makes rare) becomes one slide
 -- that says so.
-fetch :: (MonadWiki n, MonadNotifications n) => Input -> n Loaded
-fetch input =
+fetch :: (MonadWiki n, MonadNotifications n) => UrlOwner -> Input -> n Loaded
+fetch owner input =
   getPage input.space.id input.path >>= \case
     Left e -> pure (Failed e)
     Right page -> do
-      addresses <- Body.attachmentAddresses page.attachments
+      addresses <- Body.attachmentAddresses owner page.attachments
       people <- Body.askPeople (Body.unasked Body.noPeople [page.body])
       pure (Ready page addresses (either unreadable deckOf (parseMarkdown page.body)) people)
   where

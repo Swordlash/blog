@@ -14,6 +14,7 @@ module Wiki.Core.Attachment
   , MimeType (..)
   , uploadedMimeType
   , mimeEssence
+  , shownInBrowser
   , Source (..)
   , MediaKind (..)
   , mediaKind
@@ -88,6 +89,18 @@ uploadedMimeType declared = case T.strip declared of
 -- @image\/png@.
 mimeEssence :: MimeType -> Text
 mimeEssence (MimeType t) = T.toLower (T.strip (T.takeWhile (/= ';') t))
+
+-- | Whether a browser that opens an attachment of this media type by itself
+-- (a link to it, in a tab) is let show it: an image the browser draws
+-- (PNG, JPEG, GIF, WebP, AVIF), a video, a sound, or plain text, none of
+-- which runs anything. Every other type is a download: the server sends it
+-- with @Content-Disposition: attachment@, and a link to the decrypted
+-- bytes of an encrypted page's attachment is of the type
+-- @application\/octet-stream@. An SVG is among the downloads: it can
+-- carry scripts, and is shown only as an image (@\<img>@), never opened
+-- as a document.
+shownInBrowser :: MimeType -> Bool
+shownInBrowser t = any (`T.isPrefixOf` mimeEssence t) ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "video/", "audio/", "text/plain"]
 
 -- | 'Source': where an attachment's bytes are.
 data Source

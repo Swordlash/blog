@@ -329,7 +329,7 @@ attachmentsOnDisk backing = describe "attachments" $ do
       maybe (pure "") BS.readFile file `shouldReturn` "The plan."
       runStoredWiki st Anonymous (attachmentFile a.id) >>= (`shouldBe` Left NotFound) . fmap (const ())
       runStoredWiki st rita (attachmentFile (AttachmentId "no-such-attachment")) >>= (`shouldBe` Left NotFound) . fmap (const ())
-      runStoredWiki st rita (attachmentUrl a) `shouldReturn` ("/api/v1/attachments/" <> a.id.text)
+      runStoredWiki st rita (attachmentUrl (UrlOwner 0) a) `shouldReturn` ("/api/v1/attachments/" <> a.id.text)
       -- Only an SVG has an interactive form, its address with ?interactive,
       -- which the prerendered page frames.
       runStoredWiki st rita (attachmentFrameUrl a) `shouldReturn` Nothing

@@ -53,12 +53,13 @@ wiki = defaultOptions {resolveLink, pageHref = ("/wiki/" <>)}
       ToAnchor _ -> External dest
       ToPageId {} -> Unresolved
     attachment name = case name of
-      "demo.mp4" -> Just (AttachmentRef name "/files/demo.mp4" (Just "video/mp4") Nothing)
-      "team" -> Just (AttachmentRef name "/files/team" (Just "image/jpeg") Nothing)
-      "song" -> Just (AttachmentRef name "/files/song" (Just "audio/ogg") Nothing)
-      "spec.pdf" -> Just (AttachmentRef name "/files/spec.pdf" (Just "application/pdf") Nothing)
-      "clip.webm" -> Just (AttachmentRef name "blob:https://wiki.example/1" Nothing Nothing)
-      "notes.txt" -> Just (AttachmentRef name "/files/notes.txt" Nothing Nothing)
-      "my file.txt" -> Just (AttachmentRef name "/files/my%20file.txt" (Just "text/plain") Nothing)
-      "evil" -> Just (AttachmentRef name "javascript:alert(1)" (Just "image/png") Nothing)
+      "demo.mp4" -> Just (AttachmentRef name "/files/demo.mp4" "/files/demo.mp4" (Just "video/mp4") Nothing)
+      "team" -> Just (AttachmentRef name "/files/team" "/files/team" (Just "image/jpeg") Nothing)
+      "song" -> Just (AttachmentRef name "/files/song" "/files/song" (Just "audio/ogg") Nothing)
+      "spec.pdf" -> Just (AttachmentRef name "/files/spec.pdf" "/files/spec.pdf" (Just "application/pdf") Nothing)
+      "clip.webm" -> Just (AttachmentRef name "blob:https://wiki.example/1" "blob:https://wiki.example/1" Nothing Nothing)
+      "notes.txt" -> Just (AttachmentRef name "/files/notes.txt" "/files/notes.txt" Nothing Nothing)
+      "my file.txt" -> Just (AttachmentRef name "/files/my%20file.txt" "/files/my%20file.txt" (Just "text/plain") Nothing)
+      "sealed.svg" -> Just (AttachmentRef name "blob:https://wiki.example/shown" "blob:https://wiki.example/download" (Just "image/svg+xml") Nothing)
+      "evil" -> Just (AttachmentRef name "javascript:alert(1)" "javascript:alert(1)" (Just "image/png") Nothing)
       _ -> Nothing

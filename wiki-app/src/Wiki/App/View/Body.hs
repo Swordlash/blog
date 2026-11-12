@@ -39,6 +39,7 @@ module Wiki.App.View.Body
   , Addresses (..)
   , noAddresses
   , attachmentAddresses
+  , linkUrlOf
   , People (..)
   , noPeople
   , unasked
@@ -74,7 +75,7 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude
 import Web.Event.Event (EventType (..))
-import Wiki.App.Backend (MonadWiki (..), Session (boxes, user))
+import Wiki.App.Backend (MonadWiki (..), Session (boxes, user), UrlOwner)
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Browser (ArticleLink, articleLink)
 import Wiki.App.Islands (MonadIslands)
@@ -107,6 +108,9 @@ data Place = Place
   , attachments :: [Attachment]
   , urls :: Map AttachmentId Text
   -- ^ The URL of each attachment ('Wiki.App.Backend.attachmentUrl').
+  , downloads :: Map AttachmentId Text
+  -- ^ The URL a link to an attachment leads to, where it is not its URL
+  -- ('Wiki.App.Backend.attachmentDownloadUrl').
   , frames :: Map AttachmentId Text
   -- ^ The URL of the interactive form of each attachment that has one
   -- ('Wiki.App.Backend.attachmentFrameUrl'): an SVG the server stores.
@@ -121,21 +125,29 @@ data Place = Place
 -- the page it shows, and puts them into its 'Place'.
 data Addresses = Addresses
   { urls :: Map AttachmentId Text
+  , downloads :: Map AttachmentId Text
   , frames :: Map AttachmentId Text
   }
   deriving stock (Eq, Show)
 
 -- | No attachments' addresses, before any are fetched.
 noAddresses :: Addresses
-noAddresses = Addresses {urls = mempty, frames = mempty}
+noAddresses = Addresses {urls = mempty, downloads = mempty, frames = mempty}
 
--- | The addresses of these attachments, asked of the backend
--- ('Wiki.App.Backend.attachmentUrl', 'Wiki.App.Backend.attachmentFrameUrl').
-attachmentAddresses :: (MonadWiki m) => [Attachment] -> m Addresses
-attachmentAddresses attachments = do
-  urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) attachments
+-- | The addresses of these attachments, asked of the backend for the
+-- owner given, which holds them until it lets them go
+-- ('Wiki.App.Backend.attachmentUrl', 'Wiki.App.Backend.releaseUrls',
+-- 'Wiki.App.Backend.attachmentFrameUrl').
+attachmentAddresses :: (MonadWiki m) => UrlOwner -> [Attachment] -> m Addresses
+attachmentAddresses owner attachments = do
+  urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl owner a) attachments
+  downloads <- Map.fromList . catMaybes <$> traverse (\a -> fmap (a.id,) <$> attachmentDownloadUrl owner a) attachments
   frames <- Map.fromList . catMaybes <$> traverse (\a -> fmap (a.id,) <$> attachmentFrameUrl a) attachments
-  pure Addresses {urls, frames}
+  pure Addresses {urls, downloads, frames}
+
+-- | The URL a link to an attachment leads to: its download's, or its own.
+linkUrlOf :: Addresses -> AttachmentId -> Text
+linkUrlOf addresses aid = fromMaybe (Map.findWithDefault "" aid addresses.urls) (Map.lookup aid addresses.downloads)
 
 -- | What a view knows about the people its Markdown mentions: the users
 -- found, and every login looked up, found or not.
@@ -390,7 +402,7 @@ spoilerScope place =
 resolve :: Place -> Text -> Md.LinkTarget PageLink
 resolve place destination = case Md.classifyDestination destination of
   Md.ToAttachment name -> case findAttachment name place.attachments of
-    Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = Map.findWithDefault "" a.id place.urls, mediaType = Just a.mediaType.text, frameUrl = Map.lookup a.id place.frames}
+    Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = Map.findWithDefault "" a.id place.urls, downloadUrl = fromMaybe (Map.findWithDefault "" a.id place.urls) (Map.lookup a.id place.downloads), mediaType = Just a.mediaType.text, frameUrl = Map.lookup a.id place.frames}
     Nothing -> Md.Unresolved
   Md.ToUrl url -> Md.External url
   Md.ToAnchor fragment -> Md.External ("#" <> fragment)

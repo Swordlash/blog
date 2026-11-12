@@ -168,6 +168,7 @@ module Wiki.App.Backend
   ( -- * The interface
     MonadWiki (..)
   , WikiError (..)
+  , UrlOwner (..)
 
     -- * Loading
   , MonadLoad (..)
@@ -359,6 +360,14 @@ data Document = Document
 -- | The largest attachment a backend accepts, in bytes: 50 MB.
 maxAttachmentSize :: Natural
 maxAttachmentSize = 50 * 1024 * 1024
+
+-- | 'UrlOwner': who holds the addresses of attachments a backend makes
+-- in the browser (the object URLs of an encrypted page's attachments,
+-- decrypted): a view, for as long as it shows them. A view asks for an
+-- owner ('newUrlOwner'), asks for addresses under it, and lets it go
+-- ('releaseUrls') when what it shows is replaced or it closes.
+newtype UrlOwner = UrlOwner Int
+  deriving stock (Eq, Ord, Show)
 
 -- | 'MonadWiki' is the backend interface: every read and write the
 -- application makes on the wiki.
@@ -719,15 +728,46 @@ class (Monad m) => MonadWiki m where
   default deleteAttachment :: (MonadTrans t, m ~ t n, MonadWiki n) => AttachmentId -> m (Either WikiError ())
   deleteAttachment = lift . deleteAttachment
 
-  -- | The URL a browser fetches an attachment from. An attachment that
-  -- lives on the web has its own URL. For one whose bytes the backend
-  -- stores, it is an address the backend serves them at (an object URL in
-  -- the demo, a server path on the HTTP backend). Natively the in-memory
-  -- backend gives a @data:@ URL. An attachment the backend does not know
-  -- gives the empty text.
-  attachmentUrl :: Attachment -> m Text
-  default attachmentUrl :: (MonadTrans t, m ~ t n, MonadWiki n) => Attachment -> m Text
-  attachmentUrl = lift . attachmentUrl
+  -- | A new 'UrlOwner', for a view to ask for attachments' addresses
+  -- under, and to let go of with 'releaseUrls'.
+  newUrlOwner :: m UrlOwner
+  default newUrlOwner :: (MonadTrans t, m ~ t n, MonadWiki n) => m UrlOwner
+  newUrlOwner = lift newUrlOwner
+
+  -- | Let go of the addresses made for an owner: the object URLs of the
+  -- decrypted bytes of an encrypted page's attachments, and the bytes
+  -- they hold in memory. An address asked for under an owner let go is
+  -- not made. Nothing else is let go: an owner's addresses live until
+  -- the view that holds them lets them go (and until the user signs out
+  -- or another signs in), never because another view asked for its own.
+  releaseUrls :: UrlOwner -> m ()
+  default releaseUrls :: (MonadTrans t, m ~ t n, MonadWiki n) => UrlOwner -> m ()
+  releaseUrls = lift . releaseUrls
+
+  -- | The URL a browser fetches an attachment from, for the owner given.
+  -- An attachment that lives on the web has its own URL. For one whose
+  -- bytes the backend stores, it is an address the backend serves them at
+  -- (an object URL in the demo, a server path on the HTTP backend).
+  -- Natively the in-memory backend gives a @data:@ URL. For an attachment
+  -- of an encrypted page, the HTTP backend decrypts its bytes into an
+  -- object URL that the owner holds ('releaseUrls'). An attachment the
+  -- backend does not know, or one asked for under an owner let go, gives
+  -- the empty text.
+  attachmentUrl :: UrlOwner -> Attachment -> m Text
+  default attachmentUrl :: (MonadTrans t, m ~ t n, MonadWiki n) => UrlOwner -> Attachment -> m Text
+  attachmentUrl o = lift . attachmentUrl o
+
+  -- | The URL a link to an attachment leads to, when it is not its
+  -- 'attachmentUrl', for the owner given. Only the HTTP backend has one,
+  -- for an attachment of an encrypted page: its bytes, decrypted in the
+  -- browser, as a download unless the browser may show them by themselves
+  -- ("Wiki.Core.Attachment"'s 'Wiki.Core.Attachment.shownInBrowser'), so
+  -- that no link opens the decrypted bytes (an SVG's, say) as a document of
+  -- the wiki's own address. 'Nothing' everywhere else, where the server
+  -- sends a download itself.
+  attachmentDownloadUrl :: UrlOwner -> Attachment -> m (Maybe Text)
+  default attachmentDownloadUrl :: (MonadTrans t, m ~ t n, MonadWiki n) => UrlOwner -> Attachment -> m (Maybe Text)
+  attachmentDownloadUrl o = lift . attachmentDownloadUrl o
 
   -- | The URL an interactive SVG's frame loads the attachment from: its
   -- interactive form, which the wiki's server answers with the headers

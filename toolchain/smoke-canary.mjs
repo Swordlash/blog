@@ -16,9 +16,10 @@
 //   database with its write-ahead log, the attachments' files, the backups;
 // - on PostgreSQL, a dump of the database's data (pg_dump, the program
 //   WIKI_PG_DUMP names, as the smoke test's restore uses);
-// - every request a watched browser sent and every answer it received
-//   (`watch`): what the server was given, and what it gave to anyone, its
-//   members included, since the server never holds a plain text to give.
+// - every request a watched browser sent and every answer it received,
+//   and every frame of its live channel's WebSocket, both ways (`watch`):
+//   what the server was given, and what it gave to anyone, its members
+//   included, since the server never holds a plain text to give.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -36,11 +37,20 @@ export function marker(place) {
 }
 
 // Record every request a browser context sends and every answer it gets,
-// as text, for the check. An object URL (blob:) is the browser's own
-// memory, never the network: the decrypted bytes of an encrypted
-// attachment are read from one, and are not counted.
+// and every frame its pages send or receive on a WebSocket (the live
+// channel, which tells of a change to an encrypted page's comments), as
+// text, for the check. An object URL (blob:) is the browser's own memory,
+// never the network: the decrypted bytes of an encrypted attachment are
+// read from one, and are not counted.
 export function watch(context) {
   const local = (url) => url.startsWith("blob:");
+  context.on("page", (page) =>
+    page.on("websocket", (socket) => {
+      const frame = (way) => (f) => seen.push({ what: `${way} on ${socket.url()}`, bytes: Buffer.from(f.payload) });
+      socket.on("framesent", frame("frame sent"));
+      socket.on("framereceived", frame("frame received"));
+    }),
+  );
   context.on("request", (request) => {
     if (local(request.url())) return;
     const body = request.postDataBuffer();

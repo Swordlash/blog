@@ -145,7 +145,7 @@ import Protolude hiding (State)
 import Web.Event.Event (EventType (..))
 import Wiki.Api.Events (PageEvent (..), Readers (..), applyEvent, noReaders)
 import Wiki.Api.Export (ExportFormat, pageFormats)
-import Wiki.App.Backend (ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (exports, user), WikiError (..))
+import Wiki.App.Backend (ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (exports, user), UrlOwner, WikiError (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (MonadEncryption (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
@@ -170,8 +170,7 @@ import Wiki.Core.Blog (Neighbours (..), neighbours)
 import Wiki.Core.Comment (Comment (..), Thread (..), isInline, mayComment)
 import Wiki.Core.Encrypted (ChainProblem, chainProblemText)
 import Wiki.Core.Id
-  ( AttachmentId
-  , CommentThreadId (..)
+  ( CommentThreadId (..)
   , PageId
   , UserId
   )
@@ -292,6 +291,13 @@ data State = State
   -- page of an encrypted space ("Wiki.Core.Encrypted"'s chain of
   -- versions): shown in a banner over the page, which is then not edited
   -- from this tab.
+  , shownOwner :: UrlOwner
+  -- ^ The owner of the addresses of the attachments of the page shown
+  -- ("Wiki.App.Backend"'s 'UrlOwner'): let go when another fetch of the
+  -- page is shown, when the view goes to another page, and when it closes.
+  , pendingOwners :: [UrlOwner]
+  -- ^ The owners of the fetches not answered yet: let go when the view
+  -- goes to another page, so that a late answer makes no addresses.
   }
 
 -- | An address put on the clipboard: by a click on a heading's or a box's
@@ -346,7 +352,8 @@ component =
         -- render is the page the prerender shows (see "Wiki.App.Shell"),
         -- over a backend that can ('atOnce'); otherwise in 'Initialize'.
         initialState = \input -> do
-          loaded <- fromMaybe Loading <$> atOnce (fetch input)
+          shownOwner <- newUrlOwner
+          loaded <- fromMaybe Loading <$> atOnce (fetch shownOwner input)
           threads <- case loaded of
             Ready page _ _ _ | commentsHere input -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
             _ -> pure ThreadsLoading
@@ -383,6 +390,8 @@ component =
               , lastBox = Nothing
               , writing = False
               , chainProblem = Nothing
+              , shownOwner
+              , pendingOwners = []
               }
       , render
       , eval =
@@ -429,7 +438,7 @@ component =
                 <> toList (postInfo input page)
                 <> [textAndPanel st place rendered text page contents]
                 <> [ticksBar st]
-                <> attachments page addresses.urls
+                <> attachments page addresses
                 <> [commentsOf st place text page CommentsView.Below | commentsHere input]
           place = placeOf input page addresses st.people.found
           -- Rendered once: the article shows it with its quotes
@@ -762,8 +771,8 @@ component =
           ThreadsReady ts -> "Comments (" <> show (length [t | t <- ts, isInline t, not t.resolved]) <> ")" :: Text
           _ -> "Comments"
 
-    attachments :: Page -> Map AttachmentId Text -> [H.ComponentHTML Action Slots m]
-    attachments page urls =
+    attachments :: Page -> Body.Addresses -> [H.ComponentHTML Action Slots m]
+    attachments page addresses =
       [hhs|
         {% if not (null page.attachments) %}
           <section class="attachments">
@@ -771,7 +780,7 @@ component =
             <ul>
               {% for a in page.attachments %}
                 <li>
-                  <a href={{ Map.findWithDefault "" a.id urls }} download={{ a.name.text }}>{{ a.name.text }}</a>
+                  <a href={{ Body.linkUrlOf addresses a.id }} download={{ a.name.text }}>{{ a.name.text }}</a>
                   <span class="attachment-meta">{{ a.mediaType.text }}, {{ fileSize a.size }}</span>
                 </li>
               {% end %}
@@ -806,6 +815,7 @@ component =
       -- while it has ticks: the editor sets it too, and may be the next
       -- view.
       Finalize -> do
+        letAddressesGo
         disconnectFeed
         whenM (gets unsaved) (H.liftEffect (guardUnload False))
       Retry -> do
@@ -824,6 +834,7 @@ component =
         barred <- gets (\st -> not elsewhere && unsaved st && not (mayEditShown st))
         when barred $ stage (Ticking.Clear MayNoLongerEdit)
         when elsewhere $ do
+          letAddressesGo
           unwatchAll
           -- Another page or version: the shell asked before leaving the
           -- ticks ('HasUnsaved'), and the reader chose Leave.
@@ -1078,11 +1089,11 @@ component =
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       latest <- startFetch
-      loaded <- gets (\st -> st.input) >>= fetch
+      (owner, loaded) <- fetchOwned
       -- Only the answer to the latest fetch of this visit: another
       -- navigation, or another reload, may have overtaken this one.
-      onFetch latest $ do
-        void (takeFetched loaded)
+      answering latest owner $ do
+        void (takeFetched owner loaded)
         H.raise Loaded
 
     -- Fetch the page's comments (again).
@@ -1195,12 +1206,16 @@ component =
     -- An older version of the page shown is dropped here, with nothing
     -- done ('takesPage'): a fetch asked for before a save may answer after
     -- it. Whether the page was taken is the result.
-    takeFetched :: Loaded -> H.HalogenM State Action Slots ViewOutput m Bool
-    takeFetched loaded = do
+    takeFetched :: UrlOwner -> Loaded -> H.HalogenM State Action Slots ViewOutput m Bool
+    takeFetched owner loaded = do
       shown <- gets (\st -> pageOf st.loaded)
       case loaded of
-        Ready new _ _ _ | not (takesPage shown new) -> pure False
+        Ready new _ _ _ | not (takesPage shown new) -> releaseUrls owner $> False
         _ -> do
+          -- The addresses shown are this fetch's from now on.
+          before <- gets (\st -> st.shownOwner)
+          modify (\st -> st {shownOwner = owner})
+          when (before /= owner) (releaseUrls before)
           adopt loaded
           checkChain
           resolvePeople
@@ -1225,9 +1240,9 @@ component =
     catchUp :: H.HalogenM State Action Slots ViewOutput m ()
     catchUp = do
       latest <- startFetch
-      now <- gets (\st -> st.input) >>= fetch
-      onFetch latest $
-        whenM (takeFetched now) (modify (\s -> s {changed = False}))
+      (owner, now) <- fetchOwned
+      answering latest owner $
+        whenM (takeFetched owner now) (modify (\s -> s {changed = False}))
 
     -- The staging after an event ("Wiki.App.View.Ticking"'s 'Ticking.step'),
     -- and the browser's question before closing the tab, which it asks
@@ -1253,16 +1268,38 @@ component =
         holder <- H.getRef st.text
         for_ holder $ \h -> H.liftEffect (liftIO (h.querySelector ("input[data-task=\"" <> show i <> "\"]") >>= traverse_ focusInView))
 
+    -- Fetch the page, its attachments' addresses under an owner of their
+    -- own ('UrlOwner'), pending until the answer comes.
+    fetchOwned :: H.HalogenM State Action Slots ViewOutput m (UrlOwner, Loaded)
+    fetchOwned = do
+      owner <- newUrlOwner
+      modify (\st -> st {pendingOwners = owner : st.pendingOwners})
+      loaded <- gets (\st -> st.input) >>= fetch owner
+      modify (\st -> st {pendingOwners = filter (/= owner) st.pendingOwners})
+      pure (owner, loaded)
+
+    -- Run what an answer to this fetch does, if it is still the latest
+    -- fetch of the visit; the addresses of an answer overtaken are let go.
+    answering :: (Int, Int) -> UrlOwner -> H.HalogenM State Action Slots ViewOutput m () -> H.HalogenM State Action Slots ViewOutput m ()
+    answering which owner act =
+      gets (\st -> (st.visit, st.fetches) == which) >>= \case
+        True -> act
+        False -> releaseUrls owner
+
+    -- Let go of the addresses of the page shown and of the fetches not
+    -- answered yet: the view goes to another page, or closes. A fetch let
+    -- go makes no addresses when it is answered.
+    letAddressesGo :: H.HalogenM State Action Slots ViewOutput m ()
+    letAddressesGo = do
+      st <- get
+      traverse_ releaseUrls (st.shownOwner : st.pendingOwners)
+      modify (\s -> s {pendingOwners = []})
+
     -- A fetch of the page begins: its number, with the visit's.
     startFetch :: H.HalogenM State Action Slots ViewOutput m (Int, Int)
     startFetch = do
       modify (\st -> st {fetches = st.fetches + 1})
       gets (\st -> (st.visit, st.fetches))
-
-    -- Run what an answer to this fetch does, if it is still the latest
-    -- fetch of the visit.
-    onFetch :: (Int, Int) -> H.HalogenM State Action Slots ViewOutput m () -> H.HalogenM State Action Slots ViewOutput m ()
-    onFetch which act = gets (\st -> (st.visit, st.fetches) == which) >>= (`when` act)
 
     -- Run what an answer to a request made on this visit does, if the view
     -- is still on it.
@@ -1310,12 +1347,12 @@ component =
 
 -- | Fetch the page the input names, with the URL of each of its
 -- attachments, or the reason it cannot be shown.
-fetch :: (MonadWiki n) => Input -> n Loaded
-fetch input =
+fetch :: (MonadWiki n) => UrlOwner -> Input -> n Loaded
+fetch owner input =
   getPage input.space.id input.path >>= fmap join . traverse asked >>= \case
     Left e -> pure (Failed e)
     Right page -> do
-      addresses <- Body.attachmentAddresses page.attachments
+      addresses <- Body.attachmentAddresses owner page.attachments
       let parsed = Md.parseMarkdown page.body
       pure (Ready page addresses (either (const False) isDeck parsed) (either (const Nothing) Md.contentsPanel parsed))
   where
@@ -1503,7 +1540,7 @@ takesPage shown given = case shown of
 -- from: where the page is.
 placeOf :: Input -> Page -> Body.Addresses -> Map Text Author -> Body.Place
 placeOf input page addresses people =
-  Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls = addresses.urls, frames = addresses.frames, people}
+  Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls = addresses.urls, downloads = addresses.downloads, frames = addresses.frames, people}
 
 -- | The Markdown the view shows: the page's, and its comments'.
 bodiesOf :: Loaded -> Threads -> [Text]

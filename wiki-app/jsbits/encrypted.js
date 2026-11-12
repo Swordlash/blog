@@ -394,14 +394,17 @@ function wiki_enc_sealed_error(sealed) {
 
 // An attachment's bytes, fetched from the address given (the server's, of
 // its encrypted bytes), decrypted with a page key and the additional data
-// given, as an object URL of this media type: JSON {url}, or {error}. The
-// caller revokes the URL when the page no longer shows it.
-async function wiki_enc_open_attachment(handle, address, nonce, data, mediaType) {
+// given, as an object URL of this media type, and one of the link's type
+// (the same URL when the types are one): JSON {url, link}, or {error}. The
+// caller revokes the URLs when the page no longer shows them.
+async function wiki_enc_open_attachment(handle, address, nonce, data, mediaType, linkType) {
   try {
     const answer = await fetch(address, { credentials: "same-origin" });
     if (!answer.ok) throw new Error(`The attachment could not be read: ${answer.status}.`);
     const opened = await crypto.subtle.decrypt({ name: "AES-GCM", iv: wikiEncFromBase64(nonce), additionalData: wikiEncText(data) }, wikiEncKey(handle), await answer.arrayBuffer());
-    return JSON.stringify({ url: URL.createObjectURL(new Blob([opened], { type: mediaType })) });
+    const url = URL.createObjectURL(new Blob([opened], { type: mediaType }));
+    const link = linkType === mediaType ? url : URL.createObjectURL(new Blob([opened], { type: linkType }));
+    return JSON.stringify({ url, link });
   } catch (error) {
     return JSON.stringify({ error: error?.name === "OperationError" ? "This attachment does not open with its page's key." : String(error?.message ?? error) });
   }

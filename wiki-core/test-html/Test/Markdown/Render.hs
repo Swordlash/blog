@@ -403,6 +403,11 @@ spec = describe "Markdown.Render" $ do
     it "writes an attachment of another type as a download link" $ do
       showsWith wiki "![The spec](attachment:spec.pdf)" "<p><a download=\"spec.pdf\" href=\"/files/spec.pdf\">The spec</a></p>"
       showsWith wiki "![](attachment:notes.txt)" "<p><a download=\"notes.txt\" href=\"/files/notes.txt\">notes.txt</a></p>"
+    -- An encrypted page's attachment, decrypted in the browser: shown
+    -- from one object URL, and linked to another, which downloads it.
+    it "shows an attachment from its URL and links to its download's" $ do
+      showsWith wiki "![Flame](attachment:sealed.svg)" "<p><img alt=\"Flame\" src=\"blob:https://wiki.example/shown\"></p>"
+      showsWith wiki "[the file](attachment:sealed.svg)" "<p><a download=\"sealed.svg\" href=\"blob:https://wiki.example/download\">the file</a></p>"
     it "writes an attachment of no known type by its name's extension" $
       showsWith wiki "![](attachment:clip.webm)" "<p><video controls src=\"blob:https://wiki.example/1\"></video></p>"
     it "writes an unresolved attachment as a span" $

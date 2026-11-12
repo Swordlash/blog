@@ -44,17 +44,19 @@ import Control.Monad.UUID (MonadUUID)
 import Data.Aeson (Value (..), decodeStrict', encode)
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
-import Test.Browser.Http (Asked (..), answerWith, asked, serveDemo, serverStarts, startServer)
+import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, release, serveDemo, serverStarts, startServer, tellServer)
 import Test.Browser.Mount (clickButton)
 import Test.Browser.Text (editorText)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
-import Wiki.Api (SpacesApi (..), WikiApi (..))
+import Wiki.Api (EncryptedApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Events (PageEvent (..), ServerMessage (..))
 import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Stars (StarredPage (..))
 import Wiki.Api.Types (SessionInfo (..))
@@ -107,11 +109,24 @@ $( browserJS
      , ("js_tamper_latest", "wiki_test_encrypted_tamper_latest", Safe, [t|Bool -> IO ()|])
      , ("js_attachment_bytes", "wiki_test_encrypted_attachment_bytes", Safe, [t|IO JSText|])
      , ("js_image_widthPromise", "wiki_test_encrypted_image_width", Safe, [t|JSText -> IO (Promise Int)|])
+     , ("js_watch_blobs", "wiki_test_encrypted_watch_blobs", Safe, [t|IO ()|])
+     , ("js_blobs", "wiki_test_encrypted_blobs", Safe, [t|IO JSText|])
      ]
  )
 
 js_image_width :: JSText -> IO Int
 js_image_width a = if inBrowser then wait =<< js_image_widthPromise a else pure inert
+
+-- | The object URLs the page made since 'js_watch_blobs', with their
+-- types and whether they were let go.
+blobsNow :: PageM s (Map Text (Text, Bool))
+blobsNow = unsafeIOToPageM (fromJSText <$> js_blobs) <&> \raw -> fromMaybe mempty (decodeStrict' (encodeUtf8 raw))
+
+typeIn :: Map Text (Text, Bool) -> Text -> Maybe Text
+typeIn blobs url = fst <$> Map.lookup url blobs
+
+revokedIn :: Map Text (Text, Bool) -> Text -> Bool
+revokedIn blobs url = maybe False snd (Map.lookup url blobs)
 
 -- | An image of so many pixels' width, as SVG, with a word in it.
 svgOf :: Int -> Text -> ByteString
@@ -253,7 +268,7 @@ spec m = do
     map (\t -> (t.anchor, map (\c -> c.body) t.comments)) threads `shouldBe` [(Just anchor, ["A comment on Thursday", "Edited on Saturday"])]
     url <- run other (attachmentFrameUrl (fromMaybe attached (head page.attachments)))
     url `shouldBe` Nothing
-    address <- run other (attachmentUrl (fromMaybe attached (head page.attachments)))
+    address <- urlIn other ((fromMaybe attached (head page.attachments)))
     address `shouldSatisfy` T.isPrefixOf "blob:"
     -- The decrypted bytes, loaded as the page loads an image.
     unsafeIOToPageM (js_image_width (toJSText address)) `shouldReturn` 7
@@ -279,19 +294,21 @@ spec m = do
     map (\a -> a.name.text) page.attachments `shouldBe` ["same.svg"]
     for_ (head page.attachments) $ \a -> do
       ok =<< run env (deleteAttachment a.id)
-      address <- run env (attachmentUrl a)
+      address <- urlIn env (a)
       address `shouldSatisfy` (not . T.isPrefixOf "blob:")
     again <- ok =<< run env (uploadAttachment made.id "same.svg" "image/svg+xml" (svgOf 6 "Same"))
     other <- as "user-admin"
     page' <- ok =<< run other (getPage secret.id [made.slug])
     map (\a -> a.id) page'.attachments `shouldBe` [again.id]
-    address <- run other (attachmentUrl again)
+    address <- urlIn other (again)
     unsafeIOToPageM (js_image_width (toJSText address)) `shouldReturn` 6
 
-  -- An object URL of an attachment's decrypted bytes is let go when
-  -- another page's attachment is opened: the page view shows one page.
-  -- A type the server would not show in the browser is downloaded.
-  it "lets one page's attachment URLs go when another page's are made, and gives a download no type of its own" $ runPage $ do
+  -- An object URL of an attachment's decrypted bytes lives as long as
+  -- the owner that asked for it, and no longer: another owner's asking
+  -- lets nothing go, and an owner let go gets no URL. What a link leads to
+  -- is a download unless the browser may show it by itself.
+  it "holds an attachment's URLs for the owner that asked, lets them go with it, and links to a download unless the type is shown" $ runPage $ do
+    unsafeIOToPageM js_watch_blobs
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
     pageOne <- ok =<< run env (createPage secret.id Nothing "One" "First.")
@@ -299,13 +316,117 @@ spec m = do
     void (ok =<< run env (getPage secret.id [pageOne.slug]))
     first' <- ok =<< run env (uploadAttachment pageOne.id "one.svg" "image/svg+xml" (svgOf 3 "One"))
     void (ok =<< run env (getPage secret.id [pageTwo.slug]))
-    second' <- ok =<< run env (uploadAttachment pageTwo.id "two.svg" "text/html" (svgOf 4 "Two"))
-    firstUrl <- run env (attachmentUrl first')
+    second' <- ok =<< run env (uploadAttachment pageTwo.id "two.svg" "image/svg+xml" (svgOf 4 "Two"))
+    html <- ok =<< run env (uploadAttachment pageTwo.id "page.html" "text/html" (svgOf 5 "Html"))
+    plain <- ok =<< run env (uploadAttachment pageTwo.id "notes.txt" "text/plain" "Plain words.")
+    ownerOne <- run env newUrlOwner
+    two <- run env newUrlOwner
+    firstUrl <- run env (attachmentUrl ownerOne first')
     unsafeIOToPageM (js_image_width (toJSText firstUrl)) `shouldReturn` 3
-    secondUrl <- run env (attachmentUrl second')
+    secondUrl <- run env (attachmentUrl two second')
+    unsafeIOToPageM (js_image_width (toJSText secondUrl)) `shouldReturn` 4
+    unsafeIOToPageM (js_image_width (toJSText firstUrl)) `shouldReturn` 3
+    -- What each URL is: an SVG shown as an image, and downloaded by its
+    -- link; HTML never shown nor opened; plain text shown as text.
+    let typesOf a = do
+          shown <- run env (attachmentUrl two a)
+          linked <- fromMaybe shown <$> run env (attachmentDownloadUrl two a)
+          blobs <- blobsNow
+          pure (typeIn blobs shown, typeIn blobs linked)
+    typesOf second' `shouldReturn` (Just "image/svg+xml", Just "application/octet-stream")
+    typesOf html `shouldReturn` (Just "application/octet-stream", Just "application/octet-stream")
+    typesOf plain `shouldReturn` (Just "text/plain", Just "text/plain")
+    -- The first owner let go: its URL no longer loads, and it gets no new
+    -- one; the second's still load.
+    run env (releaseUrls ownerOne)
     unsafeIOToPageM (js_image_width (toJSText firstUrl)) `shouldReturn` (-1)
-    -- Given as text/html, the bytes are no image (and no page) here.
-    unsafeIOToPageM (js_image_width (toJSText secondUrl)) `shouldReturn` (-1)
+    run env (attachmentUrl ownerOne first') `shouldReturn` ""
+    unsafeIOToPageM (js_image_width (toJSText secondUrl)) `shouldReturn` 4
+
+  -- The page view holds the URLs of the page it shows: going to another
+  -- page lets them go. A page whose answer comes after the reader went on
+  -- makes none, and lets nothing of the page shown go. No link of the page
+  -- leads to an SVG's object URL as a document.
+  it "lets a page's URLs go when the view shows another, and a late answer for the page left lets nothing of the one shown go" $ runPage $ do
+    unsafeIOToPageM js_watch_blobs
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    pageOne <- ok =<< run env (createPage secret.id Nothing "One" "First.")
+    pageTwo <- ok =<< run env (createPage secret.id Nothing "Two" "Second.")
+    pageThree <- ok =<< run env (createPage secret.id Nothing "Three" "Third.")
+    let withImage p name width = do
+          read' <- ok =<< run env (getPage secret.id [p.slug])
+          void (ok =<< run env (uploadAttachment p.id name "image/svg+xml" (svgOf width name)))
+          again <- ok =<< run env (getPage secret.id [p.slug])
+          ok =<< run env (savePage p.id again.updatedAt read'.title ("![" <> name <> "](attachment:" <> name <> ")\n\n[the file](attachment:" <> name <> ")"))
+    void (withImage pageOne "one.svg" 3)
+    void (withImage pageTwo "two.svg" 4)
+    void (withImage pageThree "three.svg" 5)
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    let imageOf ui = do
+          img <- eventually (find ui ".page-view .page-body img")
+          src <- eventually (getAttribute img "src" >>= maybe (panic "no src") pure >>= \u -> u <$ (u `shouldSatisfy` T.isPrefixOf "blob:"))
+          pure src
+        go ui title = do
+          links <- findAll ui ".wiki-sidebar .page-tree a"
+          named <- filterM (\l -> (== title) . T.strip <$> textContent l) links
+          maybe (panic ("no link to " <> title)) click (head named)
+    ui <- startServer m (R.Page [secretSlug] [pageOne.slug])
+    oneSrc <- imageOf ui
+    unsafeIOToPageM (js_image_width (toJSText oneSrc)) `shouldReturn` 3
+    -- Another page: the first page's URL is let go.
+    go ui "Two"
+    eventually (find ui ".page-view .page-title-row" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Two"))
+    void (imageOf ui)
+    eventually (unsafeIOToPageM (js_image_width (toJSText oneSrc)) `shouldReturn` (-1))
+    -- The third page's answer is held; the reader goes back to the second
+    -- before it comes.
+    let threeAt = endpointUrl (\e -> e.encrypted.pageAt secret.id [pageThree.slug])
+    holdAt "GET" threeAt
+    go ui "Three"
+    -- Asked for, and held.
+    eventually ((\sent -> [r.url | r <- sent, r.url == threeAt]) <$> asked >>= (`shouldSatisfy` (not . null)))
+    go ui "Two"
+    eventually (find ui ".page-view .page-title-row" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Two"))
+    twoAgain <- imageOf ui
+    release
+    unsafeIOToPageM (threadDelay 500_000)
+    find ui ".page-view .page-title-row" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Two")
+    unsafeIOToPageM (js_image_width (toJSText twoAgain)) `shouldReturn` 4
+    -- Its links, the file's and the attachments list's, still lead to its
+    -- bytes, as a download: none to an SVG as a document.
+    blobs <- blobsNow
+    hrefs <- traverse (\a -> getAttribute a "href") =<< findAll ui ".page-view a[href^='blob:']"
+    [(h, typeIn blobs h, revokedIn blobs h) | Just h <- hrefs] `shouldSatisfy` all (\(_, t, gone) -> t == Just "application/octet-stream" && not gone)
+    length (catMaybes hrefs) `shouldSatisfy` (>= 2)
+    -- No URL of the third page was made after its answer came late.
+    filter (\(_, (t, gone)) -> t == "image/svg+xml" && not gone) (Map.toList blobs) `shouldSatisfy` ((== 1) . length)
+    unmount ui
+
+  -- The live channel says only that a page's threads changed: the page
+  -- reads them again, and shows another reader's comment, decrypted,
+  -- without a reload.
+  it "shows another reader's comment as it is made, read again and decrypted on hearing that the threads changed" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Plans" "The launch is on Tuesday.")
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    ui <- startServer m (R.Page [secretSlug] [made.slug])
+    eventually (find ui ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Tuesday"))
+    -- A comment about the whole page is shown below it.
+    _ <- eventually (find ui ".page-comments")
+    -- Another tab of the reader's writes a comment; the server tells the
+    -- page only that the threads changed.
+    other <- as "user-admin"
+    void (ok =<< run other (getPage secret.id [made.slug]))
+    void (ok =<< run other (openThread made.id Nothing "Written in another tab."))
+    let event = Event made.id ThreadsChanged
+    decodeUtf8 (toS (encode event)) `shouldSatisfy` (not . T.isInfixOf "Written")
+    tellServer event
+    eventually (find ui ".page-comments" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Written in another tab."))
+    unmount ui
 
   -- The blob store keeps each upload's bytes under their hash: the same
   -- file uploaded twice is encrypted under a new nonce each time, so the
@@ -585,7 +706,7 @@ spec m = do
           (label, map (\t -> map (\c -> c.body) t.comments) threads) `shouldBe` (label, [["Before the renewal."]])
           page' <- ok =<< run tab (getPage secret.id [made.slug])
           (label, map (\a -> a.name.text) page'.attachments) `shouldBe` (label, ["zebra.svg"])
-          address <- run tab (attachmentUrl (fromMaybe attached (head page'.attachments)))
+          address <- urlIn tab ((fromMaybe attached (head page'.attachments)))
           width <- unsafeIOToPageM (js_image_width (toJSText address))
           (label, width) `shouldBe` (label, 5)
     fresh <- as "user-admin"
@@ -719,6 +840,11 @@ as user = do
   answerWith "GET" "api/v1/session" 200 =<< sessionOf user
   unsafeIOToPageM (js_as (toJSText user))
   unsafeIOToPageM (newHttpEnv browserTransport)
+
+-- | An attachment's URL in a tab, held by an owner of its own, which the
+-- test never lets go.
+urlIn :: HttpEnv -> Attachment -> PageM s Text
+urlIn env a = run env (newUrlOwner >>= \o -> attachmentUrl o a)
 
 -- | A program of the backend, in a tab.
 run :: HttpEnv -> HttpWiki IO a -> PageM s a

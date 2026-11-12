@@ -78,7 +78,14 @@ data AttachmentRef = AttachmentRef
   { name :: Text
   -- ^ Its file name, which a download is saved as.
   , url :: Text
-  -- ^ The URL the browser fetches it from.
+  -- ^ The URL the browser fetches it from, to show it in the page (an
+  -- image, a video, a sound).
+  , downloadUrl :: Text
+  -- ^ The URL a link to it leads to. It is 'url' where the server sends
+  -- the attachment; for an encrypted page's attachment, decrypted in the
+  -- browser, it is one that the browser downloads, unless the type is one
+  -- a browser may show by itself ("Wiki.Core.Attachment"'s
+  -- 'Wiki.Core.Attachment.shownInBrowser').
   , mediaType :: Maybe Text
   -- ^ Its media type (@video/mp4@), if known; otherwise the file name's
   -- extension decides how it is shown.

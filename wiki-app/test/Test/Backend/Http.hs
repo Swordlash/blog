@@ -328,7 +328,7 @@ requests = describe "its requests" $ do
   it "gives an attachment's address without asking" $ do
     (env, asked) <- backend (const (Left "not asked"))
     for_ (head hello.attachments) $ \a -> do
-      url <- runHttpWiki env (attachmentUrl a)
+      url <- runHttpWiki env (attachmentUrl (UrlOwner 0) a)
       url `shouldSatisfy` (\u -> "api/v1/attachments/" `T.isPrefixOf` u || "https://" `T.isPrefixOf` u)
     readIORef asked `shouldReturn` []
 

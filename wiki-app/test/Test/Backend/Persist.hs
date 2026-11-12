@@ -459,9 +459,9 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       (Map.size st.blobs, Set.size st.unreadBlobs >= 20, Map.size st.versions) `shouldBe` (0, True, 0)
       writeIORef calls []
       let shown = fromMaybe (panic "nothing uploaded") (head uploaded)
-      url <- runKept reopened (attachmentUrl shown)
+      url <- runKept reopened (attachmentUrl (UrlOwner 0) shown)
       url `shouldBe` "data:application/octet-stream;base64,Ynl0ZXMgb2YgZmlsZSAx"
-      again <- runKept reopened (attachmentUrl shown)
+      again <- runKept reopened (attachmentUrl (UrlOwner 0) shown)
       again `shouldBe` url
       blob <- case shown.source of
         SourceBlob b -> pure b

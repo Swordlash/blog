@@ -134,7 +134,7 @@ import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Assistant (KeyRef, MonadAssistant, deviceKeyIO, forgetHeld, wrapForPassword)
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..), Rewrap (..))
-import Wiki.App.Backend (Document (..), ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), sessionPrincipal, withOwnUser)
+import Wiki.App.Backend (Document (..), ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (..), UrlOwner (..), WikiError (..), sessionPrincipal, withOwnUser)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), keyStateText)
@@ -153,7 +153,7 @@ import Wiki.App.Offline (browserOnline, forgetReads, offlineCopy)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.Vault (identitySlot)
 import Wiki.Core.Anchor (Anchor)
-import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), mimeEssence, parseFileName, uploadedMimeType)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), mimeEssence, parseFileName, shownInBrowser, uploadedMimeType)
 import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody)
 import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), Kept (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), Seen (..), VersionTag (..), anchorData, attachmentBytesData, attachmentMetaData, chainAfter, chainProblemText, commentData, firstChain, gapIn, headingOf, judgeHead, linkedFrom)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId)
@@ -626,11 +626,27 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- The server serves an attachment's bytes at an API address, which the
   -- program can build without a request. An attachment of an encrypted
   -- page is fetched from there, encrypted, and decrypted here into an
-  -- object URL ('sealedAttachmentUrl').
-  attachmentUrl a =
+  -- object URLs the owner given holds ('sealedAttachmentUrls').
+  attachmentUrl owner a =
     Map.lookup a.id . (\h -> h.heldAttachments) <$> readHeld >>= \case
       Nothing -> pure (Links.attachmentUrl a)
-      Just held -> sealedAttachmentUrl a.id held
+      Just held -> (\u -> u.shown) <$> sealedAttachmentUrls owner a.id held
+
+  -- The link to an attachment of an encrypted page leads to its own
+  -- object URL, of the type 'linkType' gives.
+  attachmentDownloadUrl owner a =
+    Map.lookup a.id . (\h -> h.heldAttachments) <$> readHeld >>= \case
+      Nothing -> pure Nothing
+      Just held -> Just . (\u -> u.link) <$> sealedAttachmentUrls owner a.id held
+
+  newUrlOwner = atomicHeld (\h -> let o = UrlOwner h.heldNextOwner in (h {heldNextOwner = h.heldNextOwner + 1, heldOwners = Set.insert o h.heldOwners}, o))
+
+  -- The owner's URLs are let go, and the bytes they hold with them.
+  releaseUrls owner = do
+    urls <- atomicHeld $ \h ->
+      let (gone, kept') = Map.partitionWithKey (\(o, _) _ -> o == owner) h.heldUrls
+       in (h {heldUrls = kept', heldOwners = Set.delete owner h.heldOwners}, Map.elems gone)
+    liftIO (traverse_ revokeUrls urls)
 
   -- Only where the frame can reach the server: see 'frameUrlIn'. An
   -- interactive SVG of an encrypted page is shown as the image, as on an
@@ -1420,10 +1436,14 @@ data Held = Held
   -- are encrypted with older ones.
   , heldAttachments :: Map AttachmentId SealedAt
   -- ^ The attachments of pages of encrypted spaces read here, with what
-  -- decrypts their bytes ('sealedAttachmentUrl').
-  , heldUrls :: Map AttachmentId (PageId, Text)
+  -- decrypts their bytes ('sealedAttachmentUrls').
+  , heldUrls :: Map (UrlOwner, AttachmentId) ObjectUrls
   -- ^ The object URLs made of those attachments' bytes, decrypted, by the
-  -- page they were made for: let go when another page's are made.
+  -- owner that holds them ('UrlOwner'): let go when it lets them go.
+  , heldOwners :: Set UrlOwner
+  -- ^ The owners not let go yet.
+  , heldNextOwner :: Int
+  -- ^ The number of the next owner made.
   , heldLowest :: Map PageId (UTCTime, (VersionTag, Maybe Chain))
   -- ^ The oldest version, checked by its decryption, of the last page of a
   -- page's history listed here: the next page, asked for before it, must
@@ -1431,7 +1451,7 @@ data Held = Held
   }
 
 noneHeld :: Held
-noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldLowest = mempty}
+noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldOwners = mempty, heldNextOwner = 1, heldLowest = mempty}
 
 -- | Where the bytes of an attachment of an encrypted page are, and what
 -- decrypts them: its space and page, the key of its page's that encrypts
@@ -1454,7 +1474,7 @@ forgetHeldOf :: HttpEnv -> IO ()
 forgetHeldOf env = do
   was <- atomicModifyIORef' env.held (\h -> (h {heldKeys = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldLowest = mempty, heldAttachments = mempty, heldUrls = mempty}, h))
   traverse_ (forgetSpaceKey . snd) (Map.elems was.heldKeys)
-  traverse_ (revokeUrl . snd) (Map.elems was.heldUrls)
+  traverse_ revokeUrls (Map.elems was.heldUrls)
 
 modifyHeld :: (MonadIO m) => (Held -> Held) -> HttpWiki m ()
 modifyHeld f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.held (\h -> (f h, ()))))
@@ -2106,9 +2126,9 @@ forgetAttachments :: (MonadIO m) => (AttachmentId -> SealedAt -> Bool) -> HttpWi
 forgetAttachments gone = do
   urls <- atomicHeld $ \h ->
     let (dropped, kept') = Map.partitionWithKey gone h.heldAttachments
-        (lost, urls') = Map.partitionWithKey (\i _ -> Map.member i dropped) h.heldUrls
+        (lost, urls') = Map.partitionWithKey (\(_, i) _ -> Map.member i dropped) h.heldUrls
      in (h {heldAttachments = kept', heldUrls = urls'}, Map.elems lost)
-  liftIO (traverse_ (revokeUrl . snd) urls)
+  liftIO (traverse_ revokeUrls urls)
 
 -- | An attachment's name and media type, as they are encrypted together.
 data AttachmentMeta = AttachmentMeta Text Text
@@ -2138,43 +2158,75 @@ sealedUpload sid pid k name mediaType bytes =
       lift (modifyHeld (\h -> h {heldAttachments = Map.insert aid SealedAt {space = sid, page = pid, key = k, nonce, name = n, mediaType} h.heldAttachments}))
       pure Attachment {id = aid, name = n, mediaType = uploadedMimeType mediaType, size = fromIntegral (BS.length bytes), source = SourceBlob (BlobId aid.text)}
 
--- | The bytes of an attachment of an encrypted page, fetched encrypted
--- from the server's address of them and decrypted here, as an object URL;
--- the URLs made for another page's attachments are let go first, since
--- the page view shows one page. An attachment whose bytes do not open has
--- no address (@""@).
-sealedAttachmentUrl :: (MonadIO m) => AttachmentId -> SealedAt -> HttpWiki m Text
-sealedAttachmentUrl aid at =
-  Map.lookup aid . (\h -> h.heldUrls) <$> readHeld >>= \case
-    Just (_, url) -> pure url
-    Nothing -> do
-      others <- atomicHeld (\h -> let (gone, here) = Map.partition (\(p, _) -> p /= at.page) h.heldUrls in (h {heldUrls = here}, Map.elems gone))
-      liftIO (traverse_ (revokeUrl . snd) others)
-      encryptedOr
-        at.space
-        (pure (Left (Conflict "This space is no longer encrypted.")))
-        ( \current -> withSpaceKey NoRefresh at.space current $ \key -> withPageKey key at.space at.page at.key $ \pk ->
-            liftIO (first Invalid <$> openAttachmentUrl pk (Links.links.attachments.content aid (FileName aid.text)) at.nonce (attachmentBytesData at.space at.page at.key.keyId aid) (blobType at.mediaType))
-        )
-        >>= \case
-          Right url -> modifyHeld (\h -> h {heldUrls = Map.insert aid (at.page, url) h.heldUrls}) $> url
-          Left _ -> pure ""
+-- | 'ObjectUrls': the object URLs of an attachment's decrypted bytes:
+-- the one the page shows it from ('blobType'), and the one a link to it
+-- leads to ('linkType'), which is the same URL when the types are one.
+data ObjectUrls = ObjectUrls {shown :: Text, link :: Text}
 
--- | The media type an attachment's decrypted bytes are given in their
--- object URL. The URL is the wiki's own origin, and the server's answer
--- for a plain attachment (its sandbox, its download disposition) has no
--- counterpart there, so only the types the server shows in the browser
--- keep theirs, with SVG, which the page shows as an image; any other is
--- @application/octet-stream@, which a browser downloads. An SVG opened
--- by its link in a tab of its own runs under the page's own policy, which
--- allows no script written in it.
+-- | Let both URLs go.
+revokeUrls :: ObjectUrls -> IO ()
+revokeUrls u = revokeUrl u.shown >> when (u.link /= u.shown) (revokeUrl u.link)
+
+-- | The bytes of an attachment of an encrypted page, fetched encrypted
+-- from the server's address of them and decrypted here, as object URLs
+-- that the owner given holds until it lets them go ('releaseUrls'). An
+-- owner let go gets none, and a URL made while the owner was let go is
+-- let go at once: a view that no longer shows a page holds nothing of it.
+-- An attachment whose bytes do not open has no address (@""@).
+sealedAttachmentUrls :: (MonadIO m) => UrlOwner -> AttachmentId -> SealedAt -> HttpWiki m ObjectUrls
+sealedAttachmentUrls owner aid at =
+  readHeld >>= \h -> case Map.lookup (owner, aid) h.heldUrls of
+    Just urls -> pure urls
+    Nothing
+      | not (Set.member owner h.heldOwners) -> pure none
+      | otherwise ->
+          encryptedOr
+            at.space
+            (pure (Left (Conflict "This space is no longer encrypted.")))
+            ( \current -> withSpaceKey NoRefresh at.space current $ \key -> withPageKey key at.space at.page at.key $ \pk ->
+                liftIO (first Invalid <$> openAttachmentUrl pk (Links.links.attachments.content aid (FileName aid.text)) at.nonce (attachmentBytesData at.space at.page at.key.keyId aid) (blobType at.mediaType) (linkType at.mediaType))
+            )
+            >>= \case
+              Left _ -> pure none
+              Right (shownAt, linkedAt) -> do
+                let urls = ObjectUrls {shown = shownAt, link = linkedAt}
+                -- The owner may have been let go, or another URL made for
+                -- it, while the bytes were fetched.
+                settled <- atomicHeld $ \now -> case Map.lookup (owner, aid) now.heldUrls of
+                  Just other -> (now, Left other)
+                  Nothing
+                    | Set.member owner now.heldOwners -> (now {heldUrls = Map.insert (owner, aid) urls now.heldUrls}, Right urls)
+                    | otherwise -> (now, Left none)
+                case settled of
+                  Right made -> pure made
+                  Left instead -> liftIO (revokeUrls urls) $> instead
+  where
+    none = ObjectUrls {shown = "", link = ""}
+
+-- | The media type of the object URL an attachment's decrypted bytes are
+-- shown from, in an @\<img>@, a @\<video>@ or an @\<audio>@: what the
+-- browser may show by itself ('shownInBrowser'), and an SVG, which an
+-- @\<img>@ draws without running anything in it. Anything else is
+-- @application\/octet-stream@.
 blobType :: Text -> Text
 blobType given
-  | any (`T.isPrefixOf` essence) shown = essence
+  | shownInBrowser (MimeType given) || essence == "image/svg+xml" = essence
   | otherwise = "application/octet-stream"
   where
     essence = mimeEssence (MimeType given)
-    shown = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/svg+xml", "video/", "audio/", "text/plain"]
+
+-- | The media type of the object URL a link to an attachment leads to.
+-- The URL is the wiki's own address, and has none of the server's
+-- protections of a plain attachment (its sandbox, its download
+-- disposition), so it follows the server's rule for a link: what the
+-- browser may show by itself keeps its type (an image, a video, a sound,
+-- plain text, which a tab shows as text, as the server's answer does);
+-- anything else, an SVG among them, is @application\/octet-stream@,
+-- which a browser downloads, and never opens as a document.
+linkType :: Text -> Text
+linkType given
+  | shownInBrowser (MimeType given) = mimeEssence (MimeType given)
+  | otherwise = "application/octet-stream"
 
 -- | A page's threads, in an encrypted space: their anchors and comments
 -- decrypted, each with the key of its page's it names.

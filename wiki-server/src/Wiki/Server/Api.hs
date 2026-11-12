@@ -121,7 +121,7 @@ import Wiki.App.Backend.Notifications qualified as Notifications
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Assistant.Vault (CredentialId (..))
-import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), shownInBrowser)
 import Wiki.Core.Export (Archive)
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Frame (framesInteractively)
@@ -1645,9 +1645,7 @@ safeMediaType (MimeType t)
 disposition :: Attachment -> ByteString
 disposition a = dispositionAs (if shown then "inline" else "attachment") a
   where
-    t = T.toLower (safeMediaType a.mediaType)
-    shown =
-      any (`T.isPrefixOf` t) ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "video/", "audio/", "text/plain"]
+    shown = shownInBrowser (MimeType (safeMediaType a.mediaType))
 
 -- | An attachment shown in the browser, under its file's name: an SVG's
 -- interactive form, which its frame shows.

@@ -488,6 +488,32 @@ function wiki_test_encrypted_attachment_bytes() {
   return JSON.stringify([...wikiTestEncrypted.pages.values()].flatMap((p) => (p.attachments ?? []).map((a) => a.bytes.toBase64())));
 }
 
+// Keep, from now on, every object URL the page makes, with its type, and
+// whether it was let go.
+const wikiTestEncBlobs = new Map();
+function wiki_test_encrypted_watch_blobs() {
+  wikiTestEncBlobs.clear();
+  if (URL.wikiTestWatched) return;
+  URL.wikiTestWatched = true;
+  const create = URL.createObjectURL.bind(URL);
+  const revoke = URL.revokeObjectURL.bind(URL);
+  URL.createObjectURL = (blob) => {
+    const url = create(blob);
+    wikiTestEncBlobs.set(url, [blob?.type ?? "", false]);
+    return url;
+  };
+  URL.revokeObjectURL = (url) => {
+    const known = wikiTestEncBlobs.get(url);
+    if (known) known[1] = true;
+    revoke(url);
+  };
+}
+
+// The object URLs kept, as JSON: {url: [type, let go]}.
+function wiki_test_encrypted_blobs() {
+  return JSON.stringify(Object.fromEntries(wikiTestEncBlobs));
+}
+
 // The width of the image at a URL the page made (an object URL), as an
 // <img> loads it, or -1 if it does not load. The page's policy lets images
 // come from object URLs, and not fetches.

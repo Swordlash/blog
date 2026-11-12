@@ -237,7 +237,7 @@ import Wiki.Api.ServerSettings qualified as SS
 import Wiki.Api.Stars (StarredPage (StarredPage), maxStars)
 import Wiki.Api.Stars qualified as Star
 import Wiki.Api.Upload (SealedUpload (..))
-import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
+import Wiki.App.Backend (MonadWiki (..), Session (..), UrlOwner (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -1508,7 +1508,7 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
   deletePage = run Writes . deletePageTx
   uploadAttachment pid name mediaType bytes = run Writes (uploadAttachmentTx pid name mediaType (fromIntegral (BS.length bytes)) (`storeBlob` bytes))
   deleteAttachment = run Writes . deleteAttachmentTx
-  attachmentUrl a = case a.source of
+  attachmentUrl _ a = case a.source of
     SourceUrl url -> pure url.text
     SourceBlob _ -> do
       address <- StoredWiki (asks (\env -> env.storage.config.attachmentAddress))
@@ -1518,8 +1518,15 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
   -- ?interactive, as the HTTP backend writes it, so that the page the
   -- server prerenders and the page the program renders have the same frame.
   attachmentFrameUrl a = case a.source of
-    SourceBlob _ | framesInteractively a.mediaType.text -> (\url -> if T.null url then Nothing else Just (interactiveForm url)) <$> attachmentUrl a
+    SourceBlob _ | framesInteractively a.mediaType.text -> (\url -> if T.null url then Nothing else Just (interactiveForm url)) <$> attachmentUrl (UrlOwner 0) a
     _ -> pure Nothing
+
+  -- The server sends a download itself, by the attachment's disposition.
+  attachmentDownloadUrl _ _ = pure Nothing
+
+  -- The server's addresses are its own: no view owns them.
+  newUrlOwner = pure (UrlOwner 0)
+  releaseUrls _ = pass
   searchPages = answer [] . searchPagesTx
   getDraft = run Reads . getDraftTx
   saveDraft pid base title = run Writes . saveDraftTx pid base title
