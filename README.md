@@ -1339,12 +1339,31 @@ installs it next, and the check runs again after the bootstrap; elsewhere the de
 stops there. SQLite is the system's: `wiki-server` links the machine's SQLite library
 (direct-sqlite built with its flag `systemlib`, in `cabal.project`), not a copy of its
 own, so the machine that builds it needs SQLite's development files and the one that
-runs it the library, 3.32.0 or later. The check builds a one-line program with
-`sqlite3.h` and `-lsqlite3` and refuses an older header; the server says at start which
-SQLite it runs on (`event=sqlite version=…` in its log, and the first line of
-`wiki-server check` on a wiki in SQLite), and refuses one older than 3.32.0, or built
-without what it relies on (`THREADSAFE=0`, `OMIT_WAL`, `OMIT_FOREIGN_KEY`, or fewer
-parameters than SQLite's default of 32766), saying why. libsodium needs nothing: the bootstrap builds the release `toolchain/pins.env` pins
+runs it the library, 3.32.0 or later. The server says at start which SQLite it runs on
+(`event=sqlite version=…` in its log, the first line of `wiki-server check` on a wiki in
+SQLite, and `wiki-server sqlite`, which opens no wiki), and refuses one older than
+3.32.0, or built without what it relies on (`THREADSAFE=0`, `OMIT_WAL`,
+`OMIT_FOREIGN_KEY`, or fewer parameters than SQLite's default of 32766), saying why.
+The library is checked twice before the running server is touched. First the check
+builds a small program with `sqlite3.h` and `-lsqlite3` and runs it: the program asks
+the library it loads what the server asks, and the check refuses what the server
+refuses. Its line names the library's version and the file it was loaded from, and
+the header's version when the two differ (`sqlite3.h is 3.53.2 and the library a
+program built with -lsqlite3 loads is 3.26.0 (/usr/lib64/libsqlite3.so.0)`), even
+when both are new enough, since the build and the run then find SQLite in different
+places; a program that builds and does not run (the loader finds no library) has a
+line of its own. The floors are `toolchain/pins.env`'s (`SQLITE_MIN_VERSION`,
+`SQLITE_MIN_VARIABLE_NUMBER`). That is the library your shell's loader finds, and
+the service does not run in your shell. So, second, after the build and before it
+stops the running server (and before the upgrade's rehearsal, so with
+`--no-rehearsal` too), the deploy runs the new `wiki-server sqlite` in the
+service's environment: the systemd user manager's, with the unit's `Environment=`
+lines. A server that cannot start there stops the deploy, and so does one that
+refuses its library for a wiki in SQLite; the running wiki is untouched, and the
+message gives the server's own words, what to do, and the file `ldd` finds in your
+shell. A wiki in PostgreSQL never opens a SQLite database, but its server still
+links the library: a server that cannot start stops the deploy, and a refusal is
+only a warning. libsodium needs nothing: the bootstrap builds the release `toolchain/pins.env` pins
 (`LIBSODIUM_VERSION`) from source, with `toolchain/libsodium.sh`, as a static library
 under the toolchain's directory (`~/.wiki-toolchain/libsodium`, or
 `<prefix>/toolchain/.wiki-toolchain/libsodium`), and the build links it into
@@ -1387,7 +1406,16 @@ runs `pg_config`, and pkg-config's `libpq.pc` is not enough. PGDG's packages put
 A systemd unit does not inherit the shell's environment, so when the deploy runs
 with `LD_LIBRARY_PATH` set (a shared library in a directory of your own), it writes
 it into the unit, `Environment="LD_LIBRARY_PATH=..."`, and says so; a static
-library, as the bootstrap's libsodium is, needs none.
+library, as the bootstrap's libsodium is, needs none. It does so at each deploy,
+from the shell it runs in: a deploy from a shell without it writes a unit without
+it. A machine with a SQLite of its own beside the distribution's (built into
+`/opt/sqlite`, say) either runs every deploy with
+`LD_LIBRARY_PATH=/opt/sqlite/lib`, or puts that directory on the loader's own path
+(a file in `/etc/ld.so.conf.d` naming it, then `sudo ldconfig`), which the service
+then finds without it. Either way the check before the swap is what catches a
+deploy that forgot: the new server cannot start, or loads the distribution's
+library and refuses it when it is too old, and the deploy stops with the running
+wiki untouched.
 
 The demo deploys the same way, from a page of its own: `--static --backend-only`
 downloads `app-demo-<commit>.zip` and builds nothing. On this machine alone, at

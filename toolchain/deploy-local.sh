@@ -33,7 +33,9 @@
 #
 #   1. Build: with --server, first toolchain/check-native.sh, which checks
 #      the commands and C libraries wiki-server's native build needs (GMP,
-#      libpq, zlib, SQLite; libsodium the bootstrap builds from source, and links
+#      libpq, zlib, SQLite: for SQLite, the library a program built with
+#      sqlite3.h and -lsqlite3 loads in this shell, not only the header,
+#      against the floors of toolchain/pins.env; libsodium the bootstrap builds from source, and links
 #      into wiki-server) before anything is downloaded or built, and
 #      names their Debian and RHEL packages; a library built elsewhere is
 #      found through LIBRARY_PATH, C_INCLUDE_PATH, CPATH or PKG_CONFIG_PATH,
@@ -125,7 +127,20 @@
 #      PostgreSQL, whole (accounts, settings and all) with --move-to-postgres
 #      below. --fresh (or "yes" at the question, on a terminal) goes on,
 #      moving the file aside into data/replaced/<time>/, never deleting it.
-#   2. Install: stop the running service; with --server, back its database up
+#   2. Install: with --server, first, before the upgrade's rehearsal and so
+#      with --no-rehearsal too, run the new wiki-server's `wiki-server sqlite`
+#      in the service's environment (the systemd user manager's and the
+#      unit's Environment= lines, LD_LIBRARY_PATH among them, not this
+#      shell's), which says which SQLite library it loads. The check of step
+#      1 saw the library this shell's loader finds; this one sees the
+#      service's. A server that cannot start there (no libsqlite3 where the
+#      service's loader looks) stops the deploy, and so does one that
+#      refuses its library for a wiki in SQLite (for one in PostgreSQL,
+#      which opens no SQLite database, that is a warning), with the running
+#      wiki untouched: the library must be on the loader's own path
+#      (/etc/ld.so.conf.d, then ldconfig), or in a directory this shell's
+#      LD_LIBRARY_PATH names, which the unit is given.
+#      Then stop the running service; with --server, back its database up
 #      (`wiki-server backup`, into data/backups/: VACUUM INTO on SQLite,
 #      pg_dump on PostgreSQL, the container's own) with the new binary, and if
 #      that fails start the old service again and stop. The new server then
