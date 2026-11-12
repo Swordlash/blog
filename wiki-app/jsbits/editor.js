@@ -35,6 +35,20 @@ function wiki_editor_attach(host, original) {
   if (textarea) globalThis.wikiIslands?.attachEditor?.(textarea, host, original);
 }
 
+// Put a row of a presentation's slide mode in `rowHost`: a CodeMirror over
+// the master's text from `from` up to `to`, characters (code points) of the
+// text, the master being the CodeMirror in `masterHost` (web/src/editor.js's
+// attachRow). Without the page's islands.js, or before the master is in
+// place, nothing.
+function wiki_editor_attach_row(masterHost, rowHost, from, to, focus) {
+  globalThis.wikiIslands?.attachRow?.(masterHost, rowHost, from, to, focus);
+}
+
+// Let go of the row in `rowHost`, if it has one.
+function wiki_editor_detach_row(rowHost) {
+  rowHost.wikiRow?.destroy();
+}
+
 function wikiCharacters(text, units) {
   let count = 0;
   for (let at = 0; at < units; at++) {

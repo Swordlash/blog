@@ -35,6 +35,8 @@ module Wiki.App.Editor.Browser
     -- * The text
   , attachEditor
   , detachEditor
+  , attachRow
+  , detachRow
   , typedText
   , applyCommand
   , insertAtCursor
@@ -154,6 +156,8 @@ import Wiki.Core.User (Login (..), User (..))
 $( browserJS
      ["jsbits/editor.js"]
      [ ("js_attach", "wiki_editor_attach", Safe, [t|Element -> JSText -> IO ()|])
+     , ("js_attach_row", "wiki_editor_attach_row", Safe, [t|Element -> Element -> Int -> Int -> Bool -> IO ()|])
+     , ("js_detach_row", "wiki_editor_detach_row", Safe, [t|Element -> IO ()|])
      , ("js_selection_start", "wiki_editor_selection_start", Safe, [t|Element -> IO Int|])
      , ("js_selection_end", "wiki_editor_selection_end", Safe, [t|Element -> IO Int|])
      , ("js_write", "wiki_editor_write", Safe, [t|Element -> JSText -> Int -> Int -> IO ()|])
@@ -378,6 +382,18 @@ attachEditor host original = liftIO (js_attach host (toJSText original))
 -- | Remove the host's CodeMirror, if it has one.
 detachEditor :: (MonadIO m) => Element -> m ()
 detachEditor host = liftIO $ codeMirror host >>= traverse_ (.destroy)
+
+-- | Put a row of a presentation's slide mode (WP5.103) in an element: a
+-- CodeMirror over the range of the editor's text from one character up to
+-- another, whose edits are the master's (the CodeMirror in the editor's
+-- host), one history for the whole text. With 'True', the row takes the
+-- focus. Nothing before the master is in place, nor natively.
+attachRow :: (MonadIO m) => Element -> Element -> Int -> Int -> Bool -> m ()
+attachRow master row start end focus = liftIO (js_attach_row master row start end focus)
+
+-- | Let go of the row in an element, as its slide is closed or goes.
+detachRow :: (MonadIO m) => Element -> m ()
+detachRow = liftIO . js_detach_row
 
 -- | The whole text a @wiki-input@ event says the editor now has. Pure,
 -- since the event does not change.

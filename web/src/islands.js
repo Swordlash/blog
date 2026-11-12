@@ -14,6 +14,7 @@
 //   wikiIslands.renderTikz(element, source, preamble, picture): Promise<void>
 //   wikiIslands.highlight(element, language, code)
 //   wikiIslands.attachEditor(textarea, host, original)
+//   wikiIslands.attachRow(masterHost, rowHost, from, to, focus)
 //   wikiIslands.assistant(): Promise<module>
 //   wikiIslands.cropAvatar(host, file): Promise<void>
 //   wikiIslands.opaque(): Promise<module>
@@ -356,6 +357,15 @@ const attachEditor = (textarea, host, original) => {
     .catch((error) => console.error("The editor's formatting could not be loaded:", error));
 };
 
+// A row of a presentation's slide mode over the editor's text (editor.js's
+// attachRow), once the editor's module has loaded: the module is loaded
+// already when the master is in place, so this waits only for a task.
+const attachRow = (masterHost, rowHost, from, to, focus) => {
+  loadEditor()
+    .then((editor) => editor.attachRow(masterHost, rowHost, from, to, focus))
+    .catch((error) => console.error("A slide's row could not be shown:", error));
+};
+
 // The cropper in the avatar's dialog, once its module has loaded. A module
 // that does not load leaves the dialog without one, and says so in the
 // console; the dialog then has nothing to upload.
@@ -633,6 +643,7 @@ globalThis.wikiIslands = Object.freeze({
   renderTikz,
   highlight,
   attachEditor,
+  attachRow,
   assistant: loadAssistant,
   cropAvatar,
   opaque: loadOpaque,
