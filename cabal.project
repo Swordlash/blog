@@ -3,6 +3,7 @@ packages:
   wiki-api
   wiki-app
   wiki-server
+  wiki-smoke
 
 -- Build across packages in parallel and, through a semaphore cabal shares with
 -- GHC (-jsem), across the modules of one package too. A change usually touches
@@ -44,6 +45,8 @@ package wiki-api
 package wiki-app
   optimization: False
 package wiki-server
+  optimization: False
+package wiki-smoke
   optimization: False
 
 -- haskell-halogen comes from one pinned commit: only haskell-halogen-core is on
