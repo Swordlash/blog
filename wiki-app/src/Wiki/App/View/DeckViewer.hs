@@ -73,6 +73,10 @@ data Input = Input
   { context :: Context
   , target :: Target
   , caption :: Text
+  , ids :: Text
+  -- ^ What every id the slides write starts with, and every link to a
+  -- place in them: the viewer's own, apart from the page's and from any
+  -- other viewer's on it.
   }
 
 -- | What the viewer shows.
@@ -99,15 +103,22 @@ data State = State
   , step :: Int
   -- ^ Its step shown, from 1.
   , root :: H.RefLabel
-  , near :: Maybe (Int, Callback)
+  , near :: Maybe Int
   -- ^ The watch for the link coming near the window, until it does.
+  , callbacks :: [Callback]
+  -- ^ The callbacks the watches tell through, each freed once, when the
+  -- viewer closes: a watch stopped, or one that told, never calls its
+  -- callback again, and freeing one while it runs would break it.
+  , generation :: Int
+  -- ^ How many times what the viewer shows was dropped: an answer read
+  -- before the last time is not shown.
   }
 
 -- | A move through the deck's steps.
 data Move = First | Back | Forward | Last
   deriving stock (Eq)
 
-data Action = Initialize | Finalize | Receive Input | Go Move | FollowLink ArticleLink | Near | Fetched Loaded
+data Action = Initialize | Finalize | Receive Input | Go Move | FollowLink ArticleLink | Near Int | Rewatch | Fetched Int Loaded
 
 $( browserJS
      ["jsbits/deck-viewer.js"]
@@ -122,7 +133,7 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           root <- H.newRefLabel "deck-viewer"
-          pure State {input, loaded = shownOf input, current = 1, step = 1, root, near = Nothing}
+          pure State {input, loaded = shownOf input, current = 1, step = 1, root, near = Nothing, callbacks = [], generation = 0}
       , render
       , eval =
           H.mkEval
@@ -140,7 +151,7 @@ component =
       Ready place page deck ->
         let count = length deck.slides
             shown = [showingStep (if n == st.current then st.step else s.steps) s | (n, s) <- zip [1 ..] deck.slides]
-            rendered = Body.slides place deck {slides = shown}
+            rendered = Body.slidesWithIds st.input.ids place deck {slides = shown}
             present = Router.href st.input.context.router (documentRoute st.input.context place.space.id (PageSlides (spacePathOfPlace place) place.path st.current st.step))
             atStart = st.current == 1 && st.step == 1
             atEnd = st.current >= count && st.step >= stepsAt deck st.current
@@ -176,41 +187,81 @@ component =
       -- and the static prerender run natively, where the viewer is the
       -- link and asks the backend for nothing, so the page carries no
       -- embedded page and adoption repairs nothing.
-      Initialize -> do
+      Initialize -> watchNear
+      Finalize -> do
+        stopNear
+        gets (\st -> st.callbacks) >>= traverse_ (liftIO . freeCallback)
+        modify (\st -> st {callbacks = []})
+      Near generation -> do
         st <- get
-        case st.input.target of
+        -- A watch of an earlier reading (dropped since) tells nothing.
+        when (generation == st.generation) $ nearNow st
+      Receive new -> do
+        old <- gets (\st -> st.input)
+        case new.target of
+          -- The page view's page, as it has it now.
+          Shown {} -> modify (\st -> st {input = new, loaded = shownOf new}) >> clampStep
+          -- What the viewer shows was read for one reader, at one
+          -- revision of the shell, at one address. When any of them
+          -- changes (a sign-out, another user, a change of the wiki, an
+          -- embed that names another page), it is dropped: the viewer is
+          -- the link again, holds none of the page's text, and reads the
+          -- page again when it is near the window. An answer read for the
+          -- earlier one is dropped too ('generation').
           Linked {}
-            | inBrowser ->
-                H.getRef st.root
-                  >>= traverse_
-                    ( \element -> do
-                        channel <- liftIO HS.create
-                        void (H.subscribe channel.emitter)
-                        callback <- liftIO (mkSyncCallback (const (HS.notify channel.listener Near)))
-                        i <- liftIO (js_when_near element callback)
-                        modify (\s -> s {near = Just (i, callback)})
-                    )
-          _ -> pass
-      Finalize -> gets (\st -> st.near) >>= traverse_ (\(i, callback) -> liftIO (js_stop i >> freeCallback callback))
-      Near -> do
-        st <- get
-        for_ st.near $ \(_, callback) -> liftIO (freeCallback callback)
-        modify (\s -> s {near = Nothing})
-        case st.input.target of
-          Linked embedded host -> void . H.fork $ do
-            found <- lift (attempt (fetchDeck st.input.context host embedded))
-            handleAction (Fetched (either (const Link) identity found))
-          Shown {} -> pass
-      Receive new -> case new.target of
-        -- The page view's page, as it has it now.
-        Shown {} -> modify (\st -> st {input = new, loaded = shownOf new}) >> clampStep
-        Linked {} -> modify (\st -> st {input = new})
-      Fetched loaded -> modify (\st -> st {loaded})
+            | sameReading old new -> modify (\st -> st {input = new})
+            | otherwise -> do
+                stopNear
+                modify (\st -> st {input = new, loaded = Link, current = 1, step = 1, generation = st.generation + 1})
+                -- The link is watched once it is rendered, in an action of
+                -- its own, after this one: the element the ref holds until
+                -- then is the viewer's, being removed.
+                channel <- liftIO HS.create
+                void (H.subscribe channel.emitter)
+                liftIO (HS.notify channel.listener Rewatch)
+      Rewatch -> watchNear
+      Fetched generation loaded -> do
+        current <- gets (\st -> st.generation)
+        when (generation == current) $ modify (\st -> st {loaded})
       Go move -> do
         modify (moved move)
       FollowLink target -> do
         router <- gets (\st -> st.input.context.router)
         H.liftEffect (followArticleLink router target)
+
+    -- An embed's link watched until it comes near the window, in a
+    -- browser.
+    watchNear :: H.HalogenM State Action Slots Void m ()
+    watchNear = do
+      st <- get
+      case st.input.target of
+        Linked {}
+          | inBrowser ->
+              H.getRef st.root
+                >>= traverse_
+                  ( \element -> do
+                      channel <- liftIO HS.create
+                      void (H.subscribe channel.emitter)
+                      callback <- liftIO (mkSyncCallback (const (HS.notify channel.listener (Near st.generation))))
+                      i <- liftIO (js_when_near element callback)
+                      modify (\s -> s {near = Just i, callbacks = callback : s.callbacks})
+                  )
+        _ -> pass
+
+    stopNear :: H.HalogenM State Action Slots Void m ()
+    stopNear = do
+      gets (\st -> st.near) >>= traverse_ (liftIO . js_stop)
+      modify (\st -> st {near = Nothing})
+
+    -- 'Near', for the reading watched now.
+    nearNow :: State -> H.HalogenM State Action Slots Void m ()
+    nearNow st = do
+      modify (\s -> s {near = Nothing})
+      case st.input.target of
+        Linked embedded host -> void . H.fork $ do
+          found <- lift (attempt (fetchDeck st.input.context host embedded))
+          handleAction (Fetched st.generation (either (const Link) identity found))
+        Shown {} -> pass
 
     -- The slide and step shown kept within a deck that changed.
     clampStep :: H.HalogenM State Action Slots Void m ()
@@ -286,7 +337,9 @@ spacePathOfPlace place = spacePathOf place.context.spaces place.space.id
 fetchDeck :: (MonadWiki n, MonadNotifications n) => Context -> Place -> PageLink -> n Loaded
 fetchDeck context host (PageLink route _) = case route of
   Page sp pp -> fetchAt sp pp
-  PermanentLink pid _ -> pageLocation pid >>= either (const (pure Link)) (\at -> fetchAt at.space at.page)
+  -- A version's permanent address (as "Copy permanent link" gives it)
+  -- names that version, which the viewer does not show: it is the link.
+  PermanentLink pid Nothing -> pageLocation pid >>= either (const (pure Link)) (\at -> fetchAt at.space at.page)
   _ -> pure Link
   where
     known sp = head [s | s <- context.spaces, spacePathOf context.spaces s.id == sp]
@@ -302,3 +355,16 @@ fetchDeck context host (PageLink route _) = case route of
               let place = Place {context, space, pages, path = pp, attachments = page.attachments, urls = addresses.urls, frames = addresses.frames, people}
               pure (Ready place page (deckOfPage page))
             _ -> pure Link
+
+-- | Whether two inputs of an embed's viewer read the same page for the
+-- same reader at the same revision of the shell: what was read for the
+-- one may be shown for the other.
+sameReading :: Input -> Input -> Bool
+sameReading a b =
+  a.context.revision == b.context.revision
+    && a.context.session == b.context.session
+    && linkOf' a == linkOf' b
+  where
+    linkOf' input = case input.target of
+      Linked named _ -> Just named
+      Shown {} -> Nothing

@@ -125,3 +125,23 @@ function wiki_test_viewport_rules() {
   }
   return JSON.stringify(found);
 }
+
+// What a page's ids say of its viewers (Wiki.App.View.DeckViewer), as
+// JSON: the ids written more than once in the page; the links in a viewer
+// to a place whose target is not in that viewer; and the links of the
+// contents panel whose target is not in the page's own text.
+function wiki_test_ids_report() {
+  const app = document.querySelector("#app") ?? document.body;
+  const seen = new Map();
+  for (const el of app.querySelectorAll("[id]")) seen.set(el.id, (seen.get(el.id) ?? 0) + 1);
+  const duplicates = [...seen].filter(([, n]) => n > 1).map(([id]) => id);
+  const target = (a) => document.getElementById(decodeURIComponent(a.getAttribute("href").slice(1)));
+  const outside = [...app.querySelectorAll(".deck-embed a[href^='#']")]
+    .filter((a) => a.getAttribute("href").length > 1)
+    .filter((a) => !a.closest(".deck-embed").contains(target(a)))
+    .map((a) => a.getAttribute("href"));
+  const contents = [...app.querySelectorAll(".page-contents a[href^='#']")]
+    .filter((a) => !target(a)?.closest("article.page-body") || target(a)?.closest(".deck-embed"))
+    .map((a) => a.getAttribute("href"));
+  return JSON.stringify({ duplicates, outside, contents });
+}

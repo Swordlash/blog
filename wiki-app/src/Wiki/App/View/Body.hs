@@ -66,6 +66,7 @@ module Wiki.App.View.Body
   , startsWithHeading
   , slides
   , slidesReporting
+  , slidesWithIds
   , followingLinks
   , followingLinksIn
   , islandOptions
@@ -413,6 +414,18 @@ slides
   -> Slides.Deck
   -> [Slides.RenderedSlide (H.ComponentSlot slots m action) action]
 slides place = Slides.renderDeck (options place)
+
+-- | 'slides', every id they write and every link to a place in them
+-- starting with a prefix ('Slides.renderDeckWithIds'): a viewer of a
+-- presentation in a page, whose ids stay apart from the page's.
+slidesWithIds
+  :: forall action slots m
+   . (MonadIslands m, MonadUUID m, HasIslands slots)
+  => Text
+  -> Place
+  -> Slides.Deck
+  -> [Slides.RenderedSlide (H.ComponentSlot slots m action) action]
+slidesWithIds prefix place = Slides.renderDeckWithIds prefix (options place)
 
 -- | 'slides', with each island reporting how it drew, as 'articleLines'
 -- does: the editor's preview of a presentation, whose islands' failures

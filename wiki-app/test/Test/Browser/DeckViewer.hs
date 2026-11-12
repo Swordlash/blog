@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | A presentation embedded in a page, and the page view of a
 -- presentation (WP5.97 of docs/PLAN.md), in a browser, in the shell, over
 -- the demo's wiki: the viewer is the link until it comes near the window,
@@ -10,8 +12,11 @@
 module Test.Browser.DeckViewer (spec) where
 
 import Control.Monad.UUID (MonadUUID)
+import Data.Aeson (FromJSON (..), decodeStrict, withObject, (.:))
 import Data.IORef (IORef)
 import Data.Text qualified as T
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
+import Halogen.Router.Duplex qualified as Duplex
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Http (Asked (..), answerRaw, asked, serveDemo, serverStarts, startServer)
@@ -20,17 +25,27 @@ import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (SpacesApi (..), WikiApi (..))
 import Wiki.App.Assistant (MonadAssistant)
-import Wiki.App.Backend (MonadWiki (..))
+import Wiki.App.Backend (MonadWiki (..), WikiError)
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki, switchUser)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Route (..), route)
 import Wiki.App.Shell qualified as Shell
-import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Id
+  ( PageId (..)
+  , UserId (..)
+  )
 import Wiki.Core.Page (Page (body, id, title, updatedAt))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Space (Space (id))
+
+$( browserJS
+     ["jsbits/test-slides.js"]
+     [ ("js_ids_report", "wiki_test_ids_report", Safe, [t|IO JSText|])
+     ]
+ )
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
@@ -133,6 +148,77 @@ spec m = do
     length <$> findAll ui ".page-contents" `shouldReturn` 1
     order <- findAll ui ".page-deck, article.page-body" >>= traverse classes
     map (elem "page-deck") order `shouldBe` [True, False]
+  it "drops a private deck it shows when the reader changes, holding none of its text, and reads it again for one who may" $ runPage $ do
+    (opener, wiki) <- startWith m (Just "user-admin") (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    unmount opener
+    secret <- unsafeIOToPageM . runMemWiki wiki $ do
+      team <- either (panic . show) identity <$> getSpace (slugs ["team"])
+      made <- either (panic . show) identity <$> createPageOf Kind.Presentation team.id Nothing "Secret deck" "# Secret deck\n\n## Plans\n\nThe merger closes on Friday."
+      hello <- either (panic . show) identity <$> getPage' "blog" ["hello-world"]
+      void (savePage hello.id hello.updatedAt hello.title ("# Hello, world\n\n![Deck](/l/" <> made.id.text <> "/){.presentation}\n\n![Deck](/l/" <> made.id.text <> "/)\n"))
+      pure made
+    ui <- startOn m wiki (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    let theLink = "article.page-body > p > a[href*='/l/" <> secret.id.text <> "/']:only-child"
+    find ui theLink >>= focus
+    eventually $ find ui "article.page-body .deck-embed" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The merger closes on Friday.")
+    -- Signed in as someone who may not read Team: the link, as the embed
+    -- without the class, and none of the deck's text.
+    find ui ".user-switcher-toggle" >>= click
+    find ui ".user-menu button[data-login=reader]" >>= click
+    eventually $ length <$> findAll ui ".deck-embed" `shouldReturn` 0
+    find ui ".wiki" >>= textContent >>= (`shouldSatisfy` (not . T.isInfixOf "The merger"))
+    eventually $ do
+      paragraphs <- findAll ui "article.page-body > p" >>= traverse outerHTML
+      case paragraphs of
+        [embedded, plain] -> embedded `shouldBe` plain
+        _ -> expectationFailure ("two paragraphs, not " <> show (length paragraphs))
+    -- Back to one who may: read again, once near the window.
+    find ui ".user-switcher-toggle" >>= click
+    find ui ".user-menu button[data-login=admin]" >>= click
+    find ui theLink >>= focus
+    eventually $ find ui "article.page-body .deck-embed" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The merger closes on Friday.")
+
+  it "keeps its ids apart from the page's and from another viewer's, its footnotes' links in itself, and the contents' links in the page" $ runPage $ do
+    (opener, wiki) <- startWith m (Just "user-admin") (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    unmount opener
+    unsafeIOToPageM . runMemWiki wiki $ do
+      deck <- either (panic . show) identity <$> getPage' "docs" ["markdown-guide", "presentations"]
+      void (savePage deck.id deck.updatedAt deck.title (deck.body <> "\n\n## Noted\n\nA claim[^c].\n\n[^c]: The source.\n"))
+      hello <- either (panic . show) identity <$> getPage' "blog" ["hello-world"]
+      let embed = "![Talk](/s/docs/p/markdown-guide/presentations/){.presentation}"
+      void (savePage hello.id hello.updatedAt hello.title ("# Hello, world\n\n" <> embed <> "\n\nBetween.\n\n" <> embed <> "\n"))
+    -- On the presentation's page, the viewer above the page.
+    shown <- startOn m wiki (Page docs presentations)
+    _ <- find shown ".page-deck .deck-embed"
+    _ <- find shown ".page-contents"
+    report `shouldReturn` Report [] [] []
+    unmount shown
+    -- Two viewers of one deck on one page.
+    ui <- startOn m wiki (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    links <- findAll ui "article.page-body > p > a:only-child"
+    for_ links focus
+    eventually $ length <$> findAll ui "article.page-body .deck-embed" `shouldReturn` 2
+    found <- report
+    found `shouldBe` Report [] [] []
+    length <$> findAll ui ".deck-embed .footnote-ref a" >>= (`shouldSatisfy` (>= 2))
+
+  it "is the link for a version's permanent address, as the embed without the class" $ runPage $ do
+    (opener, wiki) <- startWith m (Just "user-admin") (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    unmount opener
+    unsafeIOToPageM . runMemWiki wiki $ do
+      deck <- either (panic . show) identity <$> getPage' "docs" ["markdown-guide", "presentations"]
+      let versioned = Duplex.print route (PermanentLink deck.id (Just deck.updatedAt))
+          current = Duplex.print route (PermanentLink deck.id Nothing)
+      hello <- either (panic . show) identity <$> getPage' "blog" ["hello-world"]
+      void (savePage hello.id hello.updatedAt hello.title (T.intercalate "\n\n" ["# Hello, world", "![Then](" <> versioned <> "){.presentation}", "![Then](" <> versioned <> ")", "![Now](" <> current <> "){.presentation}"]))
+    ui <- startOn m wiki (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    findAll ui "article.page-body > p > a:only-child" >>= traverse_ focus
+    -- The current page's viewer is shown; the version's is its link.
+    eventually $ length <$> findAll ui "article.page-body .deck-embed" `shouldReturn` 1
+    paragraphs <- findAll ui "article.page-body > p" >>= traverse outerHTML
+    take 2 paragraphs `shouldSatisfy` \case
+      [versioned, plain] -> versioned == plain
+      _ -> False
   where
     docs = slugs ["docs"]
     guide = slugs ["markdown-guide"]
@@ -166,3 +252,20 @@ position ui = find ui ".deck-embed .deck-embed-position" >>= textContent
 -- | The title of the slide a viewer shows.
 cardTitle :: Mounted s q o m -> Text -> PageM s Text
 cardTitle ui within = find ui (within <> " .deck-embed .slide-frame:not(.slide-offstage) .slide-title") >>= textContent
+
+-- | A page by its space's path and its own.
+getPage' :: (MonadWiki n) => Text -> [Text] -> n (Either WikiError Page)
+getPage' space path = getSpace (slugs [space]) >>= either (pure . Left) (\s -> getPage s.id (slugs path))
+
+-- | What 'js_ids_report' finds: ids written twice, links in a viewer that
+-- leave it, the contents' links that do not reach the page's text.
+data Report = Report {duplicates :: [Text], outside :: [Text], contents :: [Text]}
+  deriving stock (Eq, Show)
+
+instance FromJSON Report where
+  parseJSON = withObject "Report" $ \o -> Report <$> o .: "duplicates" <*> o .: "outside" <*> o .: "contents"
+
+report :: PageM s Report
+report = do
+  json <- unsafeIOToPageM (fromJSText <$> js_ids_report)
+  maybe (expectationFailure ("no report: " <> json)) pure (decodeStrict (encodeUtf8 json))

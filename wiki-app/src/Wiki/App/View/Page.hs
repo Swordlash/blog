@@ -442,7 +442,7 @@ component =
           -- highlighted, and its text is where the quotes are looked for.
           rendered = Body.renderedTicking (Tick <$ guard (boxesEnabled st)) (\i -> Map.findWithDefault 0 i st.staging.drawn) (Just embedded) place st.staging.shown
           -- A presentation embedded in the page: a viewer of it.
-          embedded key target caption = HH.slot_ "deck" key DeckViewer.component DeckViewer.Input {context = input.context, target = DeckViewer.Linked target place, caption}
+          embedded key target caption = HH.slot_ "deck" key DeckViewer.component DeckViewer.Input {context = input.context, target = DeckViewer.Linked target place, caption, ids = embedIds key}
           text = either (const "") renderedText rendered
           -- The title and who reads the page, on one row, with who wrote
           -- it under them; when the Markdown has its own title, the
@@ -620,11 +620,17 @@ component =
         </form>
       |]
 
+    -- The ids of an embedded presentation's viewer: from the embed's key,
+    -- unique in the page (its destination, and how many embeds of it come
+    -- before), so that two viewers of one deck do not share them either.
+    embedIds :: Md.IslandKey -> Text
+    embedIds key = "deck-" <> T.map (\c -> if isAlphaNum c then c else '-') key.source <> "-" <> show key.occurrence <> "-"
+
     -- A presentation's viewer, above the page shown as a document (WP5.97
     -- of docs/PLAN.md), fed with the page the view has loaded.
     viewerOf :: Body.Place -> Page -> H.ComponentHTML Action Slots m
     viewerOf place page =
-      [hh|<div class="page-deck">{{ HH.slot_ "deckView" () DeckViewer.component DeckViewer.Input {context = place.context, target = DeckViewer.Shown place page, caption = page.title} }}</div>|]
+      [hh|<div class="page-deck">{{ HH.slot_ "deckView" () DeckViewer.component DeckViewer.Input {context = place.context, target = DeckViewer.Shown place page, caption = page.title, ids = "slides-"} }}</div>|]
 
     -- The page's text, its quotes highlighted, with the current selection
     -- and the panel of inline threads beside it.

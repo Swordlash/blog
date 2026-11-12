@@ -96,6 +96,7 @@ module Wiki.Core.Slides
     -- * Rendering
   , RenderedSlide (..)
   , renderDeck
+  , renderDeckWithIds
 
     -- * Slides in the source, for the editor
   , SlideSpan (..)
@@ -122,7 +123,7 @@ import Halogen.HTML qualified as HH
 import Protolude
 import Wiki.Core.Markdown.Ast
 import Wiki.Core.Markdown.Frame (FrameScheme (..))
-import Wiki.Core.Markdown.Render (Options (..), renderSections)
+import Wiki.Core.Markdown.Render (Options (..), renderSectionsWithIds)
 
 -- | 'Deck': a page as slides, with its display options. There is always at
 -- least one slide.
@@ -534,9 +535,17 @@ data RenderedSlide w i = RenderedSlide
 -- deck is rendered once for each, and each part taken from its own. The
 -- two renders are one document each, so their islands have the same keys.
 renderDeck :: Options page w i -> Deck -> [RenderedSlide w i]
-renderDeck opts deck = zipWith fromBoth (triples (render opts {frameScheme = slideScheme deck.options.theme})) (triples (render opts))
+renderDeck = renderDeckWithIds ""
+
+-- | 'renderDeck', every id the slides write (a heading's, a footnote's and
+-- its references') and every link to a place in them starting with a
+-- prefix ('Wiki.Core.Markdown.Render.renderSectionsWithIds'): a viewer of
+-- a presentation in a page keeps its ids apart from the page's and from
+-- another viewer's.
+renderDeckWithIds :: Text -> Options page w i -> Deck -> [RenderedSlide w i]
+renderDeckWithIds prefix opts deck = zipWith fromBoth (triples (render opts {frameScheme = slideScheme deck.options.theme})) (triples (render opts))
   where
-    render o = renderSections o (concat [[foldMap (pure . titleBlock) s.title, s.body, s.notes] | s <- deck.slides])
+    render o = renderSectionsWithIds o (map (prefix,) (concat [[foldMap (pure . titleBlock) s.title, s.body, s.notes] | s <- deck.slides]))
     fromBoth onSlide inPage = RenderedSlide {title = onSlide.title, body = onSlide.body, notes = inPage.notes}
     triples = \case
       title : body : notes : rest -> RenderedSlide {title, body, notes} : triples rest
