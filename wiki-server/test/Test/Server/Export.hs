@@ -656,7 +656,7 @@ slides = describe "a deck, as pandoc's slide writers read it" $ do
     length (query pauses bs) `shouldBe` 3
     latex `shouldBe` ["\\pause[\\value{beamerpauses}]"]
     -- The pause among the words of "Two and a half", where it is.
-    query (\case P.Para xs -> [[t | P.RawInline (P.Format "latex") t <- xs]]; _ -> []) bs `shouldSatisfy` elem ["\\pause "]
+    query (\case P.Para xs -> [[t | P.RawInline (P.Format "latex") t <- xs]]; _ -> []) bs `shouldSatisfy` elem ["\\pause{}"]
     divClasses bs `shouldSatisfy` elem ["incremental"]
     [inner | P.BlockQuote inner <- query (\case b@P.BlockQuote {} -> [b]; _ -> []) bs]
       `shouldBe` [[P.Div ("", ["nonincremental"], []) [P.Para [P.Str ". . ."], P.Para [P.Str ".", P.Space, P.Str ".", P.Space, P.Str "."], P.BulletList [[P.Plain [P.Str "q"]]]]]]
@@ -664,6 +664,32 @@ slides = describe "a deck, as pandoc's slide writers read it" $ do
       `shouldBe` [[P.Para [P.Str "Say."], P.Para [P.Str "More."]]]
     query (\case P.Note inner -> [inner]; _ -> []) bs `shouldBe` [[P.Para [P.Str ". . ."]]]
     [() | P.Para [P.Str ". . ."] <- bs] `shouldBe` [()]
+
+  it "puts a pause among words where its marker was, adding nothing around it, for Beamer and PowerPoint" $ do
+    let cases =
+          [ ("Hello[[!pause]]!", "Hello<P>!")
+          , ("End[[!pause]]", "End<P>")
+          , ("[[!pause]]Start", "<P>Start")
+          , ("Two [[!pause]] words", "Two <P> words")
+          , ("a[[!pause]][[!pause]]b", "a<P><P>b")
+          , ("- x[[!pause]]y", "x<P>y")
+          , ("- [[!pause]]z", "<P>z")
+          ]
+        -- A paragraph's or an item's text, a pause written <P>.
+        shown pause = query $ \case
+          P.Para xs -> [foldMap (inline pause) xs]
+          P.Plain xs -> [foldMap (inline pause) xs]
+          _ -> []
+        inline pause = \case
+          P.Str t -> t
+          P.Space -> " "
+          P.RawInline (P.Format "latex") t | "\\pause" `T.isPrefixOf` t -> pause
+          _ -> "?"
+    for_ cases $ \(source, expected) -> do
+      beamer <- blocksOf ToBeamer place ("## A\n\n" <> source <> "\n")
+      shown "<P>" beamer `shouldBe` [expected]
+      powerPoint <- blocksOf ToPowerPoint place ("## A\n\n" <> source <> "\n")
+      shown "<P>" powerPoint `shouldBe` [T.replace "<P>" "" expected]
 
   it "leaves a deck's pauses out of PowerPoint, which has none, and keeps its incremental boxes" $ do
     bs <- blocksOf ToPowerPoint place stepsDeck

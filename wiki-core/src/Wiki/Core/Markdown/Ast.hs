@@ -108,6 +108,8 @@ module Wiki.Core.Markdown.Ast
   , parseWithLines
   , parseWithLinesAndMarkers
   , parseWithSpans
+  , parseDeckSpans
+  , parseWithLinesMarkersAndDeck
 
     -- * Reading the tree
   , plainText
@@ -590,6 +592,37 @@ finishedWith located =
   let grouped = withHeadingSections (map (second (placedPauses . withMentions)) located)
    in zip (map fst grouped) (withHeadingIds (withSpoilerSections (map snd grouped)))
 
+-- | 'finishedWith' with the page's own heading spoilers left as their
+-- headings alone, their sections' blocks after them in the page, each
+-- with what it carries (its lines): the page as a presentation reads its
+-- top level ("Wiki.Core.Slides"), where a section is a slide. The blocks
+-- inside a quotation, a list, a box or a block spoiler are gathered as
+-- 'finishedWith' gathers them, and every heading has the identifier it
+-- has there.
+finishedFlatWith :: [(a, Block)] -> [(a, Block)]
+finishedFlatWith located =
+  let flat = map (second (withinSections . placedPauses . withMentions)) located
+   in zip (map fst flat) (withHeadingIds (withSpoilerSections (map snd flat)))
+
+-- | Parse a page's Markdown as 'parseWithSpans' does, with each heading
+-- spoiler of the page's own level its heading alone and its section's
+-- blocks after it, each with its own lines ('finishedFlatWith'): what a
+-- presentation's slides, the editor's view of them and its warnings of
+-- a presentation are all read from ("Wiki.Core.Slides").
+parseDeckSpans :: Text -> Either ParseError [(Maybe (Int, Int), Block)]
+parseDeckSpans source = (\(Blocks bs _ _) -> finishedFlatWith (toList bs)) <$> parsed source
+
+-- | 'parseWithLinesAndMarkers', with 'parseDeckSpans'' blocks too, each
+-- with the line it starts on: one parse for the editor's check of a
+-- text, which reads both.
+parseWithLinesMarkersAndDeck :: Text -> Either ParseError ([(Maybe Int, Block)], [MarkerLine], [(Maybe Int, Block)])
+parseWithLinesMarkersAndDeck source =
+  ( \(Blocks bs (Markers _ ss _) _) ->
+      let located = toList bs
+       in (map (first (fmap fst)) (finishedWith located), sortOn (\s -> (s.lineAt, s.columnAt)) (ordNub ss), map (first (fmap fst)) (finishedFlatWith located))
+  )
+    <$> parsed source
+
 -- | A block with each pause among its words kept where one is read, at
 -- the own level of a paragraph or of a list item's text, wherever such a
 -- block is (in a box, an alert, a spoiler, a quotation, a list), and made
@@ -1067,16 +1100,22 @@ withHeadingSections = \case
               Footnotes _ -> True
               b -> maybe False (<= level) (leadingHeading b)
          in (at, Spoiler h (heading : sectionsIn (own <> map snd inside))) : withHeadingSections after
-  (at, b) : rest -> (at, within b) : withHeadingSections rest
+  (at, b) : rest -> (at, withinSections b) : withHeadingSections rest
   where
-    within = \case
-      BlockQuote bs -> BlockQuote (sectionsIn bs)
-      List kind items -> List kind [ListItem task (sectionsIn bs) | ListItem task bs <- items]
-      Div attrs bs -> Div attrs (sectionsIn bs)
-      Alert kind box bs -> Alert kind box (sectionsIn bs)
-      Spoiler h bs -> Spoiler h (sectionsIn bs)
-      Footnotes notes -> Footnotes [Footnote n label (sectionsIn bs) | Footnote n label bs <- notes]
-      other -> other
+    sectionsIn = map snd . withHeadingSections . map ((),)
+
+-- | A block with the heading spoilers inside it given their sections
+-- ('withHeadingSections'), and those inside them.
+withinSections :: Block -> Block
+withinSections = \case
+  BlockQuote bs -> BlockQuote (sectionsIn bs)
+  List kind items -> List kind [ListItem task (sectionsIn bs) | ListItem task bs <- items]
+  Div attrs bs -> Div attrs (sectionsIn bs)
+  Alert kind box bs -> Alert kind box (sectionsIn bs)
+  Spoiler h bs -> Spoiler h (sectionsIn bs)
+  Footnotes notes -> Footnotes [Footnote n label (sectionsIn bs) | Footnote n label bs <- notes]
+  other -> other
+  where
     sectionsIn = map snd . withHeadingSections . map ((),)
 
 -- | The level of the heading a block starts a section with: a heading's,
@@ -1644,6 +1683,9 @@ spaceTok t = CM.hasType CM.Spaces t || CM.hasType CM.UnicodeSpace t
 readMarker :: [CM.Tok] -> Maybe MarkerText
 readMarker toks = do
   (marker, rest) <- markerOpening toks
+  -- A pause with words after it on its line is a pause among a
+  -- paragraph's words ('InlinePause'), the first of them: no marker line.
+  guard (marker /= Opening PauseName || blankToks rest)
   pure $ case marker of
     Opening name -> start name (dropWhile spaceTok rest)
     Closing name -> end name (dropWhile spaceTok rest)

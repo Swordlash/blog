@@ -8,10 +8,12 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Protolude
 import Test.Hspec
+import Wiki.Core.Markdown.Ast (parseMarkdown)
 import Wiki.Core.Markdown.Folds (Fold (..), spoilerFolds)
 import Wiki.Core.Markdown.Problems
 import Wiki.Core.Markdown.Render (IslandKey (..))
 import Wiki.Core.PageKind (PageKind (..))
+import Wiki.Core.Slides (Deck (..), DeckOptions (..), Theme (..), deckOf)
 
 -- | The parser's problems of a text, without their messages.
 placed :: Text -> [(Int, Int, ProblemKind)]
@@ -77,7 +79,7 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
       map (\f -> (f.from, f.to)) checked.folds `shouldBe` [(5, 7), (9, 13)]
 
     it "lists the problems in the order of their lines" $
-      placed "> [!]\n\n[[!pause]] x\n\n[[!spoiler]]{b}(B)\nText." `shouldBe` [(1, 1, Box), (3, 3, Marker), (5, 5, Spoiler)]
+      placed "> [!]\n\n[[!toc]] x\n\n[[!spoiler]]{b}(B)\nText." `shouldBe` [(1, 1, Box), (3, 3, Marker), (5, 5, Spoiler)]
 
   describe "the islands' places" $ do
     it "places a fence of the page at its lines, the fences included" $ do
@@ -170,6 +172,10 @@ spec = describe "Wiki.Core.Markdown.Problems" $ do
     it "warns in a presentation of a look after the first, and of one not at the top level" $
       map (\(l, _, m) -> (l, T.take 17 m)) (warned Presentation "[[!style]]{theme=dark}\n\n[[!style]]{theme=light}\n\n> [[!style]]\n")
         `shouldBe` [(3, "Only the first [["), (5, "[[!style]] is rea")]
+    it "reads the look after a heading spoiler as the slides read it: applied, so not warned of" $ do
+      let source = "# [[!spoiler]] Title\n\n[[!style]]{theme=dark}\n\n## One\n"
+      warned Presentation source `shouldBe` []
+      (deckOf (either (panic . show) identity (parseMarkdown source))).options.theme `shouldBe` Dark
     it "warns of a pause among a document's words, and marks one where none is read as an error" $ do
       map (\(l, sev, _) -> (l, sev)) (warned Document "Text [[!pause]] more.\n") `shouldBe` [(1, Warning)]
       warned Presentation "Text [[!pause]] more.\n" `shouldBe` []

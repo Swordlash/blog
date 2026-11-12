@@ -578,9 +578,10 @@ type Boxes = Map Text (BoxMarker, Text)
 -- once it has decoded them (@\\|@, @&#124;@) stay text.
 --
 -- Each pause among a paragraph's words ('Wiki.Core.Markdown.Ast.InlinePause')
--- is replaced the same way, by one placeholder between spaces (the fifth
--- result), which 'pauseSpans' makes the pause once pandoc has read the
--- page.
+-- is replaced the same way, by one placeholder (the fifth result) with
+-- nothing added around it, so that what stood around the marker stands
+-- around the pause, byte for byte; 'pauseSpans' makes it the pause once
+-- pandoc has read the page.
 withBoxes :: Text -> [BoxMarker] -> Map Int (Int, MarkerEdit) -> [((Int, Int), (Int, Int))] -> [(Int, Int)] -> (Text, Boxes, Map Text (Int, MarkerEdit), Maybe Bars, Maybe Text)
 withBoxes source markers edits bars pauses = case family of
   Nothing -> (source, mempty, mempty, Nothing, Nothing)
@@ -602,7 +603,7 @@ withBoxes source markers edits bars pauses = case family of
                 [ [(ol, [(oc, ("|" <> prefix <> "ho" <> show n <> "z|", "||"))]), (cl, [(cc, ("|" <> prefix <> "hc" <> show n <> "z|", "||"))])]
                 | (n, ((ol, oc), (cl, cc))) <- zip [1 :: Int ..] bars
                 ]
-                <> [(line, [(column, (" " <> pausePlaceholder prefix <> " ", Ast.openingMarker PauseName))]) | (line, column) <- pauses]
+                <> [(line, [(column, (pausePlaceholder prefix, Ast.openingMarker PauseName))]) | (line, column) <- pauses]
             )
         -- A line with its bars and its pauses replaced, from its end, so
         -- that each column is still the line's as written.
@@ -1341,7 +1342,9 @@ slideSteps beamer = concat . (`evalState` False) . traverse topLevel
             _
               | not beamer -> Nothing
               | afterItems -> Just (P.RawInline (P.Format "latex") "\\pause[\\value{beamerpauses}]")
-              | otherwise -> Just (P.RawInline (P.Format "latex") "\\pause ")
+              -- An empty group after it, so that what follows, a word or
+              -- a bracket, is the text's and not the command's.
+              | otherwise -> Just (P.RawInline (P.Format "latex") "\\pause{}")
       | otherwise = pure (Just x)
     incrementalIn cls incremental
       | "incremental" `elem` cls = True

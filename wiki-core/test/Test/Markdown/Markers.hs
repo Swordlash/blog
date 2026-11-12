@@ -112,6 +112,9 @@ spec = describe "the wiki's own blocks, [[!name]] … [[/name]]" $ do
       [() | Spoiler _ [Pause] <- blocksOf "[[!spoiler]]{s}(S)\n[[!pause]]\n[[/spoiler]]"] `shouldBe` [()]
     it "reads a pause among a paragraph's words, or a list item's, at its place" $ do
       "First [[!pause]] then" `parses` [Para [Str "First ", InlinePause 1 7, Str " then"]]
+      -- At the start of a line with words after it, a pause starts the
+      -- paragraph's words: it is no marker line.
+      "[[!pause]] then" `parses` [Para [InlinePause 1 1, Str " then"]]
       "- a [[!pause]] b" `parses` [List BulletList [ListItem Nothing [Plain [Str "a ", InlinePause 1 5, Str " b"]]]]
       "> x [[!pause]] y" `parses` [BlockQuote [Para [Str "x ", InlinePause 1 5, Str " y"]]]
     it "shows a pause among words where none is read in red: in emphasis, a link, a heading, a table, a footnote" $ do
@@ -153,7 +156,6 @@ spec = describe "the wiki's own blocks, [[!name]] … [[/name]]" $ do
       reasons "[[!div]]{.a}(Title)" `shouldBe` ["only a spoiler takes a description in parentheses, as in [[!spoiler]]{name}(Description)"]
       reasons "[[!div]]{summary}" `shouldBe` ["the braces after [[!div]] hold attributes, #id, .class or key=value, as in [[!div]]{.summary}"]
       reasons "[[!notes]] more" `shouldBe` ["nothing may follow [[!notes]] and its braces on its line"]
-      reasons "[[!pause]] now" `shouldBe` ["nothing may follow [[!pause]] on its line"]
       reasons "[[!toc]]{.x}" `shouldBe` ["nothing may follow [[!toc]] on its line"]
       reasons "[[!style]]{dark}" `shouldBe` ["the braces after [[!style]] hold a presentation's look, as in [[!style]]{theme=dark aspect=4:3}"]
       reasons "[[!div]]\nx\n[[/div]] more" `shouldBe` ["the [[!div]] block is not closed: add [[/div]] after its last line", "nothing may follow [[/div]] on its line"]

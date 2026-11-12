@@ -59,6 +59,7 @@ import Wiki.Core.Markdown.Box (readAlertKind)
 import Wiki.Core.Markdown.Folds (Fold, foldsParsed, isSpoiler)
 import Wiki.Core.Markdown.Render (IslandKey (..), Options (..), defaultOptions, renderSections)
 import Wiki.Core.PageKind (PageKind (..))
+import Wiki.Core.Slides qualified as Slides
 
 -- | 'Problem' is a place in a page's source that does not render as
 -- written: its first and last line (from 1, the last one included), what
@@ -155,12 +156,13 @@ instance NFData Severity where
 checkText :: PageKind -> Text -> Checked
 checkText pageKind source =
   Checked
-    { problems = sort (problemsParsed parsed <> kindProblemsParsed pageKind parsed)
-    , islands = islandsIn source (fst parsed)
+    { problems = sort (problemsParsed parsed <> kindProblemsParsed pageKind (deck, markers))
+    , islands = islandsIn source located
     , folds = filter isSpoiler (foldsParsed source parsed)
     }
   where
-    parsed = either (const ([], [])) identity (A.parseWithLinesAndMarkers source)
+    (located, markers, deck) = either (const ([], [], [])) identity (A.parseWithLinesMarkersAndDeck source)
+    parsed = (located, markers)
 
 -- | The problems the parser finds in a text, in the order of their lines:
 -- the broken marker lines of spoilers and of the other blocks of the
@@ -220,11 +222,15 @@ problemsParsed (located, markers) = sort (markerLines <> spoilerHeads <> boxes <
 --   the top level, which is not read; and each @[[!style]]@ after the
 --   first, which is not read either.
 kindProblems :: PageKind -> Text -> [Problem]
-kindProblems pageKind source = kindProblemsParsed pageKind (either (const ([], [])) identity (A.parseWithLinesAndMarkers source))
+kindProblems pageKind source = kindProblemsParsed pageKind (either (const ([], [])) (\(_, ms, deck) -> (deck, ms)) (A.parseWithLinesMarkersAndDeck source))
 
--- | 'kindProblems' of a text parsed already.
+-- | 'kindProblems' of a text parsed already: the page's blocks as a
+-- presentation reads them, each with the line it starts on
+-- ('A.parseDeckSpans'), and its marker lines. What is at the top level
+-- is decided where the slides decide it ('Slides.deckLevel'): the
+-- warnings about a presentation and its slides never disagree.
 kindProblemsParsed :: PageKind -> ([(Maybe Int, A.Block)], [A.MarkerLine]) -> [Problem]
-kindProblemsParsed pageKind (located, markers) = case pageKind of
+kindProblemsParsed pageKind (deck, markers) = case pageKind of
   Presentation -> sort (nestedOpeners <> laterStyles)
   _ -> sort documentMarkers
   where
@@ -235,7 +241,8 @@ kindProblemsParsed pageKind (located, markers) = case pageKind of
       , Just message <- [presentationOnly role]
       ]
         <> [warn line (fromMaybe "" (presentationOnly A.Pauses)) | A.InlinePause line _ <- A.allInlines tree]
-    tree = map snd located
+    tree = map snd deck
+    located = Slides.deckLevel deck
     presentationOnly = \case
       A.Pauses -> Just "[[!pause]] makes steps of a slide in a presentation; a document shows nothing for it"
       A.SetsStyle -> Just "[[!style]] sets a presentation's look; a document shows nothing for it"
@@ -247,7 +254,7 @@ kindProblemsParsed pageKind (located, markers) = case pageKind of
       _ -> Nothing
     -- The lines of the look's markers at the top level, in order, and
     -- every look's marker line.
-    topStyles = [line | (Just line, A.Div attrs []) <- located, A.styleClass `elem` A.classes attrs]
+    topStyles = [line | (Just line, b) <- located, Slides.isLook b]
     styleLines = [line | A.MarkerLine line _ A.SetsStyle <- markers]
     laterStyles =
       [warn line "Only the first [[!style]] at the top level sets the presentation's look: this one is not read" | line <- drop 1 topStyles]
@@ -255,15 +262,9 @@ kindProblemsParsed pageKind (located, markers) = case pageKind of
     nestedOpeners =
       [ warn line "A heading of level one or two opens a slide only at the top level of the page: one inside this block is a heading on its slide"
       | (Just line, b) <- located
-      , holdsOpener b
+      , not (Slides.isOpener b)
+      , or [level <= 2 | A.Heading level _ _ <- drop 1 (everyBlock b)]
       ]
-    -- Whether a block of the top level holds a heading of level one or
-    -- two below the top level. A heading spoiler's section is the top
-    -- level's, as a presentation reads it.
-    holdsOpener = \case
-      A.Heading {} -> False
-      A.Spoiler h (_ : bs) | h.kind == A.OnHeading -> any holdsOpener bs
-      b -> or [level <= 2 | A.Heading level _ _ <- drop 1 (everyBlock b)]
 
 -- | A block, and every block inside it, in the order of the source.
 everyBlock :: A.Block -> [A.Block]

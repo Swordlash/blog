@@ -74,6 +74,11 @@ module Wiki.Core.Slides
   , titleBlock
   , styleClass
 
+    -- * The page's top level, as a presentation reads it
+  , deckLevel
+  , isOpener
+  , isLook
+
     -- * Steps
   , atStep
   , showingStep
@@ -180,7 +185,7 @@ aspectName = \case
 deckOf :: [Block] -> Deck
 deckOf page =
   Deck
-    { options = maybe defaultDeckOptions optionsOf (head [attrs | Div attrs _ <- doc, isOptions attrs])
+    { options = maybe defaultDeckOptions optionsOf (head [attrs | b@(Div attrs _) <- doc, isLook b])
     , slides = map cutSteps (withFootnotes notes (nonEmpty' (filter (not . emptySlide) (map slideOf (splitAtOpeners content)))))
     }
   where
@@ -188,22 +193,40 @@ deckOf page =
     content = filter keep doc
     keep = \case
       Footnotes _ -> False
-      Div attrs _ -> not (isOptions attrs)
-      _ -> True
+      b -> not (isLook b)
     -- A page with nothing but breaks is still one slide, an empty one.
     nonEmpty' = \case
       [] -> [Slide Nothing [] [] 1]
       ss -> ss
-    doc = sectionsShown page
+    doc = map snd (deckLevel (map ((),) page))
 
--- | Blocks with each heading spoiler among them (not those inside a
--- quotation, a box or a list) as its heading and section, as written
--- ('Wiki.Core.Markdown.Ast.OnHeading'), and the heading spoilers in
--- those sections the same.
-sectionsShown :: [Block] -> [Block]
-sectionsShown = concatMap $ \case
-  Spoiler h bs | h.kind == OnHeading -> sectionsShown bs
-  b -> [b]
+-- | 'deckLevel' is the page's top level as a presentation reads it: its
+-- blocks, with each heading spoiler among them (not those inside a
+-- quotation, a box or a list) as its heading and then its section's
+-- blocks, as written ('Wiki.Core.Markdown.Ast.OnHeading'), and the
+-- heading spoilers in those sections the same. Each block keeps what it
+-- carries; a block of a section the parser gathered into its spoiler
+-- carries the spoiler's.
+--
+-- This is the one place the slides' top level is decided: 'deckOf' cuts
+-- the slides and reads the look from it, and the editor's warnings of a
+-- presentation ("Wiki.Core.Markdown.Problems") and its list of slides
+-- read the same blocks, with their own lines, from
+-- 'Wiki.Core.Markdown.Ast.parseDeckSpans', whose heading spoilers have
+-- no section gathered into them. An opener is a heading of level one or
+-- two among these blocks ('isOpener'), and the look is the first
+-- @[[!style]]@ among them ('isLook').
+deckLevel :: [(a, Block)] -> [(a, Block)]
+deckLevel = concatMap $ \(at, b) -> case b of
+  Spoiler h bs | h.kind == OnHeading -> deckLevel [(at, x) | x <- bs]
+  _ -> [(at, b)]
+
+-- | Whether a block of 'deckLevel' is the line @[[!style]]{…}@, which sets
+-- a presentation's look: the first one does.
+isLook :: Block -> Bool
+isLook = \case
+  Div attrs [] -> isOptions attrs
+  _ -> False
 
 -- | A slide's title as the heading it was written as, for rendering.
 titleBlock :: SlideTitle -> Block
@@ -220,8 +243,8 @@ splitAtOpeners bs = case break isOpener bs of
       (inside, []) -> [opener : inside]
       (inside, next : after) -> (opener : inside) : go next after
 
--- | Whether a block of the page's top level opens a slide: a heading of
--- level one or two.
+-- | Whether a block of 'deckLevel' opens a slide: a heading of level one
+-- or two.
 isOpener :: Block -> Bool
 isOpener = \case
   Heading level _ _ -> level <= 2

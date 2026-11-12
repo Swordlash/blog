@@ -7,8 +7,10 @@ import Data.Text qualified as T
 import Protolude
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
-import Test.QuickCheck (Gen, elements, forAll, listOf, (===))
+import Test.QuickCheck (Gen, conjoin, elements, forAll, listOf, (===))
 import Wiki.Core.Markdown.Ast
+import Wiki.Core.Markdown.Problems (Problem (..), kindProblems)
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slides
 
 deck :: Text -> Deck
@@ -91,6 +93,27 @@ spec = describe "Slides" $ do
 
     it "makes an empty page one empty slide" $
       outline (deck "") `shouldBe` [(Nothing, [], [])]
+
+    prop "and the editor's warnings agree: a look it reads and a heading it opens a slide at are never warned of" $
+      forAll (listOf aPiece) $ \pieces ->
+        let numbered = zip [0 :: Int ..] pieces
+            texts = [render i p | (i, p) <- numbered]
+            source = T.intercalate "\n\n" texts
+            -- The line each piece starts on.
+            starts = scanl (\l t -> l + length (T.lines t) + 1) 1 texts
+            atStart = zip starts pieces
+            d = deck source
+            warned = [(p.from, p.message) | p <- kindProblems Presentation source]
+            openerLines = sort [l | (l, m) <- warned, "A heading of level one or two" `T.isPrefixOf` m]
+            styleLines = sort [l | (l, m) <- warned, "[[!style]]" `T.isInfixOf` m]
+            topStyles = [(l, t) | (l, Look t) <- atStart]
+            expectedOptions = maybe defaultDeckOptions (\(_, t) -> DeckOptions {theme = t, aspect = Standard}) (head topStyles)
+         in conjoin
+              [ [plainText t.text | s <- d.slides, Just t <- [s.title]] === [w | (_, Opener _ w) <- atStart]
+              , openerLines === sort [l | (l, Nested) <- atStart]
+              , d.options === expectedOptions
+              , styleLines === sort (map fst (drop 1 topStyles) <> [l | (l, NestedLook) <- atStart])
+              ]
 
     prop "has, one for one and in order, the page's openers as its slides' titles" $
       forAll (listOf piece) $ \pieces ->
@@ -238,6 +261,58 @@ spec = describe "Slides" $ do
     it "are named as the attributes write them" $ do
       map themeName [minBound .. maxBound] `shouldBe` ["beamer", "light", "dark"]
       map aspectName [minBound .. maxBound] `shouldBe` ["16:9", "4:3"]
+
+-- | 'APiece' is a piece of a presentation as the agreement of the slides
+-- and the editor's warnings is tested with: what it is written as, and
+-- what the slides and the warnings make of it.
+data APiece
+  = -- | A heading that opens a slide, written in one of its ways, and its
+    -- title.
+    Opener Text Text
+  | -- | A heading of level one or two inside a block: warned of.
+    Nested
+  | -- | The look at the top level, with its theme.
+    Look Theme
+  | -- | The look inside a quotation: warned of, never read.
+    NestedLook
+  | -- | Anything else: text, a rule, code, a pause.
+    Other Text
+  deriving stock (Eq, Show)
+
+-- | The pieces, with an opener's or a look's own in each.
+aPiece :: Gen APiece
+aPiece = do
+  word <- elements ["Alpha", "Beta", "Gamma", "Delta"]
+  theme <- elements [Light, Dark]
+  elements
+    [ Opener ("# " <> word) word
+    , Opener ("## " <> word) word
+    , Opener (word <> "\n---") word
+    , Opener ("## [[!spoiler]] " <> word <> "\n\nInside.") word
+    , Opener ("# [[!spoiler]] " <> word) word
+    , Nested
+    , Look theme
+    , NestedLook
+    , Other ("### " <> word)
+    , Other ("Text of " <> word <> ".")
+    , Other "---"
+    , Other "```\n## not a heading\n```"
+    , Other "[[!pause]]"
+    ]
+
+-- | A piece's Markdown, by its place among the pieces (a list's bullet
+-- changes from one piece to the next, so that two lists in a row are
+-- two lists).
+render :: Int -> APiece -> Text
+render i = \case
+  Opener t _ -> t
+  Nested -> case i `mod` 3 of
+    0 -> "> ## Quoted"
+    1 -> (if even i then "- " else "* ") <> "## Listed"
+    _ -> "[[!div]]{.box}\n## Boxed\n[[/div]]"
+  Look t -> "[[!style]]{theme=" <> themeName t <> " aspect=4:3}"
+  NestedLook -> "> [[!style]]{theme=dark}"
+  Other t -> t
 
 -- | A piece of a page, its Markdown and, when it opens a slide, its
 -- title: the openers in every way they are written, and blocks that look
