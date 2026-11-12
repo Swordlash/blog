@@ -156,7 +156,7 @@ component =
 
     bodyOf :: State -> H.ComponentHTML Action Slots m
     bodyOf st = case st.shown of
-      Shows _ title text -> HH.slot_ "preview" () Preview.component Preview.Input {place = place st, title, body = text}
+      Shows _ title text -> HH.slot_ "preview" () Preview.component Preview.Input {place = place st, title, body = text, slides = Nothing}
       Failed e -> errorView e
       Loading -> [hh|<p class="loading">Loading…</p>|]
 

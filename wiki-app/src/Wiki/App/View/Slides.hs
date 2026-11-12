@@ -57,6 +57,10 @@ module Wiki.App.View.Slides
   ( Input (..)
   , Slots
   , component
+
+    -- * Slides as cards
+  , slideCard
+  , deckClasses
   )
 where
 
@@ -264,22 +268,12 @@ component =
     slideFrame st page count n s html =
       [hh|
         <div class="slide-frame{% if n == st.current %} current{% end %}" data-slide={{ show n :: Text }} onClick={{ const (Picked n) }}>
-          <div class="slide-slot">
-            <section class="slide{% if titlePage %} slide-title-page{% end %}{% if isNothing s.title %} slide-untitled{% end %}" {{ [attr "aria-label" ("Slide " <> position n count)] }}>
-              {% if isJust s.title %}
-                <header class="slide-title">{{ html.title }}</header>
-              {% end %}
-              <div class="slide-body page-body">{{ html.body }}</div>
-              <footer class="slide-footer"><span class="slide-footer-title">{{ page.title }}</span><span class="slide-number">{{ position n count }}</span></footer>
-            </section>
-          </div>
+          <div class="slide-slot">{{ slideSection page.title count n ("Slide " <> position n count) s html }}</div>
           {% if not (null s.notes) %}
             <aside class="slide-notes page-body" aria-label="Notes">{{ html.notes }}</aside>
           {% end %}
         </div>
       |]
-      where
-        titlePage = maybe False (\t -> t.level == 1) s.title
 
     -- A copy of a slide at one of its steps before the last, for the print
     -- with each step on its own page: hidden on the screen, printed before
@@ -288,19 +282,9 @@ component =
     stepCopy page count n k s html =
       [hh|
         <div class="slide-frame slide-step-copy" data-slide={{ show n :: Text }} data-step={{ show k :: Text }}>
-          <div class="slide-slot">
-            <section class="slide{% if titlePage %} slide-title-page{% end %}{% if isNothing s.title %} slide-untitled{% end %}" {{ [attr "aria-label" ("Slide " <> position n count <> ", step " <> show k)] }}>
-              {% if isJust s.title %}
-                <header class="slide-title">{{ html.title }}</header>
-              {% end %}
-              <div class="slide-body page-body">{{ html.body }}</div>
-              <footer class="slide-footer"><span class="slide-footer-title">{{ page.title }}</span><span class="slide-number">{{ position n count }}</span></footer>
-            </section>
-          </div>
+          <div class="slide-slot">{{ slideSection page.title count n ("Slide " <> position n count <> ", step " <> show k) s html }}</div>
         </div>
       |]
-      where
-        titlePage = maybe False (\t -> t.level == 1) s.title
 
     progress :: State -> Int -> H.ComponentHTML Action Slots m
     progress st count =
@@ -559,6 +543,46 @@ fetch owner input =
   where
     unreadable _ = deckOf []
 
+-- | A slide as the page shows it: its title in a bar, its body, and a
+-- footer with the presentation's title and the slide's number out of the
+-- total, labelled for a screen reader.
+slideSection :: Text -> Int -> Int -> Text -> Slide -> RenderedSlide w i -> HH.HTML w i
+slideSection pageTitle count n label s html =
+  [hh|
+    <section class="slide{% if titlePage %} slide-title-page{% end %}{% if isNothing s.title %} slide-untitled{% end %}" {{ [attr "aria-label" label] }}>
+      {% if isJust s.title %}
+        <header class="slide-title">{{ html.title }}</header>
+      {% end %}
+      <div class="slide-body page-body">{{ html.body }}</div>
+      <footer class="slide-footer"><span class="slide-footer-title">{{ pageTitle }}</span><span class="slide-number">{{ position n count }}</span></footer>
+    </section>
+  |]
+  where
+    titlePage = maybe False (\t -> t.level == 1) s.title
+
+-- | 'slideCard' is a slide shown as a card, as the editor's preview shows
+-- it (WP5.97 of docs/PLAN.md): the slide, of its shape and look, and its
+-- notes under it. Inside an element with the deck's classes
+-- ('deckClasses'), which set the shape and the colours.
+slideCard :: Text -> Int -> Int -> Slide -> RenderedSlide w i -> HH.HTML w i
+slideCard pageTitle count n s html =
+  [hh|
+    <div class="slide-frame" data-slide={{ show n :: Text }}>
+      <div class="slide-slot">{{ slideSection pageTitle count n ("Slide " <> position n count) s html }}</div>
+      {% if not (null s.notes) %}
+        <aside class="slide-notes page-body" aria-label="Notes">{{ html.notes }}</aside>
+      {% end %}
+    </div>
+  |]
+
+-- | A deck's classes: its theme and its shape, which set the colours and
+-- the shape of its slides.
+deckClasses :: Deck -> Text
+deckClasses deck =
+  "slides-theme-" <> themeName deck.options.theme <> " " <> case deck.options.aspect of
+    Wide -> "slides-wide"
+    Standard -> "slides-standard"
+
 -- | A slide's number out of the total, as the footer and the controls
 -- write it.
 position :: Int -> Int -> Text
@@ -601,16 +625,12 @@ backward st
 viewClasses :: State -> Deck -> Text
 viewClasses st deck =
   T.unwords
-    ( ["slides-theme-" <> themeName deck.options.theme, aspectClass deck.options.aspect]
+    ( [deckClasses deck]
         <> ["notes-open" | st.notesOpen]
         <> ["overview" | st.overview]
         <> ["print-notes" | st.printNotes]
         <> ["print-steps" | st.printSteps]
     )
-  where
-    aspectClass = \case
-      Wide -> "slides-wide"
-      Standard -> "slides-standard"
 
 -- | How far through the deck a slide is, as a width.
 percent :: Int -> Int -> Text

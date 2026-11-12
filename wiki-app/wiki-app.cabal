@@ -431,6 +431,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Server
       Test.Browser.EditorSettings
       Test.Browser.Shell
+      Test.Browser.SlideEditor
       Test.Browser.Slides
       Test.Browser.Source
       Test.Browser.Spaces

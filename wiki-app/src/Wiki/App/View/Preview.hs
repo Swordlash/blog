@@ -25,6 +25,7 @@
 -- preview's own, so that a mention becomes a link once it is known.
 module Wiki.App.View.Preview
   ( Input (..)
+  , Slides (..)
   , Output (..)
   , component
   )
@@ -42,15 +43,31 @@ import Wiki.App.Islands qualified as Islands
 import Wiki.App.View.Body (IslandSlots, Place (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common (Context (..))
+import Wiki.App.View.Slides (deckClasses, slideCard)
+import Wiki.Core.Markdown (parseMarkdown)
 import Wiki.Core.Markdown.Render (IslandKey)
+import Wiki.Core.Slides (Deck (..), Slide (..), deckOf, showingStep)
 
--- | The preview's input: the draft's title and Markdown, and the place it
--- is read in.
+-- | The preview's input: the draft's title and Markdown, the place it is
+-- read in, and, for a presentation, which of its slides are shown.
 data Input = Input
   { place :: Place
   , title :: Text
   , body :: Text
+  , slides :: Maybe Slides
+  -- ^ 'Nothing' for a document, shown as its page.
   }
+
+-- | Which slides of a presentation the preview shows (WP5.97 of
+-- docs/PLAN.md), each as a card of the slide's shape and look, with its
+-- notes under it and every step shown.
+data Slides
+  = -- | One slide, by its index in the deck ('Wiki.Core.Slides.slideSpans'
+    -- of the text the editor last checked): the cursor's.
+    SlideAt Int
+  | -- | Every slide, one under the other.
+    WholeDeck
+  deriving stock (Eq)
 
 data State = State
   { input :: Input
@@ -74,10 +91,26 @@ component =
       }
   where
     render :: State -> H.ComponentHTML Action IslandSlots m
-    render State {input = Input {place, title, body}, known} =
-      [hh|
-        <div class="preview">{{ Body.heading title body }}{{ Body.articleLines FollowLink FromIsland (Body.withPeople known.found place) body }}</div>
-      |]
+    render State {input = Input {place, title, body, slides}, known} = case slides of
+      Nothing ->
+        [hh|
+          <div class="preview">{{ Body.heading title body }}{{ Body.articleLines FollowLink FromIsland (Body.withPeople known.found place) body }}</div>
+        |]
+      Just shown ->
+        let d = either (const (deckOf [])) deckOf (parseMarkdown body)
+            count = length d.slides
+            picked = case shown of
+              WholeDeck -> zip [1 ..] d.slides
+              SlideAt i -> [(m, s) | (m, s) <- zip [1 ..] d.slides, m == max 1 (min (i + 1) count)]
+            withPlace = Body.withPeople known.found place
+            rendered = Body.slides withPlace Deck {options = d.options, slides = [showingStep s.steps s | (_, s) <- picked]}
+         in [hh|
+              <div class="preview slides-preview {{ deckClasses d }}" {{ Body.followingLinks FollowLink withPlace }}>
+                {% for ((n, s), html) in zip picked rendered %}
+                  {{ slideCard title count n s html }}
+                {% end %}
+              </div>
+            |]
 
     handleAction :: Action -> H.HalogenM State Action IslandSlots Output m ()
     handleAction = \case
@@ -110,6 +143,7 @@ same :: Input -> Input -> Bool
 same a b =
   a.title == b.title
     && a.body == b.body
+    && a.slides == b.slides
     && a.place.context.revision == b.place.context.revision
     && a.place.context.session == b.place.context.session
     && a.place.context.spaces == b.place.context.spaces

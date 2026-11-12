@@ -72,6 +72,16 @@
 //   detail is the folds as JSON [[first, last]], when the author folds or
 //   unfolds, or an edit moves or opens a fold. A fold changes what is
 //   shown, never the text: it makes no "wiki-input" event.
+// - a presentation's slides (WP5.97) have their controls at the start of
+//   their first lines: a handle to drag a slide by, and a button to open
+//   or close it (see slideMarks below). Which lines are slides, and what a
+//   move does to the text, are Haskell's (Wiki.Core.Slides).
+// - each change of the cursor's line is told by a "wiki-cursor-line"
+//   event, whose detail is the line, from 1, so that the preview of a
+//   presentation shows the cursor's slide.
+// - once CodeMirror is in place, a "wiki-ready" event on the host says so:
+//   the component folds a presentation's slides then, which it cannot do
+//   before.
 //
 // The text is never normalised: the document's only line separator is
 // "\n", so a "\r" the page holds stays where it is and the text handed back
@@ -100,6 +110,7 @@ import {
   foldKeymap,
   foldNodeProp,
   foldService,
+  foldState,
   foldedRanges,
   syntaxHighlighting,
   syntaxTree,
@@ -589,6 +600,183 @@ const folding = [
     foldingChanged: (update) => update.startState.field(offered) !== update.state.field(offered),
   }),
 ];
+
+// A presentation's slides in the editor (WP5.97 of docs/PLAN.md). Which
+// lines are slides is Haskell's (Wiki.Core.Slides.slideSpans), set by the
+// component for the text they were found in (wikiEditor.slides) and never
+// computed here, as the folds are. Each slide's first line starts with its
+// controls: a handle to drag the slide by, when it can move (not the text
+// before the first heading, nor the title slide), and a button that opens
+// or closes it, which tells the component by a "wiki-open-slide" event
+// ({line, open, more}: the slide's first line, from 1, and more when Ctrl
+// or Cmd was held). A slide dragged by its handle and dropped on another
+// slide is told by a "wiki-move-slide" event ({from, to, after}: the two
+// slides' first lines, and whether the drop was below the other's first
+// line, which puts the slide after it rather than before); the component
+// moves the text (Wiki.Core.Slides.moveSlide), as one edit. Slides are
+// told by their lines as the text has them now, not by their places in
+// the list, which an edit since the last marks may have changed. The marks
+// follow the text as it is typed, until the next ones come; a mark whose
+// line start is gone with an edit is dropped.
+const setSlides = StateEffect.define();
+
+const slideMarks = StateField.define({
+  create: () => [],
+  update(marks, tr) {
+    for (const effect of tr.effects) if (effect.is(setSlides)) return effect.value;
+    if (!tr.docChanged) return marks;
+    return marks
+      .map((mark) => ({ ...mark, from: tr.changes.mapPos(mark.from, -1) }))
+      .filter((mark, i, all) => tr.state.doc.lineAt(mark.from).from === mark.from && (i === 0 || all[i - 1].from !== mark.from));
+  },
+});
+
+// Where a dragged slide would go: {at, end}, the start of the line it
+// would go above, or with end the last line, which it would go below; or
+// null.
+const setDropTarget = StateEffect.define();
+
+const dropTarget = StateField.define({
+  create: () => null,
+  update(target, tr) {
+    for (const effect of tr.effects) if (effect.is(setDropTarget)) return effect.value;
+    return target === null || !tr.docChanged ? target : null;
+  },
+  provide: (field) =>
+    EditorView.decorations.from(field, (target) =>
+      target === null ? Decoration.none : Decoration.set([Decoration.line({ class: target.end ? "cm-wiki-slide-drop-end" : "cm-wiki-slide-drop" }).range(target.at)]),
+    ),
+});
+
+// The first line of the slide being dragged, while a drag of a handle
+// lasts. One at a time in a page: a drag is the pointer's.
+let draggedSlide = null;
+
+class SlideControls extends WidgetType {
+  constructor(index, movable, open, host) {
+    super();
+    this.index = index;
+    this.movable = movable;
+    this.open = open;
+    this.host = host;
+  }
+
+  eq(other) {
+    return other.index === this.index && other.movable === this.movable && other.open === this.open;
+  }
+
+  toDOM(view) {
+    const controls = document.createElement("span");
+    controls.className = "cm-wiki-slide-controls";
+    controls.contentEditable = "false";
+    // The slide's first line as the text has it now.
+    const line = () => view.state.doc.lineAt(view.posAtDOM(controls)).number;
+    if (this.movable) {
+      const handle = document.createElement("span");
+      handle.className = "cm-wiki-slide-handle";
+      handle.draggable = true;
+      handle.textContent = "\u283f";
+      handle.title = "Drag to move the slide (or Alt+Up and Alt+Down in it)";
+      handle.addEventListener("dragstart", (event) => {
+        draggedSlide = line();
+        event.dataTransfer?.setData("application/x-wiki-slide", String(draggedSlide));
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+      });
+      handle.addEventListener("dragend", () => {
+        draggedSlide = null;
+      });
+      controls.append(handle);
+    }
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "cm-wiki-slide-toggle";
+    toggle.textContent = this.open ? "\u25be" : "\u25b8";
+    toggle.title = this.open ? "Close the slide" : "Open the slide (with Ctrl or Cmd, keep the others open)";
+    toggle.setAttribute("aria-expanded", this.open ? "true" : "false");
+    toggle.addEventListener("mousedown", (event) => event.preventDefault());
+    toggle.addEventListener("click", (event) => {
+      event.preventDefault();
+      const detail = { line: line(), open: !this.open, more: event.ctrlKey || event.metaKey };
+      this.host.dispatchEvent(new CustomEvent("wiki-open-slide", { detail }));
+    });
+    controls.append(toggle);
+    return controls;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+// A slide is open when no fold starts at the end of its first line.
+const slideControls = (host) =>
+  EditorView.decorations.compute([slideMarks, foldState], (state) => {
+    const folded = new Set();
+    foldedRanges(state).between(0, state.doc.length, (from) => {
+      folded.add(state.doc.lineAt(from).from);
+    });
+    return Decoration.set(
+      state.field(slideMarks).map((mark) =>
+        Decoration.widget({ widget: new SlideControls(mark.index, mark.movable, !folded.has(mark.from), host), side: -1 }).range(mark.from),
+      ),
+    );
+  });
+
+// Where a drag at a point of the page would put the slide: before the
+// slide whose first line the point is on, or after the slide whose other
+// lines it is on. {line, after, target}: that slide's first line, whether
+// after it, and the drop's mark (setDropTarget); or null before the first
+// slide.
+const dropAt = (view, event) => {
+  const { doc } = view.state;
+  // The start of the line shown at the point: a folded slide shows as one
+  // line, its first, where a position would be anywhere in what it hides.
+  const at = view.lineBlockAtHeight(event.clientY - view.documentTop).from;
+  const marks = view.state.field(slideMarks);
+  const index = marks.findLastIndex((mark) => mark.from <= at);
+  if (index < 0) return null;
+  const mark = marks[index];
+  const after = doc.lineAt(at).from !== mark.from;
+  const next = marks[index + 1];
+  const target = !after ? { at: mark.from, end: false } : next ? { at: next.from, end: false } : { at: doc.line(doc.lines).from, end: true };
+  return { line: doc.lineAt(mark.from).number, after, target };
+};
+
+// A slide's drag over the text and its drop, which only the handles start:
+// the drop is the component's, not CodeMirror's (which would put the
+// dragged text in).
+const slideDrops = (host) =>
+  Prec.high(
+    EditorView.domEventHandlers({
+      // A slide's drag is the text's alone: the panes around it, where
+      // files are dropped, do not hear it.
+      dragover: (event, view) => {
+        if (draggedSlide === null) return false;
+        event.preventDefault();
+        event.stopPropagation();
+        const drop = dropAt(view, event);
+        const target = drop === null ? null : drop.target;
+        const shown = view.state.field(dropTarget);
+        if (shown?.at !== target?.at || shown?.end !== target?.end) view.dispatch({ effects: setDropTarget.of(target) });
+        return true;
+      },
+      dragleave: (event, view) => {
+        if (draggedSlide !== null && !view.dom.contains(event.relatedTarget)) view.dispatch({ effects: setDropTarget.of(null) });
+        return false;
+      },
+      drop: (event, view) => {
+        if (draggedSlide === null) return false;
+        event.preventDefault();
+        event.stopPropagation();
+        const from = draggedSlide;
+        draggedSlide = null;
+        const drop = dropAt(view, event);
+        view.dispatch({ effects: setDropTarget.of(null) });
+        if (drop !== null && drop.line !== from) host.dispatchEvent(new CustomEvent("wiki-move-slide", { detail: { from, to: drop.line, after: drop.after } }));
+        return true;
+      },
+    }),
+  );
 
 // The selection, kept in sight while the text does not have the focus
 // (issue #120): the browser shows a selection only where the focus is, so
@@ -1300,6 +1488,8 @@ export function attach(textarea, host, original, codeTokens) {
   // The folds last told by a "wiki-folds" event, or made by the component,
   // as JSON [[first, last]].
   let toldFolds = "[]";
+  // The cursor's line last told by a "wiki-cursor-line" event.
+  let toldLine = 0;
 
   // A textarea nobody has typed in has its cursor at the start, which is
   // the title line's "#": the cursor starts instead where the page's text
@@ -1334,6 +1524,10 @@ export function attach(textarea, host, original, codeTokens) {
       keptSelection,
       lintGutter(),
       folding,
+      slideMarks,
+      dropTarget,
+      slideControls(host),
+      slideDrops(host),
       EditorView.contentAttributes.of({
         "aria-label": textarea.getAttribute("aria-label") ?? "",
         spellcheck: "true",
@@ -1353,6 +1547,15 @@ export function attach(textarea, host, original, codeTokens) {
         }
         if (update.docChanged) {
           host.dispatchEvent(new CustomEvent("wiki-input", { detail: update.state.doc.toString() }));
+        }
+        // The cursor's line, when it is another: the slide the preview
+        // shows follows it (WP5.97).
+        if (update.docChanged || update.selectionSet) {
+          const line = update.state.doc.lineAt(update.state.selection.main.head).number;
+          if (line !== toldLine) {
+            toldLine = line;
+            host.dispatchEvent(new CustomEvent("wiki-cursor-line", { detail: line }));
+          }
         }
         // The folds changed other than by the component (the gutter, the
         // keys, the mark, or an edit that moved or opened one): told as
@@ -1524,6 +1727,27 @@ export function attach(textarea, host, original, codeTokens) {
     // The folds, as JSON [[first, last]], lines from 1, in the order of the
     // text.
     foldedLines: () => JSON.stringify(foldedLinesOf(view.state)),
+    // A presentation's slides Haskell found in `text`
+    // (Wiki.Core.Slides.slideSpans), as JSON [[first line, movable]], lines
+    // from 1, in place of those marked before; [] for none (a document, or
+    // the presentation's raw Markdown). Taken only for the text CodeMirror
+    // holds, as the folds are.
+    slides: (text, json) => {
+      if (text !== view.state.doc.toString()) return;
+      const { doc } = view.state;
+      let list = [];
+      try {
+        list = JSON.parse(json);
+      } catch {
+        list = [];
+      }
+      const marks = (Array.isArray(list) ? list : [])
+        .map((entry, index) => (Array.isArray(entry) && Number.isInteger(entry[0]) && entry[0] >= 1 && entry[0] <= doc.lines ? { from: doc.line(entry[0]).from, index, movable: entry[1] === true } : null))
+        .filter((mark) => mark !== null);
+      view.dispatch({ effects: setSlides.of(marks) });
+    },
+    // The cursor's line, from 1.
+    cursorLine: () => view.state.doc.lineAt(view.state.selection.main.head).number,
     // The cursor to the next problem after it (or the first), with its
     // message shown, and the focus in the text.
     nextProblem: () => {
@@ -1595,4 +1819,7 @@ export function attach(textarea, host, original, codeTokens) {
   // For the browser tests, which find the text by what one types into.
   view.contentDOM.wikiEditor = editor;
   editors.add(editor);
+  // CodeMirror is ready: what the component does only once it is (folding
+  // a presentation's slides, marking them) is done now.
+  host.dispatchEvent(new CustomEvent("wiki-ready"));
 }

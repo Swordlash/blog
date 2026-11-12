@@ -2489,7 +2489,8 @@ pre.numbered > code {
    over the frame, which stays where it was beneath. Each theme sets the
    slide's own colours; the dark frame around a slide, the notes and the
    controls are the page's. */
-.slides-view {
+.slides-view,
+.slides-preview {
   --slide-ratio: 16 / 9;
   --slide-background: #ffffff;
   --slide-text: #1f2328;
@@ -2497,6 +2498,9 @@ pre.numbered > code {
   --slide-bar: #23376e;
   --slide-bar-text: #ffffff;
   --slide-muted: #59636e;
+}
+
+.slides-view {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -2510,8 +2514,31 @@ body:has(.slides-view) {
   overflow: hidden;
 }
 
-.slides-view.slides-standard {
+.slides-view.slides-standard,
+.slides-preview.slides-standard {
   --slide-ratio: 4 / 3;
+}
+
+/* The editor's preview of a presentation (Wiki.App.View.Preview): its
+   slides as cards, one under the other, each with its notes under it,
+   every step shown. */
+.slides-preview .slide-frame {
+  display: flex;
+  margin-bottom: 1.5rem;
+}
+
+.slides-preview .slide-slot {
+  flex: none;
+  aspect-ratio: var(--slide-ratio);
+}
+
+.slides-preview .slide {
+  box-shadow: 0 0.25rem 1rem rgb(0 0 0 / 25%);
+}
+
+.slides-preview .slide-notes {
+  display: block;
+  max-height: none;
 }
 
 .slides-theme-light {
@@ -3403,6 +3430,62 @@ body:has(.slides-view) {
   gap: 0.4rem;
 }
 
+/* A presentation's controls in the editor's toolbar (WP5.97): the switch
+   between slide by slide and the raw Markdown, and the mode's button. */
+.editor-slides-mode {
+  display: inline-flex;
+}
+
+.editor-slides-mode button + button {
+  margin-left: -1px;
+}
+
+.editor-slides-note {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* A slide's controls at the start of its first line in the editor: the
+   handle it is dragged by, and the button that opens or closes it. Where
+   a dragged slide would go is marked by a line above the slide it would go
+   before, or below the last line. */
+.cm-wiki-slide-controls {
+  display: inline-flex;
+  gap: 0.15rem;
+  margin-right: 0.3rem;
+  user-select: none;
+  vertical-align: baseline;
+}
+
+.cm-wiki-slide-handle {
+  cursor: grab;
+  color: var(--muted);
+}
+
+.cm-wiki-slide-toggle {
+  padding: 0 0.2rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.cm-wiki-slide-toggle:hover,
+.cm-wiki-slide-handle:hover {
+  color: var(--accent);
+}
+
+.cm-wiki-slide-drop {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.cm-wiki-slide-drop-end {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.editor-slides-mode [aria-pressed="true"],
+.editor-one-slide[aria-pressed="true"],
 .editor-side-by-side[aria-pressed="true"],
 .editor-macros-toggle[aria-pressed="true"] {
   border-color: var(--accent);
