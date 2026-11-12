@@ -50,7 +50,7 @@ import Protolude hiding (First, Last, State)
 import Web.DOM.Internal.Types (Element (..))
 import Web.Event.Event (Event, EventType (..))
 import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..))
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), UrlOwner (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
@@ -112,13 +112,19 @@ data State = State
   , generation :: Int
   -- ^ How many times what the viewer shows was dropped: an answer read
   -- before the last time is not shown.
+  , owners :: Maybe Body.Owners
+  -- ^ The owners of the embedded page's attachments' addresses
+  -- ("Wiki.App.Backend"'s 'UrlOwner'), from the first read of it: let go
+  -- when the viewer goes back to the link, and when it closes. None for
+  -- the page view's own presentation, whose addresses are the page
+  -- view's.
   }
 
 -- | A move through the deck's steps.
 data Move = First | Back | Forward | Last
   deriving stock (Eq)
 
-data Action = Initialize | Finalize | Receive Input | Go Move | FollowLink ArticleLink | Near Int | Rewatch | Fetched Int Loaded
+data Action = Initialize | Finalize | Receive Input | Go Move | FollowLink ArticleLink | Near Int | Rewatch | Fetched Int UrlOwner Loaded
 
 $( browserJS
      ["jsbits/deck-viewer.js"]
@@ -133,7 +139,7 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           root <- H.newRefLabel "deck-viewer"
-          pure State {input, loaded = shownOf input, current = 1, step = 1, root, near = Nothing, callbacks = [], generation = 0}
+          pure State {owners = Nothing, input, loaded = shownOf input, current = 1, step = 1, root, near = Nothing, callbacks = [], generation = 0}
       , render
       , eval =
           H.mkEval
@@ -190,6 +196,7 @@ component =
       Initialize -> watchNear
       Finalize -> do
         stopNear
+        whenM (gets (\st -> isJust st.owners)) (Body.releaseOwned ownersOf' setOwners)
         gets (\st -> st.callbacks) >>= traverse_ (liftIO . freeCallback)
         modify (\st -> st {callbacks = []})
       Near generation -> do
@@ -212,6 +219,7 @@ component =
             | sameReading old new -> modify (\st -> st {input = new})
             | otherwise -> do
                 stopNear
+                whenM (gets (\st -> isJust st.owners)) (Body.resetOwned ownersOf' setOwners)
                 modify (\st -> st {input = new, loaded = Link, current = 1, step = 1, generation = st.generation + 1})
                 -- The link is watched once it is rendered, in an action of
                 -- its own, after this one: the element the ref holds until
@@ -220,8 +228,9 @@ component =
                 void (H.subscribe channel.emitter)
                 liftIO (HS.notify channel.listener Rewatch)
       Rewatch -> watchNear
-      Fetched generation loaded -> do
+      Fetched generation owner loaded -> do
         current <- gets (\st -> st.generation)
+        Body.settleOwned ownersOf' setOwners owner (generation == current)
         when (generation == current) $ modify (\st -> st {loaded})
       Go move -> do
         modify (moved move)
@@ -258,10 +267,22 @@ component =
     nearNow st = do
       modify (\s -> s {near = Nothing})
       case st.input.target of
-        Linked embedded host -> void . H.fork $ do
-          found <- lift (attempt (fetchDeck st.input.context host embedded))
-          handleAction (Fetched st.generation (either (const Link) identity found))
+        Linked embedded host -> do
+          when (isNothing st.owners) $ do
+            first' <- newUrlOwner
+            modify (\s -> s {owners = Just (Body.ownersOf first')})
+          owner <- Body.beginOwned ownersOf' setOwners
+          void . H.fork $ do
+            found <- lift (attempt (fetchDeck st.input.context owner host embedded))
+            handleAction (Fetched st.generation owner (either (const Link) identity found))
         Shown {} -> pass
+
+    ownersOf' :: State -> Body.Owners
+    -- Read only once the first read of the page has made them ('nearNow').
+    ownersOf' st = fromMaybe (Body.ownersOf (UrlOwner 0)) st.owners
+
+    setOwners :: Body.Owners -> State -> State
+    setOwners owners st = st {owners = Just owners}
 
     -- The slide and step shown kept within a deck that changed.
     clampStep :: H.HalogenM State Action Slots Void m ()
@@ -334,8 +355,8 @@ spacePathOfPlace place = spacePathOf place.context.spaces place.space.id
 -- shown, anything else is the link. Its space is the one the reader's
 -- spaces hold, and a page of the embedding page's own space takes that
 -- page's list of pages: neither is asked for again.
-fetchDeck :: (MonadWiki n, MonadNotifications n) => Context -> Place -> PageLink -> n Loaded
-fetchDeck context host (PageLink route _) = case route of
+fetchDeck :: (MonadWiki n, MonadNotifications n) => Context -> UrlOwner -> Place -> PageLink -> n Loaded
+fetchDeck context owner host (PageLink route _) = case route of
   Page sp pp -> fetchAt sp pp
   -- A version's permanent address (as "Copy permanent link" gives it)
   -- names that version, which the viewer does not show: it is the link.
@@ -350,9 +371,9 @@ fetchDeck context host (PageLink route _) = case route of
           getPage space.id pp >>= \case
             Right page | isPresentation page.kind -> do
               pages <- if space.id == host.space.id then pure host.pages else either (const []) identity <$> listPages space.id
-              addresses <- Body.attachmentAddresses page.attachments
+              addresses <- Body.attachmentAddresses owner page.attachments
               people <- Body.askPeople (Body.unasked Body.noPeople [page.body])
-              let place = Place {context, space, pages, path = pp, attachments = page.attachments, urls = addresses.urls, frames = addresses.frames, people}
+              let place = Place {context, space, pages, path = pp, attachments = page.attachments, urls = addresses.urls, downloads = addresses.downloads, frames = addresses.frames, people}
               pure (Ready place page (deckOfPage page))
             _ -> pure Link
 

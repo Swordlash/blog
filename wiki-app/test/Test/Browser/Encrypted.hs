@@ -185,7 +185,8 @@ spec m = do
     read' <- ok =<< run env (getPage secret.id [made.slug])
     (read'.title, read'.kind) `shouldBe` ("Launch talk", Kind.Presentation)
     listed <- ok =<< run env (listPages secret.id)
-    [(p.title, p.kind) | p <- listed] `shouldBe` [("Launch talk", Kind.Presentation)]
+    -- Beside the space's home page, a document.
+    [(p.title, p.kind) | p <- listed] `shouldBe` [("Home", Kind.Document), ("Launch talk", Kind.Presentation)]
 
   it "gives a second member the key through a pending grant, when a member opens the space" $ runPage $ do
     env <- encryptedSpace "user-admin"
@@ -426,7 +427,8 @@ spec m = do
     unsafeIOToPageM js_watch_blobs
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
-    made <- ok =<< run env (createPage secret.id Nothing "Deck" "First.")
+    -- A presentation: a document's address of slides shows no slides.
+    made <- ok =<< run env (createPageOf Kind.Presentation secret.id Nothing "Deck" "First.")
     void (ok =<< run env (getPage secret.id [made.slug]))
     a <- ok =<< run env (uploadAttachment made.id "a.svg" "image/svg+xml" (svgOf 3 "A"))
     b <- ok =<< run env (uploadAttachment made.id "b.svg" "image/svg+xml" (svgOf 4 "B"))
@@ -457,7 +459,8 @@ spec m = do
   it "leaves no owner of addresses behind a view that closes, on a plain page and an encrypted one" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
-    made <- ok =<< run env (createPage secret.id Nothing "Deck" "First.")
+    -- A presentation, so that its address of slides shows its slides.
+    made <- ok =<< run env (createPageOf Kind.Presentation secret.id Nothing "Deck" "First.")
     void (ok =<< run env (getPage secret.id [made.slug]))
     attached <- ok =<< run env (uploadAttachment made.id "a.svg" "image/svg+xml" (svgOf 3 "A"))
     again <- ok =<< run env (getPage secret.id [made.slug])

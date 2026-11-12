@@ -1762,7 +1762,8 @@ sealedHomeOf key sid name k = liftIO . runExceptT $ do
   (pk, pageKey) <- ExceptT (first Invalid <$> newPageKey key k sid pid)
   content <- ExceptT (first Invalid <$> sealContent pk sid pid pageKey.keyId firstChain homeTitle (homeBody name))
   lift (forgetPageKey pk)
-  pure NewSealedPage {id = pid, parent = Nothing, pageKey, content}
+  -- A home page is always a document ("Wiki.Core.PageKind").
+  pure NewSealedPage {id = pid, parent = Nothing, pageKey, content, kind = Kind.Document}
 
 -- | A space's name, as the list of spaces has it; empty if not listed.
 spaceNameOf :: (MonadIO m) => SpaceId -> HttpWiki m Text

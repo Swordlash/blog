@@ -221,8 +221,8 @@ spec backing = describe "encrypted spaces in the storage" $ do
         pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
         unchained c = chainedAs Nothing (contentOf c)
     -- A first version that is not the chain's first, or has none: refused.
-    as p.ada (createSealedPage secret.id NewSealedPage {id = pid, parent = Nothing, pageKey = pageKeyOf, content = savedOn (contentOf 'z') 'a'}) >>= (`shouldSatisfy` conflict)
-    as p.ada (createSealedPage secret.id NewSealedPage {id = pid, parent = Nothing, pageKey = pageKeyOf, content = unchained 'a'}) >>= (`shouldSatisfy` conflict)
+    as p.ada (createSealedPage secret.id NewSealedPage {id = pid, parent = Nothing, pageKey = pageKeyOf, content = savedOn (contentOf 'z') 'a', kind = Kind.Document}) >>= (`shouldSatisfy` conflict)
+    as p.ada (createSealedPage secret.id NewSealedPage {id = pid, parent = Nothing, pageKey = pageKeyOf, content = unchained 'a', kind = Kind.Document}) >>= (`shouldSatisfy` conflict)
     made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
     -- A save that skips a number, names another version, or has no chain.
     let skipping = chainedAs (Just (Chain 3 (Just (contentOf 'a').tag))) (contentOf 'b')
@@ -469,7 +469,9 @@ spec backing = describe "encrypted spaces in the storage" $ do
     other.kind `shouldBe` Kind.Document
     _ <- ok =<< as p.ada (setPageKind plainId Kind.Presentation)
     listed <- ok =<< as p.ada (sealedPages secret.id)
-    sortOn fst [(s.id, s.kind) | s <- listed] `shouldBe` sortOn fst [(pid, Kind.Presentation), (plainId, Kind.Presentation)]
+    sortOn fst [(s.id, s.kind) | s <- listed, s.id `elem` [pid, plainId]] `shouldBe` sortOn fst [(pid, Kind.Presentation), (plainId, Kind.Presentation)]
+    -- The space's home page is a document.
+    [s.kind | s <- listed, s.id `notElem` [pid, plainId]] `shouldSatisfy` all (== Kind.Document)
     ((\x -> x.kind) <$> (ok =<< as p.ada (sealedPageAt secret.id [made.slug]))) `shouldReturn` Kind.Presentation
     as p.ada (createSealedPage secret.id (newPageOf (Kind.OtherKind "calendar") otherId Nothing 'c')) >>= (`shouldSatisfy` invalid)
 
@@ -937,11 +939,11 @@ subspaceAs u k sid name = NewEncryptedSubspace {id = sid, name, keyId = subKey s
 
 -- | 'homeIn', under a subspace's own key.
 homeUnder :: SpaceId -> NewSealedPage
-homeUnder sid = NewSealedPage {id = homeIdOf sid, parent = Nothing, pageKey = PageKey {keyId = homeKey.keyId, spaceKeyId = subKey sid, wrapped = homeKey.wrapped}, content = contentUnder homeKey.keyId 'h'}
+homeUnder sid = NewSealedPage {id = homeIdOf sid, parent = Nothing, pageKey = PageKey {keyId = homeKey.keyId, spaceKeyId = subKey sid, wrapped = homeKey.wrapped}, content = contentUnder homeKey.keyId 'h', kind = Kind.Document}
 
 -- | 'newPage' in a subspace, under its key.
 newPageUnder :: SpaceId -> PageId -> Char -> NewSealedPage
-newPageUnder sid pid c = NewSealedPage {id = pid, parent = Nothing, pageKey = PageKey {keyId = pageKeyOf.keyId, spaceKeyId = subKey sid, wrapped = pageKeyOf.wrapped}, content = contentOf c}
+newPageUnder sid pid c = NewSealedPage {id = pid, parent = Nothing, pageKey = PageKey {keyId = pageKeyOf.keyId, spaceKeyId = subKey sid, wrapped = pageKeyOf.wrapped}, content = contentOf c, kind = Kind.Document}
 
 -- | Make an encrypted space one made before encrypted spaces had home
 -- pages: no home page, its pages at the top.
@@ -1093,7 +1095,7 @@ encryptAs u k sid = EncryptSpace {keyId = spaceKey, grant = newGrant u k, homePa
 -- id made of the space's (a page's id is the wiki's own, so each space's
 -- home page has one of its own), under a page key of its own.
 homeIn :: SpaceId -> NewSealedPage
-homeIn sid = NewSealedPage {id = homeIdOf sid, parent = Nothing, pageKey = homeKey, content = contentUnder homeKey.keyId 'h'}
+homeIn sid = NewSealedPage {id = homeIdOf sid, parent = Nothing, pageKey = homeKey, content = contentUnder homeKey.keyId 'h', kind = Kind.Document}
 
 -- | The id of a space's home page in these tests: the space's id with its
 -- last twelve digits changed, a UUID still.

@@ -2978,7 +2978,9 @@ setPageKindTx pid kind = do
   requireKnownKind kind
   p <- findNode pid
   (s, c) <- findSpace p.space
-  requireEdit c
+  -- What a save of the page asks, in a plain space and an encrypted one
+  -- alike: the kind is the page's, in the clear in both.
+  requireSavePage c pid
   requireOrdinary p.space
   when (kind /= Document && s.homePage == Just pid) $
     invalid "A space's home page is a document."
@@ -3383,6 +3385,8 @@ createSealedHomeTx sid new = do
 insertSealedHome :: Space -> KeyId -> NewSealedPage -> Tx PageId
 insertSealedHome s k new = do
   unless (isNothing new.parent) $ invalid "A space's home page is at the top of its pages."
+  -- A home page is always a document ("Wiki.Core.PageKind").
+  unless (new.kind == Document) $ invalid "A space's home page is a document."
   requireUuid "A page" new.id.text
   db (pageNode new.id) >>= traverse_ (\_ -> failWith (Conflict "A page with this id exists already."))
   checkSealedParts new.pageKey new.content
@@ -3408,6 +3412,7 @@ insertSealedHome s k new = do
           , template = False
           , createdBy = Nothing
           , updatedBy = Nothing
+          , kind = Document
           }
   author <- asks (\x -> x.author)
   db $ do
