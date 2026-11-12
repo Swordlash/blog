@@ -159,9 +159,10 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
   await editor.press("Control+s");
   assert.ok((await answered).ok(), "the first save of the encrypted page");
   // The second version holds the title and a text of its own, and not the
-  // first's.
+  // first's. The editor keeps the title line's "# " (web/src/editor.js): a
+  // selection of everything starts after it, so the title is typed alone.
   await editor.press("Control+a");
-  await editor.pressSequentially(`# ${title}`);
+  await editor.pressSequentially(title);
   await editor.press("Enter");
   await editor.press("Enter");
   await editor.pressSequentially(`Now: ${marker("text")}, ${marker("quote")} and ${searchWord}.`);
@@ -387,9 +388,7 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
     };
     const outer = await pagesOf("smoke-secret");
     assert.equal(outer.s.encryption ?? null, null, "the imported space is plain");
-    // Found by the marker its title holds, as the parts above find it
-    // ("hasText"): the title the editor saved is not the marker alone.
-    const summary = outer.pages.find((p) => p.title.includes(title));
+    const summary = outer.pages.find((p) => p.title === title);
     assert.ok(summary, `the page is not imported: ${JSON.stringify(outer.pages.map((p) => p.title))}`);
     const imp = await at(`spaces/${encodeURIComponent(outer.s.id)}/pages/at/${summary.slug}`);
     assert.ok(imp.body.includes(marker("text")) && imp.body.includes(quote), "the imported page's text");
@@ -403,7 +402,7 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
     );
     assert.match(threads[0].comments[0].author.name, /Ada Admin/, "the imported comment's author");
     const innerImported = await pagesOf("smoke-secret/smoke-inner");
-    const innerSummary = innerImported.pages.find((p) => p.title.includes(innerTitle));
+    const innerSummary = innerImported.pages.find((p) => p.title === innerTitle);
     assert.ok(innerSummary, "the subspace's page is not imported");
     const innerPage = await at(`spaces/${encodeURIComponent(innerImported.s.id)}/pages/at/${innerSummary.slug}`);
     assert.ok(innerPage.body.includes(marker("subspace text")), "the imported subspace page's text");

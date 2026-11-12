@@ -436,6 +436,7 @@ component =
                     <> (if spaces == 1 then " space" else " spaces")
                     <> ", decrypted."
                     <> mconcat [" Left out: " <> l.name <> ". " <> l.why | l <- made.leftOut]
+                    <> (if null made.renamed then "" else " Two attachments of one name on a page are told apart: " <> T.intercalate "; " made.renamed <> ".")
             modify (\st -> st {exporting = False, mode = Viewing, exported = Just said})
       Delete -> do
         Input {context = ctx, space} <- gets (\st -> st.input)

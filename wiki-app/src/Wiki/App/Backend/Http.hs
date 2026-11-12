@@ -2565,9 +2565,9 @@ decryptedExport top = do
                     Right (Right _) -> ExceptT (exportedSpace s k) <&> \e -> (done <> [e], left)
       (done, left) <- foldlM step ([], []) (tree start)
       now <- liftIO getCurrentTime
-      let archive = decryptedArchive now ("wiki-app " <> toS (showVersion Paths.version)) done
+      let (archive, renamed) = decryptedArchive now ("wiki-app " <> toS (showVersion Paths.version)) done
       bytes <- ExceptT (first Invalid <$> checkedZip archive)
-      pure DecryptedExport {fileName = exportFileName start now, bytes, archive, leftOut = left}
+      pure DecryptedExport {fileName = exportFileName start now, bytes, archive, leftOut = left, renamed}
 
 -- | One space of the export, decrypted with its key ('readingSealed', so
 -- that a key renewed meanwhile is opened and the space read once more):

@@ -44,6 +44,7 @@ import Protolude
 import Wiki.App.Browser (unzipFiles, zipFiles)
 import Wiki.Core.Anchor (Anchor)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
+import Wiki.Core.Attachment qualified as A
 import Wiki.Core.Comment (Comment (..), Thread (..), formerAuthorName)
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (BlobId, PageId)
@@ -77,6 +78,9 @@ data DecryptedExport = DecryptedExport
   , bytes :: ByteString
   , archive :: Archive
   , leftOut :: [LeftOut]
+  , renamed :: [Text]
+  -- ^ The attachments renamed in the file, each said as the export's
+  -- summary says it ('distinctNames').
   }
 
 -- | What such an export does not hold, as the export's dialog says it.
@@ -91,26 +95,31 @@ leftOutOfExport = "older versions of the pages, drafts, the wiki's users and gro
 -- space, shown, and under its parent only when the parent is exported too
 -- (the space the export starts from goes to the top). A home page is
 -- kept when it is one of the space's pages. A thread with no comments,
--- which an archive refuses, has nothing to lose and is left out.
-decryptedArchive :: UTCTime -> Text -> [ExportedSpace] -> Archive
+-- which an archive refuses, has nothing to lose and is left out. Two
+-- attachments of one name on a page are told apart ('distinctNames'),
+-- and what was renamed is given beside the archive.
+decryptedArchive :: UTCTime -> Text -> [ExportedSpace] -> (Archive, [Text])
 decryptedArchive at app exported =
-  Archive
-    { createdAt = at
-    , app
-    , users = []
-    , groups = []
-    , membership = mempty
-    , grants = mempty
-    , spaces = map (plainSpace . (\e -> e.space)) exported
-    , pages = [p {template = False, createdBy = Nothing, updatedBy = Nothing} | e <- exported, p <- e.pages]
-    , threads = Map.filter (not . null) (Map.unions [map (filter (\t -> not (null t.comments))) e.threads | e <- exported])
-    , commentAuthors = []
-    , blobs = Map.unions (map (\e -> e.blobs) exported)
-    , homeVersions = []
-    , homePage = Nothing
-    , audit = []
-    }
+  ( Archive
+      { createdAt = at
+      , app
+      , users = []
+      , groups = []
+      , membership = mempty
+      , grants = mempty
+      , spaces = map (plainSpace . (\e -> e.space)) exported
+      , pages = map fst named
+      , threads = Map.filter (not . null) (Map.unions [map (filter (\t -> not (null t.comments))) e.threads | e <- exported])
+      , commentAuthors = []
+      , blobs = Map.unions (map (\e -> e.blobs) exported)
+      , homeVersions = []
+      , homePage = Nothing
+      , audit = []
+      }
+  , concatMap snd named
+  )
   where
+    named = [distinctNames p {template = False, createdBy = Nothing, updatedBy = Nothing} | e <- exported, p <- e.pages]
     ids = Set.fromList [e.space.id | e <- exported]
     pagesOf = Map.fromList [(e.space.id, Set.fromList (map (\p -> p.id) e.pages)) | e <- exported]
     plainSpace s =
@@ -123,6 +132,28 @@ decryptedArchive at app exported =
         , parent = mfilter (`Set.member` ids) s.parent
         , homePage = mfilter (\h -> maybe False (Set.member h) (Map.lookup s.id pagesOf)) s.homePage
         }
+
+-- | A page whose attachments all have names of their own, and what was
+-- renamed. A page of an encrypted space can hold two attachments of one
+-- name: the browser that uploads one replaces the one of that name it read
+-- with the page, and two tabs that upload the same name at once each add
+-- theirs, since the server cannot read the names. The page lists both,
+-- and its text shows the first ('Wiki.Core.Attachment.findAttachment'),
+-- so the first keeps the name and each later one is renamed
+-- (@plans (2).png@), keeping its bytes: an archive takes one name once
+-- on a page.
+distinctNames :: Page -> (Page, [Text])
+distinctNames p = (p {attachments = reverse kept}, reverse said)
+  where
+    (kept, said, _) = foldl' step ([], [], Set.empty) p.attachments
+    step (xs, notes, taken) x
+      | Set.member x.name.text taken =
+          let new = fromMaybe x.name.text (find (`Set.notMember` taken) [numbered n x.name.text | n <- [2 :: Int ..]])
+           in (x {A.name = FileName new} : xs, ("another " <> x.name.text <> " of " <> show p.title <> " as " <> new) : notes, Set.insert new taken)
+      | otherwise = (x : xs, notes, Set.insert x.name.text taken)
+    numbered n name = case T.breakOnEnd "." name of
+      (stem, ext) | T.length stem > 1 -> T.dropEnd 1 stem <> " (" <> show n <> ")." <> ext
+      _ -> name <> " (" <> show n <> ")"
 
 -- | What an archive read back from the file lacks of the archive written,
 -- or 'Nothing' when it holds it all: every space with its name, slug and

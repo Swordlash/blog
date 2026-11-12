@@ -32,8 +32,8 @@ import Wiki.Core.Version (Author (..))
 spec :: Spec
 spec = describe "the export decrypted in the browser" $ do
   it "is an archive readArchive takes and reads back whole, with no users, its authors kept by name" $ do
-    let written = decryptedArchive demoNow "wiki-app test" [outer, inner]
-    written.users `shouldBe` []
+    let (written, renamed) = decryptedArchive demoNow "wiki-app test" [outer, inner]
+    (written.users, renamed) `shouldBe` ([], [])
     back <- either (\why -> panic ("refused: " <> why)) pure (readArchive (Map.fromList (writeArchive written)))
     archiveMismatch written back `shouldBe` Nothing
     -- The space it started from at the top, and plain; the subspace under
@@ -47,12 +47,25 @@ spec = describe "the export decrypted in the browser" $ do
       `shouldBe` [(Just (Anchor "Tuesday" "on *" "*."), [("Moved?", "Ada Admin"), ("Gone since.", "Former Fred (not a user here)")])]
 
   it "says what an archive read back lacks of the one written" $ do
-    let written = decryptedArchive demoNow "wiki-app test" [outer]
+    let (written, _) = decryptedArchive demoNow "wiki-app test" [outer]
         changed = written {Export.pages = [p {P.body = if p.title == "Plans" then "Something else." else p.body} | p <- written.pages]}
         withoutBytes = written {Export.blobs = mempty}
     archiveMismatch written changed `shouldSatisfy` isJust
     archiveMismatch written withoutBytes `shouldSatisfy` isJust
     archiveMismatch written written `shouldBe` Nothing
+
+  -- Two tabs that upload one name at once each add theirs: the page lists
+  -- both, and its text shows the first, which keeps the name.
+  it "tells apart two attachments of one name on a page, the first keeping it, and keeps both" $ do
+    let twin = attachment {id = AttachmentId "attachment-2", source = SourceBlob (BlobId "attachment-2")}
+        third = attachment {id = AttachmentId "attachment-3", source = SourceBlob (BlobId "attachment-3")}
+        doubled = outer {pages = [home, plans {attachments = [attachment, twin, third]}], blobs = Map.fromList [(BlobId "attachment-1", "Plain words."), (BlobId "attachment-2", "Other words."), (BlobId "attachment-3", "Third words.")]}
+        (written, renamed) = decryptedArchive demoNow "wiki-app test" [doubled]
+    back <- either (\why -> panic ("refused: " <> why)) pure (readArchive (Map.fromList (writeArchive written)))
+    archiveMismatch written back `shouldBe` Nothing
+    [(x.name.text, Map.lookup blob back.blobs) | p <- back.pages, x <- p.attachments, SourceBlob blob <- [x.source]]
+      `shouldBe` [("plans.txt", Just "Plain words."), ("plans (2).txt", Just "Other words."), ("plans (3).txt", Just "Third words.")]
+    length renamed `shouldBe` 2
 
   it "names its file after the space and the day" $
     exportFileName outerSpace demoNow `shouldSatisfy` (\n -> "secret-decrypted-" `BS.isPrefixOf` encodeUtf8 n && ".zip" `BS.isSuffixOf` encodeUtf8 n)
