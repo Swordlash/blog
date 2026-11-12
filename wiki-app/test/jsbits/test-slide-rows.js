@@ -66,13 +66,33 @@ function wiki_test_rows_completing(key) {
 }
 
 // Count the master's "wiki-input" and "wiki-cursor-line" events, from now
-// on, and keep what each tells.
+// on, and keep what each tells; and keep the errors the page logs or
+// throws meanwhile (CodeMirror logs an error thrown in an update listener,
+// or in its measuring, which comes a frame later, rather than throwing
+// it).
 function wiki_test_rows_watch() {
   const host = document.querySelector(".rows-master");
   if (!host) return;
   host.wikiTestTold = [];
+  host.wikiTestErrors = [];
   host.addEventListener("wiki-input", () => host.wikiTestTold.push("input"));
-  host.addEventListener("wiki-cursor-line", (event) => host.wikiTestTold.push(`line ${event.detail}`));
+  host.addEventListener("wiki-cursor-line", (event) => host.wikiTestTold.push("line " + event.detail));
+  const logError = console.error;
+  console.error = (...args) => {
+    host.wikiTestErrors.push(args.map(String).join(" "));
+    logError.apply(console, args);
+  };
+  window.addEventListener("error", (event) => host.wikiTestErrors.push(String(event.message)));
+}
+
+// The errors kept since wiki_test_rows_watch, as JSON.
+function wiki_test_rows_errors() {
+  return JSON.stringify(document.querySelector(".rows-master")?.wikiTestErrors ?? []);
+}
+
+// Where the master's own completion is: "active", "pending" or "".
+function wiki_test_rows_master_completing() {
+  return wikiTestMaster()?.completing() ?? "";
 }
 
 // The events counted since wiki_test_rows_watch, as JSON ["input",

@@ -96,7 +96,7 @@ import {
   insertCompletionText,
   pickedCompletion,
 } from "@codemirror/autocomplete";
-import { Annotation, ChangeSet, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
 import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, redo, standardKeymap, undo } from "@codemirror/commands";
 import {
@@ -1348,6 +1348,23 @@ const forwarded = (row, tr) => {
   };
 };
 
+// The master's selection made a row's, moved to where the row starts, and
+// kept out of the history: a row that takes the focus without a click (Tab,
+// a header's button) changes no selection of its own, and without this an
+// undo of what is typed next would put the master's cursor back in the row
+// the focus came from.
+const selectionToMaster = (row, masterView) => {
+  const { ranges, mainIndex } = row.view.state.selection;
+  masterView.dispatch({
+    selection: EditorSelection.create(
+      ranges.map((range) => EditorSelection.range(range.anchor + row.from, range.head + row.from)),
+      mainIndex,
+    ),
+    annotations: [rowOf.of(row), Transaction.addToHistory.of(false)],
+    filter: false,
+  });
+};
+
 // Make a row's text the master's range again, after a change of the master
 // the row did not make: the part that differs replaced, as one change that
 // is not sent back. The row's selection follows the master's when the
@@ -1415,6 +1432,12 @@ export function attachRow(masterHost, rowHost, fromCharacters, toCharacters, foc
         master.rowExtensions,
         keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...keys, ...textKeys]),
         EditorView.lineWrapping,
+        EditorView.domEventHandlers({
+          focus: () => {
+            selectionToMaster(row, masterView);
+            return false;
+          },
+        }),
       ],
     }),
     dispatchTransactions: (trs, view) => {
@@ -1428,6 +1451,7 @@ export function attachRow(masterHost, rowHost, fromCharacters, toCharacters, foc
   rowHost.replaceChildren(row.view.dom);
   masterHost.wikiRows ??= new Set();
   masterHost.wikiRows.add(row);
+  master.rowsChanged();
   rowHost.wikiRow = {
     view: row.view,
     text: () => row.view.state.doc.toString(),
@@ -1448,6 +1472,7 @@ export function attachRow(masterHost, rowHost, fromCharacters, toCharacters, foc
     completing: () => completionStatus(row.view.state) ?? "",
     destroy: () => {
       masterHost.wikiRows?.delete(row);
+      masterHost.wikiEditor?.rowsChanged();
       row.view.destroy();
       if (rowHost.wikiRow?.view === row.view) delete rowHost.wikiRow;
     },
@@ -1682,6 +1707,11 @@ export function attach(textarea, host, original, codeTokens) {
   const clamp = (at) => Math.min(Math.max(at, 0), doc.length);
   const changes = tracking(host);
   const completion = completions(host);
+  // The master's own completion, which is off while rows type into it
+  // (attachRow): a row's typing reaches the master as typing, and the
+  // master would ask the same question again and open a list of its own.
+  const ownCompletion = new Compartment();
+  let masterCompletes = true;
   const follow = following(host);
   // The selection last told, in characters, as "from:to" ("" for none),
   // and whether it was empty.
@@ -1712,7 +1742,7 @@ export function attach(textarea, host, original, codeTokens) {
       history(),
       titled ? titleLine : [],
       changes.extensions,
-      completion.extension,
+      ownCompletion.of(completion.extension),
       // Enter is a line break and nothing more, as in the textarea, except
       // while the completion's list is open, when it may choose (the
       // completion's keys come first); Tab and the toolbar's shortcuts are
@@ -1827,6 +1857,13 @@ export function attach(textarea, host, original, codeTokens) {
     // Markdown as it is drawn.
     view,
     rowExtensions: [completion.extension, new LanguageSupport(wikiMarkdown), syntaxHighlighting(highlighter), decorations(codeTokens), unclosedMath],
+    // A row came or went: the master completes only while it has none.
+    rowsChanged: () => {
+      const completes = (host.wikiRows?.size ?? 0) === 0;
+      if (completes === masterCompletes) return;
+      masterCompletes = completes;
+      view.dispatch({ effects: ownCompletion.reconfigure(completes ? completion.extension : []) });
+    },
     hasFocus: () => view.hasFocus,
     text: () => view.state.doc.toString(),
     selectionStart: () => view.state.selection.main.from,

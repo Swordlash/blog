@@ -14,10 +14,11 @@
 -- tells of its input and its cursor's line; the completion of mentions and
 -- emoji, asked through the master's host, answers in the row that asked;
 -- a reorder of the keyed list keeps an open row's CodeMirror, the same
--- element with its text and selection; and a row that starts in the
--- middle of one of the master's lines (after a lone carriage return, or
--- after @\\r\\n\\n@, which the Markdown parser reads as one line break)
--- shows and edits its range, carriage returns included, byte for byte.
+-- element with its text and selection; and rows cut where the Markdown
+-- parser's lines are, which are not always the master's, show and edit
+-- their ranges, carriage returns included, byte for byte: one after a lone
+-- carriage return, which the master does not break its line at, and one
+-- after @\\r\\n\\n@, one line break to the parser and two to the master.
 module Test.Browser.SlideRows (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -58,6 +59,8 @@ $( browserJS
      , ("js_master_select", "wiki_test_rows_master_select", Safe, [t|Int -> Int -> IO JSText|])
      , ("js_master_panels", "wiki_test_rows_master_panels", Safe, [t|IO Int|])
      , ("js_master_shown", "wiki_test_rows_master_shown", Safe, [t|IO Bool|])
+     , ("js_errors", "wiki_test_rows_errors", Safe, [t|IO JSText|])
+     , ("js_master_completing", "wiki_test_rows_master_completing", Safe, [t|IO JSText|])
      ]
  )
 
@@ -111,6 +114,24 @@ spec m = do
     (_, head'') <- masterSelection
     head'' `shouldSatisfy` within (rowRange deck 2)
 
+  it "takes a row's selection to the master when the row takes the focus without a click, so that an undo goes back to that row" $ runPage $ do
+    ui <- start deck [1, 2]
+    selectIn 1 3 3
+    (_, inRow1) <- masterSelection
+    inRow1 `shouldSatisfy` within (rowRange deck 1)
+    -- The focus moved to row 2 as Tab moves it, no selection set: its
+    -- cursor is at its start, and the master's goes there.
+    rowContent ui 2 >>= focus
+    (_, inRow2) <- masterSelection
+    inRow2 `shouldBe` rowStart deck 2
+    press "x"
+    masterText `shouldReturn` insertAt (rowStart deck 2) "x" deck
+    selectIn 1 3 3
+    press "Control+z"
+    eventually $ masterText `shouldReturn` deck
+    (_, back) <- masterSelection
+    back `shouldSatisfy` within (rowRange deck 2)
+
   it "keeps a master hidden by display: none moving to a problem, selecting and scrolling, with no panel, and telling of its input and cursor's line" $ runPage $ do
     ui <- start deck [1, 3]
     void (query ui (H.mkTell (HideMaster True)))
@@ -133,12 +154,20 @@ spec m = do
     masterSelection `shouldReturn` (rowStart typed 2, rowStart typed 2 + 2)
     unsafeIOToPageM js_master_panels `shouldReturn` 0
     toldEvents >>= (`shouldSatisfy` ((> length told) . length))
+    -- CodeMirror logs what an update listener or its measuring throws,
+    -- the measuring a frame later.
+    unsafeIOToPageM (threadDelay 100_000)
+    errorsLogged `shouldReturn` []
 
-  it "completes a mention and an emoji in the row that asked, through the master's host" $ runPage $ do
-    ui <- start deck [2]
+  it "completes a mention and an emoji in the row that asked, through the master's host, and nowhere else" $ runPage $ do
+    ui <- start deck [1, 2]
     typeAt ui 2 (rowLength deck 2) " :smi"
     eventually $ rowCompleting 2 `shouldReturn` "active"
     _ <- find ui ".rows-list li[data-key=\"2\"] .cm-tooltip-autocomplete"
+    -- Not in the master, which the row's typing reached, nor in row 1.
+    (fromJSText <$> unsafeIOToPageM js_master_completing) `shouldReturn` ""
+    rowCompleting 1 `shouldReturn` ""
+    length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 1
     -- CodeMirror takes no choice in the list's first 75 ms.
     unsafeIOToPageM (threadDelay 100_000)
     press "Tab"
@@ -175,8 +204,9 @@ spec m = do
 
   it "shows and edits a row that starts inside one of the master's lines, carriage returns and all" $ runPage $ do
     ui <- start returns [1, 2]
-    -- Row 1 starts after a lone carriage return, row 2 after "\r\n\n":
-    -- inside the master's first and second lines.
+    -- Row 1 starts after a lone carriage return, inside the master's
+    -- first line; row 2 after "\r\n\n", at the start of one of the
+    -- master's lines, which the parser counts otherwise.
     map (rowOf returns) [0, 1, 2] `shouldBe` ["# Deck 😀", "## One\r\n", "## Two\rx\r\nmore\n"]
     rowText 1 `shouldReturn` rowOf returns 1
     rowText 2 `shouldReturn` rowOf returns 2
@@ -241,6 +271,9 @@ spec m = do
 
     toldEvents :: forall s. PageM s [Text]
     toldEvents = (\t -> fromMaybe [] (decodeStrict (encodeUtf8 (fromJSText t)))) <$> unsafeIOToPageM js_told
+
+    errorsLogged :: forall s. PageM s [Text]
+    errorsLogged = (\t -> fromMaybe ["unreadable"] (decodeStrict (encodeUtf8 (fromJSText t)))) <$> unsafeIOToPageM js_errors
 
     keysShown :: forall s. Mounted s Query Void m -> PageM s [Text]
     keysShown ui = findAll ui ".rows-list > li" >>= traverse (fmap (fromMaybe "") . (`getAttribute` "data-key"))
