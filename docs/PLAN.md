@@ -1743,6 +1743,29 @@ which the wiki pins since #227.
   controls the server still refuses, from one predicate the server's
   checks share. Schema steps from 20 (the presentations' is 19, decision 77). The
   canary of decision 76 gains a place for each.
+- **WP5.103 A presentation's slides are rows, each with an editor of its
+  own (the owner, 2026-11-12, after using #253's slide-by-slide mode:
+  "raczej jako listę rozwijalnych wierszy z których każda ma osobny
+  edytor, a nie taką listę w jednym edytorze, wygląda to dość dziwnie i
+  hacky").** The "Slides" mode of decision 77, one CodeMirror over the
+  whole text with every slide folded and its controls drawn as widgets
+  at the slide's first line, is replaced, not kept beside the new one.
+  The new mode is a list of rows drawn by Halogen, one per slide: a
+  closed row shows the slide's number, its title, its fit mark and a
+  handle to move it; an open row holds a CodeMirror over that slide's
+  Markdown, heading included; several rows may be open. Raw stays as it
+  is, and the stored text stays one Markdown document. Undo and search
+  are the whole presentation's, not a slide's (the owner, the same day:
+  "ctrl-z zahaczające o inny slajd zamknie obecny i przejdzie do tamtego
+  (i cofnie)"): one history, in which a move, a delete, a new slide, a
+  split and a merge are entries like typing, and an undo of a change in
+  another slide opens that slide's row and undoes it there; Ctrl+F
+  searches the whole text and walks its matches across rows. A design
+  stage comes first (which text is cut into rows when a slide leaves a
+  fence open, rows' identity, split and merge, how the editor's eight
+  whole-document mechanisms reach a row); decision 77 is amended when
+  the package merges. The fit's measure and its tests are WP5.102's and
+  do not depend on the mode.
 - **WP5.98 The smoke tests wait on the program, and run slowed down
   (the owner, 2026-11-12: "mamy bardzo dużo timing issues w testach
   dymnych"; after #251 and #253).** Two days of red runs fell into two
