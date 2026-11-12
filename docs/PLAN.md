@@ -1572,6 +1572,18 @@ confirms it against reality and the plan is amended if it does not hold.
     under a prefix of its own. A presentation's page shows its viewer
     above the page as a document. A document's address of slides shows a
     note with a link.
+78. **"What's new?" leaves technical changelog entries out (WP5.99,
+    #254; the owner, 2026-11-12).** The page is for what makes someone
+    using the wiki in a browser think "a new feature, I will try it" or
+    "that bug is fixed now". An entry that gives neither thought carries
+    `technical: true` in its front matter: nothing of it is seen on the
+    wiki's pages (CI, tests, build and deploy scripts, the console,
+    upgrades, dependencies). A technical entry is still required and
+    checked, and is not compiled into the programs: it is not shown, not
+    counted among the newest twelve, and never lights the link's dot. The
+    session marks its own entry by that rule (`AGENTS.md`). The owner was
+    offered leaving them out or showing them as one line marked
+    technical; this leaves them out.
 
 ## Repository layout
 
