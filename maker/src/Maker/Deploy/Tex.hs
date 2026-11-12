@@ -27,16 +27,12 @@ import Data.List (isPrefixOf, isSuffixOf, sort, stripPrefix)
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.Time (defaultTimeLocale, formatTime, getZonedTime)
 import Maker.Deploy.Plan
+import Maker.Deploy.Sqlite (unitBasePath)
 import System.Directory
 import System.Environment (getEnvironment, lookupEnv)
 import System.FilePath ((</>))
 import System.IO
 import System.Process.Typed
-
--- | The PATH of a unit that uses the toolchain's TeX Live, after its bin
--- directory: the system's own programs.
-unitBasePath :: String
-unitBasePath = "/usr/local/bin:/usr/bin:/bin"
 
 -- | The CTAN mirror TeX Live is installed from when --texlive-mirror names
 -- none; it redirects to a mirror near the machine.
