@@ -893,6 +893,13 @@ The words searched for reach the server too: the search page's address
 carries them, and the server searches the plain spaces with them. It
 never sees the encrypted pages, nor which of them matched.
 
+Not there yet, and to come: an export of an encrypted space decrypted in
+your browser; encrypting a space that already has pages, and turning
+encryption off; an option of an encrypted space to ask for a passkey or
+the password before each opening, with signing out removing your keys from
+the device; and the titles of encrypted pages under the bell (they show as
+"an encrypted page" there for now).
+
 Removing a reader gives the space a new key (WP5.74b3). A reader stops
 being one when their grant, their group's grant or their membership of the
 group goes, when their account is disabled or removed, or when a password

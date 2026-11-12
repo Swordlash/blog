@@ -155,7 +155,7 @@ component =
           {% if encryptable %}
             <div class="permissions-encrypt">
               {% if st.confirming %}
-                <p class="permissions-intro encrypt-explained">Encrypting this space encrypts the titles and texts of its pages, and their histories, in its members' browsers: the server cannot read them, search them, export them, show them in feeds or previews, or keep their comments and attachments yet. The space's name stays readable. Its members need the wiki's HTTPS address and their keys (your account's security) to read it. It cannot be undone.</p>
+                <p class="permissions-intro encrypt-explained">Encrypting this space encrypts the titles and texts of its pages, and their histories, in its members' browsers: the server cannot read them, search them, export them, or show them in feeds or previews. Their comments and attachments are encrypted too. The space's name stays readable. Its members need the wiki's HTTPS address and their keys (your account's security) to read it. It cannot be undone.</p>
                 <button type="button" class="primary encrypt-confirm" disabled={{ st.busy }} onClick={{ const Encrypt }}>Encrypt</button>
                 <button type="button" class="encrypt-cancel" disabled={{ st.busy }} onClick={{ const (AskEncrypt False) }}>Cancel</button>
               {% else %}

@@ -1,6 +1,6 @@
 ---
 pr: 251
-title: Encrypted spaces: comments, attachments, rollbacks caught, new keys
+title: Encrypted spaces: subspaces, comments, attachments, rollbacks, new keys
 ---
 
 ## New features
@@ -58,7 +58,8 @@ title: Encrypted spaces: comments, attachments, rollbacks caught, new keys
 ## Other changes
 
 - The server's smoke test now encrypts a space, writes a page in it,
-  attaches a file and comments on it, shares its key with a reader and
-  unlocks it in a browser without the keys, and checks that what the
+  attaches a file and comments on it, shares its key with a reader,
+  unlocks it in a browser without the keys, makes an encrypted subspace
+  that a reader of it alone reads, and checks that what the
   space protects is found nowhere in the server's files, its database or
   what it sends.

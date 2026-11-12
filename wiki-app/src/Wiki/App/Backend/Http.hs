@@ -531,10 +531,25 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
 
   -- An encrypted space made before encrypted spaces had home pages gets
   -- its home page here, when one of its administrators opens it, before
-  -- its pages are listed ('ensureHome').
+  -- its pages are listed ('ensureHome'). Until it has one, its record is
+  -- not taken from the cache: another tab may have made its home page
+  -- since, which every page now hangs from, and a path read with the old
+  -- record would not be found.
   getSpace path =
     cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path) >>= \case
-      Right s | Just k <- s.encryption, isNothing s.homePage -> ensureHome path s k
+      Right s
+        | isJust s.encryption
+        , isNothing s.homePage -> do
+            cacheOnly <- HttpWiki (asks (\env -> env.cacheOnly))
+            fresh <-
+              if cacheOnly
+                then pure (Right s)
+                else do
+                  modifyCache (\c -> c {Cache.spaceAt = Map.delete path c.spaceAt})
+                  cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path)
+            case fresh of
+              Right now | Just k <- now.encryption, isNothing now.homePage -> ensureHome path now k
+              other -> pure other
       other -> pure other
 
   -- A subspace of an encrypted space is made encrypted, with a key of its

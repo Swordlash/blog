@@ -473,7 +473,8 @@ spec m = do
     void (ok =<< run env (listPages secret.id))
     readerTab <- as "user-reader"
     void (run readerTab listSpaces)
-    void (ok =<< run readerTab (getSpace [secretSlug]))
+    homeless <- ok =<< run readerTab (getSpace [secretSlug])
+    homeless.homePage `shouldBe` Nothing
     unsafeIOToPageM (fromJSText <$> js_made) `shouldReturn` "[0,0]"
     admin <- as "user-admin"
     void (run admin listSpaces)
@@ -487,6 +488,12 @@ spec m = do
     void (run again listSpaces)
     void (ok =<< run again (getSpace [secretSlug]))
     unsafeIOToPageM (fromJSText <$> js_made) `shouldReturn` "[0,1]"
+    -- The reader's tab, which read the space before it had its home page,
+    -- reads it again with it, and finds the nested page at its address.
+    -- (The test's server answers as the user named last.)
+    void (as "user-reader")
+    (\s -> isJust s.homePage) <$> (ok =<< run readerTab (getSpace [secretSlug])) `shouldReturn` True
+    (\p -> p.body) <$> (ok =<< run readerTab (getPage secret.id [top.slug, nested.slug])) `shouldReturn` "Below it."
 
   -- The blob store keeps each upload's bytes under their hash: the same
   -- file uploaded twice is encrypted under a new nonce each time, so the
