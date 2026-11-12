@@ -26,8 +26,11 @@
 -- key; the two modes, Ask, whose request has the tools
 -- turned off and whose model's edit is refused, and Agent, kept in the
 -- settings and chosen above the conversation with the model and the
--- effort; and the text's selection kept in sight while the message box
--- has the focus. The
+-- effort; the text's selection kept in sight while the message box has
+-- the focus; and a presentation edited slide by slide, its rows showing
+-- the changes in their ranges, a closed row the assistant writes in
+-- opening without the focus, a change across two rows shown in both, and
+-- accept and reject on the change in a row. The
 -- providers themselves cannot be reached from here (the script answers
 -- for all of them on a test's page): they are tested over their SDKs by
 -- toolchain/test-assistant.mjs.
@@ -45,7 +48,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, replace)
 import Test.Browser.Http (answerWith, serveDemo, serverStarts, serverStops, startServer)
-import Test.Browser.Mount (slugs, startWith)
+import Test.Browser.Mount (slugs, startOn, startWith)
 import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
@@ -54,7 +57,7 @@ import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Assistant.Keys (Keys (..), changeKeys, readKeys)
 import Wiki.App.Assistant.Sync (MonadVault)
-import Wiki.App.Backend (Session (..), session)
+import Wiki.App.Backend (MonadWiki (..), Session (..), session)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State qualified as M
 import Wiki.App.Demo (demoNow, demoState)
@@ -63,6 +66,9 @@ import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Assistant (ApiKey (..), Mode (..), ModelName (..), Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withEffort, withKey, withMode, withModel)
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Page (Page (id, updatedAt))
+import Wiki.Core.PageKind qualified as Kind
+import Wiki.Core.Space (Space (id))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Standing (..))
 
@@ -124,6 +130,44 @@ spec m = do
     editorText ui >>= click
     press "Control+z"
     eventually $ markdown ui >>= (`shouldSatisfy` T.isInfixOf "This is the first post of a blog")
+
+  it "shows a presentation's changes in its rows, opens a closed row it writes in without the focus, and accepts and rejects in a row, one history" $ runPage $ do
+    script [[replace "Second." "Second, better.", replace "Third." "Third, better.", text "Two changes."]]
+    ui <- openDeckAssistant m
+    eventually $ openRowTitles ui `shouldReturn` ["Deck"]
+    send ui "Polish."
+    -- The rows the changes are in open, the focus left in the panel.
+    eventually $ openRowTitles ui `shouldReturn` ["Deck", "Two", "Three"]
+    eventually $ (findAll ui ".editor-slides .cm-wiki-inserted" >>= traverse textContent) `shouldReturn` ["Second, better.", "Third, better."]
+    (findAll ui ".editor-slides .cm-wiki-removed" >>= traverse textContent) `shouldReturn` ["Second.", "Third."]
+    length <$> findAll ui ".editor-slides .slide-row-body:focus-within" `shouldReturn` 0
+    -- Rejected in its row: what it replaced is back, as a step Ctrl+Z
+    -- takes back.
+    find ui ".editor-slides > li:nth-child(3) .cm-wiki-change-reject" >>= click
+    eventually $ markdown ui >>= (`shouldSatisfy` T.isInfixOf "\n\nSecond.\n\n")
+    -- Accepted in its row: the text stays, the marks go.
+    find ui ".editor-slides > li:nth-child(4) .cm-wiki-change-accept" >>= click
+    eventually $ length <$> findAll ui ".editor-slides .cm-wiki-inserted" `shouldReturn` 0
+    markdown ui >>= (`shouldSatisfy` T.isInfixOf "Third, better.")
+    find ui ".editor-slides > li:nth-child(4) .cm-content" >>= click
+    press "Control+z"
+    eventually $ markdown ui >>= (`shouldSatisfy` T.isInfixOf "Second, better.")
+
+  it "shows a change across two of a presentation's rows in both, its controls where it ends" $ runPage $ do
+    script [[replace "Second.\n\n## Three\n\nThird." "Second and more.\n\n## Three\n\nThird and more.", text "Done."]]
+    ui <- openDeckAssistant m
+    send ui "Lengthen."
+    eventually $ openRowTitles ui `shouldReturn` ["Deck", "Two", "Three"]
+    -- The change takes in the start of "Three": its rows are cut again
+    -- after the pause, and then each shows its part.
+    eventually $ do
+      length <$> findAll ui ".editor-slides > li:nth-child(3) .cm-wiki-inserted" >>= (`shouldSatisfy` (> 0))
+      length <$> findAll ui ".editor-slides > li:nth-child(4) .cm-wiki-inserted" >>= (`shouldSatisfy` (> 0))
+      length <$> findAll ui ".editor-slides > li:nth-child(3) .cm-wiki-change-controls" `shouldReturn` 0
+      length <$> findAll ui ".editor-slides > li:nth-child(4) .cm-wiki-change-controls" `shouldReturn` 1
+    openRowTitles ui `shouldReturn` ["Deck", "Two", "Three"]
+    find ui ".editor-slides > li:nth-child(4) .cm-wiki-change-reject" >>= click
+    eventually $ markdown ui >>= (`shouldSatisfy` T.isInfixOf "Second.\n\n## Three\n\nThird.")
 
   it "rejects a change from the change itself, putting back what it replaced, and tells the model so" $ runPage $ do
     script [[replace "## Why a wiki" "## Why this is a wiki", text "Retitled."], [text "Noted."]]
@@ -841,6 +885,37 @@ openAssistantKept
   ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => PageM s (Mounted s Shell.Query Void m)
 openAssistantKept m = fst <$> openAssistantKeptWith m
+
+-- | The editor on the demo's first post made a presentation of four slides,
+-- slide by slide, as its author, with the scripted provider chosen and the
+-- panel open.
+openDeckAssistant
+  :: forall m
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m)
+  => PageM s (Mounted s Shell.Query Void m)
+openDeckAssistant m = do
+  keep m (UserId "user-editor") (chooseProvider Scripted defaultSettings)
+  (opener, wiki) <- startWith m (Just "user-editor") (Page (slugs ["blog"]) (slugs ["hello-world"]))
+  unmount opener
+  unsafeIOToPageM . runMemWiki wiki $ do
+    blog <- either (panic . show) identity <$> getSpace (slugs ["blog"])
+    hello <- either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])
+    made <- either (panic . show) identity <$> setPageKind hello.id Kind.Presentation
+    void (either (panic . show) identity <$> savePage made.id made.updatedAt "Deck" assistantDeck)
+  ui <- startOn m wiki (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+  _ <- editorText ui
+  find ui scriptedButton >>= click
+  _ <- find ui ".assistant-input"
+  eventually $ find ui ".assistant-using" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Scripted")
+  pure ui
+
+-- | The presentation the assistant edits slide by slide.
+assistantDeck :: Text
+assistantDeck = T.intercalate "\n" ["# Deck", "", "By me.", "", "## One", "", "First.", "", "## Two", "", "Second.", "", "## Three", "", "Third."]
+
+-- | The titles of the open rows of a presentation's editor.
+openRowTitles :: Mounted s q o n -> PageM s [Text]
+openRowTitles ui = findAll ui ".editor-slides .slide-row.open .slide-row-title" >>= traverse textContent
 
 -- | The scripted provider's button, which a test's page has.
 scriptedButton :: Text

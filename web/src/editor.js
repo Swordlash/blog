@@ -319,12 +319,16 @@ class ChangeControls extends WidgetType {
   }
 }
 
+// A change's marks: what it replaced, struck through before it, the text
+// it put in, and its controls after it. A row of the slide mode shows the
+// part of a change in its range (rowChanges): what it replaced only where
+// the change starts in the row, and its controls only where it ends there.
 const changeDecorations = (changes, host) =>
   Decoration.set(
     changes.flatMap((change) => [
       ...(change.removed !== "" ? [Decoration.widget({ widget: new RemovedText(change.removed), side: -1 }).range(change.from)] : []),
       ...(change.to > change.from ? [Decoration.mark({ class: "cm-wiki-inserted", attributes: { "data-change": String(change.id) } }).range(change.from, change.to)] : []),
-      Decoration.widget({ widget: new ChangeControls(change.id, host), side: 1 }).range(change.to),
+      ...(change.controls === false ? [] : [Decoration.widget({ widget: new ChangeControls(change.id, host), side: 1 }).range(change.to)]),
     ]),
     true,
   );
@@ -1246,7 +1250,10 @@ const mirror = (key, view, state) => {
   const shown = view.state.doc.toString();
   const { head, anchor } = state.selection.main;
   const inside = head >= range.from && head <= range.to && anchor >= range.from && anchor <= range.to;
-  if (now === shown && !inside) return;
+  const mine = view.state.selection.main;
+  // Nothing to tell when the row shows the master's text and selection
+  // already: a selection set again would reset the row's completion.
+  if (now === shown && (!inside || (mine.anchor === anchor - range.from && mine.head === head - range.from))) return;
   let start = 0;
   while (start < now.length && start < shown.length && now[start] === shown[start]) start++;
   let end = 0;
@@ -1261,6 +1268,50 @@ const mirror = (key, view, state) => {
     // first row's title line guard) rewrites it.
     filter: false,
   });
+};
+
+// The assistant's changes a row shows: those of the master's in the row's
+// range, cut to it and moved to the row (changesToRow), each kept on its
+// text as the row is typed in until the next ones come. Accepting and
+// rejecting on a change in a row tells the master's host, which decides.
+const setRowChanges = StateEffect.define();
+
+// A row's changes as JSON, to tell whether new ones differ.
+const rowChangesShown = new WeakMap();
+
+const rowChanges = (masterHost) =>
+  StateField.define({
+    create: () => [],
+    update(changes, tr) {
+      for (const effect of tr.effects) if (effect.is(setRowChanges)) return effect.value;
+      return tr.docChanged ? changes.map((change) => moved(change, tr.changes)) : changes;
+    },
+    provide: (f) => EditorView.decorations.from(f, (changes) => changeDecorations(changes, masterHost)),
+  });
+
+// The master's changes in a row's range, moved to the row, as the row's: a
+// change across rows shows in each, its replaced text where it starts and
+// its controls where it ends.
+const changesToRow = (key, view, state, field) => {
+  const range = rangeOf(state, key);
+  if (range === null || !field) return;
+  const inside = state
+    .field(field)
+    .filter((change) => change.to >= range.from && change.from <= range.to)
+    .map((change) => ({
+      id: change.id,
+      from: Math.max(change.from, range.from) - range.from,
+      to: Math.min(change.to, range.to) - range.from,
+      removed: change.from >= range.from ? change.removed : "",
+      controls: change.to <= range.to,
+    }));
+  // The master's changes are a new list at each of its transactions, a
+  // keystroke's in a row too: the row is told only when its part of them
+  // is another than the one it shows.
+  const said = JSON.stringify(inside);
+  if (rowChangesShown.get(view) === said) return;
+  rowChangesShown.set(view, said);
+  view.dispatch({ effects: setRowChanges.of(inside), annotations: mirrored.of(true) });
 };
 
 // The master's problems in a row's range, moved to the row, as the row's.
@@ -1301,12 +1352,16 @@ const rowsSync = (host) =>
     const problems = update.transactions.some((tr) => tr.effects.some((e) => e.is(setDiagnosticsEffect)));
     const relaid = update.transactions.some((tr) => tr.effects.some((e) => e.is(relayout)));
     const folds = relaid || update.transactions.some((tr) => tr.effects.some((e) => e.is(offerFolds) || e.is(setLayout)));
-    if (!update.docChanged && !update.selectionSet && !problems && !folds) return;
+    const field = host.wikiEditor?.changesField;
+    const tracked =
+      field !== undefined && JSON.stringify(update.startState.field(field, false) ?? []) !== JSON.stringify(update.state.field(field, false) ?? []);
+    if (!update.docChanged && !update.selectionSet && !problems && !folds && !tracked) return;
     const origin = update.transactions.map((tr) => tr.annotation(rowOf)).find((key) => key !== undefined);
     for (const [key, view] of rows) {
       if (key !== origin) mirror(key, view, update.state);
       if (problems) problemsToRow(key, view, update.state);
       if (folds) foldsToRow(key, view, update.state);
+      if (tracked || folds) changesToRow(key, view, update.state, field);
     }
     // A step, or its undo or redo: the component reads the rows again at
     // once ("wiki-relayout"), and decides which open and which has the
@@ -1322,7 +1377,10 @@ const rowsSync = (host) =>
       host.dispatchEvent(new CustomEvent("wiki-row-wanted", { detail: { key, left: left ?? -1, close, focus, reason } }));
     if (update.docChanged && update.transactions.some((tr) => tr.isUserEvent("input.wiki.assistant"))) {
       const written = new Set();
-      update.changes.iterChangedRanges((_fromA, _toA, fromB) => written.add(rowAtPosition(update.state, fromB)));
+      // Every row a change's text touches, from its start to its end.
+      update.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+        for (const row of update.state.field(rowsLayout)) if (row.to >= fromB && row.from <= toB) written.add(row.key);
+      });
       for (const key of written) if (key !== undefined && !rows.has(key)) want(key, false, false, "assistant");
       return;
     }
@@ -1375,6 +1433,7 @@ export function attachRow(masterHost, rowHost, key, focus) {
         // The page's title line is the first row's first line.
         titled && range.from === 0 ? titleLine : [],
         master.rowExtensions,
+        rowChanges(masterHost),
         keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...keys, ...textKeys, ...foldKeys]),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({ spellcheck: "true", autocapitalize: "sentences", autocorrect: "on" }),
@@ -1410,6 +1469,7 @@ export function attachRow(masterHost, rowHost, key, focus) {
   masterHost.wikiRows.set(key, view);
   problemsToRow(key, view, masterView.state);
   foldsToRow(key, view, masterView.state);
+  changesToRow(key, view, masterView.state, master.changesField);
   const characterRange = () => {
     const now = rangeOf(masterView.state, key);
     return now === null ? [] : charactersOfAll(masterView.state.doc.toString(), [now.from, now.to]);
@@ -1799,6 +1859,7 @@ export function attach(textarea, host, original, codeTokens) {
     // (attachRow): the completion, which asks the master's host, and the
     // Markdown as it is drawn.
     view,
+    changesField: changes.field,
     rowExtensions: [completion.extension, new LanguageSupport(wikiMarkdown), syntaxHighlighting(highlighter), decorations(codeTokens), unclosedMath, lintGutter(), folding],
     // Whether the presentation is edited slide by slide, its rows typing
     // into the master: the master's completion is then off, and its focus

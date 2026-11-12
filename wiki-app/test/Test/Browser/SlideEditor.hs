@@ -206,7 +206,7 @@ spec m = do
     eventually $ rowTitles ui `shouldReturn` ["Deck 😀", "One", "Two", "Three"]
     find ui ".editor-slides > li:nth-child(2) .cm-editor" >>= (`shouldBeSameElement` editor)
     -- The row above went from the list: the editor kept the focus.
-    rowFocused 1 `shouldReturn` True
+    eventually $ rowFocused 1 `shouldReturn` True
 
   it "keeps the rows below a row that leaves a code block, a spoiler or an HTML comment open, their editors and cursors, and says the presentation takes them in" $ runPage $ do
     (ui, _) <- openDeck deck

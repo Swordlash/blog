@@ -39,5 +39,9 @@ title: A presentation's slides as rows, each with its own editor
   marks beside the text. The toolbar writes in the row your cursor is in, and
   its buttons wait while no row is open.
 
+- The writing assistant's suggested changes show in the rows: a slide it
+  changes opens (your cursor stays where it was), a change across two slides
+  shows in both, and ✓ and ✕ on the change accept or reject it there.
+
 - "Raw" still shows the whole Markdown; back in "Slides", the rows you had
   open open again. Text with Windows line endings is cut into rows too.
