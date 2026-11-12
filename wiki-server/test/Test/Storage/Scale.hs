@@ -65,6 +65,7 @@ import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Notification (..), PageLocation (..), WatchTarget (..), maxListed)
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..), rootPage)
@@ -82,7 +83,6 @@ import Wiki.Server.Storage.Schema (AuditLog (..), GlobalGrants (..), Notificatio
 import Database.PostgreSQL.Simple qualified as Pg
 import Database.PostgreSQL.Simple.Types qualified as PgTypes
 import Wiki.Server.Storage.Postgres (closePostgres, openPostgres)
-import Wiki.Core.PageKind qualified as Kind
 #endif
 
 spec :: Backing -> Spec
