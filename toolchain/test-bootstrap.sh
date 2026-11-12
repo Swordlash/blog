@@ -310,7 +310,11 @@ pass 'build installs the compilers and Node, and neither Chromium nor fourmolu; 
 # Debian or not, it runs toolchain/check-native.sh. What that script checks
 # is faked, so that the result does not depend on the host: cc preprocesses
 # anything and links the terminfo probe unless TINFO_MISSING is set and
-# SQLite's unless SQLITE_MISSING is,
+# SQLite's unless SQLITE_MISSING is; SQLite's probe prints a library like
+# Debian's, 3.45.1, unless SQLITE_HEADER, SQLITE_VERSION and SQLITE_NUMBER,
+# SQLITE_FILE, SQLITE_THREADSAFE, SQLITE_OMIT_WAL, SQLITE_OMIT_FOREIGN_KEY
+# or SQLITE_MAX_VARIABLES say otherwise, and fails as the loader does when
+# it finds no library if SQLITE_NOT_LOADED is set,
 # pkg-config knows libpq, and zlib unless ZLIB_MISSING is set, and make and
 # pg_config answer. libsodium is the fixture's, as toolchain/libsodium.sh
 # leaves it, so the maker does not build it.
@@ -337,7 +341,25 @@ if [ -n "$sqlite" ] && [ -n "${SQLITE_MISSING:-}" ]; then
   printf 'sqlite3.h: No such file or directory\n' >&2
   exit 1
 fi
-printf '#!/bin/sh\n' >"$output"
+if [ -n "$sqlite" ]; then
+  cat >"$output" <<'PROBE'
+#!/bin/sh
+if [ -n "${SQLITE_NOT_LOADED:-}" ]; then
+  printf '%s: error while loading shared libraries: libsqlite3.so.0: cannot open shared object file: No such file or directory\n' "$0" >&2
+  exit 127
+fi
+printf 'header %s\n' "${SQLITE_HEADER:-3.45.1}"
+printf 'version %s\n' "${SQLITE_VERSION:-3.45.1}"
+printf 'number %s\n' "${SQLITE_NUMBER:-3045001}"
+printf 'file %s\n' "${SQLITE_FILE:-/usr/lib/x86_64-linux-gnu/libsqlite3.so.0}"
+printf 'threadsafe %s\n' "${SQLITE_THREADSAFE:-1}"
+printf 'omit_wal %s\n' "${SQLITE_OMIT_WAL:-0}"
+printf 'omit_foreign_key %s\n' "${SQLITE_OMIT_FOREIGN_KEY:-0}"
+printf 'max_variable_number %s\n' "${SQLITE_MAX_VARIABLES:-250000}"
+PROBE
+else
+  printf '#!/bin/sh\n' >"$output"
+fi
 chmod +x "$output"
 EOF
 printf '#!/bin/sh\ncase $* in "--exists libpq") exit 0 ;; "--exists zlib") [ -z "${ZLIB_MISSING:-}" ] ;; *) exit 1 ;; esac\n' >"$case_dir/bin/pkg-config"
@@ -522,7 +544,7 @@ for name in toolchain/check-native.sh 'maker check native'; do
 
   # SQLite's header and library, which wiki-server links: named with
   # their packages when cc cannot build the probe.
-  assert_contains "$case_dir/check-plain" 'ok       SQLite      sqlite3.h and -lsqlite3, through cc (3.32.0 or later)'
+  assert_contains "$case_dir/check-plain" 'ok       SQLite      sqlite3.h and the library a program built with -lsqlite3 loads are 3.45.1 (/usr/lib/x86_64-linux-gnu/libsqlite3.so.0); 3.32.0 or later, built as wiki-server needs'
   out=$case_dir/check-no-sqlite
   status=0
   SQLITE_MISSING=1 env PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check --without-postgres >"$out" 2>&1 || status=$?
@@ -530,6 +552,46 @@ for name in toolchain/check-native.sh 'maker check native'; do
   assert_contains "$out" 'missing  SQLite      cc cannot build a program with sqlite3.h and -lsqlite3 (Debian: libsqlite3-dev; RHEL: sqlite-devel)'
   assert_contains "$out" 'Missing for the native build of wiki-server: SQLite.'
   pass "$name checks SQLite's header and library"
+
+  # The library the probe loads, not the header, is what is judged, by
+  # wiki-server's rules: a library too old behind a new header is refused,
+  # naming both and the file; a header and a library that differ are said
+  # when both are new enough, without failing; a probe the loader cannot
+  # start has a line of its own; each option wiki-server refuses is
+  # refused. The floor is toolchain/pins.env's: its own version passes.
+  sqlite_check() {
+    out=$case_dir/check-sqlite-$1
+    shift
+    status=0
+    env "$@" PATH="$case_dir/pgsql-16/bin:$case_dir/bin:$no_dpkg" $check --without-tex >"$out" 2>&1 || status=$?
+  }
+  sqlite_check old SQLITE_HEADER=3.53.2 SQLITE_VERSION=3.26.0 SQLITE_NUMBER=3026000 SQLITE_FILE=/usr/lib64/libsqlite3.so.0
+  [ "$status" = 1 ] || fail "the check with SQLite 3.26.0 behind a 3.53.2 header exited $status, not 1"
+  assert_contains "$out" 'missing  SQLite      sqlite3.h is 3.53.2 and the library a program built with -lsqlite3 loads is 3.26.0 (/usr/lib64/libsqlite3.so.0): wiki-server needs SQLite 3.32.0 or later (Debian: libsqlite3-dev; RHEL: sqlite-devel)'
+  sqlite_check differ SQLITE_HEADER=3.53.2 SQLITE_FILE=/opt/sqlite/lib/libsqlite3.so.0
+  [ "$status" = 0 ] || fail "the check with a 3.53.2 header and a 3.45.1 library exited $status, not 0: $(cat "$out")"
+  assert_contains "$out" 'ok       SQLite      sqlite3.h is 3.53.2 and the library a program built with -lsqlite3 loads is 3.45.1 (/opt/sqlite/lib/libsqlite3.so.0); 3.32.0 or later, built as wiki-server needs, but the two differ: the build and the run find SQLite in different places'
+  sqlite_check not-loaded SQLITE_NOT_LOADED=1
+  [ "$status" = 1 ] || fail "the check with a probe the loader cannot start exited $status, not 1"
+  assert_contains "$out" "missing  SQLite      a program built with sqlite3.h and -lsqlite3 does not run: error while loading shared libraries: libsqlite3.so.0: cannot open shared object file: No such file or directory; the loader does not find at run time the library the build linked: give its directory in LD_LIBRARY_PATH, or put it on the loader's path (/etc/ld.so.conf.d, then ldconfig) (Debian: libsqlite3-dev; RHEL: sqlite-devel)"
+  for refused in SQLITE_THREADSAFE=0:THREADSAFE=0 SQLITE_OMIT_WAL=1:OMIT_WAL SQLITE_OMIT_FOREIGN_KEY=1:OMIT_FOREIGN_KEY; do
+    sqlite_check option "${refused%%:*}"
+    [ "$status" = 1 ] || fail "the check with a library built with ${refused#*:} exited $status, not 1"
+    assert_contains "$out" "missing  SQLite      sqlite3.h and the library a program built with -lsqlite3 loads are 3.45.1 (/usr/lib/x86_64-linux-gnu/libsqlite3.so.0), built with ${refused#*:}, which wiki-server refuses (Debian"
+  done
+  sqlite_check variables SQLITE_MAX_VARIABLES=999
+  [ "$status" = 1 ] || fail "the check with a library built with MAX_VARIABLE_NUMBER=999 exited $status, not 1"
+  assert_contains "$out" 'built with MAX_VARIABLE_NUMBER=999, which wiki-server refuses (it needs 32766 or more) (Debian'
+  # The floor, toolchain/pins.env's SQLITE_MIN_VERSION, passes, and the
+  # release before it does not.
+  sqlite_floor=$(sed -n 's/^SQLITE_MIN_VERSION=//p' "$SOURCE_DIR/pins.env")
+  [ "$sqlite_floor" = 3.32.0 ] || fail "toolchain/pins.env's SQLITE_MIN_VERSION is $sqlite_floor: change this test's numbers with it"
+  sqlite_check floor SQLITE_HEADER=3.32.0 SQLITE_VERSION=3.32.0 SQLITE_NUMBER=3032000 SQLITE_MAX_VARIABLES=32766
+  [ "$status" = 0 ] || fail "the check with SQLite 3.32.0, the floor, exited $status, not 0: $(cat "$out")"
+  sqlite_check below SQLITE_HEADER=3.31.1 SQLITE_VERSION=3.31.1 SQLITE_NUMBER=3031001
+  [ "$status" = 1 ] || fail "the check with SQLite 3.31.1 exited $status, not 1"
+  assert_contains "$out" 'loads are 3.31.1 (/usr/lib/x86_64-linux-gnu/libsqlite3.so.0): wiki-server needs SQLite 3.32.0 or later'
+  pass "$name judges the SQLite library its probe loads, as wiki-server does, and names its file"
 
   # The xelatex of the PDF exports, through toolchain/check-tex.sh: a line
   # of its own after the commands, ok when the fake typesets the probe, no
