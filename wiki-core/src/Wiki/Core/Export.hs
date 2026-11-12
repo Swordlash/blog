@@ -1034,7 +1034,7 @@ parseSpace createdBefore = withObject "space" $ \o -> do
   owner <- fmap UserId <$> o .:? "owner"
   active <- o .:? "active" .!= True
   personalContainer <- o .:? "personalContainer" .!= False
-  pure Space {id, name, slug, parent, public, sealed, encryption = Nothing, owner, active, personalContainer, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
+  pure Space {id, name, slug, parent, public, sealed, encryption = Nothing, conversion = Nothing, owner, active, personalContainer, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
 
 -- | An order as the archive writes it.
 orderText :: ChildOrder -> Text

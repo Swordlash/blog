@@ -1115,6 +1115,7 @@ secret =
     , public = False
     , sealed = True
     , encryption = Nothing
+    , conversion = Nothing
     , owner = Nothing
     , active = True
     , personalContainer = False

@@ -1121,6 +1121,14 @@ theirs) answer 409 until a rotation.
 | POST | `api/v1/encrypted/pages/<page>/threads/<thread>/comments` | `NewSealedComment` `{"id", "content"}` | 201 `SealedCommentInfo` | 404, 403, 400, 409 |
 | PUT | `api/v1/encrypted/pages/<page>/threads/<thread>/comments/<comment>` | `SealedCommentEdit` `{"content"}` | `SealedCommentInfo` | 404, 403, 400, 409 |
 | POST | `api/v1/encrypted/pages/<page>/attachments` | multipart: `sealed` `{"id", "meta": {"keyId", "meta", "bytesNonce"}, "replaces"}` and `file`, the bytes encrypted, at most the largest attachment and 16 bytes | 201 `SealedAttachment` `{"id", "size", "meta"}` | 404, 403, 400, 409 |
+| GET | `api/v1/encrypted/spaces/<space>/conversion` | | `ConversionInfo` `{"running": "encrypting", "decrypting" or null, "root", "spaces", "left": [{"page", "space"}], "cannotEncrypt": [reason], "cannotDecrypt": [reason]}` | 404 |
+| POST | `api/v1/encrypted/spaces/<space>/conversion/encrypt` | `StartEncrypting` `{"keys": [{"space", "keyId", "grant": NewGrant}]}`, a key for the space and each plain space below it, sealed to the caller | `ConversionInfo` | 404, 403, 400, 409 (a reason it cannot be converted, the spaces changed) |
+| POST | `api/v1/encrypted/spaces/<space>/conversion/decrypt` | | `ConversionInfo` | 404, 403, 409 |
+| POST | `api/v1/encrypted/conversion/pages/<page>/sealed` | `StagedSealed` `{"pageKey": PageKey or null, "versions": [{"updatedAt", "content"}], "threads": [{"id", "anchor"}], "comments": [{"id", "content"}], "attachments": [{"id", "meta"}]}`; a key starts the page anew and comes with its latest version | 204 | 404, 403, 400, 409 (not being encrypted, converted already, a renewal due) |
+| POST | `api/v1/encrypted/conversion/pages/<page>/plain` | `StagedPlain` `{"versions": [{"updatedAt", "title", "body"}], "threads": [{"id", "anchor"}], "comments": [{"id", "body"}], "attachments": [{"id", "name", "mediaType"}]}` | 204 | 404, 403, 400, 409 |
+| POST | `api/v1/encrypted/conversion/pages/<page>/attachments/<attachment>` | multipart: `file`, the bytes as the page will hold them | 204 | 404, 403, 400, 409 |
+| GET | `api/v1/encrypted/conversion/pages/<page>` | | `StagedPage` `{"digest", "pageKeys", "sealed": StagedSealed, "plain": StagedPlain, "blobs": [[attachment, blob]]}` | 404, 403, 409 |
+| POST | `api/v1/encrypted/conversion/pages/<page>/commit` | `ConversionCommit` `{"digest"}`, the digest read back | `ConversionProgress` `{"left"}` | 404, 403, 400, 409 (staged changed since, not all staged) |
 
 A grant (`KeyGrant` `{"keyId", "recipient", "recipientKeyId", "enc",
 "sealed"}`) is the space's key sealed with HPKE (base mode, X25519,
@@ -1134,6 +1142,15 @@ rotation keeps every older page key, wrapped again, so what was written
 before a rotation is read with the key it names. The live channel tells a
 page's subscribers only that an encrypted page's threads changed
 (`threads-changed`), and answers a subscription to one with no threads.
+
+A conversion encrypts a space that has pages, or turns a space's
+encryption off, one page at a time in the browser of an administrator of
+the space who holds its key; every route of it asks that of the caller.
+The space and the spaces below it carry `"conversion"` while it runs, and
+every other write in them answers 409. A page reads by the plain routes
+until the conversion encrypts it, or from when it decrypts it; read by
+the other routes meanwhile, it answers 409 with a reason that starts
+`This page is read as plain text while its space is converted`.
 
 ### Administration
 

@@ -53,7 +53,7 @@ spec = describe "JSON" $ do
       toJSON (SpaceId "s1") `shouldBe` toJSON ("s1" :: Text)
     it "with a record's field names, and a slug as its text" $ do
       let s = either (panic . show) identity (mkSlug "eng")
-      toJSON Space {id = SpaceId "s1", name = "Engineering", slug = s, parent = Nothing, public = True, sealed = False, encryption = Nothing, owner = Just (UserId "u1"), active = True, personalContainer = False, mathMacros = "\\newcommand{\\x}{1}", createdAt = UTCTime (fromGregorian 2026 1 2) 0, position = 3, subspaceOrder = ByHand, pageOrder = NewestFirst, homePage = Just (PageId "p1"), icon = Just (IconEmoji "📘"), description = "Where we write", blog = True, boxNumbering = InPage}
+      toJSON Space {id = SpaceId "s1", name = "Engineering", slug = s, parent = Nothing, public = True, sealed = False, encryption = Nothing, conversion = Nothing, owner = Just (UserId "u1"), active = True, personalContainer = False, mathMacros = "\\newcommand{\\x}{1}", createdAt = UTCTime (fromGregorian 2026 1 2) 0, position = 3, subspaceOrder = ByHand, pageOrder = NewestFirst, homePage = Just (PageId "p1"), icon = Just (IconEmoji "📘"), description = "Where we write", blog = True, boxNumbering = InPage}
         `shouldBe` object
           [ "id" .= ("s1" :: Text)
           , "name" .= ("Engineering" :: Text)
@@ -62,6 +62,7 @@ spec = describe "JSON" $ do
           , "public" .= True
           , "sealed" .= False
           , "encryption" .= (Nothing :: Maybe Text)
+          , "conversion" .= (Nothing :: Maybe Text)
           , "owner" .= ("u1" :: Text)
           , "active" .= True
           , "personalContainer" .= False

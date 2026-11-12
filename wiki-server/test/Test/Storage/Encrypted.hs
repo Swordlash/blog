@@ -31,14 +31,15 @@ import Data.ByteString qualified as BS
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (getCurrentTime)
+import Data.Time (UTCTime, getCurrentTime)
 import Database.Beam (all_, delete, filter_, runDelete, runSelectReturningList, runUpdate, select, update, val_, (<-.), (==.))
 import Protolude
+import System.Directory (doesFileExist, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Database (Backing)
 import Test.Hspec
-import Test.Storage.Fixture (demoArchive, ok, withPlaceIn)
+import Test.Storage.Fixture (demoArchive, ok, tableRows, withPlaceIn)
 import Wiki.Api.Account (Account (..))
 import Wiki.Api.Encrypted
 import Wiki.Api.Notifications (Notifications (..))
@@ -50,8 +51,10 @@ import Wiki.App.Backend (MonadWiki (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Backlink (Backlink (..))
+import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Encrypted (Chain (..), Encapsulated (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), VersionTag (..), chainAfter, firstChain)
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..), UserId (..))
@@ -65,7 +68,7 @@ import Wiki.Core.Space (Space (..), SpaceProfile (..))
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.User (Group (..), Password (..), User (..))
 import Wiki.Core.Vault
-import Wiki.Core.Version (VersionsQuery (..))
+import Wiki.Core.Version (VersionInfo (..), VersionsQuery (..))
 import Wiki.Server.Accounts (createAccount)
 import Wiki.Server.Import (intoEncrypted)
 import Wiki.Server.Opaque (defaultStretch)
@@ -925,6 +928,288 @@ spec backing = describe "encrypted spaces in the storage" $ do
     isLeft (eitherDecode body :: Either [Char] NewSealedPage) `shouldBe` True
     isLeft (eitherDecode "{\"content\":{\"title\":\"x\",\"body\":\"y\"}}" :: Either [Char] SealedEdit) `shouldBe` True
 
+  -- Item 4 of #213: a space that has pages encrypted page by page in an
+  -- administrator's browser (here, ciphertexts of made-up bytes), stopped
+  -- halfway, the storage closed and opened again, and finished; and its
+  -- encryption turned off the same way. At every moment each page reads
+  -- one way or the other, with as many versions, threads and attachments
+  -- as it had; afterwards no marker of its plain text is in any table, nor
+  -- in SQLite's files.
+  describe "converting a space" $ do
+    it "encrypts a space that has pages page by page, each page read one way or the other, the storage reopened halfway, and leaves its plain text nowhere" $
+      withSystemTempDirectory "conversion" $ \dir -> withPlaceIn backing $ \at -> do
+        (p, s, inner, pages) <- withStorage defaultConfig at $ \st -> do
+          p <- makePeople st
+          let as :: UserId -> StoredWiki IO a -> IO a
+              as u = runStoredWiki st (AsUser u)
+          s <- privateSpace st p.ada "Plans"
+          home <- ok =<< as p.ada (homeOf s.id)
+          void (ok =<< as p.ada (savePage home.id home.updatedAt "Plans" ("Home of " <> marker "home")))
+          first' <- ok =<< as p.ada (createPage s.id Nothing (marker "title") ("Once " <> marker "older"))
+          now' <- ok =<< as p.ada (savePage first'.id first'.updatedAt (marker "title") ("Now " <> marker "text" <> " and " <> marker "quote" <> "."))
+          void (ok =<< as p.ada (openThread first'.id (Just (Anchor (marker "quote") "and " ".")) (marker "comment")))
+          void (ok =<< as p.ada (openThread first'.id Nothing "About the whole page."))
+          att <- ok =<< as p.ada (uploadAttachment first'.id (marker "name" <> ".txt") "text/plain" (encodeUtf8 (marker "bytes")))
+          void (ok =<< as p.ada (saveDraft first'.id now'.updatedAt "Draft" (marker "draft")))
+          inner <- ok =<< as p.ada (createSpace (Just s.id) "Inner")
+          innerHome <- ok =<< as p.ada (homeOf inner.id)
+          innerPage <- ok =<< as p.ada (createPage inner.id Nothing (marker "inner") "In the inner space.")
+          -- What cannot be converted is refused before anything starts:
+          -- a template, and someone else's draft.
+          template <- ok =<< as p.ada (createPage s.id Nothing "A template" "Fill in.")
+          void (ok =<< as p.ada (setPageTemplate template.id True))
+          void (ok =<< as p.ada (setSpaceGrant s.id (SubjectUser p.bob) Edit True))
+          void (ok =<< as p.bob (saveDraft innerPage.id innerPage.updatedAt "Bob's" "Bob's draft"))
+          refusals <- (\i -> i.cannotEncrypt) <$> (ok =<< as p.ada (conversionInfo s.id))
+          (any ("templates" `T.isInfixOf`) refusals, any ("in the middle of editing" `T.isInfixOf`) refusals) `shouldBe` (True, True)
+          as p.ada (startEncrypting s.id StartEncrypting {keys = [startKey p s.id, startKey p inner.id]}) >>= (`shouldSatisfy` conflict)
+          void (ok =<< as p.ada (deletePage template.id))
+          void (ok =<< as p.bob (discardDraft innerPage.id))
+          ((\i -> i.cannotEncrypt) <$> (ok =<< as p.ada (conversionInfo s.id))) `shouldReturn` []
+          -- Only from someone who administers it.
+          as p.bob (startEncrypting s.id StartEncrypting {keys = [startKey p s.id, startKey p inner.id]}) >>= (`shouldSatisfy` isLeft)
+          started <- ok =<< as p.ada (startEncrypting s.id StartEncrypting {keys = [startKey p s.id, startKey p inner.id]})
+          (started.running, length started.left) `shouldBe` (Just Space.Encrypting, 4)
+          -- Every other write in it is refused, saying why.
+          let converting = ruleRefused "are being encrypted"
+          as p.ada (savePage now'.id now'.updatedAt "Changed" "Changed") >>= (`shouldSatisfy` converting)
+          as p.ada (createPage s.id Nothing "New" "New") >>= (`shouldSatisfy` converting)
+          as p.ada (openThread first'.id Nothing "A comment") >>= (`shouldSatisfy` converting)
+          as p.ada (uploadAttachment first'.id "b.txt" "text/plain" "b") >>= (`shouldSatisfy` converting)
+          as p.ada (setSpaceGrant s.id (SubjectUser p.cyd) View True) >>= (`shouldSatisfy` converting)
+          as p.ada (renameSpace s.id "Renamed") >>= (`shouldSatisfy` converting)
+          as p.ada (createSpace (Just inner.id) "Deeper") >>= (`shouldSatisfy` converting)
+          -- Every page reads plain until its commit; none by the encrypted
+          -- routes.
+          map (\x -> x.id) <$> (ok =<< as p.ada (listPages s.id)) >>= (`shouldMatchList` [home.id, first'.id])
+          (ok =<< as p.ada (sealedPages s.id)) `shouldReturn` []
+          as p.ada (sealedPageAt s.id [first'.slug]) >>= (`shouldSatisfy` ruleRefused notConvertedYet)
+          -- Half of it encrypted.
+          encryptPage st p.ada dir s.id home.id []
+          encryptPage st p.ada dir s.id first'.id [att.id]
+          readsOneWay st p.ada s.id first'.id (2, 2, 1)
+          pure (p, s, inner, (home, first', innerHome, innerPage))
+        -- The deploy's check after a migration reads the storage halfway.
+        checkDatabase at >>= (`shouldSatisfy` isRight)
+        let (_, first', innerHome, innerPage) = pages
+        withStorage defaultConfig at $ \st -> do
+          let as :: UserId -> StoredWiki IO a -> IO a
+              as u = runStoredWiki st (AsUser u)
+          info <- ok =<< as p.ada (conversionInfo s.id)
+          (info.running, map (\x -> x.page) info.left) `shouldBe` (Just Space.Encrypting, [innerHome.id, innerPage.id])
+          readsOneWay st p.ada s.id first'.id (2, 2, 1)
+          map (\x -> x.id) <$> (ok =<< as p.ada (listPages inner.id)) >>= (`shouldMatchList` [innerHome.id, innerPage.id])
+          -- Resumed, and finished: the last commit ends it.
+          encryptPage st p.ada dir inner.id innerHome.id []
+          encryptPage st p.ada dir inner.id innerPage.id []
+          ((\i -> (i.running, i.left)) <$> (ok =<< as p.ada (conversionInfo s.id))) `shouldReturn` (Nothing, [])
+          spaces <- as p.ada listSpaces
+          [(x.name, isJust x.encryption, x.conversion) | x <- spaces, x.id `elem` [s.id, inner.id]] `shouldMatchList` [("Plans", True, Nothing), ("Inner", True, Nothing)]
+          length <$> (ok =<< as p.ada (sealedPages inner.id)) `shouldReturn` 2
+          -- Written to again.
+          void (ok =<< as p.ada (setSpaceGrant s.id (SubjectUser p.cyd) View True))
+          -- No marker anywhere in the database, nor in its files on SQLite,
+          -- nor in the blob store: the plain attachment's file went.
+          rows <- tableRows st
+          [(t, r) | (t, rs) <- rows, r <- rs, any (`T.isInfixOf` r) markers] `shouldBe` []
+          files <- databaseFiles at
+          blobs <- listDirectory (at.dataDir </> "attachments") <&> map ((at.dataDir </> "attachments") </>)
+          contents <- traverse (\f -> (f,) <$> BS.readFile f) =<< filterM doesFileExist (files <> blobs)
+          [f | (f, b) <- contents, m <- markers, encodeUtf8 m `BS.isInfixOf` b] `shouldBe` []
+
+    it "turns a space's encryption off page by page, and leaves no ciphertext, key or grant of it" $ withSystemTempDirectory "conversion" $ \dir -> withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+      made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
+      void (ok =<< as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = savedOn (contentOf 'a') 'b'}))
+      t <- ok =<< as p.ada (openSealedThread pid NewSealedThread {id = threadId, anchor = Just (anchorUnder pageKeyOf.keyId 'q'), comment = NewSealedComment {id = commentId, content = commentUnder pageKeyOf.keyId 'c'}})
+      BS.writeFile (dir </> "sealed") "sealed bytes"
+      a <- ok =<< as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = attachmentId, meta = metaUnder pageKeyOf.keyId 'm', replaces = Nothing} (dir </> "sealed"))
+      -- Refused below an encrypted space, and to one who does not hold
+      -- the key.
+      inner <- ok =<< as p.ada (createEncryptedSubspace secret.id (subspaceAs p.ada p.adaKey (subspaceId 7) "Inner"))
+      ((\i -> i.cannotDecrypt) <$> (ok =<< as p.ada (conversionInfo inner.id))) >>= (`shouldSatisfy` any ("Its parent space" `T.isInfixOf`))
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) AdministerSpace True))
+      as p.bob (startDecrypting secret.id) >>= (`shouldSatisfy` conflict)
+      started <- ok =<< as p.ada (startDecrypting secret.id)
+      (started.running, sort (map (\x -> x.space) started.left)) `shouldBe` (Just Space.Decrypting, sort [secret.id, secret.id, inner.id])
+      as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = savedOn (contentOf 'b') 'c'}) >>= (`shouldSatisfy` ruleRefused "are being decrypted")
+      -- Each page staged decrypted, and committed.
+      for_ started.left $ \x -> do
+        versions <- ok =<< as p.ada (sealedVersions x.page (VersionsQuery Nothing 50))
+        threads <- threadsOf (ok =<< as p.ada (sealedThreads x.page))
+        let attachments = [a.id | x.page == pid]
+        ok =<< as p.ada (stagePlain x.page StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title = "Title " <> show v.number, body = "Text " <> show v.number} | v <- versions], threads = [PlainAnchor {id = th.id, anchor = if th.anchored then Just (Anchor "quoted" "" "") else Nothing} | th <- threads], comments = [PlainComment {id = c.id, body = "Decrypted comment"} | th <- threads, c <- th.comments], attachments = [PlainMeta {id = i, name = "file.txt", mediaType = "text/plain"} | i <- attachments]})
+        BS.writeFile (dir </> "plain") "plain bytes"
+        for_ attachments $ \i -> ok =<< as p.ada (stageBytesFile x.page i (dir </> "plain"))
+        staged <- ok =<< as p.ada (stagedPage x.page)
+        -- What was staged changed since it was read back: refused.
+        as p.ada (commitConverted x.page ConversionCommit {digest = "an older digest"}) >>= (`shouldSatisfy` conflict)
+        void (ok =<< as p.ada (commitConverted x.page ConversionCommit {digest = staged.digest}))
+      spaces <- as p.ada listSpaces
+      [(x.encryption, x.conversion) | x <- spaces, x.id `elem` [secret.id, inner.id]] `shouldBe` [(Nothing, Nothing), (Nothing, Nothing)]
+      readBack <- ok =<< as p.ada (getPage secret.id [made.slug])
+      (readBack.title, readBack.body, map (\x -> (x.name.text, x.size)) readBack.attachments) `shouldBe` ("Title 2", "Text 2", [("file.txt", 11)])
+      threads <- ok =<< as p.ada (listThreads pid)
+      [((\x -> x.exact) <$> th.anchor, map (\c -> c.body) th.comments) | th <- threads] `shouldBe` [(Just "quoted", ["Decrypted comment"])]
+      t.id `shouldBe` threadId
+      rows <- tableRows st
+      [(n, length rs) | (n, rs) <- rows, n `elem` ["key_grants", "page_keys", "sealed_versions", "sealed_threads", "sealed_comments", "sealed_attachments", "staged_plain"], not (null rs)] `shouldBe` []
+      -- Plain again: written as any plain page.
+      void (ok =<< as p.ada (savePage pid readBack.updatedAt "Title 3" "Text 3"))
+
+    conversionPrivacy backing
+
+    it "renews a space's key in the middle of its encryption, a page staged in part, and goes on" $ withSystemTempDirectory "conversion" $ \dir -> withPeople backing $ \st p -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+      s <- privateSpace st p.ada "Renewed"
+      home <- ok =<< as p.ada (homeOf s.id)
+      page <- ok =<< as p.ada (createPage s.id Nothing "A page" "First")
+      void (ok =<< as p.ada (savePage page.id page.updatedAt "A page" "Second"))
+      void (ok =<< as p.ada (setSpaceGrant s.id (SubjectUser p.bob) View True))
+      void (ok =<< as p.ada (startEncrypting s.id StartEncrypting {keys = [startKey p s.id]}))
+      -- Bob given the key, as the converting browser shares it.
+      ok =<< as p.ada (grantSpaceKey s.id NewGrants {keyId = subKey s.id, grants = [newGrant p.bob p.bobKey]})
+      -- The page's key staged with its latest version alone.
+      versions <- reverse <$> (ok =<< as p.ada (listVersions page.id (VersionsQuery Nothing 50)))
+      let key = pageKeyUnder (subKey s.id) 'k'
+          staged = chainOf key 'k' (map (\v -> v.updatedAt) versions)
+      ok =<< as p.ada (stageSealed page.id StagedSealed {pageKey = Just key, versions = take 1 (reverse staged), threads = [], comments = [], attachments = []})
+      -- Staged and not committed: no encrypted route reads it.
+      (ok =<< as p.ada (sealedPages s.id)) `shouldReturn` []
+      (ok =<< as p.ada (sealedContents s.id)) `shouldReturn` []
+      as p.ada (sealedPageAt s.id [page.slug]) >>= (`shouldSatisfy` ruleRefused notConvertedYet)
+      as p.ada (sealedVersions page.id (VersionsQuery Nothing 50)) >>= (`shouldSatisfy` ruleRefused notConvertedYet)
+      as p.ada (sealedThreads page.id) >>= (`shouldSatisfy` ruleRefused notConvertedYet)
+      -- Bob can no longer read it: the key must be renewed, and nothing
+      -- more is staged until it is.
+      void (ok =<< runStoredWiki st Administrator (setDisabled p.bob True))
+      as p.ada (stageSealed page.id StagedSealed {pageKey = Nothing, versions = staged, threads = [], comments = [], attachments = []}) >>= (`shouldSatisfy` renewalRefused)
+      info <- ok =<< as p.ada (rotationInfo s.id)
+      map (\x -> x.page) info.pages `shouldBe` [page.id]
+      ok =<< as p.ada (rotateSpaceKey s.id (rotationOf 3 info))
+      -- Then the page goes on, its versions under the key they name.
+      ok =<< as p.ada (stageSealed page.id StagedSealed {pageKey = Nothing, versions = staged, threads = [], comments = [], attachments = []})
+      done <- ok =<< as p.ada (stagedPage page.id)
+      void (ok =<< as p.ada (commitConverted page.id ConversionCommit {digest = done.digest}))
+      encryptPageAs st p.ada dir (KeyId (numbered 3)) home.id []
+      ((\i -> i.running) <$> (ok =<< as p.ada (conversionInfo s.id))) `shouldReturn` Nothing
+
+-- | 'it' of the conversion's: a space private from one who administers the
+-- space above it is not named to them.
+conversionPrivacy :: Backing -> Spec
+conversionPrivacy backing =
+  it "names no space below one being asked about that the caller may not see" $ withPeople backing $ \st p -> do
+    let as :: UserId -> StoredWiki IO a -> IO a
+        as u = runStoredWiki st (AsUser u)
+    s <- privateSpace st p.ada "Seen"
+    void (ok =<< as p.ada (setSpaceGrant s.id (SubjectUser p.bob) AdministerSpace True))
+    hidden <- ok =<< as p.ada (createSpace (Just s.id) "Hidden away")
+    void (ok =<< as p.ada (setSpaceSealed hidden.id True))
+    info <- ok =<< as p.bob (conversionInfo s.id)
+    (hidden.id `elem` info.spaces, any ("Hidden away" `T.isInfixOf`) info.cannotEncrypt, any ("may not see" `T.isInfixOf`) info.cannotEncrypt) `shouldBe` (False, False, True)
+
+-- | A marker of a place in a conversion's tests: text that must be found
+-- nowhere once the space is encrypted.
+marker :: Text -> Text
+marker place = "convcanary-" <> place <> "-x9"
+
+markers :: [Text]
+markers = map marker ["home", "title", "older", "text", "quote", "comment", "name", "bytes", "draft", "inner"]
+
+-- | A space's new key at the start of its encryption: its id made of the
+-- space's, sealed to Ada.
+startKey :: People -> SpaceId -> SpaceKeyStart
+startKey p sid = SpaceKeyStart {space = sid, keyId = subKey sid, grant = newGrant p.ada p.adaKey}
+
+-- | A page key of a letter, wrapped by a space key.
+pageKeyUnder :: KeyId -> Char -> PageKey
+pageKeyUnder k c = PageKey {keyId = KeyId (bytes16 c), spaceKeyId = k, wrapped = WrappedKey (Nonce (bytes 12)) (Ciphertext (bytes 48))}
+
+-- | A page's versions, of these times, oldest first, encrypted with a key
+-- as one chain from 1, each with a tag of its own.
+chainOf :: PageKey -> Char -> [UTCTime] -> [StagedVersion]
+chainOf key c times =
+  [ StagedVersion {updatedAt = at, content = SealedContent {tag = tagOf i, keyId = key.keyId, chain = Just Chain {number = i, previous = if i == 1 then Nothing else Just (tagOf (i - 1))}, title = base.title, body = base.body}}
+  | (i, at) <- zip [1 ..] times
+  ]
+  where
+    base = contentUnder key.keyId c
+    tagOf :: Int -> VersionTag
+    tagOf i = VersionTag (toBase64Url (BS.pack (replicate 15 (fromIntegral (ord c)) <> [fromIntegral i])))
+
+-- | 'encryptPageAs' under a space's key as these tests make it.
+encryptPage :: Storage -> UserId -> FilePath -> SpaceId -> PageId -> [AttachmentId] -> IO ()
+encryptPage st u dir sid = encryptPageAs st u dir (subKey sid)
+
+-- | Encrypt a page of a space being encrypted as a browser does, with
+-- made-up ciphertexts under the space's key given: its plain versions,
+-- threads, comments and the attachments given read, the key and latest
+-- version staged first, the rest after, each attachment's bytes, the
+-- staged read back, and the page committed with its digest.
+encryptPageAs :: Storage -> UserId -> FilePath -> KeyId -> PageId -> [AttachmentId] -> IO ()
+encryptPageAs st u dir spaceKey' pid attachments = do
+  let as :: StoredWiki IO a -> IO a
+      as = runStoredWiki st (AsUser u)
+      c = T.head (T.drop 3 pid.text)
+      key = pageKeyUnder spaceKey' c
+  versions <- reverse <$> (ok =<< as (listVersions pid (VersionsQuery Nothing 50)))
+  threads <- ok =<< as (listThreads pid)
+  let staged = chainOf key c (map (\v -> v.updatedAt) versions)
+  ok =<< as (stageSealed pid StagedSealed {pageKey = Just key, versions = take 1 (reverse staged), threads = [], comments = [], attachments = []})
+  ok
+    =<< as
+      ( stageSealed
+          pid
+          StagedSealed
+            { pageKey = Nothing
+            , versions = staged
+            , threads = [StagedAnchor {id = t.id, anchor = anchorUnder key.keyId c <$ t.anchor} | t <- threads]
+            , comments = [StagedComment {id = x.id, content = commentUnder key.keyId c} | t <- threads, x <- t.comments]
+            , attachments = [StagedMeta {id = i, meta = metaUnder key.keyId c} | i <- attachments]
+            }
+      )
+  for_ attachments $ \i -> do
+    BS.writeFile (dir </> "staged") ("sealed bytes of " <> encodeUtf8 i.text)
+    ok =<< as (stageBytesFile pid i (dir </> "staged"))
+  read' <- ok =<< as (stagedPage pid)
+  length read'.sealed.versions `shouldBe` length versions
+  void (ok =<< as (commitConverted pid ConversionCommit {digest = read'.digest}))
+
+-- | A page encrypted by a conversion, read only by the encrypted routes,
+-- with as many versions, threads and attachments as it had.
+readsOneWay :: Storage -> UserId -> SpaceId -> PageId -> (Int, Int, Int) -> IO ()
+readsOneWay st u sid pid (versions, threads, attachments) = do
+  let as :: StoredWiki IO a -> IO a
+      as = runStoredWiki st (AsUser u)
+  listed <- ok =<< as (sealedPages sid)
+  summary <- maybe (panic "not listed encrypted") pure (find (\x -> x.id == pid) listed)
+  map (\x -> x.id) <$> (ok =<< as (listPages sid)) >>= (`shouldNotContain` [pid])
+  as (getPage sid [summary.slug]) >>= (`shouldSatisfy` refusedAsEncrypted)
+  as (listVersions pid (VersionsQuery Nothing 50)) >>= (`shouldSatisfy` refusedAsEncrypted)
+  sealed <- ok =<< as (sealedPageAt sid [summary.slug])
+  length sealed.attachments `shouldBe` attachments
+  length <$> (ok =<< as (sealedVersions pid (VersionsQuery Nothing 50))) `shouldReturn` versions
+  length <$> threadsOf (ok =<< as (sealedThreads pid)) `shouldReturn` threads
+
+-- | The database's own files: SQLite's, with its log; none on
+-- PostgreSQL, whose rows 'tableRows' reads.
+databaseFiles :: Place -> IO [FilePath]
+databaseFiles at = case at.database of
+  SqliteFile file -> pure [file, file <> "-wal", file <> "-shm"]
+  _ -> pure []
+
+threadId :: CommentThreadId
+threadId = CommentThreadId "1a2b3c4d-1111-4c3f-9e7a-1d2b3c4d5e6f"
+
+commentId :: CommentId
+commentId = CommentId "1a2b3c4d-2222-4c3f-9e7a-1d2b3c4d5e6f"
+
+attachmentId :: AttachmentId
+attachmentId = AttachmentId "1a2b3c4d-3333-4c3f-9e7a-1d2b3c4d5e6f"
+
 -- | The id of a subspace made in these tests, a UUID of a number.
 subspaceId :: Int -> SpaceId
 subspaceId n = SpaceId (T.justifyRight 8 '0' (show n) <> "-5a5a-4b4b-8c8c-0123456789ab")
@@ -1025,7 +1310,11 @@ withPeople = withPeopleIn defaultConfig
 
 -- | 'withPeople', on a storage of this configuration.
 withPeopleIn :: Config -> Backing -> (Storage -> People -> IO a) -> IO a
-withPeopleIn config backing action = withPlaceIn backing $ \at -> withStorage config at $ \st -> do
+withPeopleIn config backing action = withPlaceIn backing $ \at -> withStorage config at $ \st -> makePeople st >>= action st
+
+-- | The people, made in a storage.
+makePeople :: Storage -> IO People
+makePeople st = do
   let person login = (\a -> a.user.id) <$> (ok =<< createAccount st login (T.toTitle login) (Just (Password "correct horse")))
   ada <- person "ada"
   bob <- person "bob"
@@ -1035,7 +1324,7 @@ withPeopleIn config backing action = withPlaceIn backing $ \at -> withStorage co
   adaKey <- giveKey st ada 'a'
   bobKey <- giveKey st bob 'b'
   danKey <- giveKey st dan 'd'
-  action st People {ada, adaKey, bob, bobKey, cyd, dan, danKey}
+  pure People {ada, adaKey, bob, bobKey, cyd, dan, danKey}
 
 -- | A storage with the people and Ada's encrypted space.
 withEncrypted :: Backing -> (Storage -> People -> Space -> IO a) -> IO a

@@ -768,11 +768,33 @@ quotes) and their attachments (names, types and bytes) are encrypted in
 its members' browsers, and the server keeps only ciphertext it cannot
 read. In the
 space's settings, under **Permissions**, **Encrypt this space…** turns a
-space encrypted. Only a space with nothing written in it yet can be, and an
-encrypted space stays encrypted. Its untouched home page is replaced by
-one your browser writes and encrypts, with the same starter text: an
-encrypted space has a home page, as every space does, and its address
-shows it.
+space encrypted. A space with nothing written in it yet is encrypted at
+once: its untouched home page is replaced by one your browser writes and
+encrypts, with the same starter text (an encrypted space has a home page,
+as every space does, and its address shows it). **Turn encryption off…**
+makes an encrypted space plain again.
+
+A space that has pages is encrypted page by page in the browser of the
+administrator who asks, with the plain spaces below it, each with a key
+of its own: every version of each page, its comments with the text they
+quote, and its attachments, encrypted in that browser, sent, read back
+from the server and opened again before the page is committed, all of it
+in one step. Turning encryption off is the same, the other way, and
+deletes the spaces' keys at the end. Meanwhile each page reads the way it
+did until its turn, and nothing else can be written in these spaces; a
+conversion that stops (the tab closed, a refusal) is continued from the
+space's permissions by an administrator of the space who holds its key
+("Continue", with the pages left). A page encrypted gets a new address
+made of random letters, since its old one spelled its title; its link by
+id (`/l/<id>`) keeps working. What cannot be converted is said before
+anything starts: templates, a blog, a public space, the wiki's front page,
+an attachment on the web, someone else's draft of a page, and, to turn it
+off, a parent space that is encrypted too. Afterwards the plain text is
+gone from the wiki's database: SQLite's files are written over where it
+was, and its log emptied; on PostgreSQL old rows stay in the database's
+files until it is vacuumed. **Backups made before keep the plain text**,
+and the attachments' plain files they name stay in the data directory,
+until those backups are pruned: nothing deletes a backup.
 
 How it works:
 
@@ -896,8 +918,7 @@ The words searched for reach the server too: the search page's address
 carries them, and the server searches the plain spaces with them. It
 never sees the encrypted pages, nor which of them matched.
 
-Not there yet, and to come: encrypting a space that already has pages,
-and turning encryption off; an option of an encrypted space to ask for a
+Not there yet, and to come: an option of an encrypted space to ask for a
 passkey or the password before each opening, with signing out removing
 your keys from the device; and the titles of encrypted pages under the
 bell (they show as "an encrypted page" there for now).

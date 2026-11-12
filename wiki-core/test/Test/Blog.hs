@@ -50,6 +50,7 @@ blogSpace home =
     , public = True
     , sealed = False
     , encryption = Nothing
+    , conversion = Nothing
     , owner = Nothing
     , active = True
     , personalContainer = False

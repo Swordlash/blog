@@ -184,6 +184,16 @@ module Wiki.Server.Storage
   , sealedVersions
   , sealedVersionAt
 
+    -- * Encrypting a space that has pages, and turning encryption off
+  , conversionInfo
+  , startEncrypting
+  , startDecrypting
+  , stageSealed
+  , stagePlain
+  , stageBytesFile
+  , stagedPage
+  , commitConverted
+
     -- * Accounts
   , PasswordLink (..)
   , passwordLinkFor
@@ -207,8 +217,10 @@ import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID (..))
 import Crypto.OPAQUE (ServerSetup)
 import Crypto.Random (getRandomBytes)
-import Data.ByteArray.Encoding (Base (Base64URLUnpadded), convertToBase)
+import Data.Aeson (encode)
+import Data.ByteArray.Encoding (Base (Base16, Base64URLUnpadded), convertToBase)
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as BSL
 import Data.Containers.ListUtils (nubOrdOn)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List qualified as List
@@ -217,6 +229,7 @@ import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, setNumS
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Type.Equality (type (~))
 import Data.UUID.Types qualified as UUID
 import Protolude
@@ -294,7 +307,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, hasHome, homeDeleteRefusal, homeMoveRefusal, homeTitle, isHomeBody, isPersonal, ownProfile, parentOrRoot, personalName, positionSpace, rootPage, spaceTreeOrder, strayRoots, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Conversion (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, hasHome, homeDeleteRefusal, homeMoveRefusal, homeTitle, isHomeBody, isPersonal, ownProfile, parentOrRoot, personalName, positionSpace, rootPage, spaceTreeOrder, strayRoots, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
@@ -304,17 +317,20 @@ import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Opaque (defaultStretch, loadServerSetup, registerHere, setupFromText, setupKey, storedRecordOf)
 import Wiki.Server.Password (newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
+import Wiki.Server.Sha256 (sha256)
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, loadActivity, loadAuditLog, restoreAudit)
 import Wiki.Server.Storage.Backend (Backend (..), withTransaction, withTransactionEither)
 import Wiki.Server.Storage.Backup (DataLock, KeptBackups, backupBlobs, backupFiles, backupInto, loadBackupSettings, loadLastBackup, lockDataDir, storeBackupSettings, storeLastBackup, unlockDataDir)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, storeBlob, storeBlobFile)
 import Wiki.Server.Storage.Check (TableRead (..), readEveryTable)
 import Wiki.Server.Storage.Comments qualified as Comments
+import Wiki.Server.Storage.Conversion
 import Wiki.Server.Storage.Layout (Database (..), PgDatabase (..), PgPrograms, attachmentsDir, backupsDir, defaultDatabase, defaultPgPrograms, postgresAt, temporaryDir)
 import Wiki.Server.Storage.Migrate (databaseVersion, knownVersion, migrateSaying, schemaVersion)
 import Wiki.Server.Storage.Notifications qualified as Notifications
 import Wiki.Server.Storage.Renewal (noticeRenewals, readersIn, renewalDue)
 import Wiki.Server.Storage.Rows
+import Wiki.Server.Storage.Schema (StagedPlain (..))
 import Wiki.Server.Storage.Sealed (currentPublicKeys, deleteGrantsOfSpace, deleteSpaceGrants, grantsOfKey, insertGrant, insertPageKey, insertSealedAttachment, insertSealedComment, insertSealedThread, insertSealedVersion, loadPageKey, loadPageKeys, loadSealedAnchors, loadSealedComments, loadSealedLatest, loadSealedMetas, loadSealedVersion, loadSpaceAllPageKeys, replacePageKeys, replaceSealedComment, setSpaceKey, spaceKind)
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
 import Wiki.Server.Storage.Stars qualified as Stars
@@ -1330,6 +1346,9 @@ requireView c =
       (canView x.principal x.grants c || (x.server.homePage.showAnonymous && any (\s -> Home.isHomeSpace x.server.homePage s.id) c))
       (failWith NotFound)
 
+-- | What writing in a space asks: to edit it. While a conversion of the
+-- space runs, nothing but the conversion is written in it
+-- ('requireNoConversion').
 requireEdit :: [Space] -> Tx ()
 requireEdit c = do
   requireView c
@@ -1339,6 +1358,7 @@ requireEdit c = do
         then hasGlobalPermission x.principal x.grants Administer
         else canEdit x.principal x.grants c
     )
+  requireNoConversion c
 
 -- | 'requireEdit' for a write that changes this page: saving it (which
 -- renames it too), restoring a version, its drafts, its attachments, and
@@ -1382,6 +1402,7 @@ requireCreateSpace parent = do
   parentChain <- traverse (fmap snd . findSpace) parent
   traverse_ requireView parentChain
   traverse_ requireOrdinary parent
+  traverse_ requireNoConversion parentChain
   require (mayCreateSpace ctx.principal ctx.grants parentChain)
   pure parentChain
 
@@ -1792,7 +1813,8 @@ threadsThen st who pid = transactThen st who ReadsOnWriter $ do
   -- A page of an encrypted space has its threads encrypted: the browser
   -- reads them from their own route, and is told only that they changed
   -- ('ThreadsChanged'). Its subscription answers with none.
-  threads <- if home || any (\s -> isJust s.encryption) c then pure [] else listThreadsTx pid
+  sealed <- maybe (pure False) (`pageReadsSealed` pid) (lastMay c)
+  threads <- if home || sealed then pure [] else listThreadsTx pid
   readingAs <- asks (\x -> x.user) <&> \u -> authorOf <$> mfilter (\v -> v.id /= administratorId) u
   pure (threads, readingAs)
 
@@ -1894,6 +1916,52 @@ uploadSealedAttachmentFile :: (MonadIO m) => PageId -> SealedUpload -> FilePath 
 uploadSealedAttachmentFile pid up file = do
   size <- liftIO (getFileSize file)
   run Writes (uploadSealedAttachmentTx pid up size (\dir -> fst <$> storeBlobFile dir file))
+
+-- | A space's conversion ('E.ConversionInfo').
+conversionInfo :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError E.ConversionInfo)
+conversionInfo = run Reads . conversionInfoTx
+
+-- | Start encrypting a space that has pages.
+startEncrypting :: (MonadIO m) => SpaceId -> E.StartEncrypting -> StoredWiki m (Either WikiError E.ConversionInfo)
+startEncrypting sid = run Writes . startEncryptingTx sid
+
+-- | Start turning a space's encryption off.
+startDecrypting :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError E.ConversionInfo)
+startDecrypting = run Writes . startDecryptingTx
+
+-- | Stage ciphertexts of a page while its space is encrypted.
+stageSealed :: (MonadIO m) => PageId -> E.StagedSealed -> StoredWiki m (Either WikiError ())
+stageSealed pid = run Writes . stageSealedTx pid
+
+-- | Stage a page's texts, decrypted, while its encryption is turned off.
+stagePlain :: (MonadIO m) => PageId -> E.StagedPlain -> StoredWiki m (Either WikiError ())
+stagePlain pid = run Writes . stagePlainTx pid
+
+-- | Stage an attachment's bytes, from a file of an upload.
+stageBytesFile :: (MonadIO m) => PageId -> AttachmentId -> FilePath -> StoredWiki m (Either WikiError ())
+stageBytesFile pid aid file = do
+  size <- liftIO (getFileSize file)
+  run Writes (stageBytesTx pid aid size (\dir -> fst <$> storeBlobFile dir file))
+
+-- | What is staged of a page.
+stagedPage :: (MonadIO m) => PageId -> StoredWiki m (Either WikiError E.StagedPage)
+stagedPage = run Reads . stagedPageTx
+
+-- | Commit a page of a conversion. Then, on SQLite, the write-ahead log is
+-- moved into the database file and emptied, so that the plain text the
+-- commit took out of the database is in neither file ('checkpoint'); and
+-- once the conversion has ended, the files of the blob store nothing
+-- refers to any more are deleted ('collectGarbage'): the plain bytes of
+-- the attachments encrypted, unless a backup kept names them.
+commitConverted :: (MonadIO m) => PageId -> E.ConversionCommit -> StoredWiki m (Either WikiError E.ConversionProgress)
+commitConverted pid commit = do
+  result <- run Writes (commitConvertedTx pid commit)
+  st <- StoredWiki (asks (\env -> env.storage))
+  for_ result $ \(_, ended) -> liftIO $ case st.engine of
+    Engine p -> withResource p.writer $ \c -> do
+      void (checkpoint c)
+      when (ended && isJust st.lock) (collectGarbage c st.place.dataDir)
+  pure (fst <$> result)
 
 -- | The pages of an encrypted space, with their encrypted titles.
 sealedPages :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError [SealedSummary])
@@ -2095,8 +2163,16 @@ listPagesTx :: SpaceId -> Tx [PageSummary]
 listPagesTx sid = do
   (s, c) <- findSpace sid
   requireView c
-  requirePlain "Listing its pages as plain text" c
-  pageTreeOrder s.pageOrder <$> db (loadPageSummaries sid)
+  -- While a space is converted, the pages that read plain are listed
+  -- plain; the others are listed by the encrypted route.
+  if isJust s.conversion
+    then do
+      listed <- db (loadPageSummaries sid)
+      sealed <- Set.fromList <$> sealedAmong s (map (\p -> p.id) listed) identity
+      pure (pageTreeOrder s.pageOrder [p | p <- listed, Set.notMember p.id sealed])
+    else do
+      requirePlain "Listing its pages as plain text" c
+      pageTreeOrder s.pageOrder <$> db (loadPageSummaries sid)
 
 -- | The pages of a space with their bodies and attachments, in the space's
 -- page order, for someone who may view the space. The API's list of pages
@@ -2144,10 +2220,10 @@ getPageTx :: SpaceId -> [Slug] -> Tx Page
 getPageTx sid path = do
   (s, c) <- findSpace sid
   requireView c
-  requirePlain "Reading a page as plain text" c
+  unless (isJust s.conversion) (requirePlain "Reading a page as plain text" c)
   root <- maybe (pure Nothing) (\r -> db (pageNode r)) (rootPage s)
   resolveUnderM root (\parent slug -> db (childPage sid parent slug)) path >>= \case
-    Right ps | Just p <- lastMay ps -> findPage p.id
+    Right ps | Just p <- lastMay ps -> requirePlainPage "Reading a page as plain text" c p.id >> findPage p.id
     _ -> failWith NotFound
 
 -- | Where a page is now, by its id ('Wiki.App.Backend.pageLocation'): its
@@ -2312,6 +2388,7 @@ createSpaceTx parent name = do
           , public = False
           , sealed = False
           , encryption = Nothing
+          , conversion = Nothing
           , owner = Nothing
           , active = True
           , personalContainer = False
@@ -2347,6 +2424,7 @@ setSpaceProfileTx :: SpaceId -> SpaceProfile -> Tx Space
 setSpaceProfileTx sid given = do
   (s, c) <- findSpace sid
   home <- requireIconAdminister sid c
+  requireNoConversion c
   -- The wiki home's space takes only an icon: the rest is its own.
   -- The owner's avatar, which the settings show as the icon of a personal
   -- space with none of its own, is not taken for one ('ownProfile').
@@ -2386,6 +2464,7 @@ uploadSpaceIconTx :: SpaceId -> Text -> Integer -> (FilePath -> IO BlobId) -> Tx
 uploadSpaceIconTx sid mediaType size store = do
   (s, c) <- findSpace sid
   _ <- requireIconAdminister sid c
+  requireNoConversion c
   mt <- either invalid pure (checkIconUpload mediaType (fromIntegral size))
   dir <- asks (\x -> x.blobs)
   blob <- liftIO (store dir)
@@ -2413,6 +2492,7 @@ adjustSpace :: SpaceId -> (Space -> Tx Space) -> Tx Space
 adjustSpace sid f = do
   (s, c) <- findSpace sid
   requireAdminister c
+  requireNoConversion c
   s' <- f s
   db (updateSpace s')
   pure s'
@@ -2439,6 +2519,7 @@ setSpaceGrantTx :: SpaceId -> Subject -> SpacePermission -> Bool -> Tx ()
 setSpaceGrantTx sid subject permission granted = do
   (_, c) <- findSpace sid
   requireAdminister c
+  requireNoConversion c
   when granted $ case subject of
     SubjectUser u -> db (loadUser u) >>= maybe (invalid "There is no such user.") (const pass)
     SubjectGroup g -> db loadGroups >>= maybe (invalid "There is no such group.") (const pass) . find (\x -> x.id == g)
@@ -2508,6 +2589,7 @@ renameSpaceTx sid name = adjustSpace sid $ \s -> do
       , public = s.public
       , sealed = s.sealed
       , encryption = s.encryption
+      , conversion = s.conversion
       , owner = s.owner
       , active = s.active
       , personalContainer = s.personalContainer
@@ -2537,6 +2619,8 @@ moveSpaceTx sid destination = do
   destinationChain <- traverse (fmap snd . findSpace) destination
   requireView c
   traverse_ requireView destinationChain
+  requireNoConversion c
+  traverse_ requireNoConversion destinationChain
   require (mayMoveSpace ctx.principal ctx.grants c destinationChain)
   requireOrdinary sid
   when (isPersonal s && destination /= s.parent) $
@@ -2663,6 +2747,7 @@ setPersonalSpaceTx enabled = do
                   , public = True
                   , sealed = False
                   , encryption = Nothing
+                  , conversion = Nothing
                   , owner = Just u
                   , active = True
                   , personalContainer = False
@@ -2697,6 +2782,7 @@ setPersonalSpaceTx enabled = do
               , public = False
               , sealed = False
               , encryption = Nothing
+              , conversion = Nothing
               , owner = Nothing
               , active = True
               , personalContainer = True
@@ -2721,6 +2807,7 @@ deleteSpaceTx :: SpaceId -> Tx ()
 deleteSpaceTx sid = do
   (s, c) <- findSpace sid
   requireAdminister c
+  requireNoConversion c
   ctx <- ask
   let below = [sp | sp <- Map.elems ctx.spaces, sp.id /= sid, within sid (chainOf ctx sp.id)]
   -- Count what is deleted with it, before deleting it.
@@ -2749,6 +2836,7 @@ respace parent slug position s =
     , public = s.public
     , sealed = s.sealed
     , encryption = s.encryption
+    , conversion = s.conversion
     , owner = s.owner
     , active = s.active
     , personalContainer = s.personalContainer
@@ -2771,6 +2859,7 @@ setSpaceOrderTx :: SpaceId -> Children -> ChildOrder -> Tx Space
 setSpaceOrderTx sid kind order = do
   (s, c) <- findSpace sid
   requireAdminister c
+  requireNoConversion c
   let old = case kind of
         ChildSpaces -> s.subspaceOrder
         ChildPages -> s.pageOrder
@@ -2811,6 +2900,7 @@ shiftSpaceTx :: SpaceId -> Shift -> Tx Space
 shiftSpaceTx sid how = do
   ctx <- ask
   (s, c) <- findSpace sid
+  requireNoConversion c
   case s.parent of
     Nothing -> do
       requireView c
@@ -3103,7 +3193,7 @@ listVersionsTx pid q = do
   p <- findNode pid
   c <- chainOfPage p
   requireView c
-  requirePlain "Reading a page's history as plain text" c
+  requirePlainPage "Reading a page's history as plain text" c pid
   (before, rows) <- db (loadVersionsPage pid q.before (max 1 (min maxVersionsPageSize q.limit)))
   pure [versionInfo n (versionOf pid r) | (n, r) <- zip [before, before - 1 ..] rows]
 
@@ -3118,7 +3208,7 @@ getVersionTx pid at = do
   p <- findNode pid
   c <- chainOfPage p
   requireView c
-  requirePlain "Reading a page's history as plain text" c
+  requirePlainPage "Reading a page's history as plain text" c pid
   findVersion pid at
 
 -- | Restore a version: a save of its title and body, as any save, in this
@@ -3255,6 +3345,7 @@ encryptSpaceTx sid req = do
   ctx <- ask
   (s, c) <- findSpace sid
   requireAdminister c
+  requireNoConversion c
   when (isJust s.encryption) $ failWith (Conflict "This space is encrypted already.")
   when (isJust s.owner || s.personalContainer || s.blog) $ failWith (Conflict "A personal space or a blog cannot be encrypted.")
   when (any (\x -> x.parent == Just sid) (Map.elems ctx.spaces)) $
@@ -3330,6 +3421,7 @@ createEncryptedSubspaceTx parent new = do
           , public = False
           , sealed = False
           , encryption = Just new.keyId
+          , conversion = Nothing
           , owner = Nothing
           , active = True
           , personalContainer = False
@@ -3366,6 +3458,7 @@ createSealedHomeTx :: SpaceId -> NewSealedPage -> Tx SealedPage
 createSealedHomeTx sid new = do
   (s, c) <- findSpace sid
   requireAdminister c
+  requireNoConversion c
   k <- requireEncrypted s
   when (isJust s.homePage) $ failWith (Conflict "This space has a home page already.")
   requireNoRenewal sid c k
@@ -3564,6 +3657,8 @@ maxGrantsAtOnce = 500
 -- | A page of an encrypted space with its latest version, encrypted.
 sealedPageOf :: Page -> Tx SealedPage
 sealedPageOf p = do
+  (s, _) <- findSpace p.space
+  requireSealedPage s p.id
   pk <- db (loadPageKey p.id) >>= maybe (failWith (Conflict "This page has no key: it is not a page of an encrypted space.")) pure
   content <- db (loadSealedVersion p.id p.updatedAt) >>= maybe (failWith NotFound) pure
   pageKeys <- db (loadPageKeys p.id)
@@ -3593,7 +3688,7 @@ sealedPagesTx sid = do
   (s, c) <- findSpace sid
   requireView c
   _ <- requireEncrypted s
-  summaries <- db (loadPageSummaries sid)
+  summaries <- (\xs -> sealedAmong s xs (\x -> x.id)) =<< db (loadPageSummaries sid)
   keys <- db (loadSpaceAllPageKeys sid)
   latest <- db (loadSealedLatest sid)
   pure
@@ -3609,7 +3704,7 @@ sealedContentsTx sid = do
   (s, c) <- findSpace sid
   requireView c
   _ <- requireEncrypted s
-  summaries <- db (loadPageSummaries sid)
+  summaries <- (\xs -> sealedAmong s xs (\x -> x.id)) =<< db (loadPageSummaries sid)
   keys <- db (loadSpaceAllPageKeys sid)
   latest <- db (loadSealedLatest sid)
   pure
@@ -3700,6 +3795,7 @@ saveSealedPageTx pid base edit = do
   requireSavePage c pid
   s <- fst <$> findSpace p.space
   k <- requireEncrypted s
+  requireSealedPage s pid
   requireNoRenewal p.space c k
   pk <- db (loadPageKey pid) >>= maybe (failWith (Conflict "This page has no key: it is not a page of an encrypted space.")) pure
   -- A version encrypted with an older key of the page's, from a tab that
@@ -3733,6 +3829,7 @@ sealedVersionsTx pid q = do
   requireView c
   s <- fst <$> findSpace p.space
   _ <- requireEncrypted s
+  requireSealedPage s pid
   (before, rows) <- db (loadVersionsPage pid q.before (max 1 (min maxVersionsPageSize q.limit)))
   fmap catMaybes . for (zip [before, before - 1 ..] rows) $ \(n, r) -> do
     let v = versionOf pid r
@@ -3746,6 +3843,7 @@ sealedVersionTx pid at = do
   requireView c
   s <- fst <$> findSpace p.space
   _ <- requireEncrypted s
+  requireSealedPage s pid
   v <- findVersion pid at
   content <- db (loadSealedVersion pid at) >>= maybe (failWith NotFound) pure
   pure SealedVersion {page = pid, updatedAt = v.updatedAt, content, author = v.author}
@@ -4253,7 +4351,7 @@ commentAuthor u name avatar
 discussion :: PageId -> Tx ([Space], [Thread])
 discussion pid = do
   (c, ts) <- discussionOf pid
-  requirePlain "A comment" c
+  requirePlainPage "A comment" c pid
   pure (c, ts)
 
 -- | 'discussion' for what carries no text of a comment (deleting one,
@@ -4282,6 +4380,7 @@ commenter :: [Space] -> Tx UserId
 commenter c = do
   ctx <- ask
   require (mayComment ctx.principal ctx.grants c)
+  requireNoConversion c
   maybe (failWith Forbidden) pure ctx.author
 
 -- | A comment's Markdown, checked.
@@ -4331,6 +4430,7 @@ editCommentTx pid tid cid body = do
   old <- threadIn ts tid >>= (`commentIn` cid)
   ctx <- ask
   require (mayEditComment ctx.principal old)
+  findNode pid >>= chainOfPage >>= requireNoConversion
   text <- commentText body
   time <- now
   db (Comments.updateCommentBody cid text time)
@@ -4348,6 +4448,7 @@ deleteCommentTx pid tid cid = do
   old <- commentIn t cid
   ctx <- ask
   require (mayDeleteComment ctx.principal ctx.grants c old)
+  requireNoConversion c
   case t.comments of
     opening : _ : _ | opening.id == cid -> invalid "The first comment of a thread with replies cannot be deleted: delete the thread instead."
     [_] -> db (Comments.deleteThreadRow tid) $> ((), pid, ThreadDeleted tid)
@@ -4359,6 +4460,7 @@ deleteThreadTx pid tid = do
   t <- threadIn ts tid
   ctx <- ask
   require (mayDeleteThread ctx.principal ctx.grants c t)
+  requireNoConversion c
   db (Comments.deleteThreadRow tid)
   pure ((), pid, ThreadDeleted tid)
 
@@ -4369,14 +4471,574 @@ setResolvedTx pid tid resolved = do
   _ <- commenter c
   -- In an encrypted space the quote is encrypted, and the thread's row says
   -- only whether it has one.
+  sealed <- maybe (pure False) (`pageReadsSealed` pid) (lastMay c)
   anchored <-
-    if any (\s -> isJust s.encryption) c
+    if sealed
       then maybe False fst . Map.lookup tid <$> db (loadSealedAnchors pid)
       else pure (isJust t.anchor)
   unless anchored $
     invalid "A thread about the whole page is not resolved: only one about a quote of it is."
   db (Comments.updateResolved tid resolved)
   pure (Thread {id = t.id, page = t.page, anchor = t.anchor, resolved, createdAt = t.createdAt, comments = t.comments}, pid, ThreadResolved tid resolved)
+
+--------------------------------------------------------------------------------
+-- Encrypting a space that has pages, and turning encryption off
+
+-- $conversion
+-- A conversion ("Wiki.Core.Space"'s 'Conversion', item 4 of #213) turns a
+-- space's plain pages into ciphertext, or back, one page at a time, in the
+-- browser of one of its administrators who holds its key. It covers the
+-- space and the spaces below it (every space below an encrypted space is
+-- encrypted, 'Permission.encryptionProblem'). The space's key is set from
+-- its start to the end of a decryption, so that the search, the exports,
+-- the links and the import treat it as encrypted throughout.
+--
+-- For each page the browser stages what the page becomes: while a space is
+-- encrypted, every version in the chained format, the threads' quotes, the
+-- comments and the attachments, encrypted, in the encrypted tables
+-- ("Wiki.Server.Storage.Sealed"), the attachments' bytes in
+-- @sealed_attachments.staged_blob@; while its encryption is turned off,
+-- the same decrypted, in @staged_plain@. It reads back what is staged
+-- ('stagedPageTx'), opens or compares all of it, and commits the page
+-- with the digest of what it read ('commitConvertedTx'). The commit checks
+-- that everything of the page is staged, as read, and puts it in place in
+-- one transaction: until then the page reads the way it did
+-- ('Space.readsSealed'). The last page's commit ends the conversion.
+--
+-- Meanwhile every other write in the space is refused
+-- ('requireNoConversion'), but for a renewal of its key, which a reader's
+-- removal elsewhere may make due, and the sharing of its key with its
+-- readers: the browser converting the space renews the key when it is due
+-- and goes on, since staging an encrypted page is refused until then.
+
+-- | Why a write in a space being converted is refused.
+conversionRefusal :: Conversion -> Text
+conversionRefusal c =
+  "This space's pages are being "
+    <> (case c of Encrypting -> "encrypted"; Decrypting -> "decrypted")
+    <> " in the browser of one of its administrators, so nothing else can be written in it until that is done. An administrator of the space who holds its key continues it from the space's settings."
+
+-- | 'Conflict' while a conversion of a space of the chain runs: every
+-- write in it but the conversion's own is refused.
+requireNoConversion :: [Space] -> Tx ()
+requireNoConversion c = for_ (asum (map (\s -> s.conversion) c)) (failWith . Conflict . conversionRefusal)
+
+-- | Whether a page of a space is read and written by the encrypted routes
+-- now ('Space.readsSealed'): asked of the database only while the space
+-- is being converted.
+pageReadsSealed :: Space -> PageId -> Tx Bool
+pageReadsSealed s pid = case s.conversion of
+  Nothing -> pure (isJust s.encryption)
+  Just _ -> Space.readsSealed s <$> db (pageConverted pid)
+
+-- | 'requirePlain' for a read of one page: in a space being converted, a
+-- page that reads plain may be read plain; any other page of an encrypted
+-- space is refused.
+requirePlainPage :: Text -> [Space] -> PageId -> Tx ()
+requirePlainPage what c pid = case lastMay c of
+  Just s | isJust s.conversion -> whenM (pageReadsSealed s pid) (failWith (Conflict (encryptedRefusal what)))
+  _ -> requirePlain what c
+
+-- | 'Conflict' for a read of a page by the encrypted routes while it reads
+-- plain, with the reason the browser knows ('E.notConvertedYet').
+requireSealedPage :: Space -> PageId -> Tx ()
+requireSealedPage s pid =
+  unlessM (pageReadsSealed s pid) $
+    failWith (Conflict (E.notConvertedYet <> ": read it by the plain routes."))
+
+-- | The pages of a space, among those given, that read by the encrypted
+-- routes now.
+sealedAmong :: Space -> [a] -> (a -> PageId) -> Tx [a]
+sealedAmong s xs idOf = case s.conversion of
+  Nothing -> pure (if isJust s.encryption then xs else [])
+  Just _ -> do
+    done <- db (convertedIn s.id)
+    pure [x | x <- xs, Space.readsSealed s (Set.member (idOf x) done)]
+
+-- | A space and the spaces below it, each before the spaces below it.
+subtreeOf :: SpaceId -> Tx [Space]
+subtreeOf sid = do
+  ctx <- ask
+  let spaces = Map.elems ctx.spaces
+      below p = sortOn (\x -> x.id) [x | x <- spaces, x.parent == Just p]
+      walk x = x : concatMap walk (below x.id)
+  pure (maybe [] walk (Map.lookup sid ctx.spaces))
+
+-- | The space a running conversion of a space started from: the space of
+-- its chain nearest the top that the conversion covers.
+conversionRootOf :: Space -> Tx Space
+conversionRootOf s = do
+  c <- asks (`chainOf` s.id)
+  pure (fromMaybe s (find (\x -> isJust x.conversion) c))
+
+-- | What a conversion's every request asks of the caller, for each of the
+-- spaces it covers: to administer the space, and to hold its current key,
+-- as a renewal of the key asks ('rotateSpaceKeyTx'). Only those could
+-- delete the space anyway, and only a browser that holds the key can make
+-- or read what is staged. The caller and the space's key.
+requireConverter :: Space -> Tx (UserId, KeyId)
+requireConverter s = do
+  (_, c) <- findSpace s.id
+  requireAdminister c
+  k <- requireEncrypted s
+  me <- asks (\x -> x.author) >>= maybe (failWith Forbidden) pure
+  holding <- holdsKey s.id k me
+  unless holding $
+    failWith (Conflict ("You do not hold the key of " <> s.name <> ": open the space in your browser first, or ask an administrator who holds it."))
+  pure (me, k)
+
+-- | Whether a user holds a grant of a space's key to their current public
+-- key.
+holdsKey :: SpaceId -> KeyId -> UserId -> Tx Bool
+holdsKey sid k u = do
+  grants <- db (grantsOfKey spaceKind sid.text k)
+  mine <- db (currentPublicKeys [u])
+  pure (any (\g -> g.recipient == u && Just g.recipientKeyId == (fst <$> Map.lookup u mine)) grants)
+
+-- | Why a space, with the spaces below it, cannot be encrypted now by the
+-- caller: every reason, so that the dialog says all of them at once. None
+-- when it can.
+encryptRefusals :: Space -> [Space] -> [Space] -> Tx [Text]
+encryptRefusals s c tree = do
+  ctx <- ask
+  let plainTree = filter (\x -> isNothing x.encryption) tree
+      ids = map (\x -> x.id) plainTree
+      chainTo i = fromMaybe [] (ancestry (`Map.lookup` ctx.spaces) i)
+      -- The spaces as they would be once the conversion starts: each plain
+      -- one of the subtree encrypted, the space itself made private when it
+      -- is at the top, as 'encryptSpaceTx' makes it.
+      started =
+        Map.union
+          (Map.fromList [(x.id, x {encryption = Just (KeyId "converting"), sealed = x.sealed || (x.id == s.id && isNothing x.parent)}) | x <- plainTree])
+          ctx.spaces
+      startedChain i = fromMaybe [] (ancestry (`Map.lookup` started) i)
+      ruleProblems = ordNub (mapMaybe (Permission.encryptionProblem . startedChain) ids)
+  templates <- db (templatesIn ids)
+  drafts <- db (draftsIn ids)
+  web <- db (webAttachmentsIn ids)
+  pageSpace <- Map.fromList . map (\p -> (p.id, p.space)) . concat <$> traverse (\x -> db (pageNodes x)) ids
+  let spaceOfPage p = maybe "" (\i -> maybe "" (shownName ctx) (Map.lookup i ctx.spaces)) (Map.lookup p pageSpace)
+      others = [p | (p, u) <- drafts, Just u /= ctx.author]
+  let administers = [(x, canAdministerSpace ctx.principal ctx.grants (chainTo x.id)) | x <- plainTree]
+  pure $
+    ["This space is encrypted already." | isJust s.encryption]
+      <> [shownName ctx x <> " is being converted already." | x <- c <> tree, isJust x.conversion]
+      <> [shownName ctx x <> " is a personal space, or holds the personal spaces: those are not encrypted." | x <- tree, isJust x.owner || x.personalContainer]
+      <> [shownName ctx x <> " is a blog: a blog's pages are read by everyone it is shown to, and an encrypted space's only by its members." | x <- plainTree, x.blog]
+      <> [shownName ctx x <> " is public: make it private first." | x <- plainTree, x.public]
+      <> [shownName ctx x <> " holds the wiki's front page." | x <- plainTree, Home.isHomeSpace ctx.server.homePage x.id]
+      <> ["You do not administer " <> shownName ctx x <> "." | (x, False) <- administers]
+      <> [spaceOfPage p <> " has templates, which an encrypted space has none of: make them ordinary pages first." | p <- take 1 templates]
+      <> ["A page of " <> spaceOfPage p <> " has an attachment on the web: an encrypted page keeps its attachments' bytes. Upload the file instead." | p <- take 1 web]
+      <> ["Someone else is in the middle of editing a page of " <> spaceOfPage p <> " (a draft kept on the server): the conversion would delete it. Ask them to save or discard it first." | p <- take 1 others]
+      <> ruleProblems
+
+-- | Why the encryption of a space, with the spaces below it, cannot be
+-- turned off now by the caller. None when it can.
+decryptRefusals :: Space -> [Space] -> [Space] -> Tx [Text]
+decryptRefusals s c tree = do
+  ctx <- ask
+  me <- asks (\x -> x.author)
+  let chainTo i = fromMaybe [] (ancestry (`Map.lookup` ctx.spaces) i)
+  checked <- for tree $ \x -> case x.encryption of
+    Nothing -> pure [shownName ctx x <> " is not encrypted."]
+    Just k -> do
+      holding <- maybe (pure False) (holdsKey x.id k) me
+      pure $
+        ["You do not administer " <> shownName ctx x <> "." | not (canAdministerSpace ctx.principal ctx.grants (chainTo x.id))]
+          <> ["You do not hold the key of " <> shownName ctx x <> ": open it in your browser first." | not holding]
+  pure $
+    ["This space is not encrypted." | isNothing s.encryption]
+      <> [shownName ctx x <> " is being converted already." | x <- c <> tree, isJust x.conversion]
+      <> [ "Its parent space " <> p.name <> " is encrypted, and every space below an encrypted space is encrypted: turn the encryption of " <> p.name <> " off instead."
+         | p <- take 1 (reverse (filter (\x -> isJust x.encryption) (fromMaybe [] (initMay c))))
+         ]
+      <> concat checked
+
+-- | A space's name in what the caller is told, or what it is when the
+-- caller may not view it: a conversion covers the spaces below its space,
+-- some of which may be private from those who see that one.
+shownName :: Ctx -> Space -> Text
+shownName ctx x
+  | canView ctx.principal ctx.grants (chainOf ctx x.id) = x.name
+  | otherwise = "A space below it that you may not see"
+
+-- | A space's conversion as one who may view it sees it: of the spaces it
+-- covers, and their pages left, only those the caller may view.
+conversionInfoTx :: SpaceId -> Tx E.ConversionInfo
+conversionInfoTx sid = do
+  ctx <- ask
+  (s, c) <- findSpace sid
+  requireView c
+  let viewable x = canView ctx.principal ctx.grants (chainOf ctx x.id)
+  case s.conversion of
+    Just running -> do
+      root <- conversionRootOf s
+      covered <- filter (\x -> isJust x.conversion) <$> subtreeOf root.id
+      left <- db (unconvertedIn (map (\x -> x.id) (filter viewable covered)))
+      pure E.ConversionInfo {running = Just running, root = (\x -> x.id) <$> mfilter viewable (Just root), spaces = map (\x -> x.id) (filter viewable covered), left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = []}
+    Nothing -> do
+      tree <- subtreeOf sid
+      enc <- if isJust s.encryption then pure [] else encryptRefusals s c tree
+      dec <- if isJust s.encryption then decryptRefusals s c tree else pure []
+      pure
+        E.ConversionInfo
+          { running = Nothing
+          , root = Nothing
+          , spaces = map (\x -> x.id) (filter viewable (if isJust s.encryption then tree else filter (\x -> isNothing x.encryption) tree))
+          , left = []
+          , cannotEncrypt = enc
+          , cannotDecrypt = dec
+          }
+
+-- | Start encrypting a space that has pages, and the plain spaces below
+-- it, each with its new key, sealed to the caller ('E.StartEncrypting').
+startEncryptingTx :: SpaceId -> E.StartEncrypting -> Tx E.ConversionInfo
+startEncryptingTx sid req = do
+  (s, c) <- findSpace sid
+  requireAdminister c
+  tree <- subtreeOf sid
+  refusals <- encryptRefusals s c tree
+  unless (null refusals) $ failWith (Conflict (T.unwords refusals))
+  me <- asks (\x -> x.author) >>= maybe (failWith Forbidden) pure
+  let plainTree = filter (\x -> isNothing x.encryption) tree
+      sent = Map.fromList [(k.space, k) | k <- req.keys]
+  unless (length req.keys == Map.size sent && Map.keysSet sent == Set.fromList (map (\x -> x.id) plainTree)) $
+    failWith (Conflict "The spaces below this one have changed since the keys were made: open the space again.")
+  unless (length (ordNub (map (\k -> k.keyId) req.keys)) == length req.keys) $
+    invalid "Each space needs a key of its own."
+  keys <- db (currentPublicKeys [me])
+  for_ req.keys $ \k -> do
+    checkGrantParts k.keyId k.grant.enc k.grant.sealed
+    unless (k.grant.recipient == me && (fst <$> Map.lookup me keys) == Just k.grant.recipientKeyId) $
+      invalid "The spaces' keys must be sealed to your own current public key: open your keys in your account's security first."
+  time <- now
+  for_ plainTree $ \x -> for_ (Map.lookup x.id sent) $ \k -> do
+    db $ do
+      setSpaceKey x.id k.keyId
+      insertGrant spaceKind x.id.text time KeyGrant {keyId = k.keyId, recipient = me, recipientKeyId = k.grant.recipientKeyId, enc = k.grant.enc, sealed = k.grant.sealed}
+      clearConverted x.id
+      setConversion x.id (Just Encrypting)
+    -- A top-level space is made private with it, as 'encryptSpaceTx'
+    -- makes it, so that a later move under another space keeps it so.
+    when (x.id == sid && isNothing x.parent && not x.sealed) $
+      db (updateSpace x {sealed = True})
+  requireEncryptionRule sid
+  left <- db (unconvertedIn (map (\x -> x.id) plainTree))
+  record "space.encryption-started" (spaceSubject s) [("spaces", show (length plainTree)), ("pages", show (length left))]
+  pure E.ConversionInfo {running = Just Encrypting, root = Just sid, spaces = map (\x -> x.id) plainTree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = []}
+
+-- | Start turning the encryption of a space, and of the spaces below it,
+-- off.
+startDecryptingTx :: SpaceId -> Tx E.ConversionInfo
+startDecryptingTx sid = do
+  (s, c) <- findSpace sid
+  requireAdminister c
+  tree <- subtreeOf sid
+  refusals <- decryptRefusals s c tree
+  unless (null refusals) $ failWith (Conflict (T.unwords refusals))
+  for_ tree $ \x -> db (clearConverted x.id >> setConversion x.id (Just Decrypting))
+  left <- db (unconvertedIn (map (\x -> x.id) tree))
+  record "space.decryption-started" (spaceSubject s) [("spaces", show (length tree)), ("pages", show (length left))]
+  pure E.ConversionInfo {running = Just Decrypting, root = Just sid, spaces = map (\x -> x.id) tree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = []}
+
+-- | A page a conversion stages or commits, checked: its space is being
+-- converted this way, the page is not converted yet, and the caller may
+-- convert it ('requireConverter'). The page, its space and its chain, the
+-- caller and the space's key.
+convertingPage :: PageId -> Conversion -> Tx (PageNode, Space, [Space], UserId, KeyId)
+convertingPage pid way = do
+  p <- findNode pid
+  (s, c) <- findSpace p.space
+  requireView c
+  unless (s.conversion == Just way) $
+    failWith (Conflict ("This page's space is not being " <> (case way of Encrypting -> "encrypted"; Decrypting -> "decrypted") <> " now."))
+  (me, k) <- requireConverter s
+  whenM (db (pageConverted pid)) $ failWith (Conflict "This page is converted already.")
+  pure (p, s, c, me, k)
+
+-- | 'checkSealedText' for a ciphertext staged by a conversion, which names
+-- any key of the page's: one of before a renewal of the space's key made
+-- while the page was staged stays valid.
+checkStagedText :: [PageKey] -> KeyId -> Sealed -> Int -> Tx ()
+checkStagedText keys k s most = do
+  unless (any (\x -> x.keyId == k) keys) $
+    invalid "This ciphertext names no key of the page's."
+  unless (holdsBytes nonceBytes s.nonce.text && boundedBytes 16 most s.ciphertext.text) $
+    invalid "This is not a ciphertext this wiki keeps: a nonce or a text is not of its length."
+
+-- | Stage ciphertexts of a page while its space is encrypted
+-- ('E.StagedSealed').
+stageSealedTx :: PageId -> E.StagedSealed -> Tx ()
+stageSealedTx pid req = do
+  (_, s, c, _, k) <- convertingPage pid Encrypting
+  requireNoRenewal s.id c k
+  times <- db (pageVersionTimes pid)
+  for_ req.pageKey $ \pk -> do
+    unless (holdsBytes keyIdBytes pk.keyId.text && holdsBytes nonceBytes pk.wrapped.nonce.text && holdsBytes sealedKeyBytes pk.wrapped.key.text) $
+      invalid "This is not a key this wiki keeps: a part of the page's key is not of its length."
+    unless (pk.spaceKeyId == k) $
+      failWith (Conflict "The space's key has changed since: open the space again.")
+    -- A key comes with the page's latest version, so that no page has a
+    -- key without one, which a renewal of the space's key reads.
+    unless (any (\v -> Just (micro v.updatedAt) == lastMay times) req.versions) $
+      invalid "A page's key is staged with its latest version."
+    db (dropStagedSealed pid >> insertPageKey pid pk)
+  keys <- db (loadPageKeys pid)
+  when (null keys) $ invalid "This page's key is staged first, with its latest version."
+  let known = Set.fromList times
+  for_ req.versions $ \v -> do
+    unless (Set.member (micro v.updatedAt) known) $ invalid "This is not a version of the page."
+    when (isNothing v.content.chain) $ invalid "A version is staged in the chained format."
+    key <- maybe (invalid "This version names no key of the page's.") pure (find (\x -> x.keyId == v.content.keyId) keys)
+    checkSealedParts key v.content
+    db (replaceSealedVersion pid v.updatedAt v.content)
+  threads <- Map.fromList <$> db (pageThreads pid)
+  for_ req.threads $ \t -> do
+    quoted <- maybe (invalid "This is not a thread of the page.") pure (Map.lookup t.id threads)
+    unless (quoted == isJust t.anchor) $ invalid "A thread about a quote is staged with its quote, and one about the whole page without."
+    for_ t.anchor $ \a -> checkStagedText keys a.keyId a.anchor maxAnchorCiphertext
+    db (replaceSealedThread t.id (maybe (fromMaybe k (head (map (\x -> x.keyId) keys))) (\a -> a.keyId) t.anchor) t.anchor)
+  comments <- Set.fromList . map fst <$> db (pageComments pid)
+  for_ req.comments $ \x -> do
+    unless (Set.member x.id comments) $ invalid "This is not a comment of the page."
+    checkStagedText keys x.content.keyId x.content.body maxCommentCiphertext
+    unless (holdsBytes keyIdBytes x.content.tag.text) $ invalid "This is not a comment this wiki keeps: its tag is not of its length."
+    db (replaceSealedComment x.id x.content)
+  attachments <- db (pageAttachmentIds pid)
+  for_ req.attachments $ \a -> do
+    unless (a.id `elem` attachments) $ invalid "This is not an attachment of the page."
+    checkStagedText keys a.meta.keyId a.meta.meta maxMetaCiphertext
+    unless (holdsBytes nonceBytes a.meta.bytesNonce.text) $ invalid "This is not an attachment this wiki keeps: its nonce is not of its length."
+    db (replaceSealedAttachment a.id a.meta)
+
+-- | Stage a page's texts, decrypted, while its space's encryption is
+-- turned off ('E.StagedPlain').
+stagePlainTx :: PageId -> E.StagedPlain -> Tx ()
+stagePlainTx pid req = do
+  _ <- convertingPage pid Decrypting
+  known <- Set.fromList <$> db (pageVersionTimes pid)
+  for_ req.versions $ \v -> do
+    unless (Set.member (micro v.updatedAt) known) $ invalid "This is not a version of the page."
+    -- As the encrypted space held it: a conversion refuses none of what
+    -- is there, which nothing else could turn plain.
+    db (upsertStagedPlain (stagedRow pid "version" (versionItem v.updatedAt) (Just (micro v.updatedAt)) (Just v.title) (Just v.body) Nothing Nothing))
+  anchors <- db (loadSealedAnchors pid)
+  for_ req.threads $ \t -> do
+    (anchored, _) <- maybe (invalid "This is not a thread of the page.") pure (Map.lookup t.id anchors)
+    unless (anchored == isJust t.anchor) $ invalid "A thread about a quote is staged with its quote, and one about the whole page without."
+    db (upsertStagedPlain (stagedRow pid "thread" t.id.text Nothing Nothing Nothing t.anchor Nothing))
+  comments <- Set.fromList . map fst <$> db (pageComments pid)
+  for_ req.comments $ \x -> do
+    unless (Set.member x.id comments) $ invalid "This is not a comment of the page."
+    db (upsertStagedPlain (stagedRow pid "comment" x.id.text Nothing Nothing (Just x.body) Nothing Nothing))
+  attachments <- db (pageAttachmentIds pid)
+  for_ req.attachments $ \a -> do
+    unless (a.id `elem` attachments) $ invalid "This is not an attachment of the page."
+    n <- either invalid pure (parseFileName a.name)
+    db (upsertStagedPlain (stagedRow pid "attachment" a.id.text Nothing Nothing Nothing Nothing (Just (n.text, (uploadedMimeType a.mediaType).text))))
+
+-- | A row of @staged_plain@ for an item of a page: a version's time,
+-- title and text, a comment's text, a thread's quote, an attachment's name
+-- and media type, as the item has them.
+stagedRow :: PageId -> Text -> Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Anchor -> Maybe (Text, Text) -> StagedPlain Identity
+stagedRow pid kind item updated_at title body anchor file =
+  StagedPlainRow
+    { page_id = pid.text
+    , kind
+    , item
+    , updated_at
+    , title
+    , body
+    , quote = (\a -> a.exact) <$> anchor
+    , prefix = (\a -> a.prefix) <$> anchor
+    , suffix = (\a -> a.suffix) <$> anchor
+    , name = fst <$> file
+    , media_type = snd <$> file
+    , blob = Nothing
+    }
+
+-- | How a version is named among the staged items: its time.
+versionItem :: UTCTime -> Text
+versionItem at = toS (iso8601Show (micro at))
+
+-- | Stage an attachment's bytes, of this size, which the last argument
+-- stores in the blob directory given to it: encrypted while its space is
+-- encrypted, decrypted while its encryption is turned off. Its name and
+-- media type are staged first.
+stageBytesTx :: PageId -> AttachmentId -> Integer -> (FilePath -> IO BlobId) -> Tx ()
+stageBytesTx pid aid size store = do
+  p <- findNode pid
+  (s, c) <- findSpace p.space
+  requireView c
+  way <- maybe (failWith (Conflict "This page's space is not being converted now.")) pure s.conversion
+  _ <- convertingPage pid way
+  dir <- asks (\x -> x.blobs)
+  case way of
+    Encrypting -> do
+      metas <- db (loadSealedMetas pid)
+      unless (Map.member aid metas) $ invalid "An attachment's name and media type are staged before its bytes."
+      when (size > fromIntegral maxAttachmentSize + 16) $
+        invalid ("An attachment can be at most " <> show (maxAttachmentSize `div` (1024 * 1024)) <> " MB.")
+      blob <- liftIO (store dir)
+      db (setSealedStagedBlob aid blob)
+    Decrypting -> do
+      rows <- db (loadStagedPlain pid)
+      unless (any (\r -> r.kind == "attachment" && r.item == aid.text) rows) $
+        invalid "An attachment's name and media type are staged before its bytes."
+      when (size > fromIntegral maxAttachmentSize) $
+        invalid ("An attachment can be at most " <> show (maxAttachmentSize `div` (1024 * 1024)) <> " MB.")
+      blob <- liftIO (store dir)
+      db (setPlainStagedBlob pid aid blob)
+
+-- | What is staged of a page, for the browser to read back before it
+-- commits it.
+stagedPageTx :: PageId -> Tx E.StagedPage
+stagedPageTx pid = do
+  p <- findNode pid
+  (s, c) <- findSpace p.space
+  requireView c
+  way <- maybe (failWith (Conflict "This page's space is not being converted now.")) pure s.conversion
+  _ <- convertingPage pid way
+  stagedPageOf pid way
+
+-- | What is staged of a page, with the digest that names it.
+stagedPageOf :: PageId -> Conversion -> Tx E.StagedPage
+stagedPageOf pid way = do
+  keys <- db (loadPageKeys pid)
+  (sealed, plain, blobs) <- case way of
+    Encrypting -> do
+      rows <- db (loadStagedSealed pid)
+      pure
+        ( E.StagedSealed
+            { pageKey = head keys
+            , versions = [E.StagedVersion {updatedAt, content} | (updatedAt, content) <- rows.versions]
+            , threads = [E.StagedAnchor {id = t, anchor} | (t, (_, anchor)) <- Map.toList rows.anchors]
+            , comments = [E.StagedComment {id = x, content} | (x, content) <- Map.toList rows.comments]
+            , attachments = [E.StagedMeta {id = a, meta} | (a, (meta, _)) <- Map.toList rows.metas]
+            }
+        , noPlain
+        , [(a, b) | (a, (_, Just b)) <- Map.toList rows.metas]
+        )
+    Decrypting -> do
+      rows <- db (loadStagedPlain pid)
+      pure
+        ( noSealed
+        , E.StagedPlain
+            { versions = sortOn (\v -> v.updatedAt) [E.PlainVersion {updatedAt = at, title = fromMaybe "" r.title, body = fromMaybe "" r.body} | r <- rows, r.kind == "version", Just at <- [r.updated_at]]
+            , threads = [E.PlainAnchor {id = CommentThreadId r.item, anchor = Anchor <$> r.quote <*> Just (fromMaybe "" r.prefix) <*> Just (fromMaybe "" r.suffix)} | r <- rows, r.kind == "thread"]
+            , comments = [E.PlainComment {id = CommentId r.item, body = fromMaybe "" r.body} | r <- rows, r.kind == "comment"]
+            , attachments = [E.PlainMeta {id = AttachmentId r.item, name = fromMaybe "" r.name, mediaType = fromMaybe "" r.media_type} | r <- rows, r.kind == "attachment"]
+            }
+        , [(AttachmentId r.item, BlobId b) | r <- rows, r.kind == "attachment", Just b <- [r.blob]]
+        )
+  let unnamed = E.StagedPage {digest = "", pageKeys = keys, sealed, plain, blobs}
+  pure E.StagedPage {digest = decodeUtf8 (convertToBase Base16 (sha256 (BSL.toStrict (encode unnamed))) :: ByteString), pageKeys = keys, sealed, plain, blobs}
+  where
+    noSealed = E.StagedSealed {pageKey = Nothing, versions = [], threads = [], comments = [], attachments = []}
+    noPlain = E.StagedPlain {versions = [], threads = [], comments = [], attachments = []}
+
+-- | Put what is staged of a page in place, in this transaction, if it is
+-- what the browser read back ('E.ConversionCommit''s digest) and holds
+-- everything of the page; and end the conversion with the last page.
+--
+-- While a space is encrypted, the page's plain title, text and search
+-- text, and every version's, are blanked, and its links forgotten; it gets
+-- a new random slug (its address spelled its title, and @/l/<id>@ keeps
+-- leading to it); its threads' quotes and its comments' texts are
+-- blanked; each attachment's row takes the staged blob of its encrypted
+-- bytes and its id as its name; its drafts go; and its notifications are
+-- made those of an encrypted page. While a space's encryption is turned
+-- off, the page's plain columns are written from what is staged, with its
+-- search text and links, and its ciphertexts and keys are deleted; it
+-- keeps its random slug.
+commitConvertedTx :: PageId -> E.ConversionCommit -> Tx (E.ConversionProgress, Bool)
+commitConvertedTx pid commit = do
+  p <- findNode pid
+  (s, c) <- findSpace p.space
+  requireView c
+  way <- maybe (failWith (Conflict "This page's space is not being converted now.")) pure s.conversion
+  (_, _, _, _, k) <- convertingPage pid way
+  staged <- stagedPageOf pid way
+  unless (staged.digest == commit.digest) $
+    failWith (Conflict "What is staged of this page has changed since it was read back: it is read back again before its commit.")
+  page <- findPage pid
+  times <- db (pageVersionTimes pid)
+  threads <- db (pageThreads pid)
+  comments <- map fst <$> db (pageComments pid)
+  attachments <- db (pageAttachmentIds pid)
+  dir <- asks (\x -> x.blobs)
+  let blobOf a = List.lookup a staged.blobs
+      sizeOf b = maybe (pure 0) (\f -> fromIntegral <$> liftIO (getFileSize f)) (blobFile dir b)
+      incomplete what = failWith (Conflict ("Not everything of this page is staged (" <> what <> "): it is staged again before its commit."))
+  case way of
+    Encrypting -> do
+      requireNoRenewal s.id c k
+      let versions = staged.sealed.versions
+          chained = and (List.zipWith3 (\n v before -> v.content.chain == Just CE.Chain {number = n, previous = before}) [1 ..] versions (Nothing : map (\v -> Just v.content.tag) versions))
+      when (null staged.pageKeys) $ incomplete "its key"
+      unless (map (\v -> micro v.updatedAt) versions == map micro times) $ incomplete "its versions"
+      unless chained $ invalid "The versions staged are not one chain from the first."
+      unless (sort [t.id | t <- staged.sealed.threads] == sort (map fst threads) && and [maybe False (\t -> isJust t.anchor == quoted) (find (\t -> t.id == tid) staged.sealed.threads) | (tid, quoted) <- threads]) $
+        incomplete "its threads"
+      unless (sort [x.id | x <- staged.sealed.comments] == sort comments) $ incomplete "its comments"
+      unless (all (isJust . blobOf) attachments && length staged.sealed.attachments == length attachments) $ incomplete "its attachments"
+      random <- T.take 12 . T.filter (/= '-') <$> newId
+      siblings <- db (childPages p.space p.parent)
+      subtree <- db (subtreeIds pid)
+      for_ attachments $ \a -> for_ (blobOf a) $ \b -> do
+        size <- sizeOf b
+        db (setAttachmentFile a a.text "application/octet-stream" size b >> clearSealedStagedBlob a)
+      db $ do
+        for_ times $ \at -> setVersionText pid at "" ""
+        updatePageText pid "" "" page.updatedAt
+        movePages pid p.space p.parent (freshSlug (isJust . findChild (filter (\x -> x.id /= pid) siblings) p.parent) (fallbackSlug random)) p.position subtree
+        for_ threads $ \(tid, quoted) -> setThreadQuote tid (if quoted then Just ("", "", "") else Nothing)
+        for_ comments $ \x -> setCommentBody x ""
+        deletePageDrafts pid
+        hideNotificationsOf pid encryptedTitle
+        setPageConverted pid
+    Decrypting -> do
+      let plain = staged.plain
+      unless (map (\v -> micro v.updatedAt) plain.versions == map micro times) $ incomplete "its versions"
+      unless (sort [t.id | t <- plain.threads] == sort (map fst threads)) $ incomplete "its threads"
+      unless (sort [x.id | x <- plain.comments] == sort comments) $ incomplete "its comments"
+      unless (all (isJust . blobOf) attachments && length plain.attachments == length attachments) $ incomplete "its attachments"
+      latest <- maybe (incomplete "its latest version") pure (lastMay plain.versions)
+      for_ attachments $ \a -> for_ ((,) <$> blobOf a <*> find (\m -> m.id == a) plain.attachments) $ \(b, m) -> do
+        size <- sizeOf b
+        db (setAttachmentFile a m.name m.mediaType size b)
+      db $ do
+        for_ plain.versions $ \v -> setVersionText pid v.updatedAt v.title v.body
+        updatePageText pid latest.title latest.body page.updatedAt
+        for_ plain.threads $ \t -> setThreadQuote t.id ((\a -> (a.exact, a.prefix, a.suffix)) <$> t.anchor)
+        for_ plain.comments $ \x -> setCommentBody x.id x.body
+        dropSealedOf pid
+        dropStagedPlain pid
+        setPageConverted pid
+  pagesMoved
+  ended <- endIfConverted s
+  pure (E.ConversionProgress {left = ended}, ended == 0)
+
+-- | End the conversion a space is in when it has no page left: each space
+-- it covers is unmarked, and, once its encryption is off, made plain, its
+-- key's grants deleted. The pages left.
+endIfConverted :: Space -> Tx Int
+endIfConverted s = do
+  root <- conversionRootOf s
+  covered <- filter (\x -> isJust x.conversion) <$> subtreeOf root.id
+  left <- db (unconvertedIn (map (\x -> x.id) covered))
+  when (null left) $ do
+    for_ covered $ \x -> db $ do
+      setConversion x.id Nothing
+      clearConverted x.id
+      when (x.conversion == Just Decrypting) $ do
+        clearSpaceKey x.id
+        deleteGrantsOfSpace x.id
+    case root.conversion of
+      Just Decrypting -> record "space.decrypted" (spaceSubject root) [("spaces", show (length covered))]
+      _ -> record "space.encrypted" (spaceSubject root) [("spaces", show (length covered))]
+  pure (length left)
 
 --------------------------------------------------------------------------------
 -- Comments and attachments in an encrypted space
@@ -4391,6 +5053,7 @@ sealedTarget pid = do
   c <- chainOfPage p
   s <- fst <$> findSpace p.space
   k <- requireEncrypted s
+  requireSealedPage s pid
   requireNoRenewal p.space c k
   pk <- db (loadPageKey pid) >>= maybe (failWith (Conflict "This page has no key: it is not a page of an encrypted space.")) pure
   pure (c, pk)
@@ -4428,7 +5091,8 @@ sealedThreadOf anchors texts t = do
 sealedThreadsTx :: PageId -> Tx [SealedThread]
 sealedThreadsTx pid = do
   (c, ts) <- discussionOf pid
-  _ <- maybe (failWith (Conflict "This space is not encrypted.")) pure (find (\s -> isJust s.encryption) c)
+  s <- maybe (failWith (Conflict "This space is not encrypted.")) pure (mfilter (\x -> isJust x.encryption) (lastMay c))
+  requireSealedPage s pid
   anchors <- db (loadSealedAnchors pid)
   texts <- db (loadSealedComments pid)
   pure (mapMaybe (sealedThreadOf anchors texts) ts)
@@ -4501,6 +5165,7 @@ sealedEditCommentTx pid tid cid edit = do
   old <- threadIn ts tid >>= (`commentIn` cid)
   ctx <- ask
   require (mayEditComment ctx.principal old)
+  findNode pid >>= chainOfPage >>= requireNoConversion
   (_, pk) <- sealedTarget pid
   checkSealedComment pk edit.content
   time <- now

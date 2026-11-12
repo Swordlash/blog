@@ -29,6 +29,15 @@
 //   (name, type, bytes) and comment (text, quote, author's name) is there,
 //   plain. The second server and what is sent to it are outside the
 //   canary's watch: the export's plain text is the reader's to keep.
+// - A space written plain (a title, a text, an older version, a comment on
+//   a quote, an attachment's name and bytes), backed up, is encrypted page
+//   by page from its permissions in the administrator's browser, and read
+//   back decrypted; afterwards none of its markers is in any file of the
+//   data directory but the backup made before and the attachment's plain
+//   file it names (kept by design until the backup is pruned), nor in the
+//   database's dump, nor in anything sent or answered since. Then its
+//   encryption is turned off the same way, and every page reads plain
+//   again with all it had.
 // - The canary (toolchain/smoke-canary.mjs): a marker in the title, the
 //   text, the older version, a comment, the text it quotes, an
 //   attachment's name and its bytes, and the title and text of the
@@ -37,9 +46,10 @@
 //   they and the test received.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { assertNoCanary, marker, saw, watch } from "./smoke-canary.mjs";
+import { assertGone, assertNoCanary, marker, plainMarker, saw, seenCount, watch } from "./smoke-canary.mjs";
 
 export async function encryptedSpaces({ browser, url, origin, data, work, wikiServer, app, timeout, eventually, failures, admin, reader }) {
   const editorText = "#app .editor-cm .cm-content";
@@ -425,6 +435,132 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
   }
   const checked = await assertNoCanary({ data, shown: shown.join("\n") });
   console.log(`ok: none of ${checked.markers} markers of the encrypted space is in any of ${checked.places} files, requests and answers`);
+
+  // ---- A space that has pages, encrypted, and turned plain again -----------
+
+  // Written plain first, through the API, as any space is: a title, a text,
+  // an older version, a comment on a quote, an attachment's name and bytes.
+  // A backup is made of it, deliberately, before it is encrypted. Then the
+  // administrator encrypts it from its permissions, in her browser, page by
+  // page; afterwards no marker is in any file of the data directory but the
+  // backup and the attachment's plain file it names (kept by design until
+  // the backup is pruned), nor in the database's dump, nor in anything sent
+  // or answered since. Then its encryption is turned off the same way, and
+  // every page reads plain again, with all it had.
+  const pm = {
+    title: plainMarker("convert title"),
+    older: plainMarker("convert older"),
+    text: plainMarker("convert text"),
+    quote: plainMarker("convert quote"),
+    comment: plainMarker("convert comment"),
+    name: plainMarker("convert name"),
+    bytes: plainMarker("convert bytes"),
+  };
+  const raw = async (who, path, init = {}) => {
+    const response = await fetch(url(`/api/v1/${path}`), { ...init, headers: { "X-Wiki-Request": "1", Cookie: who.cookie, ...(init.json ? { "Content-Type": "application/json" } : {}), ...init.headers }, body: init.json ? JSON.stringify(init.json) : init.body });
+    const text = await response.text();
+    return { status: response.status, etag: response.headers.get("etag"), body: text && response.headers.get("content-type")?.includes("json") ? JSON.parse(text) : text };
+  };
+  const ada2 = await signedIn(admin);
+  const convert = await raw(ada2, "spaces", { method: "POST", json: { parent: null, name: "Smoke convert" } });
+  assert.equal(convert.status, 201, `the space to convert: ${JSON.stringify(convert.body)}`);
+  const created = await raw(ada2, `spaces/${encodeURIComponent(convert.body.id)}/pages`, { method: "POST", json: { parent: null, title: pm.title, body: `Once: ${pm.older}.` } });
+  assert.equal(created.status, 201, `the page to convert: ${JSON.stringify(created.body)}`);
+  const resaved = await raw(ada2, `pages/${encodeURIComponent(created.body.id)}`, { method: "PUT", headers: { "If-Match": created.etag }, json: { title: pm.title, body: `Now: ${pm.text} and ${pm.quote}.` } });
+  assert.equal(resaved.status, 200, `the page's second version: ${JSON.stringify(resaved.body)}`);
+  const threaded = await raw(ada2, `pages/${encodeURIComponent(created.body.id)}/threads`, { method: "POST", json: { anchor: { exact: pm.quote, prefix: "and ", suffix: "." }, body: pm.comment } });
+  assert.equal(threaded.status, 201, `the comment: ${JSON.stringify(threaded.body)}`);
+  const form = new FormData();
+  form.append("file", new Blob([pm.bytes], { type: "text/plain" }), `${pm.name}.txt`);
+  const attached = await raw(ada2, `pages/${encodeURIComponent(created.body.id)}/attachments`, { method: "POST", body: form });
+  assert.equal(attached.status, 201, `the attachment: ${JSON.stringify(attached.body)}`);
+  const backup = await raw(ada2, "admin/server/backups/run", { method: "POST" });
+  assert.ok(backup.status === 200 && backup.body.last?.file && !backup.body.last.failure, `the backup before the conversion: ${JSON.stringify(backup.body)}`);
+  const plainBlob = createHash("sha256").update(pm.bytes).digest("hex");
+
+  const converter = ada2.page;
+  await converter.goto(url("/s/smoke-convert/pages/"));
+  await converter.locator("#app .space-view", { hasText: pm.title }).waitFor({ timeout });
+  await converter.locator("#app .space-settings-toggle").click();
+  await converter.locator("#app .space-permissions .encrypt-space").click();
+  await converter.locator("#app .space-permissions .encrypt-pages").waitFor({ timeout });
+  await converter.locator("#app .space-permissions .encrypt-confirm").click();
+  await eventually(async () => {
+    const s = (await raw(ada2, "spaces/at/smoke-convert")).body;
+    assert.ok(s.encryption && !s.conversion, `the space is not encrypted yet: ${JSON.stringify(s)}`);
+  }, "the space encrypted page by page");
+  const since = seenCount();
+  // Read back in her browser, decrypted.
+  await converter.goto(url("/s/smoke-convert/pages/"));
+  await converter.locator("#app .space-view a", { hasText: pm.title }).click();
+  await converter.locator("#app .page-view .page-body", { hasText: pm.text }).waitFor({ timeout });
+  const convertedLink = converter.locator("#app .page-view .attachments a", { hasText: pm.name });
+  await eventually(async () => assert.match((await convertedLink.getAttribute("href")) ?? "", /^blob:/), "the converted attachment's decrypted link");
+  const downloadingConverted = converter.waitForEvent("download", { timeout });
+  await convertedLink.click();
+  assert.equal(await readFile(await (await downloadingConverted).path(), "utf8"), pm.bytes, "the converted attachment's bytes");
+  await converter.locator("#app .comments-toggle").click();
+  await converter.locator("#app .comments-panel", { hasText: pm.comment }).waitFor({ timeout });
+  await converter.locator("#app mark.comment-mark", { hasText: pm.quote }).waitFor({ timeout });
+  await converter.locator("#app .page-view .actions a", { hasText: "History" }).click();
+  await converter.locator("#app .history-view", { hasText: pm.older }).waitFor({ timeout });
+  console.log("ok: a space that had pages encrypted page by page in its administrator's browser, and read back decrypted with its history, comment and attachment");
+  const leftOut = [
+    { matches: (f) => f.startsWith(join(data, "backups")), why: "a backup made before the conversion keeps the plain text until it is pruned" },
+    { matches: (f) => f.endsWith(plainBlob), why: "the attachment's plain file, which that backup names" },
+  ];
+  const convertedPlaces = await assertGone({ data, markers: Object.values(pm), since, leftOut });
+  // The check looks where the text was: the attachment's plain file is
+  // there, left out as the backup names it, and so, on SQLite, is the
+  // text in the backup itself.
+  assert.equal(await readFile(join(data, "attachments", plainBlob.slice(0, 2), plainBlob), "utf8"), pm.bytes, "the attachment's plain file, which the backup names");
+  if (!process.env.WIKI_DATABASE_URL) assert.ok((await readFile(join(data, "backups", backup.body.last.file))).includes(Buffer.from(pm.text)), "the backup made before the conversion keeps the plain text");
+  console.log(`ok: none of ${Object.keys(pm).length} markers written plain before the conversion is in any of ${convertedPlaces} files, requests and answers since, but for the backup made before it`);
+
+  // The way back.
+  await converter.goto(url("/s/smoke-convert/pages/"));
+  await converter.locator("#app .space-view", { hasText: pm.title }).waitFor({ timeout });
+  await converter.locator("#app .space-settings-toggle").click();
+  await converter.locator("#app .space-permissions .decrypt-space").click();
+  await converter.locator("#app .space-permissions .decrypt-explained").waitFor({ timeout });
+  await converter.locator("#app .space-permissions .decrypt-confirm").click();
+  await eventually(async () => {
+    const s = (await raw(ada2, "spaces/at/smoke-convert")).body;
+    assert.ok(!s.encryption && !s.conversion, `the space is not plain yet: ${JSON.stringify(s)}`);
+  }, "the space's encryption turned off page by page");
+  const plainAgain = await raw(ada2, `spaces/${encodeURIComponent(convert.body.id)}/pages`);
+  const back = plainAgain.body.find((p) => p.title === pm.title);
+  assert.ok(back, `the page read plain again: ${JSON.stringify(plainAgain.body)}`);
+  const backPage = (await raw(ada2, `spaces/${encodeURIComponent(convert.body.id)}/pages/at/${back.slug}`)).body;
+  assert.ok(backPage.body.includes(pm.text), "the page's text, plain again");
+  assert.deepEqual(backPage.attachments.map((a) => a.name), [`${pm.name}.txt`], "the attachment, plain again");
+  assert.equal((await raw(ada2, `attachments/${encodeURIComponent(backPage.attachments[0].id)}/${encodeURIComponent(`${pm.name}.txt`)}`)).body, pm.bytes, "the attachment's bytes, plain again");
+  const backThreads = (await raw(ada2, `pages/${encodeURIComponent(back.id)}/threads`)).body;
+  assert.deepEqual(backThreads.map((t) => [t.anchor?.exact, t.comments.map((x) => x.body)]), [[pm.quote, [pm.comment]]], "the comment, plain again");
+  const backVersions = (await raw(ada2, `pages/${encodeURIComponent(back.id)}/versions`)).body;
+  assert.equal(backVersions.length, 2, "the page's two versions, plain again");
+  // In the tab that turned it off: read plain, its attachment the
+  // server's, its comment, its history, and a save by the plain route.
+  await converter.goto(url(`/s/smoke-convert/p/${back.slug}/`));
+  await converter.locator("#app .page-view .page-body", { hasText: pm.text }).waitFor({ timeout });
+  const plainLink = converter.locator("#app .page-view .attachments a", { hasText: pm.name });
+  await plainLink.waitFor({ timeout });
+  assert.doesNotMatch((await plainLink.getAttribute("href")) ?? "", /^blob:/, "the attachment's link, plain again, is the server's");
+  await converter.locator("#app .comments-toggle").click();
+  await converter.locator("#app .comments-panel", { hasText: pm.comment }).waitFor({ timeout });
+  await converter.locator("#app .page-view .actions a", { hasText: "History" }).click();
+  await converter.locator("#app .history-view", { hasText: pm.older }).waitFor({ timeout });
+  await converter.goto(url(`/s/smoke-convert/p/${back.slug}/`));
+  await converter.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
+  const plainEditor = converter.locator(editorText);
+  await plainEditor.waitFor({ timeout });
+  await plainEditor.press("Control+End");
+  await plainEditor.pressSequentially(" Saved plain.");
+  const plainSaved = converter.waitForResponse((r) => r.request().method() === "PUT" && new URL(r.url()).pathname === `/api/v1/pages/${back.id}`, { timeout });
+  await plainEditor.press("Control+s");
+  assert.equal((await plainSaved).status(), 200, "a save of the page plain again, by the plain route");
+  console.log("ok: the space's encryption turned off page by page, every page plain again with its versions, comment and attachment");
+  await ada2.context.close();
 
   for (const c of [ada.context, bea.context, elsewhere]) await c.close();
 

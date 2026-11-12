@@ -495,6 +495,9 @@ spaceOf r =
     , public = r.public
     , sealed = r.sealed
     , encryption = KeyId <$> r.key_id
+    , -- A conversion this program does not know (a later one's) is read as
+      -- none.
+      conversion = r.conversion >>= \n -> find (\c -> Space.conversionName c == n) [minBound .. maxBound]
     , owner = UserId <$> r.owner
     , active = r.active
     , personalContainer = r.personal_container
@@ -537,6 +540,7 @@ spaceRow s =
     , active = s.active
     , personal_container = s.personalContainer
     , key_id = (\k -> k.text) <$> s.encryption
+    , conversion = Space.conversionName <$> s.conversion
     }
 
 -- | Every space, by id. A wiki has tens of them, and every permission is
@@ -987,16 +991,25 @@ referencedBlobs = do
   staged <- loadStagedBlobs
   pure (Set.fromList (attached <> [b | t <- icons, Just (IconImage b _) <- [decodeStrict' (encodeUtf8 t)]] <> avatars <> staged))
 
--- | The blobs of encrypted attachments staged while their space is being
--- encrypted, not yet in their rows' place (@sealed_attachments@'s
--- @staged_blob@). A database of a schema before step 18 (a backup made by
--- an older server) has none.
+-- | The blobs staged while a space is converted, not yet in their rows'
+-- place: an encrypted attachment's bytes, staged while its space is
+-- encrypted (@sealed_attachments@'s @staged_blob@, step 18), and a
+-- decrypted attachment's, staged while its space's encryption is turned
+-- off (@staged_plain@'s @blob@, step 20). They are kept as the
+-- attachments' are. A database of a schema before either step (a backup
+-- made by an older server) has none of that kind.
 loadStagedBlobs :: (Backend be) => Db be [BlobId]
 loadStagedBlobs = do
   tables <- tableNames
-  if "sealed_attachments" `elem` tables
-    then map BlobId . catMaybes <$> runSelectReturningList (select ((\a -> a.staged_blob) <$> filter_ (\a -> Beam.isJust_ a.staged_blob) (all_ wikiDb.sealed_attachments)))
-    else pure []
+  sealed <-
+    if "sealed_attachments" `elem` tables
+      then map BlobId . catMaybes <$> runSelectReturningList (select ((\a -> a.staged_blob) <$> filter_ (\a -> Beam.isJust_ a.staged_blob) (all_ wikiDb.sealed_attachments)))
+      else pure []
+  plain <-
+    if "staged_plain" `elem` tables
+      then map BlobId . catMaybes <$> runSelectReturningList (select ((\a -> a.blob) <$> filter_ (\a -> Beam.isJust_ a.blob) (all_ wikiDb.staged_plain)))
+      else pure []
+  pure (sealed <> plain)
 
 -- | The blobs of the users' avatars. A database of a schema before the
 -- avatars (a backup made by an older server, which 'referencedBlobs' reads
@@ -1735,6 +1748,7 @@ insertPage p = do
           , search_text = searchText
           , search_fold = searchFold p.title searchText
           , kind = pageKindName p.kind
+          , converted = False
           }
       ]
   writeLinks p.id p.body

@@ -66,6 +66,38 @@ export function watch(context) {
   });
 }
 
+// A marker of text the test writes plain on purpose, to be found nowhere
+// once a conversion has encrypted it (item 4 of #213): not one of the
+// markers above, whose check covers every request since the start, which
+// carried this one plain before the conversion.
+export function plainMarker(place) {
+  return `plaincanary-${place.replace(/[^a-z0-9]+/gi, "-")}-${run}`;
+}
+
+// How many requests, answers and frames were seen so far: where a later
+// check starts.
+export function seenCount() {
+  return seen.length;
+}
+
+// Fail, naming each marker and where it was found, if a marker given is
+// in a file of the data directory but those left out ("left out" names
+// them, with why), in the database's dump, or in what was seen since the
+// count given.
+export async function assertGone({ data, markers: given, since, leftOut = [] }) {
+  const places = [];
+  for (const file of await filesUnder(data)) if (!leftOut.some((x) => x.matches(file))) places.push({ what: `the file ${file}`, bytes: await readFile(file) });
+  if (process.env.WIKI_DATABASE_URL) {
+    const dump = process.env.WIKI_PG_DUMP || "pg_dump";
+    places.push({ what: "the database's dump", bytes: execFileSync(dump, ["--data-only", "--inserts", process.env.WIKI_DATABASE_URL], { maxBuffer: 1 << 30 }) });
+  }
+  places.push(...seen.slice(since));
+  const leaks = [];
+  for (const m of given) for (const p of places) if (p.bytes.includes(Buffer.from(m))) leaks.push(`${m} in ${p.what}`);
+  assert.deepEqual(leaks, [], "a marker of a space encrypted by a conversion was found in plain text");
+  return places.length;
+}
+
 // Record something the test fetched itself, as anyone.
 export function saw(what, bytes) {
   seen.push({ what, bytes: Buffer.from(bytes) });

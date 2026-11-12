@@ -85,6 +85,7 @@ spaceWith i parent s public mathMacros subspaceOrder pageOrder =
     , public
     , sealed = False
     , encryption = Nothing
+    , conversion = Nothing
     , owner = Nothing
     , active = True
     , personalContainer = False

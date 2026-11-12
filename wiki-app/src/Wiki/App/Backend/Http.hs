@@ -118,7 +118,7 @@ import Wiki.Api.Activity (ActivityQuery (..), firstPage)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..), UserQuery (..))
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
-import Wiki.Api.Encrypted (EncryptSpace (..), NewEncryptedSubspace (..), NewGrant (..), NewGrants (..), NewSealedComment (..), NewSealedPage (..), NewSealedThread (..), RotatedPage (..), Rotation (..), RotationInfo (..), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedThread (..), SealedThreads (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..))
+import Wiki.Api.Encrypted (ConversionCommit (..), ConversionInfo (..), ConversionPage (..), EncryptSpace (..), NewEncryptedSubspace (..), NewGrant (..), NewGrants (..), NewSealedComment (..), NewSealedPage (..), NewSealedThread (..), PlainAnchor (..), PlainComment (..), PlainMeta (..), PlainVersion (..), RotatedPage (..), Rotation (..), RotationInfo (..), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedThread (..), SealedThreads (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..), SpaceKeyStart (..), StagedAnchor (..), StagedComment (..), StagedMeta (..), StagedPage (..), StagedPlain (..), StagedSealed (..), StagedVersion (..), StartEncrypting (..), notConvertedYet)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Export (dispositionFileName, formatExtension, formatMediaType)
@@ -150,7 +150,7 @@ import Wiki.App.Backend.Opaque qualified as Opaque
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
 import Wiki.App.DecryptedExport (DecryptedExport (..), ExportedSpace (..), LeftOut (..), checkedZip, decryptedArchive, exportFileName)
-import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, keepSeen, keyNamed, newPageId, newPageKey, newSpaceKey, newTag, noEncryption, objectUrls, openAttachmentBytes, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openText, openVersionTitles, openedBytes, revokeUrl, rotateKeys, sealBytes, sealContent, sealText, seenOf, shareSpaceKey)
+import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, keepSeen, keyNamed, newPageId, newPageKey, newSpaceKey, newTag, noEncryption, objectUrls, openAttachmentBytes, openBytes, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openText, openVersionTitles, openedBytes, revokeUrl, rotateKeys, sealBytes, sealContent, sealText, seenOf, shareSpaceKey)
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (browserOnline, forgetReads, offlineCopy)
@@ -161,7 +161,7 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Sour
 import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody)
 import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), Kept (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), Seen (..), VersionTag (..), anchorData, attachmentBytesData, attachmentMetaData, chainAfter, chainProblemText, commentData, firstChain, gapIn, headingOf, judgeHead, linkedFrom)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..))
-import Wiki.Core.Notification (WatchTarget (..))
+import Wiki.Core.Notification (PageLocation (..), WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.PageKind (PageKind)
@@ -171,7 +171,7 @@ import Wiki.Core.Permission (canAdministerSpace)
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), searchPlain)
 import Wiki.Core.Search qualified as Search
 import Wiki.Core.Slug (Slug, slugText)
-import Wiki.Core.Space (Icon (..), Space (..), homeBody, homeTitle)
+import Wiki.Core.Space (Conversion (..), Icon (..), Space (..), homeBody, homeTitle)
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.User (Password (..), Standing (..), User (..), checkNewPassword)
 import Wiki.Core.Vault (KeyId, Nonce)
@@ -2092,6 +2092,24 @@ pageOrderOf sid = either (const ByName) (maybe ByName (\s -> s.pageOrder) . find
 
 sealedListPages :: (MonadIO m) => SpaceId -> KeyId -> HttpWiki m (Either WikiError [PageSummary])
 sealedListPages sid current =
+  plainWhileConverting sid (send (endpoints.spaces.listPages sid)) (sealedListPagesWith sid current)
+
+-- | A read of a space's pages by the encrypted routes, or, when it fails
+-- (this browser holds no key of the space) while the space is converted,
+-- by the plain ones, which give the pages that read plain: a reader
+-- without the key reads those as before. The refusal stands when the
+-- plain read fails too.
+plainWhileConverting :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError a) -> HttpWiki m (Either WikiError a) -> HttpWiki m (Either WikiError a)
+plainWhileConverting sid plain sealed = do
+  immediate <- HttpWiki (asks (\env -> env.immediate))
+  sealed >>= \case
+    Left e | not immediate -> do
+      converting <- either (const False) (any (\s -> s.id == sid && isJust s.conversion)) <$> spacesNow
+      if converting then plain <&> either (const (Left e)) Right else pure (Left e)
+    other -> pure other
+
+sealedListPagesWith :: (MonadIO m) => SpaceId -> KeyId -> HttpWiki m (Either WikiError [PageSummary])
+sealedListPagesWith sid current =
   -- The key first: opening it may renew it, which wraps every page's key
   -- again, and the list read after carries the new wraps.
   readingSealed Refresh sid current $ \key ->
@@ -2109,12 +2127,21 @@ sealedListPages sid current =
           Just found | Map.fromList [(p.id, p.updatedAt) | (p, _) <- found] /= now' -> h {heldFound = Map.delete sid h.heldFound}
           _ -> h
         order <- pageOrderOf sid
-        pure (Right (pageTreeOrder order [summaryFrom p (Map.findWithDefault unreadable p.id titles) | p <- listed]), Map.size titles == length listed)
+        -- While the space is converted, the pages that read plain are
+        -- listed by the plain route, beside these.
+        converting <- either (const False) (any (\s -> s.id == sid && isJust s.conversion)) <$> spacesNow
+        plain <- if converting then either (const []) identity <$> send (endpoints.spaces.listPages sid) else pure []
+        let sealed = [summaryFrom p (Map.findWithDefault unreadable p.id titles) | p <- listed]
+            others = [p | p <- plain, p.id `notElem` map (\x -> x.id) sealed]
+        pure (Right (pageTreeOrder order (sealed <> others)), Map.size titles == length listed)
 
 sealedGetPage :: (MonadIO m) => SpaceId -> [Slug] -> KeyId -> HttpWiki m (Either WikiError Page)
-sealedGetPage sid path current =
+sealedGetPage sid path current = plainWhileConverting sid (send (getResponse <$> endpoints.spaces.pageAt sid path)) $
   readingSealed NoRefresh sid current $ \key ->
     send (getResponse <$> endpoints.encrypted.pageAt sid path) >>= \case
+      -- A page a conversion of its space has not encrypted yet, or has
+      -- decrypted already: read by the plain route.
+      Left (Conflict why) | notConvertedYet `T.isPrefixOf` why -> (,True) <$> send (getResponse <$> endpoints.spaces.pageAt sid path)
       Left e -> pure (Left e, True)
       Right p -> do
         rememberPages sid [(p.id, p.pageKey)]
@@ -2638,6 +2665,236 @@ exportedAttachment key sid pid keys a = case keyNamed a.meta.keyId keys of
     bytes <- liftIO (openedBytes opened)
     pure (Attachment {id = a.id, name = n, mediaType = uploadedMimeType mediaType, size = fromIntegral (BS.length bytes), source = SourceBlob (BlobId a.id.text)}, bytes)
 
+--------------------------------------------------------------------------------
+-- Encrypting a space that has pages, and turning encryption off
+
+-- $conversion
+-- A conversion ("Wiki.Core.Space"'s 'Conversion') is done here, in the
+-- browser of an administrator of the space who holds its key, one page at
+-- a time ('convertNext'): the page is read the way it reads now, encrypted
+-- or decrypted here, staged, read back from the server and checked, and
+-- only then committed. A ciphertext is checked with the key it will be
+-- read with: the page's key as the server stores it, opened again with
+-- the space's key. The bytes of an attachment are checked before they are
+-- sent, and the server's digest of what is staged binds the commit to
+-- what was read back. A page interrupted halfway is started again, with a
+-- new key, the next time.
+
+-- | The pages of a page's history, all of them, the latest first, read by
+-- a route of histories.
+allVersions :: (MonadIO m) => (Maybe VersionTime -> Maybe Int -> HttpWiki IO [a]) -> (a -> UTCTime) -> HttpWiki m (Either WikiError [a])
+allVersions route timeOf = go Nothing []
+  where
+    go before got =
+      send (route (VersionTime <$> before) (Just maxVersionsPageSize)) >>= \case
+        Left e -> pure (Left e)
+        Right listed
+          | length listed < maxVersionsPageSize -> pure (Right (got <> listed))
+          | otherwise -> go (timeOf <$> lastMay listed) (got <> listed)
+
+-- | A list in parts of at most so many.
+partsOf :: Int -> [a] -> [[a]]
+partsOf = chunksOf
+
+-- | Why a conversion stops on a page that is not what it read or staged.
+notAsStaged :: Text -> WikiError
+notAsStaged what = Invalid ("What the server keeps of this page's " <> what <> " is not what this browser staged, so the page was not committed. Continue to stage it again.")
+
+-- | Encrypt one page of a space being encrypted: read it plain, encrypt
+-- every version as one chain from 1, its threads' quotes, its comments and
+-- its attachments under a new key of the page's, stage them (the key with
+-- the latest version first), read back what is staged, open every
+-- ciphertext of it with the page's key as stored and compare it with what
+-- was read, and commit the page.
+encryptOnePage :: forall m. (MonadIO m) => SpaceId -> KeyId -> PageId -> HttpWiki m (Either WikiError ())
+encryptOnePage sid k pid =
+  withSpaceKey NoRefresh sid k $ \key -> runExceptT $ do
+    loc <- ExceptT (send (endpoints.pages.location pid))
+    page <- ExceptT (send (getResponse <$> endpoints.spaces.pageAt sid loc.page))
+    infos <- ExceptT (allVersions (endpoints.pages.versions pid) (\v -> v.updatedAt))
+    versions <- for (reverse infos) $ \v -> ExceptT (send (endpoints.pages.version pid (VersionTime v.updatedAt)))
+    threads <- ExceptT (send (endpoints.comments pid).list)
+    files <- for page.attachments $ \a -> case a.source of
+      SourceUrl _ -> throwError (Invalid "A page with an attachment on the web cannot be encrypted: upload the file instead.")
+      SourceBlob _ -> (a,) . BSL.toStrict . (\r -> r.responseBody) <$> ExceptT (send (endpoints.attachments.content a.id a.name methodGet))
+    (pk, pageKey) <- ExceptT (first Invalid <$> liftIO (newPageKey key k sid pid))
+    let kid = pageKey.keyId
+        sealing :: IO (Either Text a) -> ExceptT WikiError (HttpWiki m) a
+        sealing = ExceptT . fmap (first Invalid) . liftIO
+    flip finally' (liftIO (forgetPageKey pk)) $ do
+      -- Every version, the oldest first, as one chain from 1.
+      contents <- reverse . snd <$> foldlM (\(before, done) v -> sealing (sealContent pk sid pid kid (maybe firstChain (\(c :: SealedContent) -> chainAfter c.tag c.chain) before) v.title v.body) <&> \c -> (Just c, (v.updatedAt, c) : done)) (Nothing, []) versions
+      anchors <- for threads $ \t -> (t.id,) <$> for t.anchor (\a -> SealedAnchor kid <$> sealing (sealText pk (decodeUtf8 (BSL.toStrict (encode a))) (anchorData sid pid kid t.id)))
+      comments <- for [(t, c) | t <- threads, c <- t.comments] $ \(t, c) -> do
+        tag <- liftIO newTag
+        (c.id,) . (\body -> SealedComment {keyId = kid, tag, body}) <$> sealing (sealText pk c.body (commentData sid pid kid t.id c.id tag))
+      metas <- for files $ \(a, bytes) -> do
+        meta <- sealing (sealText pk (decodeUtf8 (BSL.toStrict (encode (AttachmentMeta a.name.text a.mediaType.text)))) (attachmentMetaData sid pid kid a.id))
+        (nonce, sealedBytes) <- sealing (sealBytes pk bytes (attachmentBytesData sid pid kid a.id))
+        -- The bytes about to be staged are opened again before they are
+        -- sent: the server keeps them as they are, by their hash.
+        back <- sealing (openBytes pk nonce sealedBytes (attachmentBytesData sid pid kid a.id))
+        unless (back == bytes) $ throwError (Invalid "An attachment did not open again once encrypted here: nothing of it was sent.")
+        pure (a, SealedMeta {keyId = kid, meta, bytesNonce = nonce}, sealedBytes)
+      latest <- maybe (throwError (Invalid "This page has no version.")) pure (lastMay contents)
+      let stage pageKey' vs ts cs ms = ExceptT (write_ (endpoints.encrypted.stageSealed pid StagedSealed {pageKey = pageKey', versions = vs, threads = ts, comments = cs, attachments = ms}))
+          versionOf' (at, c) = StagedVersion {updatedAt = at, content = c}
+      stage (Just pageKey) [versionOf' latest] [] [] []
+      for_ (partsOf 20 (initDef [] contents)) $ \part -> stage Nothing (map versionOf' part) [] [] []
+      stage Nothing [] [StagedAnchor {id = t, anchor = a} | (t, a) <- anchors] [StagedComment {id = c, content} | (c, content) <- comments] [StagedMeta {id = a.id, meta} | (a, meta, _) <- metas]
+      for_ metas $ \(a, _, sealedBytes) ->
+        ExceptT (write_ (withBoundary (endpoints.encrypted.stageBytes pid a.id) AttachmentUpload {name = a.id.text, mediaType = "application/octet-stream", payload = toS sealedBytes}))
+      -- Read back, and opened with the page's key as the server keeps it,
+      -- which is how every reader will open it.
+      staged <- ExceptT (send (endpoints.encrypted.staged pid))
+      stored <- maybe (throwError (notAsStaged "key")) pure (find (\x -> x.keyId == kid) staged.pageKeys)
+      readBack <- sealing (openPageKey key sid pid stored)
+      flip finally' (liftIO (forgetPageKey readBack)) $ do
+        let expected = Map.fromList [(at, (v.title, v.body)) | (at, v) <- zip (map (\v -> v.updatedAt) versions) versions]
+        unless (length staged.sealed.versions == length versions) $ throwError (notAsStaged "versions")
+        for_ staged.sealed.versions $ \v -> do
+          opened <- sealing (openContent readBack sid pid v.content)
+          unless (Just opened == Map.lookup v.updatedAt expected) $ throwError (notAsStaged "versions")
+        let quotes = Map.fromList [(t.id, t.anchor) | t <- threads]
+        unless (length staged.sealed.threads == length threads) $ throwError (notAsStaged "comments")
+        for_ staged.sealed.threads $ \t -> do
+          opened <- for t.anchor $ \a -> sealing (openText readBack a.anchor (anchorData sid pid a.keyId t.id))
+          unless (Just ((\x -> decodeUtf8 (BSL.toStrict (encode x))) <$> join (Map.lookup t.id quotes)) == Just opened) $ throwError (notAsStaged "comments")
+        let texts = Map.fromList [(c.id, (t.id, c.body)) | t <- threads, c <- t.comments]
+        unless (length staged.sealed.comments == Map.size texts) $ throwError (notAsStaged "comments")
+        for_ staged.sealed.comments $ \c -> do
+          (tid, body) <- maybe (throwError (notAsStaged "comments")) pure (Map.lookup c.id texts)
+          opened <- sealing (openText readBack c.content.body (commentData sid pid c.content.keyId tid c.id c.content.tag))
+          unless (opened == body) $ throwError (notAsStaged "comments")
+        unless (length staged.sealed.attachments == length metas && all (\(a, _, _) -> isJust (lookup' a.id staged.blobs)) metas) $ throwError (notAsStaged "attachments")
+        for_ staged.sealed.attachments $ \m -> do
+          opened <- sealing (openText readBack m.meta.meta (attachmentMetaData sid pid m.meta.keyId m.id))
+          unless (Just opened == ((\(a, _, _) -> decodeUtf8 (BSL.toStrict (encode (AttachmentMeta a.name.text a.mediaType.text)))) <$> find (\(a, _, _) -> a.id == m.id) metas)) $ throwError (notAsStaged "attachments")
+        void (ExceptT (write (endpoints.encrypted.commit pid ConversionCommit {digest = staged.digest})))
+
+-- | Decrypt one page of a space whose encryption is being turned off:
+-- read it by the encrypted routes, decrypt every version, thread, comment
+-- and attachment with the key of the page's each names, stage them, read
+-- back what is staged and compare it with what was decrypted, and commit
+-- the page.
+decryptOnePage :: (MonadIO m) => SpaceId -> KeyId -> PageId -> HttpWiki m (Either WikiError ())
+decryptOnePage sid k pid =
+  withSpaceKey NoRefresh sid k $ \key -> runExceptT $ do
+    loc <- ExceptT (send (endpoints.pages.location pid))
+    p <- ExceptT (send (getResponse <$> endpoints.encrypted.pageAt sid loc.page))
+    infos <- ExceptT (allVersions (endpoints.encrypted.versions pid) (\v -> v.updatedAt))
+    versions <- for (reverse infos) $ \info -> do
+      v <- ExceptT (send (endpoints.encrypted.version pid (VersionTime info.updatedAt)))
+      vk <- maybe (throwError (Invalid "A version of this page names no key of the page's.")) pure (keyNamed v.content.keyId p.pageKeys)
+      (title, body) <- ExceptT (withPageKey key sid pid vk (\pk -> liftIO (first Invalid <$> openContent pk sid pid v.content)))
+      pure PlainVersion {updatedAt = v.updatedAt, title, body}
+    listed <- ExceptT (send (endpoints.encrypted.threads pid))
+    threads <- for listed.threads $ \t -> lift (openThreadWith key sid pid listed.pageKeys t) >>= maybe (throwError (Invalid "A comment on this page does not decrypt here.")) pure
+    files <- for p.attachments $ \a -> ExceptT (exportedAttachment key sid pid p.pageKeys a)
+    -- Each text as the encrypted space holds it: a conversion turns it
+    -- plain as it is, and refuses none of it.
+    let anchors = [PlainAnchor {id = t.id, anchor = t.anchor} | t <- threads]
+        comments = [PlainComment {id = c.id, body = c.body} | t <- threads, c <- t.comments]
+        metas = [PlainMeta {id = a.id, name = a.name.text, mediaType = a.mediaType.text} | (a, _) <- files]
+        stage vs ts cs ms = ExceptT (write_ (endpoints.encrypted.stagePlain pid StagedPlain {versions = vs, threads = ts, comments = cs, attachments = ms}))
+    for_ (partsOf 20 versions) $ \part -> stage part [] [] []
+    stage [] anchors comments metas
+    for_ files $ \(a, bytes) ->
+      ExceptT (write_ (withBoundary (endpoints.encrypted.stageBytes pid a.id) AttachmentUpload {name = a.name.text, mediaType = a.mediaType.text, payload = toS bytes}))
+    -- Read back, and compared with what was decrypted here.
+    staged <- ExceptT (send (endpoints.encrypted.staged pid))
+    let same :: (Ord b, Eq a) => (a -> b) -> [a] -> [a] -> Bool
+        same key' xs ys = sortOn key' xs == sortOn key' ys
+    unless (staged.plain.versions == versions) $ throwError (notAsStaged "versions")
+    unless (same (\t -> t.id) staged.plain.threads anchors && same (\c -> c.id) staged.plain.comments comments) $ throwError (notAsStaged "comments")
+    unless (same (\a -> a.id) staged.plain.attachments metas && all (\(a, _) -> isJust (lookup' a.id staged.blobs)) files) $ throwError (notAsStaged "attachments")
+    void (ExceptT (write (endpoints.encrypted.commit pid ConversionCommit {digest = staged.digest})))
+
+-- | The value of a key in a list of pairs.
+lookup' :: (Eq k) => k -> [(k, v)] -> Maybe v
+lookup' k = fmap snd . find (\(x, _) -> x == k)
+
+-- | Run a step, and then another whatever the first did.
+finally' :: (MonadIO m) => ExceptT e (HttpWiki m) a -> HttpWiki m () -> ExceptT e (HttpWiki m) a
+finally' step after = ExceptT (runExceptT step <* after)
+
+-- | 'convertNext' over HTTP: the next page the space's conversion has
+-- left, converted here. A renewal of the space's key that is due is made
+-- first, as the browser of an administrator who holds the key makes it
+-- whenever it opens the space: a reader removed meanwhile does not stop
+-- the conversion, which goes on under the new key. The key is opened with
+-- the readers waiting for it ('openKey' with 'Refresh'), so that they get
+-- it as the conversion goes, as from any member's browser that opens the
+-- space.
+--
+-- A page decrypted is no longer one this tab reads encrypted: what it
+-- holds of the page is forgotten, so that its history, its comments, its
+-- attachments and its saves go by the plain routes; and once the
+-- encryption is off, so are the spaces' keys.
+convertNextPage :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError Int)
+convertNextPage sid = runExceptT $ do
+  info <- ExceptT (send (endpoints.encrypted.conversion sid))
+  way <- maybe (throwError (Invalid "No conversion runs in this space.")) pure info.running
+  case info.left of
+    [] -> pure 0
+    next : _ -> do
+      current <- ExceptT (send (endpoints.encrypted.space next.space))
+      when (way == Encrypting) (void (lift (openKey Refresh next.space current.keyId)))
+      e <- ExceptT (send (endpoints.encrypted.space next.space))
+      ExceptT $ case way of
+        Encrypting -> encryptOnePage next.space e.keyId next.page
+        Decrypting -> decryptOnePage next.space e.keyId next.page
+      lift forgetFound
+      when (way == Decrypting) (lift (forgetSealedPage next.page))
+      left <- ExceptT (send (endpoints.encrypted.conversion sid))
+      -- The last page ended it: the spaces are read again, with their
+      -- keys as they are now.
+      when (isNothing left.running) $ do
+        void (lift freshSpaces)
+        when (way == Decrypting) $ lift (traverse_ forgetKeyOf info.spaces)
+      pure (length left.left)
+  where
+    forgetKeyOf x = do
+      held <- Map.lookup x . (\h -> h.heldKeys) <$> readHeld
+      traverse_ (liftIO . forgetSpaceKey . snd) held
+      modifyHeld (\h -> h {heldKeys = Map.delete x h.heldKeys})
+
+-- | Forget what this tab holds of a page as one of an encrypted space: its
+-- keys, the versions it read, what it found wrong with them, and its
+-- attachments, whose object URLs go. The page is then read by whichever
+-- routes its space says.
+forgetSealedPage :: (MonadIO m) => PageId -> HttpWiki m ()
+forgetSealedPage pid = do
+  forgetAttachments (\_ at -> at.page == pid)
+  modifyHeld $ \h ->
+    h
+      { heldPages = Map.delete pid h.heldPages
+      , heldPageKeys = Map.delete pid h.heldPageKeys
+      , heldHeads = Map.delete pid h.heldHeads
+      , heldProblems = Map.delete pid h.heldProblems
+      , heldLowest = Map.delete pid h.heldLowest
+      }
+
+-- | 'startConversion' over HTTP. Encrypting: a new key for the space and
+-- each plain space below it, each sealed to the user and opened here
+-- before it is sent ('newCheckedKey'), held here once the server has
+-- taken them. Decrypting: the server's say.
+startConversionOf :: (MonadIO m) => SpaceId -> Conversion -> HttpWiki m (Either WikiError ConversionInfo)
+startConversionOf sid way = case way of
+  Decrypting -> write (endpoints.encrypted.startDecrypting sid) <* freshSpaces
+  Encrypting -> runExceptT $ do
+    info <- ExceptT (send (endpoints.encrypted.conversion sid))
+    unless (null info.cannotEncrypt) $ throwError (Conflict (T.unwords info.cannotEncrypt))
+    made <- for info.spaces $ \x -> (x,) <$> ExceptT (newCheckedKey x)
+    let forget = liftIO (traverse_ (\(_, (m, _)) -> forgetSpaceKey m.key) made)
+    begun <- lift (write (endpoints.encrypted.startEncrypting sid StartEncrypting {keys = [SpaceKeyStart {space = x, keyId = m.keyId, grant} | (x, (m, grant)) <- made]}))
+    case begun of
+      Left e -> lift forget >> throwError e
+      Right i -> do
+        lift (modifyHeld (\h -> h {heldKeys = Map.union (Map.fromList [(x, (m.keyId, m.key)) | (x, (m, _)) <- made]) h.heldKeys}))
+        void (lift freshSpaces)
+        pure i
+
 -- | Encrypted spaces over the API's @encrypted\/@ routes.
 instance (MonadIO m) => MonadEncryption (HttpWiki m) where
   keyState sid =
@@ -2670,3 +2927,6 @@ instance (MonadIO m) => MonadEncryption (HttpWiki m) where
   spaceEncryption sid = send (endpoints.encrypted.space sid)
   chainProblem pid = Map.lookup pid . (\h -> h.heldProblems) <$> readHeld
   exportDecrypted = decryptedExport
+  conversionOf sid = send (endpoints.encrypted.conversion sid)
+  startConversion = startConversionOf
+  convertNext = convertNextPage

@@ -1,6 +1,6 @@
 ---
 pr: 255
-title: Encrypted spaces: an export decrypted in your browser
+title: Encrypted spaces: a decrypted export, and encrypting a space with pages
 ---
 
 ## New features
@@ -23,3 +23,19 @@ title: Encrypted spaces: an export decrypted in your browser
   A wiki imports the file as plain spaces, in its administration's "The
   wiki as one file". Do it before a password reset that would delete your
   keys: the page that resets a password now says so.
+
+- A space that already has pages can now be encrypted, and an encrypted
+  space can be made plain again. In the space's settings, under
+  **Permissions**, choose **Encrypt this space…**: your browser encrypts
+  its pages one by one, with their histories, comments and attachments,
+  and the spaces below it too. **Turn encryption off…** does the same the
+  other way. Until it is done nothing else can be written in the space; if
+  you close the tab, an administrator who holds the key picks it up where
+  it stopped:
+
+  ```text
+  Encrypting its pages stopped, with 12 pages left. [Continue]
+  ```
+
+  Each encrypted page gets a new address; its link by id keeps working.
+  Backups made before keep the plain text until they are pruned.

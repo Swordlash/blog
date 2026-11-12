@@ -37,6 +37,26 @@ module Wiki.Api.Encrypted
   , SealedCommentEdit (..)
   , SealedAttachment (..)
 
+    -- * Encrypting a space that has pages, and turning encryption off
+  , ConversionInfo (..)
+  , ConversionPage (..)
+  , StartEncrypting (..)
+  , SpaceKeyStart (..)
+  , StagedSealed (..)
+  , StagedVersion (..)
+  , StagedAnchor (..)
+  , StagedComment (..)
+  , StagedMeta (..)
+  , StagedPlain (..)
+  , PlainVersion (..)
+  , PlainAnchor (..)
+  , PlainComment (..)
+  , PlainMeta (..)
+  , StagedPage (..)
+  , ConversionCommit (..)
+  , ConversionProgress (..)
+  , notConvertedYet
+
     -- * Pages
   , SealedSummary (..)
   , SealedPage (..)
@@ -52,10 +72,12 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Version (PageVersion (..))
+import Wiki.Core.Anchor (Anchor)
 import Wiki.Core.Encrypted (Encapsulated, KeyGrant, PageKey, SealedAnchor, SealedComment, SealedContent, SealedHeading, SealedMeta)
-import Wiki.Core.Id (AttachmentId, CommentId, CommentThreadId, PageId, SpaceId, UserId)
+import Wiki.Core.Id (AttachmentId, BlobId, CommentId, CommentThreadId, PageId, SpaceId, UserId)
 import Wiki.Core.PageKind (PageKind)
 import Wiki.Core.Slug (Slug)
+import Wiki.Core.Space (Conversion)
 import Wiki.Core.Vault (Ciphertext, KeyId, PublicKey)
 import Wiki.Core.Version (Author)
 
@@ -280,6 +302,187 @@ data SealedAttachment = SealedAttachment
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
+--------------------------------------------------------------------------------
+-- Encrypting a space that has pages, and turning encryption off
+
+-- | 'ConversionInfo': a space's conversion ("Wiki.Core.Space"'s
+-- 'Conversion') as one who may view the space sees it: the one under way,
+-- if any, from the space it started at ('root'), with the pages it has not
+-- converted yet; and, when none runs, why one could not start now, each
+-- way ('cannotEncrypt', 'cannotDecrypt'; empty when it could, or when the
+-- space is not of that kind).
+data ConversionInfo = ConversionInfo
+  { running :: Maybe Conversion
+  , root :: Maybe SpaceId
+  , spaces :: [SpaceId]
+  -- ^ The spaces the conversion covers, or would cover: the space and the
+  -- spaces below it, the space first.
+  , left :: [ConversionPage]
+  -- ^ The pages not converted yet, the oldest first.
+  , cannotEncrypt :: [Text]
+  , cannotDecrypt :: [Text]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'ConversionPage': a page a conversion has still to convert, with its
+-- space.
+data ConversionPage = ConversionPage
+  { page :: PageId
+  , space :: SpaceId
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'StartEncrypting': the keys of the spaces a conversion encrypts, the
+-- space and each plain space below it, each sealed to the caller, made in
+-- the caller's browser.
+newtype StartEncrypting = StartEncrypting
+  { keys :: [SpaceKeyStart]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'SpaceKeyStart': one space's new key, by its id, sealed to the caller.
+data SpaceKeyStart = SpaceKeyStart
+  { space :: SpaceId
+  , keyId :: KeyId
+  , grant :: NewGrant
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'StagedSealed': ciphertexts of a page staged while its space is
+-- encrypted, made in the browser from the plain page: its key the first
+-- time ('pageKey', which starts the page anew, forgetting anything staged
+-- of it before), and any of its versions (each as a chain from 1, in the
+-- chained format), threads' anchors, comments and attachments' names and
+-- media types. A request that sends the page's key carries its latest
+-- version too, so that no page has a key without one.
+data StagedSealed = StagedSealed
+  { pageKey :: Maybe PageKey
+  , versions :: [StagedVersion]
+  , threads :: [StagedAnchor]
+  , comments :: [StagedComment]
+  , attachments :: [StagedMeta]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'StagedVersion': a version of a page, by its time, encrypted.
+data StagedVersion = StagedVersion
+  { updatedAt :: UTCTime
+  , content :: SealedContent
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'StagedAnchor': a thread's quote, encrypted; none for a thread about
+-- the whole page.
+data StagedAnchor = StagedAnchor
+  { id :: CommentThreadId
+  , anchor :: Maybe SealedAnchor
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'StagedComment': a comment's text, encrypted.
+data StagedComment = StagedComment
+  { id :: CommentId
+  , content :: SealedComment
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'StagedMeta': an attachment's name and media type, encrypted, with the
+-- nonce of its bytes, which are staged by a request of their own.
+data StagedMeta = StagedMeta
+  { id :: AttachmentId
+  , meta :: SealedMeta
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'StagedPlain': a page staged while its space's encryption is turned
+-- off, decrypted in the browser: any of its versions' titles and texts,
+-- threads' quotes, comments and attachments' names and media types.
+data StagedPlain = StagedPlain
+  { versions :: [PlainVersion]
+  , threads :: [PlainAnchor]
+  , comments :: [PlainComment]
+  , attachments :: [PlainMeta]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+data PlainVersion = PlainVersion
+  { updatedAt :: UTCTime
+  , title :: Text
+  , body :: Text
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+data PlainAnchor = PlainAnchor
+  { id :: CommentThreadId
+  , anchor :: Maybe Anchor
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+data PlainComment = PlainComment
+  { id :: CommentId
+  , body :: Text
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+data PlainMeta = PlainMeta
+  { id :: AttachmentId
+  , name :: Text
+  , mediaType :: Text
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'StagedPage': what is staged of a page now, as the browser reads it
+-- back before it commits the page: the page's keys and its ciphertexts
+-- while its space is encrypted ('sealed'), or its texts decrypted while
+-- its encryption is turned off ('plain'), and the blob of each
+-- attachment's bytes staged. 'digest' names exactly this; the commit
+-- carries it back, and is refused if what is staged has changed since.
+data StagedPage = StagedPage
+  { digest :: Text
+  , pageKeys :: [PageKey]
+  , sealed :: StagedSealed
+  , plain :: StagedPlain
+  , blobs :: [(AttachmentId, BlobId)]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'ConversionCommit': the commit of a page, of what was staged as the
+-- browser read it back ('StagedPage''s digest).
+newtype ConversionCommit = ConversionCommit
+  { digest :: Text
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'ConversionProgress': after a page's commit, how many pages are left;
+-- none once the conversion has ended.
+newtype ConversionProgress = ConversionProgress
+  { left :: Int
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The start of the reason the server gives when a page is read by the
+-- encrypted routes while a conversion has not encrypted it yet, or has
+-- decrypted it already: the browser then reads it by the plain ones.
+notConvertedYet :: Text
+notConvertedYet = "This page is read as plain text while its space is converted"
 
 --------------------------------------------------------------------------------
 -- Pages

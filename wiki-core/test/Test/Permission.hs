@@ -26,6 +26,7 @@ space s parent public =
     , public
     , sealed = False
     , encryption = Nothing
+    , conversion = Nothing
     , owner = Nothing
     , active = True
     , personalContainer = False

@@ -56,6 +56,7 @@ space i name parent made position subspaceOrder =
     , public = False
     , sealed = False
     , encryption = Nothing
+    , conversion = Nothing
     , owner = Nothing
     , active = True
     , personalContainer = False

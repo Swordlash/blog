@@ -27,12 +27,12 @@ import Control.Monad.Trans.Class (MonadTrans)
 import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Protolude
-import Wiki.Api.Encrypted (SpaceEncryption)
+import Wiki.Api.Encrypted (ConversionInfo, SpaceEncryption)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.DecryptedExport (DecryptedExport)
 import Wiki.Core.Encrypted (ChainProblem)
 import Wiki.Core.Id (PageId, SpaceId)
-import Wiki.Core.Space (Space)
+import Wiki.Core.Space (Conversion, Space)
 
 -- | 'KeyState': whether this browser can read and write an encrypted
 -- space's pages, and if not, why.
@@ -113,6 +113,28 @@ class (Monad m) => MonadEncryption m where
   exportDecrypted :: SpaceId -> m (Either WikiError DecryptedExport)
   default exportDecrypted :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> m (Either WikiError DecryptedExport)
   exportDecrypted = lift . exportDecrypted
+
+  -- | The space's conversion ("Wiki.Core.Space"'s 'Conversion'): the one
+  -- under way with the pages it has left, or why none could start now.
+  conversionOf :: SpaceId -> m (Either WikiError ConversionInfo)
+  default conversionOf :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> m (Either WikiError ConversionInfo)
+  conversionOf = lift . conversionOf
+
+  -- | Start encrypting a space that has pages, and the plain spaces below
+  -- it, with new keys made here and granted to the user; or start turning
+  -- the encryption of an encrypted space, and of the spaces below it, off.
+  -- Its pages are then converted by 'convertNext'.
+  startConversion :: SpaceId -> Conversion -> m (Either WikiError ConversionInfo)
+  default startConversion :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> Conversion -> m (Either WikiError ConversionInfo)
+  startConversion sid = lift . startConversion sid
+
+  -- | Convert the next page the conversion of the space has left, here:
+  -- read it, encrypt or decrypt it, stage it, read back what was staged
+  -- and check it, and commit it. The pages left after it; none once the
+  -- conversion has ended.
+  convertNext :: SpaceId -> m (Either WikiError Int)
+  default convertNext :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> m (Either WikiError Int)
+  convertNext = lift . convertNext
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadEncryption m) => MonadEncryption (HalogenM st act slots output m)

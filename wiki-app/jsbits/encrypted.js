@@ -414,6 +414,19 @@ function wiki_enc_opened_error(o) {
   return o.error ?? "";
 }
 
+// Bytes given, decrypted with a page key, the nonce and the additional
+// data they were encrypted with: an object {opened} holding them, or
+// {error}. What a conversion of a space checks of the bytes it is about to
+// stage, before it sends them.
+async function wiki_enc_open_bytes(handle, nonce, bytes, data) {
+  try {
+    const opened = await crypto.subtle.decrypt({ name: "AES-GCM", iv: wikiEncFromBase64(nonce), additionalData: wikiEncText(data) }, wikiEncKey(handle), bytes);
+    return { opened };
+  } catch (error) {
+    return { error: error?.name === "OperationError" ? "These bytes do not open with the page's key." : String(error?.message ?? error) };
+  }
+}
+
 // An attachment's decrypted bytes, for the program to copy (the export
 // decrypted in the browser).
 function wiki_enc_opened_bytes(o) {

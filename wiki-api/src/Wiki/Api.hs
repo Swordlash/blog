@@ -99,7 +99,7 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, TexEngine, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
-import Wiki.Api.Encrypted (EncryptSpace, NewEncryptedSubspace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedThreads, SealedVersion, SealedVersionInfo, SpaceEncryption, sealedVersion)
+import Wiki.Api.Encrypted (ConversionCommit, ConversionInfo, ConversionProgress, EncryptSpace, NewEncryptedSubspace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedThreads, SealedVersion, SealedVersionInfo, SpaceEncryption, StagedPage, StagedPlain, StagedSealed, StartEncrypting, sealedVersion)
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -357,6 +357,42 @@ data EncryptedApi form mode = EncryptedApi
   -- type encrypted with them. Its bytes are served, encrypted, by the
   -- plain route of an attachment's bytes, and it is deleted by the plain
   -- route ('AttachmentsApi').
+  , conversion :: mode :- "spaces" :> Capture "space" SpaceId :> "conversion" :> Get '[JSON] ConversionInfo
+  -- ^ The space's conversion ("Wiki.Core.Space"'s 'Conversion'): the one
+  -- under way with the pages it has left, or why none could start now.
+  -- For anyone who may view the space.
+  --
+  -- The routes of a conversion have no plain pair: they turn a space's
+  -- plain pages into ciphertext and back, which no plain route does. Each
+  -- asks what a rotation of the space's key asks, the other write of a
+  -- whole encrypted space: to administer the space (each space of it) and
+  -- to hold its current key ('Wiki.Server.Storage.requireConverter'), so
+  -- that nobody else can stage or commit what the space's readers read.
+  , startEncrypting :: mode :- "spaces" :> Capture "space" SpaceId :> "conversion" :> "encrypt" :> ReqBody '[JSON] StartEncrypting :> Post '[JSON] ConversionInfo
+  -- ^ Start encrypting a space that has pages, and the plain spaces below
+  -- it, each with a new key sealed to the caller. From then on the space is
+  -- encrypted, every write in it but the conversion's is refused, and each
+  -- page reads plain until the caller's browser commits it encrypted.
+  -- What cannot be converted is 'Wiki.Api.Error.Conflict', with the reason.
+  , startDecrypting :: mode :- "spaces" :> Capture "space" SpaceId :> "conversion" :> "decrypt" :> Post '[JSON] ConversionInfo
+  -- ^ Start turning the encryption of a space, and of the spaces below
+  -- it, off: every page reads encrypted until the caller's browser commits
+  -- it decrypted; at the end the spaces' keys and grants are deleted.
+  , stageSealed :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "sealed" :> ReqBody '[JSON] StagedSealed :> PostNoContent
+  -- ^ Stage ciphertexts of a page while its space is encrypted.
+  , stagePlain :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "plain" :> ReqBody '[JSON] StagedPlain :> PostNoContent
+  -- ^ Stage a page's texts, decrypted, while its space's encryption is
+  -- turned off.
+  , stageBytes :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "attachments" :> Capture "attachment" AttachmentId :> MultipartForm form (AttachmentUpload form) :> PostNoContent
+  -- ^ Stage an attachment's bytes: encrypted while its space is
+  -- encrypted, decrypted while its encryption is turned off. Its name and
+  -- media type are staged first, by the request above.
+  , staged :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> Get '[JSON] StagedPage
+  -- ^ What is staged of a page, as its commit would put it in place.
+  , commit :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "commit" :> ReqBody '[JSON] ConversionCommit :> Post '[JSON] ConversionProgress
+  -- ^ Put what is staged of a page in place, in one transaction, if it is
+  -- still what the caller read back ('StagedPage''s digest) and holds
+  -- everything of the page. The last page's commit ends the conversion.
   }
   deriving stock (Generic)
 

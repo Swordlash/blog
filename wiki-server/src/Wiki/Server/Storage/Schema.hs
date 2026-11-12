@@ -69,6 +69,7 @@ module Wiki.Server.Storage.Schema
   , SealedThreads (..)
   , SealedComments (..)
   , SealedAttachments (..)
+  , StagedPlain (..)
 
     -- * Settings and the log
   , Settings (..)
@@ -424,6 +425,9 @@ data Spaces f = SpaceRow
   , key_id :: Columnar f (Maybe Text)
   -- ^ The id of an encrypted space's current key (migration
   -- @0011-encrypted-spaces@), none for a space of plain pages.
+  , conversion :: Columnar f (Maybe Text)
+  -- ^ The conversion of its pages under way, by
+  -- 'Wiki.Core.Space.conversionName' (step 20), none when none runs.
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)
@@ -453,6 +457,9 @@ data Pages f = PageRow
   , search_fold :: Columnar f Text
   , kind :: Columnar f Text
   -- ^ The page's kind by its name ("Wiki.Core.PageKind"), step 19.
+  , converted :: Columnar f Bool
+  -- ^ Whether the conversion of its space under way has converted it
+  -- (step 20): false when none runs.
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)
@@ -835,6 +842,10 @@ deriving stock instance Eq (SealedAttachments Identity)
 
 deriving stock instance Show (SealedAttachments Identity)
 
+deriving stock instance Eq (StagedPlain Identity)
+
+deriving stock instance Show (StagedPlain Identity)
+
 deriving stock instance Eq (EmailVerifications Identity)
 
 deriving stock instance Show (EmailVerifications Identity)
@@ -1035,6 +1046,37 @@ instance Table SealedAttachments where
     deriving anyclass (Beamable)
   primaryKey r = SealedAttachmentKey r.attachment_id
 
+-- | What a browser turning a space's encryption off staged of a page,
+-- decrypted (@staged_plain@, step 20), before the page's commit puts it in
+-- place of the ciphertexts: one row for each version (@kind@ "version",
+-- @item@ its time, which @updated_at@ holds, with its @title@ and
+-- @body@), thread ("thread", its id, with its @quote@, @prefix@ and
+-- @suffix@, the quote none for a thread about the whole page), comment
+-- ("comment", its id, its @body@) and attachment ("attachment", its id,
+-- its @name@, @media_type@ and @blob@).
+data StagedPlain f = StagedPlainRow
+  { page_id :: Columnar f Text
+  , kind :: Columnar f Text
+  , item :: Columnar f Text
+  , updated_at :: Columnar f (Maybe UTCTime)
+  , title :: Columnar f (Maybe Text)
+  , body :: Columnar f (Maybe Text)
+  , quote :: Columnar f (Maybe Text)
+  , prefix :: Columnar f (Maybe Text)
+  , suffix :: Columnar f (Maybe Text)
+  , name :: Columnar f (Maybe Text)
+  , media_type :: Columnar f (Maybe Text)
+  , blob :: Columnar f (Maybe Text)
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table StagedPlain where
+  data PrimaryKey StagedPlain f = StagedPlainKey (Columnar f Text) (Columnar f Text) (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = StagedPlainKey r.page_id r.kind r.item
+
 --------------------------------------------------------------------------------
 -- The database
 
@@ -1077,6 +1119,7 @@ data WikiDb f = WikiDb
   , sealed_threads :: f (TableEntity SealedThreads)
   , sealed_comments :: f (TableEntity SealedComments)
   , sealed_attachments :: f (TableEntity SealedAttachments)
+  , staged_plain :: f (TableEntity StagedPlain)
   }
   deriving stock (Generic)
   deriving anyclass (Database be)

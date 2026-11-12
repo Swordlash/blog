@@ -367,6 +367,7 @@ importSpace blobs a discussions choices progress m
                 public = m.archived.public && not hidden
               , sealed = m.archived.sealed || (hidden && not underCreatedHidden)
               , encryption = Nothing
+              , conversion = Nothing
               , owner = Nothing
               , active = True
               , personalContainer = False

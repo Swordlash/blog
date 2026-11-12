@@ -48,6 +48,7 @@ module Wiki.App.Encrypted
   , Opened
   , openAttachmentBytes
   , openedBytes
+  , openBytes
   , objectUrls
   , revokeUrl
 
@@ -94,6 +95,7 @@ $( browserJS
      , ("js_opened_error", "wiki_enc_opened_error", Safe, [t|JSVal -> IO JSText|])
      , ("js_object_urls", "wiki_enc_object_urls", Safe, [t|JSVal -> JSText -> JSText -> IO JSText|])
      , ("js_opened_bytes", "wiki_enc_opened_bytes", Safe, [t|JSVal -> IO JSVal|])
+     , ("js_open_bytesPromise", "wiki_enc_open_bytes", Safe, [t|Int -> JSText -> JSVal -> JSText -> IO (Promise JSVal)|])
      , ("js_revoke", "wiki_enc_revoke", Safe, [t|JSText -> IO ()|])
      , ("js_keep_seen", "wiki_enc_keep_seen", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
      ]
@@ -116,6 +118,9 @@ js_space_key_rotate a1 a2 a3 a4 a5 a6 = if inBrowser then wait =<< js_space_key_
 
 js_seal_bytes :: Int -> JSVal -> JSText -> IO JSVal
 js_seal_bytes a1 a2 a3 = if inBrowser then wait =<< js_seal_bytesPromise a1 a2 a3 else pure inert
+
+js_open_bytes :: Int -> JSText -> JSVal -> JSText -> IO JSVal
+js_open_bytes a1 a2 a3 a4 = if inBrowser then wait =<< js_open_bytesPromise a1 a2 a3 a4 else pure inert
 
 js_open_attachment :: Int -> JSText -> JSText -> JSText -> IO JSVal
 js_open_attachment a1 a2 a3 a4 = if inBrowser then wait =<< js_open_attachmentPromise a1 a2 a3 a4 else pure inert
@@ -426,6 +431,16 @@ openedBytes :: Opened -> IO ByteString
 openedBytes (Opened o)
   | inBrowser = fromJSBytes =<< js_opened_bytes o
   | otherwise = pure mempty
+
+-- | Bytes encrypted here ('sealBytes'), decrypted again with a page key and
+-- the additional data they were encrypted with: what a conversion of a
+-- space checks of the bytes it is about to stage.
+openBytes :: PageKeyRef -> Nonce -> ByteString -> Text -> IO (Either Text ByteString)
+openBytes (PageKeyRef k) nonce bytes data' = whenHere $ do
+  sealed <- toJSBytes bytes
+  opened <- evaluate =<< js_open_bytes k (toJSText nonce.text) sealed (toJSText data')
+  why <- fromJSText <$> js_opened_error opened
+  if why == "" then Right <$> openedBytes (Opened opened) else pure (Left why)
 
 -- | Two object URLs of an attachment's decrypted bytes, which 'revokeUrl'
 -- lets go: one of the media type given, which the page shows, and one of

@@ -345,6 +345,7 @@ everyTable = do
   row wikiDb.sealed_threads [SealedThreadRow {thread_id = "copy-thread", key_id = "copy-page-key", anchored = True, anchor_nonce = Just "n", anchor = Just "a"}]
   row wikiDb.sealed_comments [SealedCommentRow {comment_id = "copy-comment", key_id = "copy-page-key", tag = "tag", nonce = "n", body = "b"}]
   row wikiDb.sealed_attachments [SealedAttachmentRow {attachment_id = "copy-att", key_id = "copy-page-key", meta_nonce = "n", meta = "m", bytes_nonce = "b", staged_blob = Just "copy-staged-blob"}]
+  row wikiDb.staged_plain [StagedPlainRow {page_id = "copy-page", kind = "comment", item = "copy-comment", updated_at = Nothing, title = Nothing, body = Just "Staged ünïcode", quote = Nothing, prefix = Nothing, suffix = Nothing, name = Nothing, media_type = Nothing, blob = Nothing}]
   row wikiDb.settings [SettingRow {key = "copy-setting", value = "ünïcode ✓"}]
   row wikiDb.sign_in_providers [ProviderRow {name = "copy-github", position = 0, kind = "github", client_id = "copy-client", issuer = Nothing, secret = Nothing}]
   row wikiDb.audit_log [AuditRow {id = "copy-audit", at = time 1, actor_id = "copy-u1", actor_login = "copy.one", action = "space.create", subject_kind = "space", subject_id = Just "copy-space", subject_name = "Copy", detail = "{}", address = "192.0.2.1"}]
@@ -371,6 +372,7 @@ everyTable = do
         , active = True
         , personal_container = False
         , key_id = key
+        , conversion = if isJust key then Just "encrypting" else Nothing
         }
     page i parent slug =
       PageRow
@@ -387,6 +389,7 @@ everyTable = do
         , kind = if slug == "late" then "presentation" else "document"
         , search_text = "Page " <> slug
         , search_fold = "page " <> slug
+        , converted = slug == "late"
         }
 
 -- | Every table's rows, shown and sorted, by the table's name: what the
@@ -419,6 +422,7 @@ comparedTables =
   , ("sealed_threads", rowsIn wikiDb.sealed_threads)
   , ("sealed_comments", rowsIn wikiDb.sealed_comments)
   , ("sealed_attachments", rowsIn wikiDb.sealed_attachments)
+  , ("staged_plain", rowsIn wikiDb.staged_plain)
   , ("spaces", rowsIn wikiDb.spaces)
   , ("pages", rowsIn wikiDb.pages)
   , ("page_versions", rowsIn wikiDb.page_versions)

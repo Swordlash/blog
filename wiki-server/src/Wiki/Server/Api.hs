@@ -842,6 +842,14 @@ handlers env caller =
           , reply = \p t new -> wiki (sealedReply p t new)
           , editComment = \p t c edit -> wiki (sealedEditComment p t c edit)
           , upload = \p u -> wiki (uploadSealedAttachmentFile p u.sealed u.payload)
+          , conversion = wiki . conversionInfo
+          , startEncrypting = \s body -> wiki (startEncrypting s body)
+          , startDecrypting = wiki . startDecrypting
+          , stageSealed = \p body -> wiki (stageSealed p body) $> NoContent
+          , stagePlain = \p body -> wiki (stagePlain p body) $> NoContent
+          , stageBytes = \p a u -> wiki (stageBytesFile p a u.payload) $> NoContent
+          , staged = wiki . stagedPage
+          , commit = \p body -> wiki (commitConverted p body)
           }
     , attachments =
         AttachmentsApi

@@ -137,7 +137,8 @@ genSpace = do
   active <- arbitrary
   personalContainer <- arbitrary
   encryption <- oneof [pure Nothing, Just . KeyId <$> genText]
-  pure Space {id, name, slug, parent, public, sealed, encryption, owner, active, personalContainer, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
+  conversion <- oneof [pure Nothing, Just <$> arbitraryBoundedEnum]
+  pure Space {id, name, slug, parent, public, sealed, encryption, conversion, owner, active, personalContainer, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
 
 genIcon :: Gen Icon
 genIcon =
@@ -243,7 +244,7 @@ genChain = do
     slug <- genSlug
     public <- frequency [(1, pure True), (3, pure False)]
     sealed <- frequency [(1, pure True), (4, pure False)]
-    pure Space {id, name = "", slug, parent, public, sealed, encryption = Nothing, owner = Nothing, active = True, personalContainer = False, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = "", blog = False, boxNumbering = InPage}
+    pure Space {id, name = "", slug, parent, public, sealed, encryption = Nothing, conversion = Nothing, owner = Nothing, active = True, personalContainer = False, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = "", blog = False, boxNumbering = InPage}
 
 genSearchQuery :: Gen SearchQuery
 genSearchQuery = do

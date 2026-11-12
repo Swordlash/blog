@@ -124,6 +124,7 @@ tableRows st = reading st rows
         , dump "sealed_threads" wikiDb.sealed_threads
         , dump "sealed_comments" wikiDb.sealed_comments
         , dump "sealed_attachments" wikiDb.sealed_attachments
+        , dump "staged_plain" wikiDb.staged_plain
         , dump "spaces" wikiDb.spaces
         , dump "pages" wikiDb.pages
         , dump "page_versions" wikiDb.page_versions

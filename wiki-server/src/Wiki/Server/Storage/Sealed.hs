@@ -27,6 +27,7 @@ module Wiki.Server.Storage.Sealed
   , insertSealedVersion
   , loadSealedVersion
   , loadSealedLatest
+  , contentOf
 
     -- * Comments and attachments
   , insertSealedThread

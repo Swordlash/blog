@@ -392,6 +392,14 @@ stubs =
           , reply = \_ _ _ -> refuse NotFound
           , editComment = \_ _ _ _ -> refuse NotFound
           , upload = \_ _ -> refuse NotFound
+          , conversion = \_ -> refuse NotFound
+          , startEncrypting = \_ _ -> refuse NotFound
+          , startDecrypting = \_ -> refuse NotFound
+          , stageSealed = \_ _ -> refuse NotFound
+          , stagePlain = \_ _ -> refuse NotFound
+          , stageBytes = \_ _ _ -> refuse NotFound
+          , staged = \_ -> refuse NotFound
+          , commit = \_ _ -> refuse NotFound
           }
     }
 

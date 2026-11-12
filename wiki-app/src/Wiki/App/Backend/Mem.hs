@@ -464,6 +464,9 @@ instance (Monad m) => MonadEncryption (MemWiki m) where
   spaceEncryption _ = pure (Left noServer)
   chainProblem _ = pure Nothing
   exportDecrypted _ = pure (Left noServer)
+  conversionOf _ = pure (Left noServer)
+  startConversion _ _ = pure (Left noServer)
+  convertNext _ = pure (Left noServer)
 
 instance (MonadIO m) => MonadStars (MemWiki m) where
   starred = query starredIn
