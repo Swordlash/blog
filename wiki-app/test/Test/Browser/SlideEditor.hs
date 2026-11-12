@@ -281,7 +281,7 @@ spec m = do
       (ui, wiki) <- openDeck text
       -- Every slide measured, with its diagram drawn.
       fits <- eventually $ do
-        found <- editorFits
+        found <- previewFits ui
         length found `shouldBe` 24
         found `shouldSatisfy` notElem "unmeasured"
         length <$> findAll ui ".editor-preview .wiki-mermaid svg" `shouldReturn` 1
@@ -303,20 +303,37 @@ spec m = do
       unsafeIOToPageM (fromJSText <$> js_viewport_rules) `shouldReturn` "[]"
       unmount ui
       shown <- startOn m wiki (PageSlides (slugs ["blog"]) (slugs ["hello-world"]) 1 1)
-      _ <- find shown ".slides-view"
-      for_ (zip [1 :: Int ..] fits) $ \(n, fit) -> do
-        for_ [1024, 1280, 1920] $ \width -> do
-          seen <- eventually $ do
-            c <- slideCut width
-            (c.ready, c.slide) `shouldBe` (True, n)
-            pure c
-          seen.width `shouldSatisfy` (>= fromIntegral width - 0.5)
-          -- Cut there: never shown as fitting.
-          when seen.cut $ (theme, aspect, n, width, fit) `shouldSatisfy` (\(_, _, _, _, f) -> f /= "fits")
-          -- Marked as cut: cut at 1024.
-          when (width == 1024 && fit == "overflowing") $ (theme, aspect, n, seen.cut) `shouldSatisfy` (\(_, _, _, c) -> c)
-        press "ArrowRight"
+      againstSlidesView (theme <> " " <> aspect) False fits
       unmount shown
+
+  it "marks a slide of the guide's presentation only where the slides view cuts it at 1024 pixels wide, so none, its table of keys close to its foot among them" $ runPage $ do
+    -- The guide's own page, as the demo has it: a fixture for both
+    -- directions of the marks.
+    let guideDeck = slugs ["markdown-guide", "presentations"]
+    (ui, wiki) <- startWith m (Just "user-admin") (EditPage (slugs ["docs"]) guideDeck)
+    _ <- editorText ui
+    fits <- eventually $ do
+      -- Every slide measured, with its diagram and its formulas drawn.
+      _ <- find ui ".editor-preview .wiki-mermaid svg"
+      _ <- find ui ".editor-preview .wiki-math-display .katex"
+      found <- previewFits ui
+      found `shouldSatisfy` (\f -> length f >= 9 && notElem "unmeasured" f)
+      -- Measured with the diagram drawn: no slide is marked, in the
+      -- preview or among the problems.
+      found `shouldSatisfy` all (== "fits")
+      marked <- problemsMarked ui
+      [message | (_, _, message) <- marked, "This slide" `T.isPrefixOf` message] `shouldBe` []
+      pure found
+    unmount ui
+    shown <- startOn m wiki (PageSlides (slugs ["docs"]) guideDeck 1 1)
+    againstSlidesView "the guide" True fits
+    unmount shown
+
+  it "leaves out a slide's speaker notes, however long, from whether the slide fits" $ runPage $ do
+    let noted = T.intercalate "\n\n" ["# Deck", "## Noted", "One line.", "[[!notes]]\n" <> T.intercalate "\n\n" (replicate 40 "A paragraph of the notes, one line long.") <> "\n[[/notes]]"]
+    (ui, _) <- openDeck noted
+    eventually $ previewFits ui `shouldReturn` ["fits", "fits"]
+    eventually $ problemsMarked ui `shouldReturn` []
 
   it "measures a slide whose image fails to load: it is not left unmeasured" $ runPage $ do
     let failing = T.intercalate "\n\n" ["# Deck", "## Lost", "Above it.", "![Lost](data:image/png;base64,AAAA){width=600 height=600}"]
@@ -368,6 +385,35 @@ spec m = do
     eventually $ cardTitles ui `shouldReturn` ["One"]
   where
     helloEditor = EditPage (slugs ["blog"]) (slugs ["hello-world"])
+
+    -- The slides view open on a deck's first slide, each slide in turn
+    -- checked against its fit as the editor's preview measured it, at
+    -- 1024, 1280 and 1920 pixels wide: a slide cut at any width is never
+    -- shown as fitting; one marked cut is cut at 1024; and, both ways, one
+    -- marked at all (cut, or may be cut) is cut at 1024.
+    againstSlidesView :: forall s. Text -> Bool -> [Text] -> PageM s ()
+    againstSlidesView deckName bothWays fits = do
+      for_ (zip [1 :: Int ..] fits) $ \(n, fit) -> do
+        for_ [1024, 1280, 1920 :: Int] $ \width -> do
+          seen <- eventually $ do
+            c <- slideCut width
+            (c.ready, c.slide) `shouldBe` (True, n)
+            pure c
+          seen.width `shouldSatisfy` (>= fromIntegral width - 0.5)
+          -- Cut there: never shown as fitting.
+          when seen.cut $ (deckName, n, width, fit) `shouldSatisfy` (\(_, _, _, f) -> f /= "fits")
+          -- Marked as cut: cut at 1024.
+          when (width == 1024 && fit == "overflowing") $ (deckName, n, seen.cut) `shouldSatisfy` (\(_, _, c) -> c)
+          -- Marked at all: cut at 1024.
+          when (bothWays && width == 1024 && fit /= "fits") $ (deckName, n, fit, seen.cut) `shouldSatisfy` (\(_, _, _, c) -> c)
+        -- To the next slide, through the steps of this one: a later step's
+        -- content is laid out, hidden, from the first step on, so the cut
+        -- is the same at every step.
+        when (n < length fits) . eventually $ do
+          c <- slideCut 1024
+          when (c.slide == n) (press "ArrowRight")
+          after <- slideCut 1024
+          after.slide `shouldBe` n + 1
 
     -- The demo's "Hello, world", made a presentation with the deck as its
     -- text, open in the editor.
@@ -424,6 +470,14 @@ editorFits :: PageM s [Text]
 editorFits = do
   json <- unsafeIOToPageM (fromJSText <$> js_slide_fits)
   pure (fromMaybe [] (decodeStrict (encodeUtf8 json)))
+
+-- | The fits the editor's preview shows on its cards ("fits", "tight",
+-- "overflowing" or "unmeasured"), every slide's in the order of the deck:
+-- the preview's own classes, which it sets from its measures.
+previewFits :: Mounted s q o m -> PageM s [Text]
+previewFits ui = do
+  frames <- findAll ui ".editor-preview .slides-preview .slide-frame"
+  traverse (fmap (fromMaybe "" . head . mapMaybe (T.stripPrefix "slide-fit-")) . classes) frames
 
 -- | A measure of the preview's cards, as the log keeps it.
 data Measure = Measure {diagrams :: Int, drawn :: Int}

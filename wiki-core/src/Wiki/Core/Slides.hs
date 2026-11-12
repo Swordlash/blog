@@ -741,7 +741,10 @@ data Fit
 -- | The fit of a slide from what the preview measured on its body: how far
 -- the bottom of its content is below the bottom of the body's room, and
 -- how far its content is wider than the body, both in lines of the body's
--- text (negative when there is room to spare).
+-- text (negative when there is room to spare). The room goes down to the
+-- bottom of the body's padding: the body shows what runs into its padding
+-- and cuts what runs out of it, so that edge is where a slide is cut, and
+-- the half line a slide that fits has to spare is counted from it.
 fitOf :: Double -> Double -> Fit
 fitOf below wider
   | below > 1 || wider > 1 = Overflowing

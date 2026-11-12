@@ -364,6 +364,14 @@ spec = describe "Slides" $ do
     it "is tight for any width beyond the body's, and overflows beyond a line" $ do
       map (fitOf (-3)) [0, 0.1, 1, 1.5] `shouldBe` [Fits, Tight, Tight, Overflowing]
 
+    it "fits with two lines to spare, and with the room the guide's slide of keys has at its foot" $ do
+      fitOf (-2) 0 `shouldBe` Fits
+      -- The guide's "Presenting" slide, at 1024 pixels: its text ends 0.78
+      -- of a line above the bottom of its body's padding, where the body
+      -- cuts it, and 0.21 of a line above the top of that padding, the
+      -- edge it was measured against before (WP5.102).
+      (fitOf (-0.78) 0, fitOf (-0.21) 0) `shouldBe` (Fits, Tight)
+
   describe "fitsNow" $ do
     let measuredText = "# Deck\n\n## A\n\nOne.\n\n## B\n\nTwo.\n"
         measures = Just (measuresFor measuredText [Fits, Tight, Overflowing])
