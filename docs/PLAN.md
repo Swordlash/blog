@@ -1787,12 +1787,29 @@ which the wiki pins since #227.
   session can slow it four times), as a job of its own or weekly, so that
   races are found on purpose and not by chance on someone's pull
   request. The throttled run is the part that also finds the first kind.
-  **Waits for the owner (2026-11-12):** he has a haskell-halogen package
-  in progress that integrates Playwright, and it should help here, with
-  waiting for the page above all; he says when it has landed. The
-  package is briefed then, on that integration rather than on helpers
-  of the wiki's own (libraries over hand-rolled code), with the bump of
-  the haskell-halogen pin as its own commit.
+  **On haskell-halogen's `playwright` package (the owner, 2026-11-12:
+  it has landed, with `H.delay` and the adoption check; pull requests
+  108 to 110 there).** Its driver waits on the program: `visit` after a
+  navigation, every action settled, `waitQuiet` until no fiber of the
+  program waits in a `liftIO`. So the smoke tests are ported to it as
+  native test-suites, and the scripts go; helpers of the wiki's own
+  for waiting are not written (libraries over hand-rolled code). The
+  application's part: a pause that only takes a notice off the screen
+  or ticks becomes `H.delay`, which `waitQuiet` does not count; a pause
+  followed by work a test waits for (a debounce, the autosave, the
+  backups' re-look) stays `threadDelay`. Four pull requests: (a) the
+  pin's bump as its own commit with `playwright` among its
+  subdirectories, the pauses, `screenshots.mjs` ported as the first
+  suite, proofs that `waitQuiet` returns after a save, with the
+  assistant's ticker running and after typing; (b) `smoke-test.mjs`
+  ported, with the adoption check through the library's `adoptWith`,
+  and the throttled run (`HALOGEN_PLAYWRIGHT_THROTTLE=4`) as a job of
+  its own or weekly; (c) `test-passkeys.mjs` and `smoke-test-server.mjs`
+  with the encrypted walk and the canary, after #255; (d) what is left
+  of the scripts' helpers and the README. `test-assistant.mjs` and
+  `test-tikz-letters.mjs` test JavaScript modules without a browser and
+  stay in node. The driver's author's notes on the port are kept with
+  pull request (a).
 - **WP5.95 No view takes an older answer over a newer one (found by
   Codex on #243, rounds 12 and 13; left there on purpose).** The page view
   drops a fetched page older than the one it shows (`takesPage`, by
