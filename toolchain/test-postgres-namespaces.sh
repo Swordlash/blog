@@ -60,9 +60,10 @@ run() {
 # signal.)
 group_alive() { kill -0 "-$1" 2>/dev/null; }
 # The sessions PostgreSQL has on the databases listed in the file.
+# A failure of the query is said, not compared with 0.
 sessions_on() {
   names=$(sed "s/.*/'&'/" "$1" | paste -sd, -)
-  sql "SELECT count(*) FROM pg_stat_activity WHERE datname IN ($names)"
+  sql "SELECT count(*) FROM pg_stat_activity WHERE datname IN ($names)" || echo "the sessions could not be counted"
 }
 
 listing >"$work/before"
@@ -100,8 +101,15 @@ cp "$work/before" "$work/known"
 printf '%s\n' "$young" >>"$work/known"
 run killed &
 killed=$!
+# Killed once its template database is there: the template lives as long
+# as the run (it is dropped at the run's end), so a run killed after it
+# appeared leaves at least it. The run's other databases are an example's
+# own, made and dropped within the example: killed on the first of those
+# to appear, a run could leave none, the drops sent before the kill having
+# finished after it. That is what CI found: four of them listed at the
+# kill, none a second later, and nothing left to check.
 tries=0
-until listing | grep -vxF -f "$work/known" | grep -q .; do
+until listing | grep -vxF -f "$work/known" | grep -q '_template$'; do
   tries=$((tries + 1))
   if [ "$tries" -gt 600 ]; then break; fi
   sleep 0.1
@@ -112,9 +120,8 @@ wait "$killed" 2>/dev/null || true
 # docker exec clients of its pg_dump and psql) are not this shell's
 # children: killed, each is a zombie until whoever adopts it reaps it, and
 # kill -0 finds a zombie. So the group is given up to five seconds to be
-# gone, as the sessions are given thirty below. Without the wait the check
-# raced the reaping: on CI it failed half a second after the kill, before
-# any wait for the sessions began.
+# gone, as the sessions are given thirty below, so that the check does not
+# race the reaping.
 tries=0
 while group_alive "$killed" && [ "$tries" -lt 50 ]; do
   tries=$((tries + 1))
@@ -124,7 +131,11 @@ done
 # container (which docker exec does not stop with its client) have ended,
 # PostgreSQL has no session on its databases.
 dead=''
-if ! kill -0 "$killed" 2>/dev/null && ! group_alive "$killed"; then
+alive=''
+: >"$work/left"
+if kill -0 "$killed" 2>/dev/null || group_alive "$killed"; then
+  alive=1
+else
   listing | grep -vxF -f "$work/known" >"$work/left" || true
   tries=0
   while [ -s "$work/left" ] && [ "$(sessions_on "$work/left")" != 0 ] && [ "$tries" -lt 300 ]; do
@@ -135,8 +146,15 @@ if ! kill -0 "$killed" 2>/dev/null && ! group_alive "$killed"; then
 fi
 killed_pid=$killed
 killed=''
-if [ -z "$dead" ]; then
-  fail "the killed run is not dead (pid $killed_pid, or a session on its databases)"
+if [ -n "$alive" ]; then
+  fail "the killed run is not dead: a process of its group (pid $killed_pid) is left"
+elif [ ! -s "$work/left" ]; then
+  fail "the killed run (pid $killed_pid) left no database: the test needs one, to check that the next run passes beside it"
+elif [ -z "$dead" ]; then
+  fail "the killed run's databases still have sessions thirty seconds after the kill: $(sessions_on "$work/left")"
+  # Which, and doing what: for the next one who reads this failure.
+  names=$(sed "s/.*/'&'/" "$work/left" | paste -sd, -)
+  sql "SELECT datname || ' | ' || state || ' | since ' || (now() - query_start)::text || ' | ' || left(regexp_replace(query, '\s+', ' ', 'g'), 160) FROM pg_stat_activity WHERE datname IN ($names)" >&2 || true
 elif [ -s "$work/left" ] && (run next) && [ -z "$(listing | grep -vxF -f "$work/known" | grep -vxF -f "$work/left")" ]; then
   pass "a run killed part-way, its processes gone and its databases unused, leaves $(wc -l <"$work/left") databases, and the next run passes all the same and leaves none of its own"
 else
