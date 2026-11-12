@@ -193,7 +193,7 @@ spec backing = describe "wiki-server check, the accounts" $ do
         -- On SQLite the first line names the SQLite library; on
         -- PostgreSQL no line does.
         case backing of
-          OnSqlite -> take 1 lines' `shouldBe` [sqliteLine]
+          OnSqlite -> sqliteLine >>= \line -> take 1 lines' `shouldBe` [line]
           _ -> filter ("SQLite" `T.isPrefixOf`) lines' `shouldBe` []
         let summary = dropWhile (/= "Every table and every record read.") lines'
         summary

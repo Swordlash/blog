@@ -211,9 +211,12 @@ withServerUsing given raw sendMail action = do
       logWith logger Info [("event", "starting"), ("version", serverVersion), ("data", toS options.dataDir), ("database", databaseName place.database), ("static", maybe "none" toS options.staticDir), ("base", options.basePath)]
       -- The SQLite library the server runs on, the operating system's: a
       -- wiki in SQLite depends on its version.
-      case (place.database, sqliteLibrary) of
-        (SqliteFile _, Right l) -> logWith logger Info [("event", "sqlite"), ("version", l.version), ("library", "system")]
-        _ -> pass
+      case place.database of
+        SqliteFile _ ->
+          sqliteLibrary >>= \case
+            Right l -> logWith logger Info [("event", "sqlite"), ("version", l.version), ("library", "system")]
+            Left _ -> pass
+        PostgresAt _ -> pass
       -- What the migration as the storage opened has to tell, such as a
       -- login it renamed: a deploy that does not run wiki-server migrate
       -- first (the Docker image) sees it here.

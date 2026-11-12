@@ -496,13 +496,13 @@ data CheckOutcome
 -- | Read the whole database as this program does ('Wiki.Server.Storage.checkDatabase').
 runCheck :: PlaceOptions -> IO CheckOutcome
 runCheck options =
-  outcome <$> try @SomeException ((`onPlace` options) (\place -> Right . fmap (library place,) <$> checkDatabase place))
+  outcome <$> try @SomeException ((`onPlace` options) (\place -> checkDatabase place >>= traverse (\checked -> (,checked) <$> library place) <&> Right))
   where
     -- On SQLite, the first line says which SQLite library the program
     -- runs on ('sqliteLine'), the operating system's.
     library place = case place.database of
-      SqliteFile _ -> [sqliteLine]
-      PostgresAt _ -> []
+      SqliteFile _ -> (: []) <$> sqliteLine
+      PostgresAt _ -> pure []
     outcome = \case
       Right (Right (Right (first', checked))) -> CheckPassed (first' <> map line checked.tables <> ["Every table and every record read."] <> waysInLines checked.ways)
       Right (Right (Left (NotMigrated at known))) ->

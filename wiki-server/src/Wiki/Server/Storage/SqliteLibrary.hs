@@ -72,12 +72,25 @@ readSqliteLibrary =
     options <- map fromOnly <$> query_ c "PRAGMA compile_options"
     pure SqliteLibrary {version, options}
 
--- | The library the process runs on, read once, the first time it is
--- needed: the library is linked into the program, so it cannot change
--- while the program runs. 'Left' says why it could not be read.
-sqliteLibrary :: Either Text SqliteLibrary
-sqliteLibrary = unsafePerformIO (first (\(e :: SomeException) -> toS (displayException e)) <$> try readSqliteLibrary)
-{-# NOINLINE sqliteLibrary #-}
+-- | The library the process runs on, read the first time it is asked for
+-- and kept ('known'): the library is linked into the program, so it
+-- cannot change while the program runs. 'Left' says why it could not be
+-- read. An asynchronous exception (the thread stopped while it reads) is
+-- not kept as the answer: it goes on, and the next call reads again.
+sqliteLibrary :: IO (Either Text SqliteLibrary)
+sqliteLibrary = modifyMVar known $ \case
+  Just l -> pure (Just l, l)
+  Nothing -> do
+    l <-
+      (Right <$> readSqliteLibrary) `catch` \(e :: SomeException) -> case fromException e of
+        Just (_ :: SomeAsyncException) -> throwIO e
+        Nothing -> pure (Left (toS (displayException e)))
+    pure (Just l, l)
+
+-- | What 'sqliteLibrary' has read, once it has.
+known :: MVar (Maybe (Either Text SqliteLibrary))
+known = unsafePerformIO (newMVar Nothing)
+{-# NOINLINE known #-}
 
 -- | The oldest SQLite the server runs on, as the module's documentation
 -- says why.
@@ -122,13 +135,15 @@ instance Exception SqliteRefused where
 -- | Throw 'SqliteRefused' when the library the process runs on is one
 -- the server cannot run on, or cannot be read.
 refuseOldSqlite :: IO ()
-refuseOldSqlite = case sqliteLibrary of
-  Left why -> throwIO (SqliteRefused ("The SQLite library's version could not be read: " <> why))
-  Right l -> traverse_ (throwIO . SqliteRefused) (sqliteRefusal l)
+refuseOldSqlite =
+  sqliteLibrary >>= \case
+    Left why -> throwIO (SqliteRefused ("The SQLite library's version could not be read: " <> why))
+    Right l -> traverse_ (throwIO . SqliteRefused) (sqliteRefusal l)
 
 -- | The line that says which SQLite the server runs on, as @wiki-server
 -- check@ prints it.
-sqliteLine :: Text
-sqliteLine = case sqliteLibrary of
-  Left why -> "SQLite: its version could not be read: " <> why
-  Right l -> "SQLite " <> l.version <> ", the system's library."
+sqliteLine :: IO Text
+sqliteLine =
+  sqliteLibrary <&> \case
+    Left why -> "SQLite: its version could not be read: " <> why
+    Right l -> "SQLite " <> l.version <> ", the system's library."

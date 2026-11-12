@@ -12,11 +12,11 @@ unitSpec :: Spec
 unitSpec = describe "the SQLite library" $ do
   it "runs on the library it is linked with, and reads its version and options" $ do
     l <- readSqliteLibrary
-    sqliteLibrary `shouldBe` Right l
+    sqliteLibrary `shouldReturn` Right l
     sqliteRefusal l `shouldBe` Nothing
     l.version `shouldSatisfy` ("3." `T.isPrefixOf`)
     l.options `shouldSatisfy` any ("THREADSAFE=" `T.isPrefixOf`)
-    sqliteLine `shouldBe` "SQLite " <> l.version <> ", the system's library."
+    sqliteLine `shouldReturn` ("SQLite " <> l.version <> ", the system's library.")
 
   it "accepts 3.32.0 and later, the distributions' builds among them" $
     for_ ["3.32.0", "3.34.1", "3.45.1", "3.46.1", "3.53.2", "3.100.0", "4.0.0"] $ \v ->
