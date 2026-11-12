@@ -88,18 +88,14 @@ source-repository-package
 -- and transformers-compat everything else here is built with: kept to them,
 -- the solver would take older versions and rebuild aeson, protolude and every
 -- package above them for the API's sake alone. serialise's and cborg's lag behind the base,
--- ghc-prim, containers and time of GHC 9.14: tls needs serialise (over cborg),
+-- containers and time of GHC 9.14: tls needs serialise (over cborg),
 -- and the server's mail (smtp-mail, over crypton-connection and tls) needs tls;
 -- without them the solver falls back to a tls of crypton 1, whose memory
--- package is not the ram the server's crypton 2 speaks. pandoc's crypton
--- (< 2.1) and pandoc-types' QuickCheck (< 2.19) lag behind those the rest is
--- built with: kept to them, linking pandoc into the server (its export)
--- would take an older crypton and tls and rebuild aeson, servant, warp and
--- everything above them a second time, for pandoc's sake alone. pandoc uses
--- crypton for its hashes (MD5, SHA-1), and pandoc-types QuickCheck for its
--- Arbitrary instances.
--- qrcode-core's containers bound lags behind GHC 9.14's (the server draws a
--- second factor's QR code with it, Wiki.Server.Totp).
+-- package is not the ram the server's crypton 2 speaks. pandoc-types'
+-- QuickCheck (< 2.19) lags behind the one the rest is built with: kept to
+-- it, linking pandoc into the server (its export) would hold the whole
+-- plan to QuickCheck 2.18, for pandoc's sake alone. pandoc-types uses
+-- QuickCheck for its Arbitrary instances.
 -- postgresql-simple's bounds on base, template-haskell, containers,
 -- bytestring, aeson and attoparsec lag behind GHC 9.14 and the versions
 -- the rest is built with, and dependent-map's (beam-migrate's, which
@@ -122,15 +118,11 @@ allow-newer:
   http-api-data:text-iso8601,
   monad-control:transformers-compat,
   serialise:base,
-  serialise:ghc-prim,
   serialise:containers,
   serialise:time,
   cborg:base,
-  cborg:ghc-prim,
   cborg:containers,
-  pandoc:crypton,
   pandoc-types:QuickCheck,
-  qrcode-core:containers,
   postgresql-simple:*,
   dependent-map:containers,
   webauthn:base,
