@@ -82,12 +82,6 @@ source-repository-package
   location: https://github.com/Swordlash/opaque-hs
   tag: 3ac875fdf5598c89cd06f23a264a1d2d71a8a942
 
--- network 3.2.10.0 (2026-10) exports getHostName from Network.Socket, which
--- smtp-mail 0.5.0.1 also imports from Network.BSD, so smtp-mail no longer
--- compiles with it (an ambiguous occurrence). Until smtp-mail is fixed, the
--- solver is kept on the network before it.
-constraints: network < 3.2.10
-
 -- As in haskell-halogen's own cabal.project: protolude's upper bounds lag
 -- behind the GHC this builds with. servant's, http-api-data's and
 -- monad-control's (servant-server's) lag behind the QuickCheck, text-iso8601
