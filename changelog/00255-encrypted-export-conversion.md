@@ -80,3 +80,13 @@ title: Encrypted spaces: a decrypted export, encrypting pages, asking each time
   wiki once your session has ended. Signing in with your password unlocks
   them again by itself; after signing in with a provider, unlock them with
   a passkey before reading an encrypted space.
+- In an encrypted space, the wiki no longer offers what the server cannot
+  do there: **Use as template**, **Show as a blog**, the **Public** switch,
+  and moving a page to another space. While a space's pages are being
+  encrypted or decrypted, nothing that writes is offered in it, and a line
+  above the page says why:
+
+  ```text
+  This space's pages are being encrypted in the browser of one of its
+  administrators, so nothing else can be written in it until that is done.
+  ```

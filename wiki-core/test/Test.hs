@@ -30,6 +30,7 @@ import Test.Markdown.Tikz qualified as Tikz
 import Test.Markdown.Toc qualified as Toc
 import Test.Math qualified as Math
 import Test.Notification qualified as Notification
+import Test.Offered qualified as Offered
 import Test.Order qualified as Order
 import Test.Path qualified as Path
 import Test.Permission qualified as Permission
@@ -77,6 +78,7 @@ main = hspec . parallel $ do
   Comment.spec
   Notification.spec
   Space.spec
+  Offered.spec
   Blog.spec
   Toc.spec
   Template.spec

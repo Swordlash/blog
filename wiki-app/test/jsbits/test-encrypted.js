@@ -482,6 +482,11 @@ function wiki_test_encrypted_live(message) {
   editor.close();
 }
 
+// The space in the middle of a conversion, as the server lists it.
+function wiki_test_encrypted_converting(space, way) {
+  wikiTestEncrypted.spaces.get(space).space.conversion = way;
+}
+
 // A reader of one space alone (a subspace), not of the spaces around it.
 function wiki_test_encrypted_add_reader(space, user) {
   wikiTestEncrypted.spaces.get(space).readers.push(user);

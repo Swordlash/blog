@@ -211,6 +211,7 @@ import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Export (Archive (..), readArchive, withoutHomeDocument, writeArchive)
 import Wiki.Core.Id (PageId, SpaceId, UserId)
 import Wiki.Core.Markdown (Destination (..), classifyDestination, parseMarkdown)
+import Wiki.Core.Offered qualified as Offered
 import Wiki.Core.Page (Page (attachments, body, id, title), PageSummary (id, title), summaryOf, templatePages, treePages)
 import Wiki.Core.Path (PathError (..), findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), canView, hasGlobalPermission, mayCreateSpace)
@@ -608,6 +609,9 @@ component =
             </button>
             <main class="wiki-content">
               {{ offlineCopyLine st }}
+              {% for why in maybeToList (conversionNotice st) %}
+                <p class="conversion-notice" role="status">{{ why }}</p>
+              {% end %}
               {% for e in maybeToList st.stale %}{{ staleNotice e RetryStale }}{% end %}
               {% for (_, unsaved) in maybeToList st.leaving %}
                 {{ leaveConfirm unsaved }}
@@ -2261,3 +2265,12 @@ routeSpace = \case
   where
     inside = Just . Just
     outside = Just Nothing
+
+-- | Why nothing can be written in the space shown, while a conversion of
+-- it runs ('Wiki.Core.Offered.refusalOf'): the views draw no control that
+-- writes then ("Wiki.App.View.Common"'s 'writable'), and this says why,
+-- above them.
+conversionNotice :: State m -> Maybe Text
+conversionNotice st = case st.here of
+  InSpace _ space _ -> Offered.refusalOf Offered.Write (chainOf (context st) space.id)
+  _ -> Nothing

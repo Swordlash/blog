@@ -283,6 +283,7 @@ import Wiki.Core.Markdown.Ast (mentionsWhole)
 import Wiki.Core.Markdown.Box (numberingName)
 import Wiki.Core.Markdown.Frame (framesInteractively)
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
+import Wiki.Core.Offered qualified as Offered
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder, savedAs)
 import Wiki.Core.PageKind (PageKind (..), knownKinds, pageKindName)
@@ -2073,7 +2074,7 @@ exportedPage :: (MonadIO m) => PageId -> StoredWiki m (Either WikiError Page)
 exportedPage pid = run Reads $ do
   c <- chainOfPage =<< findNode pid
   requireView c
-  requirePlain "An export" c
+  requireOffered Offered.ExportPlain c
   findPage pid
 
 -- | The file that holds a blob's bytes, if the blob id names one. An export
@@ -2199,7 +2200,7 @@ spacePagesTx :: SpaceId -> Tx [Page]
 spacePagesTx sid = do
   (s, c) <- findSpace sid
   requireView c
-  requirePlain "An export" c
+  requireOffered Offered.ExportPlain c
   pageTreeOrder s.pageOrder <$> db (loadPages sid)
 
 -- | The details each page of a space is listed with as a blog post: the
@@ -2449,7 +2450,7 @@ setSpaceProfileTx sid given = do
   avatar <- asks (\x -> s.owner >>= (`Map.lookup` x.avatars))
   let p = ownProfile avatar (if home then SpaceProfile {description = s.description, icon = given.icon, blog = s.blog, boxNumbering = s.boxNumbering} else given)
   checked <- either invalid pure (checkProfile s p)
-  when (checked.blog && not s.blog) (requirePlain "A blog" c)
+  when (checked.blog && not s.blog) (requireOffered Offered.MakeBlog c)
   let s' = withProfile checked s
   db (updateSpace s')
   -- The space's settings save the whole profile at once, so a save that
@@ -3049,8 +3050,8 @@ movePageTx pid destination asked = do
   -- space would need them encrypted again for that space, in a member's
   -- browser.
   when (destination /= p.space) $ do
-    requirePlain "Moving a page in or out of an encrypted space" source
-    requirePlain "Moving a page in or out of an encrypted space" target
+    requireOffered Offered.MovePageAcross source
+    requireOffered Offered.MovePageAcross target
   when (any (\q -> q.space /= destination) parentPage) $
     invalid "A page's parent has to be in the same space."
   when (any (`Set.member` subtree) parent) $
@@ -3074,7 +3075,7 @@ setPageTemplateTx pid template = do
   (s, c) <- findSpace p.space
   requireEdit c
   requireOrdinary p.space
-  requirePlain "A template" c
+  requireOffered Offered.MakeTemplate c
   when (template && s.homePage == Just pid) $
     invalid "A space's home page cannot be a template."
   db (setPageTemplateRow pid template)
@@ -3142,7 +3143,7 @@ uploadAttachmentTx pid name mediaType size store = do
   p <- findNode pid
   c <- chainOfPage p
   requireAttachTo c pid
-  requirePlain "An attachment" c
+  requireOffered Offered.AttachPlain c
   n <- either invalid pure (parseFileName name)
   when (size > fromIntegral maxAttachmentSize) $
     invalid ("An attachment can be at most " <> show (maxAttachmentSize `div` (1024 * 1024)) <> " MB.")
@@ -3173,7 +3174,7 @@ draftable pid = do
   p <- findNode pid
   c <- chainOfPage p
   requireEditPage c pid
-  requirePlain "A draft kept on the server" c
+  requireOffered Offered.KeepDraft c
   asks (\x -> x.author) >>= maybe (failWith Forbidden) pure
 
 getDraftTx :: PageId -> Tx (Maybe Draft)
@@ -3240,7 +3241,7 @@ restoreVersionTx pid at base = do
   p <- findNode pid
   c <- chainOfPage p
   requireSavePage c pid
-  requirePlain "Restoring a version on the server" c
+  requireOffered Offered.RestoreOnServer c
   v <- findVersion pid at
   savePageTx pid base v.title v.body
 
@@ -3258,7 +3259,13 @@ requirePlain what c = when (any (\s -> isJust s.encryption) c) (failWith (Confli
 -- | The reason a plain operation is refused in an encrypted space, as the
 -- application shows it.
 encryptedRefusal :: Text -> Text
-encryptedRefusal what = what <> " is not possible in an encrypted space: its pages are encrypted in its members' browsers, and the server cannot read them."
+encryptedRefusal = Offered.encryptedRefusal
+
+-- | 'Conflict' for an action the space's state refuses
+-- ('Wiki.Core.Offered.refusalOf'): the rule the interface asks before it
+-- draws the action's control.
+requireOffered :: Offered.Action -> [Space] -> Tx ()
+requireOffered a c = traverse_ (failWith . Conflict) (Offered.refusalOf a c)
 
 -- | The current key of an encrypted space, or 'Conflict' for a space whose
 -- pages are plain text.
@@ -4568,16 +4575,11 @@ setResolvedTx pid tid resolved = do
 -- and goes on, since staging an encrypted page is refused until then.
 
 -- | Why a write in a space being converted is refused.
-conversionRefusal :: Conversion -> Text
-conversionRefusal c =
-  "This space's pages are being "
-    <> (case c of Encrypting -> "encrypted"; Decrypting -> "decrypted")
-    <> " in the browser of one of its administrators, so nothing else can be written in it until that is done. An administrator of the space who holds its key continues it from the space's settings."
 
 -- | 'Conflict' while a conversion of a space of the chain runs: every
 -- write in it but the conversion's own is refused.
 requireNoConversion :: [Space] -> Tx ()
-requireNoConversion c = for_ (asum (map (\s -> s.conversion) c)) (failWith . Conflict . conversionRefusal)
+requireNoConversion = requireOffered Offered.Write
 
 -- | Whether a page of a space is read and written by the encrypted routes
 -- now ('Space.readsSealed'): asked of the database only while the space

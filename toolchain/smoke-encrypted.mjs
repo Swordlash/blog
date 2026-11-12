@@ -454,6 +454,42 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
       saw(`${path} as ${who}`, Buffer.from(await response.arrayBuffer()));
     }
   }
+  // ---- The detached preview, and the gate -------------------------------------
+
+  // The page's preview detached from its editor, in a window of its own:
+  // the page as saved, decrypted there.
+  const preview = await ada.context.newPage();
+  await preview.goto(url(`${pageAddress}live-preview/`));
+  await preview.locator("#app .live-preview-body", { hasText: marker("text") }).waitFor({ timeout });
+  await read(preview);
+  await preview.close();
+  console.log("ok: the page's detached preview shows it decrypted in its own window");
+
+  // Asking each time the space is opened: a page of it opened afresh
+  // shows nothing of it, and decrypts nothing, until the password is
+  // typed in its form.
+  const asking = await as(ada)(`encrypted/spaces/${encodeURIComponent(space.id)}/entry`, { method: "PUT", body: JSON.stringify({ entry: "confirm-each-time" }) });
+  assert.equal(asking.status, 200, "asking each time the space is opened");
+  const gated = await ada.context.newPage();
+  await gated.goto(url(pageAddress));
+  await gated.locator("#app .encrypted-confirm input[name=encrypted-password]").waitFor({ timeout });
+  const before = await gated.locator("#app").innerText();
+  for (const m of [title, marker("text"), marker("comment"), marker("reply")]) assert.ok(!before.includes(m), `${m} shown behind the gate`);
+  await gated.locator("#app .encrypted-confirm input[name=encrypted-password]").fill(admin.password);
+  await gated.locator("#app .encrypted-confirm-password").click();
+  await gated.locator("#app .page-view .page-body", { hasText: marker("text") }).waitFor({ timeout });
+  await read(gated);
+  // Left for the front page: nothing of the space on it.
+  await gated.locator("#app .wiki-brand").click();
+  await gated.waitForURL((u) => new URL(u).pathname === "/", { timeout });
+  await eventually(async () => {
+    const after = await gated.locator("#app").innerText();
+    for (const m of [title, marker("text")]) assert.ok(!after.includes(m), `${m} shown after leaving the gate`);
+  }, "nothing of the space after leaving its gate");
+  await gated.close();
+  assert.equal((await as(ada)(`encrypted/spaces/${encodeURIComponent(space.id)}/entry`, { method: "PUT", body: JSON.stringify({ entry: "at-once" }) })).status, 200, "asking no more");
+  console.log("ok: a space that asks each time shows and decrypts nothing until the password is typed in its form, and nothing once left");
+
   const checked = await assertNoCanary({ data, shown: shown.join("\n") });
   console.log(`ok: none of ${checked.markers} markers of the encrypted space is in any of ${checked.places} files, requests and answers`);
 

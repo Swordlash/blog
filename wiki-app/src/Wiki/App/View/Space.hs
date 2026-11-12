@@ -186,7 +186,7 @@ component =
     actions ctx space mode =
       [Router.link ctx.router Followed (NewPage path Nothing) [HP.class_ "button"] [HH.text "New page"] | mayEdit ctx space.id]
         <> [ Router.link ctx.router Followed (NewSpace (Just path)) [HP.class_ "button"] [HH.text "New subspace"]
-           | mayCreateSpace (principalOf ctx) (grantsOf ctx) (Just (chainOf ctx space.id))
+           | mayCreateSpace (principalOf ctx) (grantsOf ctx) (Just (chainOf ctx space.id)) && writable ctx space.id
            ]
         <> [ [hh|<button type="button" class="space-settings-toggle" aria-expanded={{ ariaBool managing }} onClick={{ const ToggleSettings }}>Space settings</button>|]
            | admin

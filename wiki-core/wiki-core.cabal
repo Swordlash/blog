@@ -96,6 +96,7 @@ library
       Wiki.Core.Markdown.Toc
       Wiki.Core.Math
       Wiki.Core.Notification
+    Wiki.Core.Offered
       Wiki.Core.Order
       Wiki.Core.Page
       Wiki.Core.PageKind
@@ -192,6 +193,7 @@ test-suite wiki-core-test
       Test.Search
       Test.Slides
       Test.Slug
+      Test.Offered
       Test.Space
       Test.Template
       Test.Title

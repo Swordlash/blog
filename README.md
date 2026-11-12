@@ -803,6 +803,31 @@ files until it is vacuumed. **Backups made before keep the plain text**,
 and the attachments' plain files they name stay in the data directory,
 until those backups are pruned: nothing deletes a backup.
 
+What can be done, and what cannot, in one place:
+
+- Added in the second part (#213): an export decrypted in your browser;
+  encrypting a space that has pages, and turning encryption off, page by
+  page, which can be stopped and turned back; asking for a passkey or your
+  password each time a space is opened; your keys deleted from the device
+  at a sign-out; titles of encrypted pages under the bell and in your
+  stars, decrypted in your browser; and the controls the server refuses in
+  an encrypted space, or while a space is converted, not offered. One rule
+  in `wiki-core` (`Wiki.Core.Offered`) decides both what the server takes
+  and what the interface draws.
+- Not possible in an encrypted space: templates, a blog and its feeds,
+  making it public, moving a page to or from another space, drafts kept on
+  the server, restoring a version on the server (your browser restores it
+  by saving it again), the server's exports (PDF, Markdown, the whole
+  wiki's, which leaves encrypted spaces out), importing into it, and the
+  server's search (your browser searches it).
+- Limits: the gate of a space that asks each time is the page's own, not
+  the encryption's (see above); the writing assistant sends the text you
+  ask it about, decrypted, to the provider you chose, as in any space; to
+  show who a page mentions, the browser asks the server which users the
+  logins mentioned belong to, so the server learns the logins, not the
+  text; a version older than one your browser read is caught only in a
+  browser that read the newer one.
+
 How it works:
 
 - The space has a key of its own, made in the browser that encrypts it.

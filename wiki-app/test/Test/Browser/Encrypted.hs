@@ -139,6 +139,7 @@ $( browserJS
      , ("js_tell_dropped", "wiki_test_encrypted_tell_dropped", Safe, [t|JSText -> IO ()|])
      , ("js_live", "wiki_test_encrypted_live", Safe, [t|JSText -> IO ()|])
      , ("js_document_title", "wiki_test_encrypted_document_title", Safe, [t|IO JSText|])
+     , ("js_converting", "wiki_test_encrypted_converting", Safe, [t|JSText -> JSText -> IO ()|])
      , ("js_headings_asked", "wiki_test_encrypted_headings_asked", Safe, [t|IO JSText|])
      , ("js_decrypted", "wiki_test_encrypted_decrypted", Safe, [t|IO JSText|])
      ]
@@ -1242,6 +1243,38 @@ spec m = do
     eventually (find ui ".notification-list .notification-page" >>= (`shouldHaveText` encryptedPageTitle))
     unsafeIOToPageM (fromJSText <$> js_document_title) >>= (`shouldSatisfy` (not . T.isInfixOf "Under the bell"))
     unmount ui
+
+  -- #213: the controls the server would refuse are not drawn, by the rule
+  -- the server's checks call ("Wiki.Core.Offered"): in an encrypted space,
+  -- the plain-only ones, which can never apply there; during a conversion,
+  -- every one that writes, with the conversion's reason said above the
+  -- view.
+  it "draws no control an encrypted space refuses, and during a conversion none that writes, saying why" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Controls" "Some text.")
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    ui <- startServer m (R.Page [secretSlug] [made.slug])
+    eventually (find ui ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Some text."))
+    -- Writes are offered; the plain-only ones are not.
+    _ <- find ui ".page-view .comments-toggle, .page-view .page-kind"
+    length <$> findAll ui ".use-as-template" `shouldReturn` 0
+    length <$> findAll ui ".conversion-notice" `shouldReturn` 0
+    unmount ui
+    settings <- startServer m (R.SpacePages [secretSlug])
+    find settings ".space-settings-toggle" >>= click
+    _ <- eventually (find settings ".entry-switch")
+    length <$> findAll settings ".space-blog" `shouldReturn` 0
+    length <$> findAll settings ".public-switch" `shouldReturn` 0
+    unmount settings
+    -- A conversion running: nothing that writes, and why.
+    unsafeIOToPageM (js_converting (toJSText secret.id.text) (toJSText ("encrypting" :: Text)))
+    during <- startServer m (R.Page [secretSlug] [made.slug])
+    eventually (find during ".conversion-notice" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "being encrypted"))
+    eventually (find during ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Some text."))
+    for_ [".page-kind", ".use-as-template", ".comment-new", ".comment-on-selection"] $ \c -> (c,) . length <$> findAll during c `shouldReturn` (c, 0)
+    unmount during
 
   it "turns asking each time on in the space's permissions, and asks the administrator who turned it on too" $ runPage $ do
     env <- encryptedSpace "user-admin"

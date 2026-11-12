@@ -444,7 +444,7 @@ component =
         H.raise (Did (event a))
 
     canComment :: State -> Bool
-    canComment st = mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space)
+    canComment st = mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space) && writable st.input.context st.input.space
 
 -- | The id of a thread's element, which the page view scrolls into view.
 threadElementId :: CommentThreadId -> Text

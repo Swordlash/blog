@@ -59,6 +59,7 @@ import Wiki.Core.Encrypted (Chain (..), Encapsulated (..), KeyGrant (..), PageKe
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Notification (Kind (..), Notification (..), PageLocation (..), WatchTarget (..))
+import Wiki.Core.Offered qualified as Offered
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
@@ -927,6 +928,42 @@ spec backing = describe "encrypted spaces in the storage" $ do
     let body = "{\"id\":\"6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f\",\"parent\":null,\"pageKey\":{\"keyId\":\"a\",\"spaceKeyId\":\"b\",\"wrapped\":{\"nonce\":\"n\",\"key\":\"k\"}},\"content\":{\"tag\":\"t\",\"keyId\":\"a\",\"title\":\"My plain title\",\"body\":\"My plain text\"}}"
     isLeft (eitherDecode body :: Either [Char] NewSealedPage) `shouldBe` True
     isLeft (eitherDecode "{\"content\":{\"title\":\"x\",\"body\":\"y\"}}" :: Either [Char] SealedEdit) `shouldBe` True
+
+  -- #213: the server's checks and the interface's controls ask one rule
+  -- ("Wiki.Core.Offered"): each plain-only action is refused in an
+  -- encrypted space, and every write during a conversion, with the very
+  -- reason the rule gives, which the interface shows or hides by.
+  describe "the rule the interface's controls share" $ do
+    it "refuses each plain-only action in an encrypted space, and every write during a conversion, with the rule's reason" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+          refusedAs a chain r = do
+            let reason = Offered.refusalOf a chain
+            reason `shouldSatisfy` isJust
+            Offered.offerOf a chain `shouldBe` Offered.Hidden
+            r `shouldBe` Left (Conflict (fromMaybe "" reason))
+      made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
+      plainSpace <- privateSpace st p.ada "Plain"
+      [chain] <- (\xs -> [[x] | x <- xs, x.id == secret.id]) <$> as p.ada listSpaces
+      refusedAs Offered.MakeTemplate chain =<< as p.ada (setPageTemplate pid True)
+      refusedAs Offered.KeepDraft chain =<< as p.ada (saveDraft pid made.updatedAt "Title" "Text")
+      refusedAs Offered.RestoreOnServer chain =<< as p.ada (restoreVersion pid made.updatedAt made.updatedAt)
+      refusedAs Offered.MovePageAcross chain =<< as p.ada (movePage pid plainSpace.id Nothing)
+      refusedAs Offered.MakeBlog chain =<< as p.ada (setSpaceProfile secret.id SpaceProfile {description = "", icon = Nothing, blog = True, boxNumbering = Space.InPage})
+      Offered.refusalOf Offered.Write chain `shouldBe` Nothing
+      -- During a conversion, every write: refused with the conversion's
+      -- reason, which the interface shows above a space whose controls
+      -- that write it does not draw.
+      converting <- privateSpace st p.ada "Converting"
+      page <- ok =<< as p.ada (createPage converting.id Nothing "A page" "Text.")
+      void (ok =<< as p.ada (startEncrypting converting.id StartEncrypting {keys = [startKey p converting.id]}))
+      [during] <- (\xs -> [[x] | x <- xs, x.id == converting.id]) <$> as p.ada listSpaces
+      let reason = Offered.refusalOf Offered.Write during
+      reason `shouldSatisfy` isJust
+      Offered.offerOf Offered.Write during `shouldBe` Offered.Unavailable (fromMaybe "" reason)
+      for_ [as p.ada (void <$> createPage converting.id Nothing "Another" "Text."), as p.ada (void <$> savePage page.id page.updatedAt "A page" "Changed."), as p.ada (void <$> setSpaceProfile converting.id SpaceProfile {description = "Changed", icon = Nothing, blog = False, boxNumbering = Space.InPage})] $ \w ->
+        w `shouldReturn` Left (Conflict (fromMaybe "" reason))
 
   -- #213: the titles under the bell and the stars, asked for by the pages'
   -- ids alone, encrypted, and only of the pages the caller may view whose

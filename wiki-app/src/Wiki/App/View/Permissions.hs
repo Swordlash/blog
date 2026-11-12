@@ -140,6 +140,7 @@ component =
       [hh|
         <section class="space-permissions" aria-label="Permissions">
           <h2>Permissions</h2>
+          {% if isNothing space.encryption %}
           <div class="permissions-public">
             <button
               type="button"
@@ -154,6 +155,7 @@ component =
             </button>
             <p class="permissions-intro">{{ publicText }}</p>
           </div>
+          {% end %}
           {% if isJust space.parent %}
             <div class="permissions-sealed">
               <button
