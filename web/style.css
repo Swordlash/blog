@@ -2497,7 +2497,8 @@ pre.numbered > code {
    slide's own colours; the dark frame around a slide, the notes and the
    controls are the page's. */
 .slides-view,
-.slides-preview {
+.slides-preview,
+.deck-embed {
   --slide-ratio: 16 / 9;
   --slide-background: #ffffff;
   --slide-text: #1f2328;
@@ -2522,7 +2523,8 @@ body:has(.slides-view) {
 }
 
 .slides-view.slides-standard,
-.slides-preview.slides-standard {
+.slides-preview.slides-standard,
+.deck-embed.slides-standard {
   --slide-ratio: 4 / 3;
 }
 
@@ -2564,9 +2566,13 @@ body:has(.slides-view) {
 }
 
 /* A presentation's viewer in a page (Wiki.App.View.DeckViewer): the
-   slide shown as the preview's card, scaled to the viewer's width, with
-   its controls under it. The fit and the speaker notes are the editor's,
-   not shown here. Printed, the slide alone, whole. */
+   slide shown as the preview's card, as wide as the viewer, with its
+   controls under it. It is sized as the slides view is, by the slide's
+   container alone (the slide's width and type are in container units):
+   no script sets its size, so the page the server renders is the page the
+   program shows. The other slides are not shown. The fit and the speaker
+   notes are the editor's, not shown here. Printed, the slide alone,
+   whole. */
 .deck-embed {
   display: block;
   max-width: 48rem;
@@ -2584,7 +2590,18 @@ body:has(.slides-view) {
 }
 
 .deck-embed .slide-frame {
+  display: flex;
   margin-bottom: 0.5rem;
+}
+
+.deck-embed .slide-frame.slide-offstage {
+  display: none;
+}
+
+.deck-embed .slide-slot {
+  flex: none;
+  width: 100%;
+  aspect-ratio: var(--slide-ratio);
 }
 
 .deck-embed .slide-fit,

@@ -1,4 +1,5 @@
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | 'DeckViewer' is a viewer of a presentation in a page (WP5.97 of
 -- docs/PLAN.md): one slide at a time, as a card of the deck's shape and
@@ -40,10 +41,13 @@ import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
-import Halogen.JSBits (inBrowser)
+import Halogen.JSBits (Callback, Safety (..), browserJS, freeCallback, inBrowser, mkSyncCallback)
 import Halogen.Router qualified as Router
+import Halogen.Subscription qualified as HS
 import Halogen.TH (hh)
 import Protolude hiding (First, Last, State)
+-- With its constructor: the FFI passes the value inside the newtype.
+import Web.DOM.Internal.Types (Element (..))
 import Web.Event.Event (Event, EventType (..))
 import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..))
@@ -51,7 +55,6 @@ import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (PageLink (..), Route (..))
-import Wiki.App.SlideFit (FitWatch, stopFits, watchFits)
 import Wiki.App.View.Body (IslandSlots, Place (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common (Context (..), documentRoute, spacePathOf)
@@ -96,14 +99,22 @@ data State = State
   , step :: Int
   -- ^ Its step shown, from 1.
   , root :: H.RefLabel
-  , watch :: Maybe FitWatch
+  , near :: Maybe (Int, Callback)
+  -- ^ The watch for the link coming near the window, until it does.
   }
 
 -- | A move through the deck's steps.
 data Move = First | Back | Forward | Last
   deriving stock (Eq)
 
-data Action = Initialize | Finalize | Receive Input | Go Move | FollowLink ArticleLink | Fetched Loaded
+data Action = Initialize | Finalize | Receive Input | Go Move | FollowLink ArticleLink | Near | Fetched Loaded
+
+$( browserJS
+     ["jsbits/deck-viewer.js"]
+     [ ("js_when_near", "wiki_deck_when_near", Safe, [t|Element -> Callback -> IO Int|])
+     , ("js_stop", "wiki_deck_stop", Safe, [t|Int -> IO ()|])
+     ]
+ )
 
 component :: forall query m. (MonadLoad m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input Void m
 component =
@@ -111,7 +122,7 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           root <- H.newRefLabel "deck-viewer"
-          pure State {input, loaded = shownOf input, current = 1, step = 1, root, watch = Nothing}
+          pure State {input, loaded = shownOf input, current = 1, step = 1, root, near = Nothing}
       , render
       , eval =
           H.mkEval
@@ -125,7 +136,7 @@ component =
   where
     render :: State -> H.ComponentHTML Action Slots m
     render st = case st.loaded of
-      Link -> linkOf st.input
+      Link -> linkOf st.root st.input
       Ready place page deck ->
         let count = length deck.slides
             shown = [showingStep (if n == st.current then st.step else s.steps) s | (n, s) <- zip [1 ..] deck.slides]
@@ -136,7 +147,7 @@ component =
          in [hh|
               <div
                 ref={{ st.root }}
-                class="deck-embed slides-preview {{ deckClasses deck }}"
+                class="deck-embed {{ deckClasses deck }}"
                 tabindex="0"
                 role="region"
                 {{ [HP.attr (HH.AttrName "aria-label") (page.title <> ", as slides")] }}
@@ -159,39 +170,47 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Slots Void m ()
     handleAction = \case
+      -- An embedded page is read only in a browser, once the page has been
+      -- adopted (a child is initialized after the tree's first render),
+      -- and only when the link comes near the window: the server's render
+      -- and the static prerender run natively, where the viewer is the
+      -- link and asks the backend for nothing, so the page carries no
+      -- embedded page and adoption repairs nothing.
       Initialize -> do
         st <- get
         case st.input.target of
-          Shown {} -> startWatch
-          -- Only in a browser, once the page has been adopted (a child is
-          -- initialized after the tree's first render): the server's
-          -- render and the static prerender run natively, where the
-          -- viewer is the link and asks the backend for nothing, so the
-          -- page carries no embedded page and adoption repairs nothing.
-          Linked embedded host -> when inBrowser . void . H.fork $ do
+          Linked {}
+            | inBrowser ->
+                H.getRef st.root
+                  >>= traverse_
+                    ( \element -> do
+                        channel <- liftIO HS.create
+                        void (H.subscribe channel.emitter)
+                        callback <- liftIO (mkSyncCallback (const (HS.notify channel.listener Near)))
+                        i <- liftIO (js_when_near element callback)
+                        modify (\s -> s {near = Just (i, callback)})
+                    )
+          _ -> pass
+      Finalize -> gets (\st -> st.near) >>= traverse_ (\(i, callback) -> liftIO (js_stop i >> freeCallback callback))
+      Near -> do
+        st <- get
+        for_ st.near $ \(_, callback) -> liftIO (freeCallback callback)
+        modify (\s -> s {near = Nothing})
+        case st.input.target of
+          Linked embedded host -> void . H.fork $ do
             found <- lift (attempt (fetchDeck st.input.context host embedded))
             handleAction (Fetched (either (const Link) identity found))
-      Finalize -> gets (\st -> st.watch) >>= traverse_ stopFits
+          Shown {} -> pass
       Receive new -> case new.target of
         -- The page view's page, as it has it now.
         Shown {} -> modify (\st -> st {input = new, loaded = shownOf new}) >> clampStep
         Linked {} -> modify (\st -> st {input = new})
-      Fetched loaded -> do
-        modify (\st -> st {loaded})
-        startWatch
+      Fetched loaded -> modify (\st -> st {loaded})
       Go move -> do
         modify (moved move)
       FollowLink target -> do
         router <- gets (\st -> st.input.context.router)
         H.liftEffect (followArticleLink router target)
-
-    -- The cards scaled to the viewer's width (the measure's scaling).
-    startWatch :: H.HalogenM State Action Slots Void m ()
-    startWatch = do
-      st <- get
-      case st.loaded of
-        Ready {} | isNothing st.watch -> H.getRef st.root >>= traverse_ (\element -> watchFits element (const pass) >>= \watch -> modify (\s -> s {watch}))
-        _ -> pass
 
     -- The slide and step shown kept within a deck that changed.
     clampStep :: H.HalogenM State Action Slots Void m ()
@@ -218,9 +237,9 @@ component =
 
 -- | The link the embed is without the class: what the viewer shows until
 -- it has a presentation to show, and for anything else.
-linkOf :: Input -> H.ComponentHTML Action Slots m
-linkOf input = case input.target of
-  Linked (PageLink route fragment) _ -> HH.a [HP.href (Router.href input.context.router route <> fragment)] [HH.text input.caption]
+linkOf :: H.RefLabel -> Input -> H.ComponentHTML Action Slots m
+linkOf root input = case input.target of
+  Linked (PageLink route fragment) _ -> HH.a [HP.ref root, HP.href (Router.href input.context.router route <> fragment)] [HH.text input.caption]
   Shown place page -> HH.a [HP.href (Router.href input.context.router (Page (spacePathOfPlace place) place.path))] [HH.text page.title]
 
 -- | What the viewer has from its input alone: the page view's own

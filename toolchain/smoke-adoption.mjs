@@ -1,6 +1,6 @@
 // What the smoke tests (toolchain/smoke-test.mjs, the demo's, and
 // toolchain/smoke-test-server.mjs, the server's) allow the program to
-// change on a page it adopts. Each test marks the page the server sent,
+// change on a page it adopts, and to ask the API for once it has started. Each test marks the page the server sent,
 // lets the program adopt it, and counts every change since as a repair:
 // HTML that a page rendered ahead got wrong. A few attributes are written
 // by the page's scripts from what only the browser knows, and are not
@@ -35,4 +35,41 @@ const fittedHeight = /^height: \d+px;$/;
 export function adoptionMayChange({ fitted, name, before, after }) {
   if (scriptAttributes.includes(name)) return true;
   return fitted && name === "style" && before === undefined && after !== undefined && fittedHeight.test(after);
+}
+
+// The pages a page embeds as presentations (WP5.97 of docs/PLAN.md): each
+// embed `![Caption](destination){.presentation}` in its Markdown, its
+// destination read as the page's links are, as a path in the page's
+// space: from the space's top (/s/<space>/p/<path>/) or, without a
+// leading slash, from the page's parent. Each as its path, with no slash
+// at either end, once; an embed shown as code in a fence is none. A page's address of another form (its permanent one) is
+// left out, and a request for it is not a viewer's.
+export function presentationsEmbedded(markdown, pagePath) {
+  const found = new Set();
+  // An embed written in a fenced code block is code, not an embed.
+  const text = markdown.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, "");
+  for (const [, destination, braces] of text.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)\{([^}]*)\}/g)) {
+    if (!braces.split(/\s+/).includes(".presentation")) continue;
+    const absolute = /^\/s\/[^/]+\/p\/(.+?)\/?$/.exec(destination);
+    if (absolute) found.add(absolute[1]);
+    else if (!destination.startsWith("/") && !destination.includes(":")) {
+      const parent = pagePath.split("/").filter(Boolean).slice(0, -1);
+      found.add([...parent, ...destination.split("/").filter(Boolean)].join("/"));
+    }
+  }
+  return [...found];
+}
+
+// Whether a request the program made once it had started on an adopted
+// page is a presentation viewer's (Wiki.App.View.DeckViewer): a read of a
+// page the adopted page embeds with the class presentation
+// ('presentationsEmbedded'), at the API's address of a page at a path,
+// .../spaces/<space>/pages/at/<path>. The page an embed names is not
+// carried by the page that embeds it, and must not be, so the viewer
+// reads it once it is near the window. A request for the adopted page
+// itself, its space's list of pages, or anything else the page carries,
+// is not a viewer's.
+export function viewerAsks(requestUrl, embedded) {
+  const at = /\/api\/v1\/spaces\/[^/]+\/pages\/at\/(.+)$/.exec(new URL(requestUrl).pathname);
+  return at !== null && embedded.includes(decodeURIComponent(at[1]).replace(/\/$/, ""));
 }

@@ -1,6 +1,7 @@
 -- | A presentation embedded in a page, and the page view of a
 -- presentation (WP5.97 of docs/PLAN.md), in a browser, in the shell, over
--- the demo's wiki: the viewer shows a slide at a time with its controls,
+-- the demo's wiki: the viewer is the link until it comes near the window,
+-- then shows a slide at a time with its controls,
 -- and its keys only while it has the focus; a page the reader may not
 -- read, and a document, are what the embed shows without the class, with
 -- nothing of the page in the page, in memory and over HTTP; a page that
@@ -35,6 +36,9 @@ spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIsl
 spec m = do
   it "shows a presentation embedded in a page a slide at a time, with its controls, and moves by its own keys only" $ runPage $ do
     ui <- start m Nothing (Page docs guide)
+    -- Far down the page, it is the link until it comes near the window.
+    length <$> findAll ui ".deck-embed" `shouldReturn` 0
+    bringNear ui
     viewer <- find ui "article.page-body .deck-embed"
     position ui `shouldReturn` "1 / 9"
     cardTitle ui "article.page-body" `shouldReturn` "Presentations"
@@ -95,6 +99,7 @@ spec m = do
     answerRaw "GET" refused 403 "{\"error\":\"forbidden\",\"message\":\"Forbidden\"}"
     ui <- startServer m (Page docs guide)
     _ <- find ui "article.page-body h1"
+    bringNear ui
     eventually $ ((\r -> r.url) <$>) <$> asked >>= (`shouldSatisfy` elem refused)
     -- Refused: the link, as without the class, and no banner.
     eventually $ find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child" >>= (`shouldHaveText` "Presentations")
@@ -110,6 +115,7 @@ spec m = do
       (\p -> p.body) . either (panic . show) identity <$> getPage space.id presentations
     (shown, _) <- changed [(["docs"], ["markdown-guide", "presentations"], deck <> "\n\n## Itself\n\n![Itself](/s/docs/p/markdown-guide/presentations/){.presentation}\n")] Nothing (Page docs presentations)
     _ <- find shown ".page-deck .deck-embed"
+    find shown "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child" >>= focus
     eventually $ length <$> findAll shown "article.page-body .deck-embed" `shouldReturn` 1
     length <$> findAll shown ".deck-embed .deck-embed" `shouldReturn` 0
     -- Inside each viewer, the embed is its link.
@@ -146,6 +152,11 @@ spec m = do
         switchUser (UserId <$> who)
       ui <- startOn m wiki at
       pure (ui, wiki)
+
+-- | Bring the guide's embedded presentation near the window: the focus on
+-- its link scrolls to it.
+bringNear :: Mounted s q o m -> PageM s ()
+bringNear ui = find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child" >>= focus
 
 -- | The slide's number out of the deck's, as the page's first viewer
 -- shows it.
