@@ -789,7 +789,6 @@ component =
       -- or it is loaded now. From now on its comments' events are
       -- received, and the comments are loaded if they were not with it.
       Initialize -> do
-        Body.startOwned ownersOf' setOwners
         subscribeFeed
         gets (\st -> st.loaded) >>= \case
           Loading -> load >> H.liftEffect revealFragment
@@ -831,7 +830,7 @@ component =
         barred <- gets (\st -> not elsewhere && unsaved st && not (mayEditShown st))
         when barred $ stage (Ticking.Clear MayNoLongerEdit)
         when elsewhere $ do
-          Body.resetOwned ownersOf' setOwners
+          Body.releaseOwned ownersOf' setOwners
           unwatchAll
           -- Another page or version: the shell asked before leaving the
           -- ticks ('HasUnsaved'), and the reader chose Leave.

@@ -1570,7 +1570,6 @@ component =
       -- After the first render, so that render is the same whatever the
       -- browser has stored.
       Initialize -> do
-        Body.startOwned (\st -> st.owners) (\owners st -> st {owners})
         remembered <- H.liftEffect (Storage.getItem LocalStorage sideBySideKey)
         when (remembered == Just (Right True)) $
           modify (\st -> st {sideBySide = True, previewMounted = True})
@@ -2111,7 +2110,7 @@ component =
     loadWork :: H.HalogenM State Action Slots ViewOutput m ()
     loadWork = do
       input <- gets (\st -> st.input)
-      owner <- gets (\st -> st.owners.shown)
+      owner <- Body.ensureOwned (\st -> st.owners) (\owners st -> st {owners})
       Fetched loaded found hasDraft <- fetchWork owner input
       modify (\st -> st {loaded, found, hasDraft, loads = st.loads + 1, conflict = Nothing, changedSince = Nothing})
       syncGuard
@@ -2123,7 +2122,7 @@ component =
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
-      owner <- gets (\st -> st.owners.shown)
+      owner <- Body.ensureOwned (\st -> st.owners) (\owners st -> st {owners})
       loaded <- either Failed (\(page, addresses) -> Ready (workOf page addresses)) <$> fetchPage owner input
       modify (\st -> st {loaded, loads = st.loads + 1, conflict = Nothing, changedSince = Nothing})
       syncGuard
@@ -2350,7 +2349,7 @@ component =
     conflicted :: Text -> After -> H.HalogenM State Action Slots ViewOutput m ()
     conflicted why after = do
       input <- gets (\st -> st.input)
-      owner <- gets (\st -> st.owners.shown)
+      owner <- Body.ensureOwned (\st -> st.owners) (\owners st -> st {owners})
       fetchPage owner input >>= \case
         Left _ -> modify (\st -> st {problem = Just (Conflict why)})
         Right (theirs, theirAddresses) -> do
@@ -2396,7 +2395,7 @@ component =
           case result of
             Left e -> modify (\st -> st {problem = Just e})
             Right a -> do
-              owner <- gets (\st -> st.owners.shown)
+              owner <- Body.ensureOwned (\st -> st.owners) (\owners st -> st {owners})
               url <- attachmentUrl owner a
               download <- attachmentDownloadUrl owner a
               frame <- attachmentFrameUrl a

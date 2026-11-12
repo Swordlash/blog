@@ -46,8 +46,7 @@ module Wiki.App.View.Body
   , ownersOf
   , beginOwned
   , settleOwned
-  , startOwned
-  , resetOwned
+  , ensureOwned
   , releaseOwned
   , People (..)
   , noPeople
@@ -84,7 +83,7 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude
 import Web.Event.Event (EventType (..))
-import Wiki.App.Backend (MonadWiki (..), Session (boxes, user), UrlOwner)
+import Wiki.App.Backend (MonadWiki (..), Session (boxes, user), UrlOwner, noUrlOwner)
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Browser (ArticleLink, articleLink)
 import Wiki.App.Islands (MonadIslands)
@@ -158,8 +157,8 @@ attachmentAddresses owner attachments = do
 -- ("Wiki.App.Backend"'s 'UrlOwner'): the one whose addresses it shows,
 -- and those of its fetches not answered yet. Every owner a view asks for
 -- is registered here before any address is asked for under it, so that
--- 'resetOwned' (the view goes to another page) and 'releaseOwned' (the
--- view closes) let go of every address the view made, those of a fetch that
+-- 'releaseOwned', which the view runs when it goes to another page or
+-- closes, lets go of every address the view made, those of a fetch that
 -- was cut short included. Every view that shows attachments keeps its
 -- owners this way.
 data Owners = Owners
@@ -195,31 +194,35 @@ settleOwned get' set' o taken = do
       modify (set' Owners {shown = before.shown, pending = pending'})
       releaseUrls o
 
--- | The view starts (its @Initialize@): it registers the owner it shows
--- under from now on. Its initial state asked under 'noUrlOwner', which
--- no backend registers: an initial state may run for a component that
--- never starts, and then never ends to let go of what it registered.
-startOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m ()
-startOwned = resetOwned
+-- | The owner a view asks under for what it shows, registered the first
+-- time it is asked for. A view's initial state asks under 'noUrlOwner',
+-- which no backend registers: an initial state may run for a component
+-- that never starts, and then never ends to let go of what it registered.
+-- Nor does a view register anything as it starts: a start's first step is
+-- what the server's rendering waits for, and what the first render shows
+-- is decided before it. So the owner is registered where the view first
+-- asks for addresses under it.
+ensureOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m UrlOwner
+ensureOwned get' set' = do
+  os <- gets get'
+  if os.shown /= noUrlOwner
+    then pure os.shown
+    else do
+      o <- newUrlOwner
+      modify (set' Owners {shown = o, pending = os.pending})
+      pure o
 
 -- | Let go of every owner the view registered, those of its fetches not
--- answered included, which then make no address, and register a new owner
--- for what the view shows next: the view goes to another page.
-resetOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m ()
-resetOwned get' set' = do
-  releaseOwned get' set'
-  fresh <- newUrlOwner
-  modify (set' (ownersOf fresh))
-
--- | Let go of every owner the view registered, those of its fetches not
--- answered included, and register none: the view closes. What a view
--- registers, the view releases, and a view that is going away registers
--- nothing, so the backend's owners are as many after a view as before.
+-- answered included, which then make no address, and register none: the
+-- view goes to another page, or closes. What comes next registers its own
+-- ('beginOwned', 'ensureOwned'). What a view registers, the view releases,
+-- and a view that is going away registers nothing, so the backend's owners
+-- are as many after a view as before.
 releaseOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m ()
 releaseOwned get' set' = do
   os <- gets get'
-  traverse_ releaseUrls (os.shown : os.pending)
-  modify (set' Owners {shown = os.shown, pending = []})
+  traverse_ releaseUrls (filter (/= noUrlOwner) (os.shown : os.pending))
+  modify (set' (ownersOf noUrlOwner))
 
 -- | The URL a link to an attachment leads to: its download's, or its own.
 linkUrlOf :: Addresses -> AttachmentId -> Text

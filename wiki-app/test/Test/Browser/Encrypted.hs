@@ -456,36 +456,38 @@ spec m = do
     tab <- unsafeIOToPageM (newHttpEnv browserTransport)
     let held = unsafeIOToPageM (ownersHeld tab)
         docs = either (const (panic "not a slug")) identity . mkSlug
-        routes =
-          [ R.Page [docs "docs"] [docs "tour"]
-          , R.EditPage [docs "docs"] [docs "tour"]
-          , R.PageSlides [docs "docs"] [docs "tour"] 1 1
-          , R.LivePreview [docs "docs"] [docs "tour"]
-          , R.Page [secretSlug] [made.slug]
-          , R.EditPage [secretSlug] [made.slug]
-          , R.PageSlides [secretSlug] [made.slug] 1 1
-          , R.LivePreview [secretSlug] [made.slug]
-          ]
+        -- Each view, and what shows it is open: on the encrypted page, its
+        -- attachment decrypted, so that it holds an owner with addresses.
+        plain = [(R.Page [docs "docs"] [docs "tour"], ".page-view .page-body"), (R.EditPage [docs "docs"] [docs "tour"], ".editor"), (R.PageSlides [docs "docs"] [docs "tour"] 1 1, ".slides-view .slide"), (R.LivePreview [docs "docs"] [docs "tour"], ".live-preview-body")]
+        sealed = [(R.Page [secretSlug] [made.slug], ".page-view img[src^='blob:']"), (R.EditPage [secretSlug] [made.slug], ".editor-attachments a[href^='blob:']"), (R.PageSlides [secretSlug] [made.slug] 1 1, ".slides-view img[src^='blob:']"), (R.LivePreview [secretSlug] [made.slug], ".live-preview-body img[src^='blob:']")]
     before <- held
     -- Unmounting runs a view's finalizer on the component tree's loop, after
     -- the unmount returns: 'settle' lets the loop run what is queued, the
     -- finalizer among it, before the owners are counted. Each view, closed,
     -- leaves the count where it was: an owner left behind is found at the
     -- view that left it.
-    let openAndClose route = do
+    let openAndClose (route, shown) = do
           ui <- startServerOver m tab route
-          -- The view is open, and holds an owner.
-          eventually (held >>= (`shouldSatisfy` (> before)))
+          _ <- eventuallyWithin 8000 (find ui shown)
           unmount ui
           settle
           (route,) <$> held `shouldReturn` (route, before)
-    for_ [1 .. 5 :: Int] $ \_ -> for_ routes openAndClose
+    for_ [1 .. 5 :: Int] $ \_ -> for_ (plain <> sealed) openAndClose
     -- Closed while their fetches are still out: the encrypted page's, and its
-    -- attachment's bytes, held back. What they would have made, they make
-    -- for no owner once they come.
-    holdAt "GET" (endpointUrl (\e -> e.encrypted.pageAt secret.id [made.slug]))
+    -- attachment's bytes, held back, once each view is there. What they
+    -- would have made, they make for no owner once they come.
+    let pageAt = endpointUrl (\e -> e.encrypted.pageAt secret.id [made.slug])
+        askedFor = length . filter (\r -> r.url == pageAt) <$> asked
+    holdAt "GET" pageAt
     holdAt "GET" ("api/v1/attachments/" <> attached.id.text <> "/" <> attached.id.text)
-    for_ (drop 4 routes) openAndClose
+    for_ (map fst sealed) $ \route -> do
+      n <- askedFor
+      ui <- startServerOver m tab route
+      -- The view asked for the page, and waits for it.
+      eventually (askedFor >>= (`shouldSatisfy` (> n)))
+      unmount ui
+      settle
+      (route,) <$> held `shouldReturn` (route, before)
     release
     settle
     held `shouldReturn` before

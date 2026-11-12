@@ -170,7 +170,6 @@ component =
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
       Initialize -> do
-        Body.startOwned (\st -> st.owners) (\owners st -> st {owners})
         -- The channel first, so that an open editor is asked at once, and
         -- what it says is shown whether or not the page has loaded.
         input <- gets (\st -> st.input)
@@ -183,7 +182,7 @@ component =
         fetched <- gets (\st -> st.fetched)
         unless fetched $ do
           shownPage <- gets (\st -> st.page)
-          owner <- gets (\st -> st.owners.shown)
+          owner <- Body.ensureOwned (\st -> st.owners) (\owners st -> st {owners})
           Fetched saved attachments addresses <- lift (fetchSaved owner input)
           modifyFor shownPage $ \st ->
             st
@@ -208,7 +207,7 @@ component =
         -- and its own editor to listen for.
         when (liveKey old.space.id old.path /= liveKey input.space.id input.path) $ do
           stopListening
-          -- 'Initialize', run again for the new page, registers its owner.
+          -- The new page's fetch registers its own owner.
           Body.releaseOwned (\st -> st.owners) (\owners st -> st {owners})
           modify (\st -> st {shown = Loading, attachments = [], addresses = Body.noAddresses, page = st.page + 1, fetched = False})
           handleAction Initialize
@@ -225,8 +224,9 @@ component =
               -- is told to fetch from now on.
               lift endPreload
               modify (\st -> st {refreshes = st.refreshes + 1})
-              State {input, page = shownPage, refreshes = refresh, owners} <- get
-              lift (fetchSaved owners.shown input) >>= \case
+              owner <- Body.ensureOwned (\st -> st.owners) (\owners st -> st {owners})
+              State {input, page = shownPage, refreshes = refresh} <- get
+              lift (fetchSaved owner input) >>= \case
                 Fetched (Shows {}) attachments addresses ->
                   modifyFor shownPage (\st -> if st.refreshes == refresh then st {attachments, addresses} else st)
                 -- Not fetched: the attachments as they were.

@@ -336,7 +336,6 @@ component =
       -- page was loaded with the initial state, and the shell is told; or
       -- it is loaded now.
       Initialize -> do
-        Body.startOwned ownersOf' setOwners
         keys <- H.liftEffect slideKeys
         void $ H.subscribe (Key <$> keys)
         gets (\st -> st.loaded) >>= \case
@@ -358,7 +357,7 @@ component =
         case () of
           _
             | elsewhere -> do
-                Body.resetOwned ownersOf' setOwners
+                Body.releaseOwned ownersOf' setOwners
                 modify (\s -> s {loaded = Loading, current = 1, step = 1, notesOpen = False, overview = False, asked = []})
                 load
             | old.context.revision /= input.context.revision -> load
