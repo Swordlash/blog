@@ -14,7 +14,7 @@ module Test.Browser.SlideEditor (spec) where
 import Control.Monad.UUID (MonadUUID)
 import Data.IORef (IORef)
 import Data.Text qualified as T
-import Halogen.JSBits (Safety (..), browserJS)
+import Halogen.JSBits (JSText, Safety (..), browserJS, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, startOn, startWith)
@@ -35,7 +35,7 @@ import Wiki.Core.Space (Space (id))
 
 $( browserJS
      ["jsbits/test-slides.js"]
-     [ ("js_ctrl_click_slide", "wiki_test_ctrl_click_slide", Safe, [t|Int -> IO Bool|])
+     [ ("js_ctrl_click", "wiki_test_ctrl_click", Safe, [t|JSText -> Int -> IO Bool|])
      ]
  )
 
@@ -52,7 +52,7 @@ spec m = do
     watchEditor ui
     toggles ui >>= traverse_ click . (`atMay` 2)
     eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7), (13, 15)]
-    unsafeIOToPageM (js_ctrl_click_slide 3) `shouldReturn` True
+    unsafeIOToPageM (js_ctrl_click (toJSText ".editor-cm .cm-wiki-slide-toggle") 3) `shouldReturn` True
     eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7)]
     -- An open slide's button closes it.
     toggles ui >>= traverse_ click . (`atMay` 3)
@@ -60,6 +60,30 @@ spec m = do
     -- Folds change what is shown, never the text.
     inputsSeen ui `shouldReturn` 0
     markdown ui `shouldReturn` deck
+
+  it "opens one slide and closes the others by its fold's mark and by the keys too, keeps them open with Ctrl, and leaves them as they are when an edit opens one" $ runPage $ do
+    (ui, _) <- openDeck
+    host <- editorHost ui
+    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(5, 7), (9, 11), (13, 15)]
+    -- The marks of "One", "Two" and "Three", in the order of the text.
+    findAll ui ".editor-cm .cm-wiki-folded" >>= traverse_ click . (`atMay` 1)
+    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7), (13, 15)]
+    -- Now the title slide's, "One"'s and "Three"'s: Ctrl on the click on
+    -- "Three"'s keeps "Two" open.
+    unsafeIOToPageM (js_ctrl_click (toJSText ".editor-cm .cm-wiki-folded") 2) `shouldReturn` True
+    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7)]
+    -- The key that unfolds the cursor's line.
+    selectText ui (lineStart deck 5) (lineStart deck 5)
+    press "Control+Shift+BracketRight"
+    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (9, 11), (13, 15)]
+    -- Backspace at the start of the line after "Two" joins it to the
+    -- hidden last line: an edit opens the fold, and the others stay.
+    selectText ui (lineStart deck 12) (lineStart deck 12)
+    press "Backspace"
+    eventually $ markdown ui `shouldReturn` T.replace "Second.\n\n" "Second.\n" deck
+    unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (12, 14)]
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` deck
 
   it "switches to the raw Markdown and back, which the browser keeps, changing no byte, of a text with carriage returns and no final line break too" $ runPage $ do
     (ui, wiki) <- openDeck

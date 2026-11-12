@@ -512,6 +512,12 @@ const offeredFold = foldService.of((state, lineStart, lineEnd) => {
 
 // The mark a fold leaves at the end of its first line: three dots, which a
 // click unfolds, read out as how many lines are hidden.
+// Whether Ctrl or Cmd is held on the click on a fold's mark being
+// handled: the "wiki-folds" event it makes says so (wikiMore), so that
+// opening a presentation's slide that way keeps the others open, as its
+// button does.
+let foldClickMore = false;
+
 const foldMark = (view, onclick, hidden) => {
   const mark = document.createElement("span");
   mark.className = "cm-foldPlaceholder cm-wiki-folded";
@@ -520,7 +526,14 @@ const foldMark = (view, onclick, hidden) => {
   mark.title = label;
   mark.setAttribute("role", "button");
   mark.setAttribute("aria-label", label);
-  mark.onclick = onclick;
+  mark.onclick = (event) => {
+    foldClickMore = event.ctrlKey || event.metaKey;
+    try {
+      onclick(event);
+    } finally {
+      foldClickMore = false;
+    }
+  };
   return mark;
 };
 
@@ -1560,13 +1573,24 @@ export function attach(textarea, host, original, codeTokens) {
         // The folds changed other than by the component (the gutter, the
         // keys, the mark, or an edit that moved or opened one): told as
         // JSON [[first, last]]. A fold that only moved within its lines
-        // (text typed before its mark) is nothing new.
+        // (text typed before its mark) is nothing new. The event also says
+        // whether an edit made the change (wikiByEdit), whether Ctrl or Cmd
+        // was held on the mark's click (wikiMore), and, for a change no
+        // edit made, the first lines of the folds it opened, as JSON
+        // (wikiOpened): a presentation's editor closes the other slides
+        // when the author opens one (WP5.97).
         if (foldedRanges(update.startState) !== foldedRanges(update.state)) {
           const now = JSON.stringify(foldedLinesOf(update.state));
           if (now !== toldFolds) {
             toldFolds = now;
             if (!update.transactions.some((tr) => tr.annotation(byProgram))) {
-              host.dispatchEvent(new CustomEvent("wiki-folds", { detail: now }));
+              const event = new CustomEvent("wiki-folds", { detail: now });
+              const firsts = (state) => foldedLinesOf(state).map(([first]) => first);
+              const still = new Set(firsts(update.state));
+              event.wikiByEdit = update.docChanged;
+              event.wikiMore = foldClickMore;
+              event.wikiOpened = JSON.stringify(update.docChanged ? [] : firsts(update.startState).filter((first) => !still.has(first)));
+              host.dispatchEvent(event);
             }
           }
         }

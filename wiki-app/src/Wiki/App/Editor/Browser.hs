@@ -82,6 +82,8 @@ module Wiki.App.Editor.Browser
   , unfoldLines
   , foldedLines
   , reportedFolds
+  , FoldsChange (..)
+  , foldsChange
 
     -- * Slides
   , markSlides
@@ -251,6 +253,20 @@ $( jsFields
      [ Fixed "from" ''Int
      , Fixed "to" ''Int
      , Fixed "after" ''Bool
+     ]
+ )
+
+-- | A @wiki-folds@ event, with what CodeMirror adds to it: whether an
+-- edit changed the folds, whether Ctrl or Cmd was held on the click on a
+-- fold's mark, and the folds the change opened.
+newtype FoldsEvent = FoldsEvent JSVal
+  deriving newtype (Inert)
+
+$( jsFields
+     ''FoldsEvent
+     [ Fixed "wikiByEdit" ''Bool
+     , Fixed "wikiMore" ''Bool
+     , Fixed "wikiOpened" ''Text
      ]
  )
 
@@ -642,6 +658,24 @@ appendSlide host title = edit host $ \old _ ->
         | otherwise = "\n\n"
       start = T.length old + T.length gap + 3
    in (old <> gap <> "## " <> title <> "\n", Selection start (start + T.length title))
+
+-- | 'FoldsChange' is how the folds changed, as a @wiki-folds@ event tells
+-- it beside the folds ('reportedFolds'): whether an edit changed them
+-- (typing into a fold, an undo), whether Ctrl or Cmd was held on the click
+-- on a fold's mark, and, when no edit did, the first lines of the folds
+-- the author opened (by the mark, the keys or the gutter).
+data FoldsChange = FoldsChange
+  { byEdit :: Bool
+  , more :: Bool
+  , opened :: [Int]
+  }
+  deriving stock (Eq, Show)
+
+-- | The change a @wiki-folds@ event tells. Pure, as 'reportedFolds' is.
+foldsChange :: Event -> FoldsChange
+foldsChange (Event v) =
+  let e = FoldsEvent v
+   in FoldsChange {byEdit = e.wikiByEdit, more = e.wikiMore, opened = fromMaybe [] (decodeStrict (encodeUtf8 e.wikiOpened))}
 
 -- | Ranges of lines as CodeMirror's side reads and writes them: JSON,
 -- @[[first, last]]@.

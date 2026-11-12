@@ -276,6 +276,7 @@ import Wiki.App.Browser (replacingEntry)
 import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
+  , FoldsChange (..)
   , GridKey (..)
   , PickedFile (..)
   , SlideToggle (..)
@@ -299,6 +300,7 @@ import Wiki.App.Editor.Browser
   , focusInView
   , focusText
   , foldLines
+  , foldsChange
   , forgetPreviewEntry
   , goToTitleLine
   , gridKey
@@ -707,6 +709,7 @@ data Action
   | CursorAt Int
   | ToggleSlide SlideToggle
   | DropSlide Int Int Bool
+  | FoldsChanged FoldsChange
   | NewSlide
   | EditorReady
 
@@ -1573,6 +1576,7 @@ component =
                 {{ HE.handler' (EventType "wiki-open-slide") (fmap ToggleSlide . slideToggled) }}
                 {{ HE.handler' (EventType "wiki-move-slide") (fmap (\(i, j, after) -> DropSlide i j after) . slideDropped) }}
                 {{ HE.handler' (EventType "wiki-ready") (const (Just EditorReady)) }}
+                {{ HE.handler' (EventType "wiki-folds") (\ev -> Just $! FoldsChanged (foldsChange ev)) }}
               ></div>
             |]
           )
@@ -2017,6 +2021,13 @@ component =
             if toggle.more
               then H.liftEffect (unfoldLines host [(sp.from, sp.to)])
               else foldAllBut [i]
+      -- A slide opened by CodeMirror's own gestures (its fold's mark, the
+      -- keys) is opened as by its button: the others close, unless Ctrl or
+      -- Cmd was held on the click. A fold an edit opened (typing into it,
+      -- an undo) is not the author choosing a slide: the others stay.
+      FoldsChanged change -> unless (change.byEdit || change.more) $
+        withSlides $ \_ spans ->
+          for_ (head [i | line <- change.opened, Just (i, _) <- [startingAt spans line]]) $ \i -> foldAllBut [i]
       -- A slide dropped before or after another: where it goes once it is
       -- taken out of the list.
       DropSlide fromLine toLine after -> withSlides $ \host spans ->
