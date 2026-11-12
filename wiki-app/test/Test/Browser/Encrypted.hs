@@ -1217,8 +1217,27 @@ spec m = do
     -- The tab's title names the space alone, which the browser keeps in
     -- its history.
     unsafeIOToPageM (fromJSText <$> js_document_title) >>= (`shouldSatisfy` \t -> "Secret" `T.isInfixOf` t && not ("Under the bell" `T.isInfixOf` t))
+    -- Inside: the bell and the stars show the title, decrypted.
+    find ui ".notifications-toggle" >>= click
+    eventually (find ui ".notification-list .notification-page" >>= (`shouldHaveText` "Under the bell"))
+    find ui ".notifications-toggle" >>= click
+    find ui ".starred-toggle" >>= click
+    eventually (find ui ".starred-list" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Under the bell"))
+    find ui ".starred-toggle" >>= click
+    -- Left, with the lists' next reads held back: what the bell and the
+    -- stars hold already names the page as the server does, before any
+    -- answer comes.
+    holdAt "GET" "api/v1/notifications"
+    holdAt "GET" "api/v1/stars"
     find ui ".wiki-brand" >>= click
     eventually ((\h -> h.confirmed) <$> unsafeIOToPageM (heldNow gated) `shouldReturn` mempty)
+    find ui ".notifications-toggle" >>= click
+    eventually (find ui ".notification-list .notification-page" >>= (`shouldHaveText` encryptedPageTitle))
+    find ui ".notifications-toggle" >>= click
+    find ui ".starred-toggle" >>= click
+    eventually (find ui ".starred-list" >>= textContent >>= (`shouldSatisfy` \t -> encryptedPageTitle `T.isInfixOf` t && not ("Under the bell" `T.isInfixOf` t)))
+    find ui ".starred-toggle" >>= click
+    release
     find ui ".notifications-toggle" >>= click
     eventually (find ui ".notification-list .notification-page" >>= (`shouldHaveText` encryptedPageTitle))
     unsafeIOToPageM (fromJSText <$> js_document_title) >>= (`shouldSatisfy` (not . T.isInfixOf "Under the bell"))

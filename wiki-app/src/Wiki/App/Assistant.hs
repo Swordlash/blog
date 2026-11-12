@@ -68,6 +68,7 @@ module Wiki.App.Assistant
   , deviceKeyIO
   , deviceSlotsIO
   , listenToOtherTabs
+  , announceSignIn
   , keysDroppedElsewhere
   , heldHandle
   , PasskeyTicket
@@ -141,6 +142,7 @@ $( browserJS
      , ("js_device_keyPromise", "wiki_vault_device_key", Safe, [t|JSText -> IO (Promise Int)|])
      , ("js_drop_keyPromise", "wiki_vault_drop_key", Safe, [t|JSText -> IO (Promise ())|])
      , ("js_listen", "wiki_vault_listen", Safe, [t|IO ()|])
+     , ("js_signed_in", "wiki_vault_signed_in", Safe, [t|IO ()|])
      , ("js_slotsPromise", "wiki_vault_slots", Safe, [t|IO (Promise JSText)|])
      , ("js_passkeys_here", "wiki_vault_passkeys_here", Safe, [t|IO Bool|])
      , ("js_sealing_here", "wiki_vault_sealing_here", Safe, [t|IO Bool|])
@@ -809,6 +811,13 @@ deviceKeyIO user
 -- there (a sign-out) is announced in this window ('keysDroppedElsewhere').
 listenToOtherTabs :: IO ()
 listenToOtherTabs = when inBrowser js_listen
+
+-- | Tell the wiki's tabs that a sign-in was completed: a tab that found
+-- nobody signed in, and has not yet let go of every user's keys
+-- ("Wiki.App.Vault"'s 'Wiki.App.Vault.forgetEveryUsersKeys'), lets go of
+-- none.
+announceSignIn :: IO ()
+announceSignIn = when inBrowser js_signed_in
 
 -- | The announcement that another tab let go of a user's vault key or
 -- private key, as its sign-out does.

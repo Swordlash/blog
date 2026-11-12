@@ -51,10 +51,18 @@ function wikiVaultPageKeys() {
 // read from IndexedDB before the page's own, so it needs no message.)
 let wikiVaultChannel = null;
 
+// Whether a sign-in was completed in this tab or another since the page
+// started: a page that found nobody signed in, and is about to let go of
+// every user's keys, then lets go of none (wiki_vault_slots). A global,
+// so that the browser tests can play a page started again by setting it
+// back.
+globalThis.wikiVaultSignedIn = false;
+
 function wikiVaultListen() {
   if (wikiVaultChannel !== null || typeof BroadcastChannel !== "function") return;
   wikiVaultChannel = new BroadcastChannel("wiki-assistant-keys");
   wikiVaultChannel.onmessage = (event) => {
+    if (event.data?.signedIn === true) globalThis.wikiVaultSignedIn = true;
     const slot = event.data?.dropped;
     if (typeof slot !== "string") return;
     wikiVaultLetGo(slot);
@@ -63,6 +71,15 @@ function wikiVaultListen() {
     // (Wiki.App.Shell listens for this event).
     if (slot.startsWith("vault:") || slot.startsWith("identity:")) globalThis.dispatchEvent?.(new CustomEvent("wiki-keys-dropped"));
   };
+}
+
+// A sign-in completed here: tell the wiki's other tabs, so that one about
+// to let go of every user's keys, having found nobody signed in just
+// before, lets go of none.
+function wiki_vault_signed_in() {
+  globalThis.wikiVaultSignedIn = true;
+  wikiVaultListen();
+  wikiVaultChannel?.postMessage({ signedIn: true });
 }
 
 // Listen to the wiki's other tabs from the page's start, not only from the
@@ -75,6 +92,7 @@ function wiki_vault_listen() {
 // The slots this device keeps a key in, in IndexedDB and in the page, as
 // JSON: what a page that finds nobody signed in looks through.
 async function wiki_vault_slots() {
+  if (globalThis.wikiVaultSignedIn) return "[]";
   const slots = new Set(globalThis.wikiVaultPageKeys instanceof Map ? globalThis.wikiVaultPageKeys.keys() : []);
   try {
     for (const key of await wikiVaultStore("readonly", (store) => store.getAllKeys())) slots.add(String(key));

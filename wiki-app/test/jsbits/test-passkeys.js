@@ -437,6 +437,19 @@ async function wiki_test_device_return(name) {
 // The page reloaded: the keys it held forgotten, what is stored kept.
 function wiki_test_device_reload() {
   globalThis.wikiVaultPageKeys?.clear();
+  globalThis.wikiVaultSignedIn = false;
+}
+
+// A tab that completed a sign-in, as jsbits/vault.js tells the others.
+function wiki_test_tell_signed_in() {
+  const other = new BroadcastChannel("wiki-assistant-keys");
+  other.postMessage({ signedIn: true });
+  other.close();
+}
+
+// Whether this page heard of a sign-in completed (jsbits/vault.js).
+function wiki_test_heard_signed_in() {
+  return globalThis.wikiVaultSignedIn === true;
 }
 
 // Whether this device stores a key for the user (not only the page).

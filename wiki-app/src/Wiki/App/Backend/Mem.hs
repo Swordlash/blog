@@ -472,7 +472,7 @@ instance (Monad m) => MonadEncryption (MemWiki m) where
 
   -- Nothing here is encrypted, so no space asks and no gate opens.
   confirmedEntry _ = pass
-  readerAt _ _ = pass
+  readerAt _ _ = pure False
   forgetEncrypted = pass
 
 instance (MonadIO m) => MonadStars (MemWiki m) where

@@ -141,7 +141,7 @@ import Web.Storage.Storage qualified as Storage
 import Wiki.Api.Links (archiveExportUrl)
 import Wiki.Api.ServerSettings (HomePage (showAnonymous, title))
 import Wiki.App.Account (Accounts (..))
-import Wiki.App.Assistant (MonadAssistant, keysDroppedElsewhere, listenToOtherTabs)
+import Wiki.App.Assistant (MonadAssistant, announceSignIn, keysDroppedElsewhere, listenToOtherTabs)
 import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous, sameAsking, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin)
@@ -407,6 +407,9 @@ data State m = State
   -- the service worker served offline was loaded without a network, and no
   -- event reports that.
   , offlineCopy :: Maybe UTCTime
+  , keysLooked :: Bool
+  -- ^ Whether this page start has looked whether nobody is signed in, to
+  -- let go of every user's keys: once a page start.
   -- ^ When the page shown was stored, if the service worker served it
   -- offline from its stored copy; kept until the reader navigates
   -- elsewhere.
@@ -558,6 +561,7 @@ component =
                   , entry = 0
                   , offline = False
                   , offlineCopy = Nothing
+                  , keysLooked = False
                   , installable = False
                   , shown = Nothing
                   , backlinks = Nothing
@@ -1526,6 +1530,9 @@ component =
       -- Someone signed in or out: reload everything, as the new user.
       FromAccount (SignInView.AccountChanged s) -> do
         forgetFormer s
+        -- A sign-in completed: a tab about to let go of every user's keys
+        -- lets go of none.
+        when (isJust s.user) (H.liftEffect (liftIO announceSignIn))
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
         restartFeed
         reload Nothing
@@ -1641,8 +1648,10 @@ component =
       -- The questions and results about the wiki's data are not shown
       -- again on coming back to the administration.
       shut <- (.) <$> shutMenu <*> shutSwitcher
-      gatesAt (settledRoute r)
-      modify (shut . \st -> st {route = settledRoute r, settled = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
+      -- A gate closed: the views' revision moves on, so that the header's
+      -- bell and stars forget the titles they show decrypted of the space.
+      closed <- gatesAt (settledRoute r)
+      modify (shut . \st -> st {route = settledRoute r, settled = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing, generation = if closed then st.generation + 1 else st.generation})
       canonicalAdmin
       whatsNewSeen
       loadHere False
@@ -1653,11 +1662,13 @@ component =
     -- ('Wiki.App.Backend.Encrypted.readerAt'). Only the backend's memory
     -- changes, so nothing waits. A path not in the list of spaces yet (a
     -- space made just now) counts as its nearest space listed.
-    gatesAt :: Route -> H.HalogenM (State m) Action Slots output m ()
-    gatesAt r = for_ (routeSpace r) $ \path -> do
-      spaces <- gets (\st -> st.spaces)
-      let nearest p = listToMaybe [x.id | n <- reverse [1 .. length p], Just chain <- [findSpace spaces (take n p)], Just x <- [lastMay chain]]
-      lift (readerAt spaces (path >>= nearest))
+    gatesAt :: Route -> H.HalogenM (State m) Action Slots output m Bool
+    gatesAt r = case routeSpace r of
+      Nothing -> pure False
+      Just path -> do
+        spaces <- gets (\st -> st.spaces)
+        let nearest p = listToMaybe [x.id | n <- reverse [1 .. length p], Just chain <- [findSpace spaces (take n p)], Just x <- [lastMay chain]]
+        lift (readerAt spaces (path >>= nearest))
 
     -- After a change: reload everything, and every view's own data too.
     reload :: Maybe Route -> H.HalogenM (State m) Action Slots output m ()
@@ -1666,7 +1677,7 @@ component =
       -- 'arrive' does.
       when (isJust next) (lift endPreload)
       loadWorld
-      gatesAt =<< maybe (gets (\st -> st.route)) (pure . settledRoute) next
+      void (gatesAt =<< maybe (gets (\st -> st.route)) (pure . settledRoute) next)
       modify (\st -> st {generation = st.generation + 1})
       for_ next $ \r -> modify (\st -> st {route = settledRoute r, settled = False, leaving = Nothing})
       loadHere True
@@ -1696,8 +1707,14 @@ component =
           -- users are its own.
           copy <- gets (\st -> st.offlineCopy)
           network <- gets overNetwork
-          -- On a thread of its own, so that nothing shown waits on it.
-          when (isNothing w.asking.user && network && isNothing copy && inBrowser) (void (H.fork (lift forgetEveryUsersKeys)))
+          looked <- gets (\st -> st.keysLooked)
+          modify (\st -> st {keysLooked = True})
+          -- Once a page start, and on a fork of its own, so that nothing
+          -- shown waits on it. The fork looks again: a session with a user
+          -- by then (signed in here meanwhile) lets go of nothing, and nor
+          -- does a sign-in in another tab ('announceSignIn').
+          when (not looked && isNothing w.asking.user && network && isNothing copy && inBrowser) . void . H.fork $
+            whenM (gets (\st -> isNothing st.session.user)) (lift forgetEveryUsersKeys)
           -- A session loaded now may name a newer entry than the page
           -- shown has marked seen.
           whatsNewSeen

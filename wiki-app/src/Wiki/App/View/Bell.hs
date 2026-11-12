@@ -53,8 +53,10 @@ import Wiki.App.Route (Route (..), pageRoute)
 import Wiki.App.View.Comments (threadElementId)
 import Wiki.App.View.Common
 import Wiki.App.View.Popup (watchPopup)
+import Wiki.Core.Encrypted (encryptedPageTitle)
 import Wiki.Core.Id (NotificationId)
-import Wiki.Core.Notification (Notification (..), PageLocation (..), notificationText)
+import Wiki.Core.Notification (Notification (..), PageLocation (..), notificationText, withTitle)
+import Wiki.Core.Space (Space (encryption))
 
 data Input = Input
   { context :: Context
@@ -203,7 +205,12 @@ component =
       Receive input -> do
         old <- gets (\st -> st.input)
         modify (\st -> st {input})
-        when (old.context.revision /= input.context.revision) reload
+        -- The titles of pages of encrypted spaces go at once, as the server
+        -- names them, before the list is read again: the reader may have
+        -- left a space that asks each time it is opened.
+        when (old.context.revision /= input.context.revision) $ do
+          modify (\st -> st {notices = fmap (\ns -> ns {items = map (sealedAgain input.context) ns.items}) <$> st.notices})
+          reload
       Toggle -> do
         isOpen <- gets (\st -> st.open)
         if isOpen
@@ -259,3 +266,11 @@ kindClass n = T.toLower (show n.kind)
 -- the server prerenders and in the program.
 stamped :: UTCTime -> Text
 stamped = toS . formatTime defaultTimeLocale "%-d %b %Y, %H:%M UTC"
+
+-- | A notification as the server names its page, when the page is in an
+-- encrypted space, or nowhere this tab knows: by what it is, not by its
+-- title decrypted.
+sealedAgain :: Context -> Notification -> Notification
+sealedAgain ctx n = case n.location of
+  Just l | Just chain <- findSpace ctx.spaces l.space, Just sp <- lastMay chain, isNothing sp.encryption -> n
+  _ -> withTitle encryptedPageTitle n

@@ -172,9 +172,11 @@ class (Monad m) => MonadEncryption m where
   -- reads anything. Every gate confirmed in this tab that the space is not
   -- under is closed again, and what the tab holds of the spaces behind it
   -- is forgotten: their keys, their pages decrypted for the search, their
-  -- attachments' names and object URLs, and the confirmation.
-  readerAt :: [Space] -> Maybe SpaceId -> m ()
-  default readerAt :: (MonadTrans t, m ~ t n, MonadEncryption n) => [Space] -> Maybe SpaceId -> m ()
+  -- attachments' names and object URLs, and the confirmation. 'True' when
+  -- a gate was closed, for the shell to tell its views, which forget what
+  -- they show decrypted of the space too.
+  readerAt :: [Space] -> Maybe SpaceId -> m Bool
+  default readerAt :: (MonadTrans t, m ~ t n, MonadEncryption n) => [Space] -> Maybe SpaceId -> m Bool
   readerAt spaces = lift . readerAt spaces
 
   -- | Forget everything this tab holds of encrypted spaces, for every

@@ -98,6 +98,8 @@ $( browserJS
      , ("js_page_key_slots", "wiki_test_page_key_slots", Safe, [t|IO JSText|])
      , ("js_page_key_holdPromise", "wiki_test_page_key_hold", Safe, [t|JSText -> IO (Promise ())|])
      , ("js_tell_dropped", "wiki_test_tell_dropped", Safe, [t|JSText -> IO ()|])
+     , ("js_tell_signed_in", "wiki_test_tell_signed_in", Safe, [t|IO ()|])
+     , ("js_heard_signed_in", "wiki_test_heard_signed_in", Safe, [t|IO Bool|])
      ]
  )
 
@@ -911,6 +913,17 @@ userKeys m = describe "the user's keys" $ do
     eventually (stored "vault:user-editor" `shouldReturn` True)
     stored "identity:user-editor" `shouldReturn` True
     unmount ui
+    -- A sign-in completed in another tab before this page looked: it lets
+    -- go of nothing.
+    unsafeIOToPageM js_reload
+    unsafeIOToPageM js_tell_signed_in
+    eventually (unsafeIOToPageM js_heard_signed_in `shouldReturn` True)
+    kept <- restarted
+    _ <- find kept ".sign-in-toggle"
+    unmount kept
+    stored "vault:user-editor" `shouldReturn` True
+    -- A page started again, with nobody signed in and no sign-in heard of.
+    unsafeIOToPageM js_reload
     again <- restarted
     _ <- find again ".sign-in-toggle"
     eventually (stored "vault:user-editor" `shouldReturn` False)

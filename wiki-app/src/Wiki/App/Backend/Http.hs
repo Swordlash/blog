@@ -1622,15 +1622,17 @@ holdKey sid key = do
 -- turned on while this tab held its key). The gates are found in the
 -- shell's list of spaces, which a write does not empty, as it empties the
 -- cache's.
-leaveGates :: (MonadIO m) => [Space] -> Maybe SpaceId -> HttpWiki m ()
+leaveGates :: (MonadIO m) => [Space] -> Maybe SpaceId -> HttpWiki m Bool
 leaveGates spaces here = do
-  gone <- atomicHeld $ \h ->
+  (gone, closed) <- atomicHeld $ \h ->
     let gateOf = Space.gateOf spaces
         stays gate = Just gate == (here >>= gateOf)
         confirmed = Set.filter stays h.heldConfirmed
         picked sid = maybe False (`Set.notMember` confirmed) (gateOf sid)
-     in first (\h' -> h' {heldConfirmed = confirmed}) (dropSpaces picked h)
+        (h', dropped) = dropSpaces picked h
+     in (h' {heldConfirmed = confirmed}, (dropped, confirmed /= h.heldConfirmed))
   liftIO (letGo gone)
+  pure closed
 
 -- | 'HeldNow': what a tab holds of encrypted spaces, for the browser
 -- tests: the spaces whose keys it holds, those whose pages it holds
