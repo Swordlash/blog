@@ -1495,6 +1495,46 @@ confirms it against reality and the plan is amended if it does not hold.
     read its port and never restart it; each run of the PostgreSQL tests
     has databases of its own name, swept after six hours. A deployment's
     own ports stay what the operator sets.
+76. **Encrypted spaces: a version chain, key renewal, comments,
+    attachments and subspaces (WP5.74b3's first part, #213, #251; the
+    owner asleep while it was designed, his word that it merges in
+    parts, 2026-11-12).** **Rollback.** Each version of an encrypted page
+    carries its number and the tag of the version before, bound into its
+    AAD (`wiki-page/2`, step 16); the browser remembers the latest
+    version it read of each page, and accepts a later one only through
+    an unbroken, authenticated run of history from that very version
+    down to the one remembered. Detected: an older latest version,
+    another under the same number, a later one its history does not
+    join, a version missing or out of order. Not detected: an old
+    version served to a browser that never read the page, a page hidden,
+    comments and attachments served as before. **Renewal.** A space's
+    key must be renewed when anyone holding a grant of it can no longer
+    read the space or has another key pair (`Wiki.Server.Storage.Renewal`);
+    until then sealed writes are refused, saying why. Only someone who
+    may administer the space and holds the key renews (the server cannot
+    check that a wrap opens, so a reader's renewal could destroy the
+    space); that browser renews when it opens the space, and at once
+    after its own removal of a reader. A renewal re-wraps every page key
+    under the new space key, gives each page a new current page key, and
+    deletes the older grants (step 17); the browser opens every new wrap
+    from the bytes it sends before sending. **A ciphertext is opened with
+    the key its own key id names**, never "the current key". **Comments
+    and attachments** are ciphertext under the page's key, each kind with
+    an AAD of its own, in side tables (step 18); an encrypted attachment
+    is shown from an object URL that belongs to the view showing it, and
+    an SVG's link downloads it. **Subspaces and home pages.** Every space
+    below an encrypted space is encrypted, with a key of its own sealed
+    to its own readers, and an encrypted space shares its readers only
+    with encrypted spaces that are not public
+    (`Wiki.Core.Permission.encryptionProblem`, checked on the result of
+    every write that could break it); every encrypted space has a sealed
+    home page, made by the browser. **Each sealed route asks for exactly
+    what its plain counterpart asks**, by the same named function. A
+    database whose recorded schema steps have a hole is refused, naming
+    the step. The canary (`toolchain/smoke-canary.mjs`) writes a marker
+    into each protected place through the browser against a real server
+    and looks for it in every file of the data directory, a dump of
+    PostgreSQL, and every request, answer and WebSocket frame.
 
 ## Repository layout
 
@@ -1601,7 +1641,7 @@ decision 58); #188 (emojis: the
 done and closed: WP5.86, #236; the owner, 2026-11-11: Slack's names that
 GitHub's list does not have are not needed); #189 (backlinks, done: decision 71, #239); #196 (done: decision 72, #238); #200 (done: decision 73, #249: an interactive SVG in a frame
 that runs scripts and shares no origin, the frame the plugins will run
-in); #204's TODO lists (done: decision 74, #243; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3), started 2026-11-11 at night, with the editor's folding (WP5.96) and #191 (WP5.97) beside it by the owner's word, ahead of #187. WP5.96 is done (#252). Then the three large ones, in the owner's order of
+in); #204's TODO lists (done: decision 74, #243; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3), started 2026-11-11 at night, with the editor's folding (WP5.96) and #191 (WP5.97) beside it by the owner's word, ahead of #187. WP5.96 is done (#252); #213's first part is done (#251, decision 76), its second part and #253 are open. Then the three large ones, in the owner's order of
 2026-11-11: #187 (autocompletion); #191 (presentations, which bring the
 notion of a kind of page); and last #186 (plugins: decision 69, WP5.84
 first), with #190 (table views) and #204's calendar after it as plugins.
@@ -1613,23 +1653,28 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
-- **WP5.74b3 Encrypted spaces, the rest (#213; the owner, 2026-11-11, at
-  night: all of it in one pull request).** The eight items of the issue
-  (encrypted attachments and comments; a new space key when a member is
-  removed; an export decrypted in the browser; encrypting a space that
-  has pages, and turning encryption off; subspaces; decrypted titles in
-  recent changes and notifications; detecting a rolled-back version;
-  hiding the controls the server refuses) and the tests #209 left. A
-  ninth by his word the same night: an option of an encrypted space, "ask
-  for a passkey or the password before each opening", as a gate in the
-  interface (the space's key leaves the tab when the reader leaves the
-  space; the option's text says it does not stop someone with the
-  developer tools on an unlocked device), and signing out removes the
-  user's keys from the device. A second key pair kept only under the
-  passkey or password, which would make the gate hold against the
-  device's own key, was weighed and left: its cost is a new layer of
-  keys, and what it adds is narrow. Built in stages on one branch, a
-  design first, the stored formats before the rest.
+- **WP5.74b3, second part: the rest of #213 (the owner, 2026-11-12:
+  #213 merges in parts; the first part is #251, decision 76).** An export
+  decrypted in the browser, with a round trip through an import
+  (the archive carries no versions, users or grants; any reader holding
+  the key may export). Encrypting a space that has pages, and turning
+  encryption off: the browser of an administrator who holds the key
+  stages each page's ciphertext (every version, comments, attachments)
+  and commits page by page; the space is read-only meanwhile, the
+  conversion resumes after an interruption, converted pages get new
+  random slugs, and what was plain is gone from the database
+  afterwards (backups from before keep it until they are pruned, and
+  the dialog says so); the browser opens again what it staged before it
+  commits. The option of an encrypted space to ask for the passkey or
+  the password before each opening (the owner's word of 2026-11-11, the
+  small form: a gate in the interface, the space's key dropped when the
+  reader leaves, the option's text saying it does not stop someone with
+  the developer tools on an unlocked device), with signing out removing
+  the user's keys from the device. Decrypted titles under the bell, with
+  stars and search through one request for headings. Hiding the
+  controls the server still refuses, from one predicate the server's
+  checks share. Schema steps from 20 (the presentations' is 19). The
+  canary of decision 76 gains a place for each.
 - **WP5.97 Presentations as a kind of page (#191; the owner's answers of
   2026-11-11; one pull request, #253, on WP5.96's folding, which is merged: #252).** A page has a kind, stored:
   a document or a presentation. "New page" offers the two kinds, and a
@@ -2631,6 +2676,36 @@ needs. Each was true when its package merged; check before relying on one.
   editor's other specs and passes alone, on `main` as on every branch
   (Enter in the empty emoji search is expected to be prevented and is
   not); CI's sharding happens to pass it. Nobody has looked for the cause.
+- **Encrypted spaces after #251 (decision 76).** The server still sees:
+  the words a reader searches for (the search page's address carries
+  them, and the server searches the plain spaces with them), sizes of
+  ciphertexts, who comments and when, that a page has attachments, a
+  page's kind, times and place, a space's name. Revoking a reader in a
+  parent's dialog renews the parent at once; each subspace open to it
+  waits for an administrator to open it, and sealing a subspace makes a
+  renewal due with none run. A rotation carries at most 20,000 page keys
+  and 5,000 readers. The browser's own "open image in new tab" on an
+  encrypted SVG is a document of the wiki's origin (no inline script
+  runs). A tab running the program from before gets a refusal on
+  "Encrypt this space…" until it reloads. Not tested: the renewal notice
+  after a space is moved; a search with subspaces over an encrypted
+  subspace; the activity view's words for an encrypted subspace's
+  creation. `sealed_attachments.staged_blob` is an unused column, kept
+  for the conversion.
+- **A view's start and the server's HTML (found on #251).** The server
+  takes a page's HTML when every `Initialize` has reached its first
+  wait. A lift into the backend as the first step of a view's
+  `Initialize` (registering an owner of attachment addresses) came
+  before the step that tells the shell which page is shown, and the
+  front page's preview tags were then sometimes missing, depending on
+  what else the process rendered. Nothing a view does before telling the
+  shell may be a wait.
+- **`toolchain/test-postgres-namespaces.sh` (#244, fixed in #251).** It
+  killed a test run when it saw a database of the run's, which could be
+  one an example drops at once; it now waits for the run's template
+  database. One failure in 38 runs is not explained: sessions on the
+  killed run's databases thirty seconds after the kill; the message now
+  prints them.
 
 ## Assumptions
 
