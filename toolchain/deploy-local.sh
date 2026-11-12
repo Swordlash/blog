@@ -997,11 +997,56 @@ linger_report() {
 # (maker/src/Maker/Deploy/Tex.hs); --status keeps the check below.
 UNIT_BASE_PATH=/usr/local/bin:/usr/bin:/bin
 
+# The value the user's systemd manager gives a variable, from `systemctl
+# --user show-environment`, with systemd's quoting undone: a value with
+# whitespace, a control character or a character the shell treats
+# specially is printed $'...', with C escapes inside (a backslash and a
+# quote after a backslash, \n, \t, and a backslash and three octal digits
+# for another control byte; maker/src/Maker/Deploy/Manager.hs reads it the
+# same way). It fails, printing nothing, for a variable the manager does
+# not have, or whose line does not read.
+manager_value() {
+  systemctl --user show-environment 2>/dev/null | LC_ALL=C awk -v name="$1" '
+    index($0, name "=") == 1 { line = substr($0, length(name) + 2); found = 1 }
+    END {
+      if (!found) exit 1
+      if (substr(line, 1, 2) != "$\047") { print line; exit 0 }
+      out = ""; i = 3; n = length(line)
+      while (i <= n) {
+        c = substr(line, i, 1)
+        if (c == "\047") { if (i != n) exit 1; print out; exit 0 }
+        if (c != "\\") { out = out c; i++; continue }
+        if (++i > n) exit 1
+        c = substr(line, i, 1)
+        if (c ~ /[0-7]/) {
+          v = 0
+          for (k = 0; k < 3 && i <= n && substr(line, i, 1) ~ /[0-7]/; k++) { v = v * 8 + substr(line, i, 1); i++ }
+          if (v == 0 || v > 255) exit 1
+          out = out sprintf("%c", v)
+          continue
+        }
+        if (c == "x") {
+          v = 0
+          for (k = 0; k < 2 && i < n && index("0123456789abcdef", tolower(substr(line, i + 1, 1))) > 0; k++) { i++; v = v * 16 + index("0123456789abcdef", tolower(substr(line, i, 1))) - 1 }
+          if (k == 0 || v == 0) exit 1
+          out = out sprintf("%c", v); i++
+          continue
+        }
+        e = index("abeEfnrtv", c)
+        if (e > 0) out = out substr("\007\b\033\033\f\n\r\t\v", e, 1)
+        else if (c == "\\" || c == "\047" || c == "\"" || c == "?") out = out c
+        else exit 1
+        i++
+      }
+      exit 1
+    }'
+}
+
 # The PATH the user's systemd manager gives a unit that sets none, which is
-# the PATH the service sees. When systemctl says nothing, systemd's usual
-# default.
+# the PATH the service sees. When systemctl says nothing, or says it in a
+# line that does not read, systemd's usual default.
 manager_path() {
-  path=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^PATH=//p' | tail -n 1)
+  path=$(manager_value PATH) || path=
   printf '%s\n' "${path:-$UNIT_BASE_PATH}"
 }
 
@@ -1058,7 +1103,9 @@ tex_status_report() {
   esac
 }
 tex_engine_report() {
-  unit_path=$(sed -n 's/^Environment="PATH=\(.*\)"$/\1/p' "$unit_file" 2>/dev/null | tail -n 1)
+  # The unit's own PATH, with the escaping the deploy wrote it with undone
+  # (a backslash before a backslash or a quote, % doubled).
+  unit_path=$(sed -n 's/^Environment="PATH=\(.*\)"$/\1/p' "$unit_file" 2>/dev/null | tail -n 1 | sed 's/\\\(.\)/\1/g;s/%%/%/g')
   if [ -n "$unit_path" ]; then
     whose="the toolchain's TeX Live, first on the unit's PATH"
   else

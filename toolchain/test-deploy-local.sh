@@ -190,7 +190,7 @@ fixture() {
   export CABAL_DIR
   mkdir -p "$FAKE_DOCKER"
   unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_TINFO FAKE_NO_SQLITE FAKE_SQLITE_VERSION FAKE_SQLITE_NUMBER FAKE_SHELL_ONLY FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_RESTORE_FAIL FAKE_NO_DOCKER \
-    FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
+    FAKE_MANAGER_ENV FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
     FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN FAKE_XELATEX_BROKEN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN \
     FAKE_COPY_EXIT FAKE_MOVE_COMPARE_EXIT FAKE_SERVE_PG_FAIL FAKE_PG_UP_FAIL FAKE_REHEARSE_EXIT FAKE_RELOAD_FAIL FAKE_RESTART_PG_FAIL FAKE_RESTART_PG_LOCK FAKE_RESTART_PG_TAMPER FAKE_STOP_PG_FAIL FAKE_SERVE_PG_SILENT \
     WIKI_TEST_MOVE_FAILPOINT WIKI_TEST_MOVE_OPERATIONS
@@ -828,7 +828,17 @@ PROBE
       printf '%s\n' "$!" >"$FAKE_SYSTEMD/$unit.pid"
     }
     case $1 in
-      show-environment) printf 'HOME=%s\nPATH=%s\n' "$HOME" "$FAKE_SERVICE_PATH" ;;
+      show-environment)
+        # As systemd prints it: a value with a space or a character the
+        # shell treats specially in $'...', a backslash and a quote escaped
+        # (systemctl(1)). FAKE_MANAGER_ENV adds lines as they are.
+        printf 'HOME=%s\n' "$HOME"
+        case $FAKE_SERVICE_PATH in
+          *[!A-Za-z0-9/:._,+@%=-]*)
+            printf "PATH=\$'%s'\n" "$(printf '%s' "$FAKE_SERVICE_PATH" | sed "s/[\\\\']/\\\\&/g")" ;;
+          *) printf 'PATH=%s\n' "$FAKE_SERVICE_PATH" ;;
+        esac
+        [ -z "${FAKE_MANAGER_ENV:-}" ] || printf '%s\n' "$FAKE_MANAGER_ENV" ;;
       # FAKE_RELOAD_FAIL fails a daemon-reload, and FAKE_RESTART_PG_FAIL a
       # restart of a unit on PostgreSQL: the move's switch and its start.
       daemon-reload) [ -z "${FAKE_RELOAD_FAIL:-}" ] || { printf 'Failed to reload daemon\n' >&2; exit 1; } ;;
@@ -2430,7 +2440,24 @@ rm "$case_dir/sqlite-unknown"
 assert_contains "$out" 'the new wiki-server does not know the command sqlite'
 assert_lacks "$out" 'refuses the SQLite library'
 assert_contains "$EVENTS" 'wiki-server rehearse'
-pass "the new server is asked which SQLite it loads in the service's environment before anything changes: a refusal or a server that cannot start stops the deploy with the old server running, with or without the rehearsal"
+# The systemd manager's own environment reaches the check as the service
+# gets it: an LD_LIBRARY_PATH with a space, which systemctl prints as
+# $'...', names the library's directory with its quoting undone, and the
+# check passes with no LD_LIBRARY_PATH in the deploying shell. A line of
+# the manager's that does not read is left out, with a warning naming its
+# variable. The rehearsal is made to fail after the check, so that the
+# running deployment stays as the cases after this one expect it.
+printf '/opt/sqlite custom/lib\n' >"$case_dir/sqlite-library"
+: >"$EVENTS"
+out=$case_dir/sqlite-manager
+if FAKE_REHEARSE_EXIT=6 FAKE_MANAGER_ENV="LD_LIBRARY_PATH=\$'/opt/sqlite custom/lib'
+BROKEN=\$'unterminated" deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose rehearsal failed succeeded'; fi
+rm "$case_dir/sqlite-library"
+assert_contains "$EVENTS" 'wiki-server sqlite saw LD_LIBRARY_PATH=/opt/sqlite custom/lib FAKE_SHELL_ONLY='
+assert_contains "$out" "the new wiki-server runs on SQLite 3.45.1, the system's library, in the service's environment"
+assert_contains "$out" "the systemd user manager's environment has a line the deploy cannot read, for BROKEN"
+assert_contains "$EVENTS" 'wiki-server rehearse'
+pass "the new server is asked which SQLite it loads in the service's environment before anything changes: a refusal or a server that cannot start stops the deploy with the old server running, with or without the rehearsal, and the manager's own LD_LIBRARY_PATH is read with systemd's quoting undone"
 
 # A migration that fails rolls back the same way; when the restore of the
 # backup fails too, the rollback stops there, with the service stopped and
@@ -4129,6 +4156,17 @@ assert_contains "$out" "PDF exports: $case_dir/tex/xelatex works, the TeX on thi
 assert_lacks "$HOME/$unit" '--no-pdf'
 deploy --status >"$out" 2>&1 || fail '--status failed'
 assert_contains "$out" "PDF exports: $case_dir/tex/xelatex works (the TeX on this machine, on the service's PATH)"
+# A service PATH with a space, which systemctl prints as $'...': the TeX
+# step and --status both read it with the quoting undone.
+mkdir -p "$case_dir/te x"
+cp "$case_dir/tex/xelatex" "$case_dir/te x/xelatex"
+FAKE_SERVICE_PATH="$case_dir/te x:$NO_TEX"
+out=$case_dir/spaced
+deploy --no-build >"$out" 2>&1 || fail "the deploy with a TeX on a PATH with a space failed: $(cat "$out")"
+assert_contains "$out" "PDF exports: $case_dir/te x/xelatex works, the TeX on this machine"
+deploy --status >"$out" 2>&1 || fail '--status failed'
+assert_contains "$out" "PDF exports: $case_dir/te x/xelatex works (the TeX on this machine, on the service's PATH)"
+FAKE_SERVICE_PATH=$case_dir/tex:$NO_TEX
 undeploy >/dev/null 2>&1
 pass 'a TeX of the machine'"'"'s on the service'"'"'s PATH: used when it works, its reason said and --no-pdf set when it fails, dropped when it works again, and the deploy goes on'
 

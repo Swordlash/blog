@@ -8,6 +8,7 @@ import GHC.Foreign qualified as GHC
 import GHC.IO.Encoding (getFileSystemEncoding)
 import Maker.Deploy.Apply (sanName)
 import Maker.Deploy.Firewall (quoteArgs)
+import Maker.Deploy.Manager (showEnvironmentLine)
 import Maker.Deploy.Move (replaceOnce)
 import Maker.Deploy.Page (Asset (..), isCode, newestCommitAsset, parseAssets, pruneOrder, repoOf, tagAsset)
 import Maker.Deploy.Plan (decodeFs, encodeFs, get, has, parsePlan, set)
@@ -23,6 +24,25 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "the deploy's part in the maker" $ do
+  describe "the systemd manager's environment" $ do
+    let line' = showEnvironmentLine . BS8.pack
+    it "takes a plain value as it is, up to the end of the line" $ do
+      line' "PATH=/usr/local/bin:/usr/bin:/bin" `shouldBe` Just ("PATH", "/usr/local/bin:/usr/bin:/bin")
+      line' "EMPTY=" `shouldBe` Just ("EMPTY", "")
+      line' "A=b=c" `shouldBe` Just ("A", "b=c")
+    it "undoes systemd's $'...' quoting of a value with a space, a $ or a quote" $ do
+      line' "LD_LIBRARY_PATH=$'/opt/sqlite custom/lib'" `shouldBe` Just ("LD_LIBRARY_PATH", "/opt/sqlite custom/lib")
+      line' "A=$'cost $5'" `shouldBe` Just ("A", "cost $5")
+      line' "A=$'it\\'s \"so\"'" `shouldBe` Just ("A", "it's \"so\"")
+    it "undoes a backslash, a newline, a tab and the octal escape of another control byte" $ do
+      line' "A=$'C:\\\\dir'" `shouldBe` Just ("A", "C:\\dir")
+      line' "A=$'one\\ntwo\\tthree'" `shouldBe` Just ("A", "one\ntwo\tthree")
+      line' "A=$'bell\\007 del\\177'" `shouldBe` Just ("A", "bell\a del\DEL")
+    it "keeps a byte beyond ASCII, raw or escaped, as that byte" $ do
+      showEnvironmentLine (BS.pack ([0x41, 0x3d, 0x24, 0x27, 0x2f, 0x6f, 0x70, 0x74, 0x20, 0xc5, 0xbc] <> [0x27])) `shouldBe` Just ("A", BS.pack [0x2f, 0x6f, 0x70, 0x74, 0x20, 0xc5, 0xbc])
+      line' "A=$'\\305\\274 \\xc5\\xbc'" `shouldBe` Just ("A", BS.pack [0xc5, 0xbc, 0x20, 0xc5, 0xbc])
+    it "reads no line that is not an assignment, or whose quoting does not close or escapes what the shell does not" $
+      mapM_ (\l -> line' l `shouldBe` Nothing) ["no assignment", "=value", "A=$'unterminated", "A=$'a'b'", "A=$'ends with \\'", "A=$'\\q'", "A=$'\\400'", "A=$'\\x'"]
   describe "the plan" $ do
     it "takes each line's value after the first =, the last one for a key twice" $ do
       let plan = parsePlan "# a comment\nname=wiki\nout=/a=b\nport=1\nport=2\nnot a line\n"

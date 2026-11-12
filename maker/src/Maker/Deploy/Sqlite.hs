@@ -33,9 +33,10 @@ module Maker.Deploy.Sqlite
 where
 
 import Control.Exception (IOException, try)
-import Control.Monad (when)
+import Control.Monad (forM_, when)
 import Data.List (isInfixOf, isPrefixOf, stripPrefix)
 import Data.Maybe (fromMaybe, listToMaybe)
+import Maker.Deploy.Manager (managerEnvironment)
 import Maker.Deploy.Plan
 import Maker.Deploy.Unit (environmentValue)
 import System.Directory (getHomeDirectory)
@@ -69,12 +70,19 @@ environmentLines = map (\(name, value) -> "Environment=\"" <> name <> "=" <> env
 -- | The environment the service starts with: the systemd user manager's,
 -- with the unit's variables over it. When the manager cannot be asked,
 -- HOME and the PATH systemd gives by default, with the unit's over them.
+-- A line of the manager's that does not read is left out, with a warning
+-- that names its variable ("Maker.Deploy.Manager").
 serviceEnvironment :: [(String, String)] -> IO [(String, String)]
 serviceEnvironment unit = do
-  (ok, out) <- outputOf "systemctl" ["--user", "show-environment"]
+  answer <- managerEnvironment
   home <- getHomeDirectory
-  let manager = [(name, value) | l <- lines out, (name, '=' : value) <- [break (== '=') l], not (null name)]
-      base = if ok && not (null manager) then manager else [("HOME", home), ("PATH", unitBasePath)]
+  manager <- case answer of
+    Just (variables, unread) -> do
+      forM_ unread $ \name ->
+        warn ("the systemd user manager's environment has a line the deploy cannot read, for " <> name <> ": the check of the server's SQLite runs without it, and the service gets it as systemd has it")
+      pure variables
+    Nothing -> pure []
+  let base = if null manager then [("HOME", home), ("PATH", unitBasePath)] else manager
   pure ([(name, value) | (name, value) <- base, name `notElem` map fst unit] <> unit)
 
 -- | Run the new wiki-server's @sqlite@ command in the service's
