@@ -498,6 +498,7 @@ spaceOf r =
     , -- A conversion this program does not know (a later one's) is read as
       -- none.
       conversion = r.conversion >>= \n -> find (\c -> Space.conversionName c == n) [minBound .. maxBound]
+    , entry = if r.confirm_entry then Space.ConfirmEach else Space.EnterAtOnce
     , owner = UserId <$> r.owner
     , active = r.active
     , personalContainer = r.personal_container
@@ -541,6 +542,7 @@ spaceRow s =
     , personal_container = s.personalContainer
     , key_id = (\k -> k.text) <$> s.encryption
     , conversion = Space.conversionName <$> s.conversion
+    , confirm_entry = s.entry == Space.ConfirmEach
     }
 
 -- | Every space, by id. A wiki has tens of them, and every permission is

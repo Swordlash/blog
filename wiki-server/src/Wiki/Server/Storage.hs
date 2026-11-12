@@ -194,6 +194,7 @@ module Wiki.Server.Storage
   , stagedPage
   , commitConverted
   , reverseConversion
+  , setSpaceEntry
 
     -- * Accounts
   , PasswordLink (..)
@@ -308,7 +309,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), foldText, folded, queryWords, searchPlain, searchRanked)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Conversion (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, hasHome, homeDeleteRefusal, homeMoveRefusal, homeTitle, isHomeBody, isPersonal, ownProfile, parentOrRoot, personalName, positionSpace, rootPage, spaceTreeOrder, strayRoots, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Conversion (..), Entry (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, hasHome, homeDeleteRefusal, homeMoveRefusal, homeTitle, isHomeBody, isPersonal, ownProfile, parentOrRoot, personalName, positionSpace, rootPage, spaceTreeOrder, strayRoots, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
@@ -1968,6 +1969,11 @@ commitConverted pid commit = do
 reverseConversion :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError E.ConversionInfo)
 reverseConversion = run Writes . reverseConversionTx
 
+-- | Set whether readers of an encrypted space confirm each time they open
+-- it ('Wiki.Core.Space.Entry'), as its administrators do.
+setSpaceEntry :: (MonadIO m) => SpaceId -> Space.Entry -> StoredWiki m (Either WikiError Space)
+setSpaceEntry sid e = run Writes (setSpaceEntryTx sid e >>= shown)
+
 -- | The pages of an encrypted space, with their encrypted titles.
 sealedPages :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError [SealedSummary])
 sealedPages = run Reads . sealedPagesTx
@@ -2394,6 +2400,7 @@ createSpaceTx parent name = do
           , sealed = False
           , encryption = Nothing
           , conversion = Nothing
+          , entry = EnterAtOnce
           , owner = Nothing
           , active = True
           , personalContainer = False
@@ -2595,6 +2602,7 @@ renameSpaceTx sid name = adjustSpace sid $ \s -> do
       , sealed = s.sealed
       , encryption = s.encryption
       , conversion = s.conversion
+      , entry = s.entry
       , owner = s.owner
       , active = s.active
       , personalContainer = s.personalContainer
@@ -2753,6 +2761,7 @@ setPersonalSpaceTx enabled = do
                   , sealed = False
                   , encryption = Nothing
                   , conversion = Nothing
+                  , entry = EnterAtOnce
                   , owner = Just u
                   , active = True
                   , personalContainer = False
@@ -2788,6 +2797,7 @@ setPersonalSpaceTx enabled = do
               , sealed = False
               , encryption = Nothing
               , conversion = Nothing
+              , entry = EnterAtOnce
               , owner = Nothing
               , active = True
               , personalContainer = True
@@ -2842,6 +2852,7 @@ respace parent slug position s =
     , sealed = s.sealed
     , encryption = s.encryption
     , conversion = s.conversion
+    , entry = s.entry
     , owner = s.owner
     , active = s.active
     , personalContainer = s.personalContainer
@@ -3432,6 +3443,7 @@ createEncryptedSubspaceTx parent new = do
           , sealed = False
           , encryption = Just new.keyId
           , conversion = Nothing
+          , entry = EnterAtOnce
           , owner = Nothing
           , active = True
           , personalContainer = False
@@ -3658,7 +3670,7 @@ rotateSpaceKeyTx sid r = do
 -- bell, the feed and the mail: not its title, which the server cannot
 -- read, but what it is.
 encryptedTitle :: Text
-encryptedTitle = "an encrypted page"
+encryptedTitle = CE.encryptedPageTitle
 
 -- | The most grants one request makes.
 maxGrantsAtOnce :: Int
@@ -5076,6 +5088,20 @@ endIfDone way root covered = do
 -- old one is not kept. Asked of an administrator of each of the spaces
 -- who holds its key ('requireConverter'), at any point of the
 -- conversion: a conversion that cannot go on can always be turned round.
+-- | The setting is kept for an encrypted space only: the browser asks
+-- before it decrypts, and a plain space has nothing to decrypt. A space
+-- under one that asks is covered by it ('Wiki.Core.Space.gateOf').
+setSpaceEntryTx :: SpaceId -> Space.Entry -> Tx Space
+setSpaceEntryTx sid e = do
+  (s, c) <- findSpace sid
+  requireAdminister c
+  requireNoConversion c
+  when (isNothing s.encryption) (failWith (Conflict "Only an encrypted space asks for a passkey or the password each time it is opened."))
+  when (s.entry /= e) $ do
+    db (setEntry sid e)
+    record "space.entry" (spaceSubject s) [("entry", Space.entryName e)]
+  pure (Space.withEntry e s)
+
 reverseConversionTx :: SpaceId -> Tx E.ConversionInfo
 reverseConversionTx sid = do
   (s, c) <- findSpace sid

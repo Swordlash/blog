@@ -87,6 +87,12 @@ $( browserJS
      , ("js_identity_exportPromise", "wiki_test_identity_export", Safe, [t|JSText -> IO (Promise JSText)|])
      , ("js_export_key_traces", "wiki_test_export_key_traces", Safe, [t|IO JSText|])
      , ("js_opaque_second_factor", "wiki_test_opaque_second_factor", Safe, [t|IO ()|])
+     , ("js_assistant_keyPromise", "wiki_test_assistant_key", Safe, [t|JSText -> Bool -> IO (Promise ())|])
+     , ("js_hear_drops", "wiki_test_hear_drops", Safe, [t|IO ()|])
+     , ("js_drops_heard", "wiki_test_drops_heard", Safe, [t|IO JSText|])
+     , ("js_page_key_slots", "wiki_test_page_key_slots", Safe, [t|IO JSText|])
+     , ("js_page_key_holdPromise", "wiki_test_page_key_hold", Safe, [t|JSText -> IO (Promise ())|])
+     , ("js_tell_dropped", "wiki_test_tell_dropped", Safe, [t|JSText -> IO ()|])
      ]
  )
 
@@ -116,6 +122,12 @@ js_identity_export a1 = if inBrowser then wait =<< js_identity_exportPromise a1 
 
 js_exportable :: IO Int
 js_exportable = if inBrowser then wait =<< js_exportablePromise else pure inert
+
+js_assistant_key :: JSText -> Bool -> IO ()
+js_assistant_key a1 a2 = if inBrowser then wait =<< js_assistant_keyPromise a1 a2 else pure inert
+
+js_page_key_hold :: JSText -> IO ()
+js_page_key_hold a1 = if inBrowser then wait =<< js_page_key_holdPromise a1 else pure inert
 
 type Specs m = (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
 
@@ -849,6 +861,41 @@ userKeys m = describe "the user's keys" $ do
     eventually $ length <$> findAll ui ".keys-offer" `shouldReturn` 0
     closed ui
 
+  -- #213: signing out lets go of the vault key and the private
+  -- key, in the page, in IndexedDB and in the wiki's other tabs. The
+  -- assistant's own key stays; one that is the vault key goes. A sign-in
+  -- that types no password, as one through a provider, finds the keys
+  -- locked, until a passkey or the password unlocks them.
+  for_ [False, True] $ \shared ->
+    it ("lets go of the vault key and the private key at the sign-out, in every tab, and " <> (if shared then "of the assistant's key that is the vault key" else "keeps the assistant's own key")) $ runPage $ do
+      ui <- signedOut "editor's password"
+      signIn ui "editor's password"
+      _ <- madeKeys
+      eventually (stored "vault:user-editor" `shouldReturn` True)
+      stored "identity:user-editor" `shouldReturn` True
+      unsafeIOToPageM (js_assistant_key (toJSText ("user-editor" :: Text)) shared)
+      unsafeIOToPageM js_hear_drops
+      answerWith "DELETE" "api/v1/session" 200 nobody
+      find ui ".account .sign-out" >>= click
+      _ <- find ui ".sign-in-toggle"
+      eventually (stored "vault:user-editor" `shouldReturn` False)
+      stored "identity:user-editor" `shouldReturn` False
+      stored "user-editor" `shouldReturn` not shared
+      eventually (sort <$> heard `shouldReturn` sort (["vault:user-editor", "identity:user-editor"] <> ["user-editor" | shared]))
+      filter (`elem` ["vault:user-editor", "identity:user-editor"]) <$> pageKeySlots `shouldReturn` []
+      -- What another tab is told, this one does too: its copy goes.
+      unsafeIOToPageM (js_page_key_hold (toJSText ("identity:user-other" :: Text)))
+      unsafeIOToPageM (js_tell_dropped (toJSText ("identity:user-other" :: Text)))
+      eventually (filter (== "identity:user-other") <$> pageKeySlots `shouldReturn` [])
+      unmount ui
+      -- Signed in again, with no password typed: the keys are locked.
+      me <- signedInAs "user-editor"
+      answerWith "GET" "api/v1/session" 200 me
+      again <- startServer m Home
+      find again ".account-toggle" >>= click
+      eventually (find again ".keys-device" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "does not hold your keys"))
+      closed again
+
   it "unlocks the key pair with a passkey added to it, on a device where the password was not typed" $ runPage $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
@@ -937,6 +984,10 @@ userKeys m = describe "the user's keys" $ do
       eventually $ identityExport `shouldReturn` "refused"
       vaultState
     identityExport = unsafeIOToPageM (fromJSText <$> (evaluate =<< js_identity_export (toJSText "user-editor")))
+    stored :: Text -> PageM s Bool
+    stored slot = unsafeIOToPageM (evaluate =<< js_stores_key (toJSText slot))
+    heard = unsafeIOToPageM (fromMaybe [] . decodeStrict . encodeUtf8 . fromJSText <$> js_drops_heard) :: PageM s [Text]
+    pageKeySlots = unsafeIOToPageM (fromMaybe [] . decodeStrict . encodeUtf8 . fromJSText <$> js_page_key_slots) :: PageM s [Text]
     fingerprint ui = do
       find ui ".account-toggle" >>= click
       printed <- find ui ".keys-fingerprint code" >>= textContent

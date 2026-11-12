@@ -91,7 +91,7 @@ import Wiki.Core.Page (Page (..), pageTreeOrder, savedAs)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Permission (spaceChain)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), hasHome, pageAtExactly, pagePath, parentOrRoot, spaceTreeOrder, withHome, withProfile)
+import Wiki.Core.Space (Entry (..), Icon (..), Space (..), SpaceProfile (..), hasHome, pageAtExactly, pagePath, parentOrRoot, spaceTreeOrder, withHome, withProfile)
 import Wiki.Server.HomePage (importHomeDocument)
 import Wiki.Server.Secret (Kept)
 import Wiki.Server.Storage (Storage, administratorUser, cacheServerSettings, reading, storageDataDir, writingThen)
@@ -368,6 +368,7 @@ importSpace blobs a discussions choices progress m
               , sealed = m.archived.sealed || (hidden && not underCreatedHidden)
               , encryption = Nothing
               , conversion = Nothing
+              , entry = EnterAtOnce
               , owner = Nothing
               , active = True
               , personalContainer = False

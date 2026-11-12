@@ -99,7 +99,7 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, TexEngine, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
-import Wiki.Api.Encrypted (ConversionCommit, ConversionInfo, ConversionProgress, EncryptSpace, NewEncryptedSubspace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedThreads, SealedVersion, SealedVersionInfo, SpaceEncryption, StagedPage, StagedPlain, StagedSealed, StartEncrypting, sealedVersion)
+import Wiki.Api.Encrypted (ConversionCommit, ConversionInfo, ConversionProgress, EncryptSpace, NewEncryptedSubspace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedThreads, SealedVersion, SealedVersionInfo, SpaceEncryption, SpaceEntry, StagedPage, StagedPlain, StagedSealed, StartEncrypting, sealedVersion)
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -382,6 +382,11 @@ data EncryptedApi form mode = EncryptedApi
   -- ^ Turn the conversion the space is in round ("Stop and turn back"):
   -- it goes the other way over the pages converted so far, and the space
   -- ends as it began.
+  , setEntry :: mode :- "spaces" :> Capture "space" SpaceId :> "entry" :> ReqBody '[JSON] SpaceEntry :> Put '[JSON] Space
+  -- ^ Whether readers of an encrypted space confirm with a passkey or
+  -- the password each time they open it, it and the spaces under it
+  -- ('Wiki.Core.Space.Entry'): set by the space's administrators. The
+  -- browser asks; the server only keeps the setting.
   , stageSealed :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "sealed" :> ReqBody '[JSON] StagedSealed :> PostNoContent
   -- ^ Stage ciphertexts of a page while its space is encrypted.
   , stagePlain :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "plain" :> ReqBody '[JSON] StagedPlain :> PostNoContent

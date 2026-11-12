@@ -53,6 +53,7 @@
 module Wiki.Core.Encrypted
   ( -- * Bytes as the browser writes them
     Encapsulated (..)
+  , encryptedPageTitle
   , VersionTag (..)
 
     -- * The chain of versions
@@ -128,6 +129,14 @@ newtype Encapsulated = Encapsulated {text :: Text}
 newtype VersionTag = VersionTag {text :: Text}
   deriving stock (Eq, Ord, Show)
   deriving newtype (FromJSON, ToJSON, IsString)
+
+-- | What a page of an encrypted space is named by where its title is not
+-- decrypted: in a notification, which the server writes without being
+-- able to read the title, and, in the browser, outside a space that asks
+-- for a passkey or the password each time ('Wiki.Core.Space.ConfirmEach')
+-- until the reader has confirmed.
+encryptedPageTitle :: Text
+encryptedPageTitle = "an encrypted page"
 
 --------------------------------------------------------------------------------
 -- The chain of versions

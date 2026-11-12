@@ -13,7 +13,7 @@ import Wiki.Core.Id (SpaceId (..))
 import Wiki.Core.Math
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Slug (mkSlug)
-import Wiki.Core.Space (BoxNumbering (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Entry (..), Space (..))
 
 space :: Text -> Maybe Text -> Text -> Space
 space i parent mathMacros =
@@ -26,6 +26,7 @@ space i parent mathMacros =
     , sealed = False
     , encryption = Nothing
     , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False

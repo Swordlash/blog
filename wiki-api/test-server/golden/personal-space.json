@@ -6,6 +6,7 @@
   "createdAt": "2026-10-24T09:30:12.345678Z",
   "description": "",
   "encryption": null,
+  "entry": "at-once",
   "homePage": "p9",
   "icon": null,
   "id": "s9",

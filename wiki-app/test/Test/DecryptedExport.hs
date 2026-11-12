@@ -25,7 +25,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Entry (..), Space (..))
 import Wiki.Core.Vault (KeyId (..))
 import Wiki.Core.Version (Author (..))
 
@@ -109,6 +109,7 @@ space i name slug parent =
     , sealed = True
     , encryption = Nothing
     , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False

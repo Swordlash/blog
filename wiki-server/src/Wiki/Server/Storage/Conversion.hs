@@ -10,6 +10,7 @@
 module Wiki.Server.Storage.Conversion
   ( -- * Spaces and pages
     setConversion
+  , setEntry
   , clearSpaceKey
   , convertedIn
   , pageConverted
@@ -62,7 +63,7 @@ import Database.Beam qualified as Beam
 import Protolude
 import Wiki.Core.Encrypted (SealedAnchor (..), SealedComment (..), SealedContent, SealedMeta (..), maxBodyCiphertext, maxTitleCiphertext)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..), UserId (..))
-import Wiki.Core.Space (Conversion, conversionName)
+import Wiki.Core.Space (Conversion, Entry (..), conversionName)
 import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), Sealed (..))
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (markSpaceLinks, micro)
@@ -77,10 +78,19 @@ import Wiki.Server.Storage.Sealed (contentOf, insertSealedThread, insertSealedVe
 setConversion :: (Backend be) => SpaceId -> Maybe Conversion -> Db be ()
 setConversion sid c = runUpdate (update wikiDb.spaces (\x -> x.conversion <-. val_ (conversionName <$> c)) (\x -> x.id ==. val_ sid.text))
 
--- | Make a space plain again, at the end of turning its encryption off.
+-- | Set whether a reader confirms each time the space is opened
+-- ('Wiki.Core.Space.Entry'). Written by this alone: a space's other
+-- updates never write the column.
+setEntry :: (Backend be) => SpaceId -> Entry -> Db be ()
+setEntry sid e = runUpdate (update wikiDb.spaces (\x -> x.confirm_entry <-. val_ (e == ConfirmEach)) (\x -> x.id ==. val_ sid.text))
+
+-- | Make a space plain again, at the end of turning its encryption off:
+-- with its key goes its asking each time ('setEntry'), which only an
+-- encrypted space has, so that encrypting it again asks only if an
+-- administrator says so again.
 clearSpaceKey :: (Backend be) => SpaceId -> Db be ()
 clearSpaceKey sid = do
-  runUpdate (update wikiDb.spaces (\x -> x.key_id <-. val_ Nothing) (\x -> x.id ==. val_ sid.text))
+  runUpdate (update wikiDb.spaces (\x -> mconcat [x.key_id <-. val_ Nothing, x.confirm_entry <-. val_ False]) (\x -> x.id ==. val_ sid.text))
   -- Paths into the space read otherwise once it is plain, as when it was
   -- made encrypted ('Wiki.Server.Storage.Sealed.setSpaceKey').
   markSpaceLinks sid

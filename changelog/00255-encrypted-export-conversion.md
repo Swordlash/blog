@@ -1,6 +1,6 @@
 ---
 pr: 255
-title: Encrypted spaces: a decrypted export, and encrypting a space with pages
+title: Encrypted spaces: a decrypted export, encrypting pages, asking each time
 ---
 
 ## New features
@@ -47,3 +47,24 @@ title: Encrypted spaces: a decrypted export, and encrypting a space with pages
   The page p-3f2a9c of Plans was not converted: … Mend it and continue,
   or stop and turn back.
   ```
+
+- An encrypted space can now ask for a passkey or your password each time
+  it is opened. Its administrators turn on **Ask for a passkey or your
+  password each time this space is opened** in its **Permissions**. It
+  guards against someone using your unlocked computer: nothing of the
+  space is shown until you open it, and leaving it forgets it again. It
+  does not stop someone who opens the browser's developer tools on a
+  device where your keys are unlocked.
+
+  ```text
+  Secret
+  This space asks for a passkey or your password each time it is opened.
+  [Open with a passkey]
+  ```
+
+## Other changes
+
+- Signing out now deletes your keys from the device, in every tab. Signing
+  in with your password unlocks them again by itself; after signing in
+  with a provider, unlock them with a passkey before reading an encrypted
+  space.

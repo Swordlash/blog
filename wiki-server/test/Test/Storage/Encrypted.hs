@@ -928,6 +928,34 @@ spec backing = describe "encrypted spaces in the storage" $ do
     isLeft (eitherDecode body :: Either [Char] NewSealedPage) `shouldBe` True
     isLeft (eitherDecode "{\"content\":{\"title\":\"x\",\"body\":\"y\"}}" :: Either [Char] SealedEdit) `shouldBe` True
 
+  -- #213: whether readers confirm each time they open an
+  -- encrypted space is the space's administrators' to set, kept by the
+  -- server for the space alone, and read by the browser of a reader of a
+  -- subspace through the parents listed with it ('Space.gateOf').
+  describe "asking each time a space is opened" $ do
+    it "keeps the setting an administrator makes on an encrypted space, refuses it to a reader and on a plain space, and lists it to a subspace's reader" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          sub = subspaceId 1
+      secret.entry `shouldBe` Space.EnterAtOnce
+      made <- ok =<< as p.ada (createEncryptedSubspace secret.id (subspaceAs p.ada p.adaKey sub "Inner"))
+      void (ok =<< as p.ada (setSpaceGrant sub (SubjectUser p.bob) View True))
+      as p.bob (setSpaceEntry secret.id Space.ConfirmEach) `shouldReturn` Left NotFound
+      as p.bob (setSpaceEntry made.id Space.ConfirmEach) `shouldReturn` Left Forbidden
+      set <- ok =<< as p.ada (setSpaceEntry secret.id Space.ConfirmEach)
+      set.entry `shouldBe` Space.ConfirmEach
+      -- Kept: the list read again has it, for Ada and for Bob, who reads
+      -- the subspace alone and gets its parent listed with it.
+      forM_ [p.ada, p.bob] $ \u -> do
+        listed <- as u listSpaces
+        [(x.id, x.entry) | x <- listed, x.id `elem` [secret.id, made.id]] `shouldMatchList` [(secret.id, Space.ConfirmEach), (made.id, Space.EnterAtOnce)]
+        Space.gateOf listed made.id `shouldBe` Just secret.id
+      plain <- privateSpace st p.ada "Plain"
+      as p.ada (setSpaceEntry plain.id Space.ConfirmEach) >>= (`shouldSatisfy` ruleRefused "Only an encrypted space asks")
+      ((\x -> x.entry) <$> (ok =<< as p.ada (setSpaceEntry secret.id Space.EnterAtOnce))) `shouldReturn` Space.EnterAtOnce
+      listed <- as p.ada listSpaces
+      Space.gateOf listed made.id `shouldBe` Nothing
+
   -- Item 4 of #213: a space that has pages encrypted page by page in an
   -- administrator's browser (here, ciphertexts of made-up bytes), stopped
   -- halfway, the storage closed and opened again, and finished; and its
@@ -1031,8 +1059,11 @@ spec backing = describe "encrypted spaces in the storage" $ do
       inner <- ok =<< as p.ada (createEncryptedSubspace secret.id (subspaceAs p.ada p.adaKey (subspaceId 7) "Inner"))
       ((\i -> i.cannotDecrypt) <$> (ok =<< as p.ada (conversionInfo inner.id))) >>= (`shouldSatisfy` any ("Its parent space" `T.isInfixOf`))
       void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) AdministerSpace True))
+      -- Asking each time, which goes with the encryption.
+      void (ok =<< as p.ada (setSpaceEntry secret.id Space.ConfirmEach))
       as p.bob (startDecrypting secret.id) >>= (`shouldSatisfy` conflict)
       started <- ok =<< as p.ada (startDecrypting secret.id)
+      as p.ada (setSpaceEntry secret.id Space.EnterAtOnce) >>= (`shouldSatisfy` ruleRefused "are being decrypted")
       (started.running, sort (map (\x -> x.space) started.left)) `shouldBe` (Just Space.Decrypting, sort [secret.id, secret.id, inner.id])
       as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = savedOn (contentOf 'b') 'c'}) >>= (`shouldSatisfy` ruleRefused "are being decrypted")
       -- Each page staged decrypted, and committed.
@@ -1048,7 +1079,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
         as p.ada (commitConverted x.page ConversionCommit {digest = "an older digest"}) >>= (`shouldSatisfy` conflict)
         void (ok =<< as p.ada (commitConverted x.page ConversionCommit {digest = staged.digest}))
       spaces <- as p.ada listSpaces
-      [(x.encryption, x.conversion) | x <- spaces, x.id `elem` [secret.id, inner.id]] `shouldBe` [(Nothing, Nothing), (Nothing, Nothing)]
+      [(x.encryption, x.conversion, x.entry) | x <- spaces, x.id `elem` [secret.id, inner.id]] `shouldBe` [(Nothing, Nothing, Space.EnterAtOnce), (Nothing, Nothing, Space.EnterAtOnce)]
       readBack <- ok =<< as p.ada (getPage secret.id [made.slug])
       (readBack.title, readBack.body, map (\x -> (x.name.text, x.size)) readBack.attachments) `shouldBe` ("Title 2", "Text 2", [("file.txt", 11)])
       threads <- ok =<< as p.ada (listThreads pid)

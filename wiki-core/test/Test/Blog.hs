@@ -16,7 +16,7 @@ import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (PageSummary (..))
 import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (BoxNumbering (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Entry (..), Space (..))
 
 slug :: Text -> Slug
 slug t = either (panic . show) identity (mkSlug t)
@@ -51,6 +51,7 @@ blogSpace home =
     , sealed = False
     , encryption = Nothing
     , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False

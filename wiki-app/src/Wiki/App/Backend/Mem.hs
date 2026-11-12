@@ -468,6 +468,11 @@ instance (Monad m) => MonadEncryption (MemWiki m) where
   startConversion _ _ = pure (Left noServer)
   convertNext _ = pure (Left noServer)
   reverseConversion _ = pure (Left noServer)
+  setEntry _ _ = pure (Left noServer)
+
+  -- Nothing here is encrypted, so no space asks and no gate opens.
+  confirmedEntry _ = pass
+  readerAt _ _ = pass
 
 instance (MonadIO m) => MonadStars (MemWiki m) where
   starred = query starredIn

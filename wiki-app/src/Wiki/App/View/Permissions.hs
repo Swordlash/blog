@@ -57,7 +57,7 @@ import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.Core.Id (GroupId (..), UserId (..))
 import Wiki.Core.Permission (SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..), keepsAdministering, sealedChain)
-import Wiki.Core.Space (Conversion (..), Space (conversion, encryption, id, name, parent, public, sealed))
+import Wiki.Core.Space (Conversion (..), Entry (..), Space (conversion, encryption, entry, id, name, parent, public, sealed), gateOf)
 import Wiki.Core.User (Group (..), Login (..), User (..))
 
 -- | The permissions view's input: the space, as the space's view has it.
@@ -103,6 +103,7 @@ data Action
   | Followed (Follow Route)
   | TogglePublic
   | ToggleSealed
+  | ToggleEntry
   | AskEncrypt Bool
   | Encrypt
   | AskDecrypt Bool
@@ -187,6 +188,23 @@ component =
             <div class="permissions-encrypted">
               <p class="permissions-intro encrypted-note">Encrypted: the titles and texts of this space's pages, and their histories, are encrypted in its members' browsers, and the server cannot read them. Its name stays readable, to whoever sees it in the list of spaces. Each reader granted here gets the space's key from a member's browser, the next time a member opens the space.</p>
               <p class="permissions-intro encrypted-removal">Removing someone here gives the space a new key: your browser makes it at once if you hold the key, or another administrator's does when they next open the space, and until then nothing more can be written in it. Whoever was removed and kept the old key can still read what was written before, with a copy of what the server stores, but nothing written after.</p>
+              <div class="permissions-entry">
+                <button
+                  type="button"
+                  role="switch"
+                  class="switch entry-switch"
+                  aria-checked={{ ariaBool (space.entry == ConfirmEach) }}
+                  aria-label={{ space.name <> " asks for a passkey or your password each time it is opened" }}
+                  disabled={{ st.busy }}
+                  onClick={{ const ToggleEntry }}
+                >
+                  Ask for a passkey or your password each time this space is opened.
+                </button>
+                <p class="permissions-intro entry-explained">This guards against someone using your unlocked computer. It does not stop someone who opens the browser's developer tools on a device where your keys are unlocked. It covers the spaces below this one too.</p>
+                {% if askedAbove %}
+                  <p class="permissions-intro entry-above">A space above this one asks already, for this one too.</p>
+                {% end %}
+              </div>
               {% if st.confirmingOff %}
                 <p class="permissions-intro decrypt-explained">Turning encryption off decrypts this space's pages and those of the spaces below it in your browser, one by one, with their histories, comments and attachments, and gives them to the server as plain text: it can then read, search and export them, as any space's. Until it is done nothing else can be written in these spaces; if it stops, an administrator who holds the key continues it here. At the end the spaces' keys are deleted.</p>
                 {{ refusalsView cannotDecrypt }}
@@ -221,6 +239,8 @@ component =
         -- space, or a subspace made private from its parent. The server
         -- says why one with pages written in it may not.
         encryptable = isNothing space.encryption && isNothing space.conversion && not space.public && (space.sealed || isNothing space.parent)
+        -- Whether a space above this one asks each time, which covers it.
+        askedAbove = maybe False (/= space.id) (gateOf st.input.context.spaces space.id)
         cannotEncrypt = maybe [] (\i -> i.cannotEncrypt) st.conversionInfo
         cannotDecrypt = maybe [] (\i -> i.cannotDecrypt) st.conversionInfo
         leftNow = maybe 0 (\i -> length i.left) st.conversionInfo
@@ -365,6 +385,9 @@ component =
       ToggleSealed -> do
         space <- gets (\st -> st.input.space)
         change (void <$> setSpaceSealed space.id (not space.sealed))
+      ToggleEntry -> do
+        space <- gets (\st -> st.input.space)
+        change (void <$> setEntry space.id (if space.entry == ConfirmEach then EnterAtOnce else ConfirmEach))
       AskEncrypt asking -> modify (\st -> st {confirming = asking})
       -- A space with nothing written in it is encrypted at once; one that
       -- has pages, page by page. The server says which it is

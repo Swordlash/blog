@@ -45,6 +45,7 @@ import Data.Aeson (Value (..), decodeStrict', encode)
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
 import Halogen.JSBits.Promise (Promise (..), wait)
@@ -64,7 +65,7 @@ import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), keyStateText)
-import Wiki.App.Backend.Http (HttpEnv, HttpWiki, browserTransport, newHttpEnv, ownersHeld, runHttpWiki)
+import Wiki.App.Backend.Http (HeldNow (..), HttpEnv, HttpWiki, browserTransport, heldNow, newHttpEnv, ownersHeld, runHttpWiki)
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State qualified as M
@@ -88,7 +89,7 @@ import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Entry (..), Space (..))
 import Wiki.Core.User (Standing (..))
 import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..))
 
@@ -119,6 +120,8 @@ $( browserJS
      , ("js_strip_home", "wiki_test_encrypted_strip_home", Safe, [t|JSText -> IO ()|])
      , ("js_made", "wiki_test_encrypted_made", Safe, [t|IO JSText|])
      , ("js_blobs", "wiki_test_encrypted_blobs", Safe, [t|IO JSText|])
+     , ("js_record_decryptions", "wiki_test_encrypted_record_decryptions", Safe, [t|IO ()|])
+     , ("js_decrypted", "wiki_test_encrypted_decrypted", Safe, [t|IO JSText|])
      ]
  )
 
@@ -1004,6 +1007,109 @@ spec m = do
     sent <- asked
     [r.url | r <- sent, "/rotation" `T.isSuffixOf` r.url, r.method == "POST"] `shouldBe` []
 
+  -- #213: a space that asks for a passkey or the password each
+  -- time it is opened. Nothing of it is decrypted from the reader's
+  -- coming in until they confirm, and nothing of it is held once they
+  -- leave: no key, no page decrypted, no attachment's name or address.
+  -- Outside it, a starred page of it is "an encrypted page".
+  it "decrypts nothing of a space that asks each time before the reader confirms, and holds nothing of it once they leave" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Behind the gate" "Read me once confirmed.")
+    void (ok =<< run env (createPage secret.id Nothing "Second room" "Also behind it."))
+    attached <- ok =<< run env (uploadAttachment made.id "gate.txt" "text/plain" "The gate's notes.")
+    gated <- ok =<< run env (setEntry secret.id ConfirmEach)
+    gated.entry `shouldBe` ConfirmEach
+    unsafeIOToPageM js_record_decryptions
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    tab <- unsafeIOToPageM (newHttpEnv browserTransport)
+    ui <- startServerOver m tab (R.Page [secretSlug] [made.slug])
+    eventually (find ui ".encrypted-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "asks for a passkey or your password each time"))
+    -- This device has no vault to unlock: it cannot be opened here.
+    _ <- eventually (find ui ".encrypted-confirm-none")
+    run tab (keyState secret.id) `shouldReturn` Right ConfirmFirst
+    decryptedSince `shouldReturn` []
+    (\h -> h.keys) <$> unsafeIOToPageM (heldNow tab) `shouldReturn` mempty
+    -- Confirmed, as the view does once the keys were unlocked again
+    -- ('Wiki.App.View.Encrypted.confirmWith'): the page is decrypted, its
+    -- attachment too, and the stars name it.
+    run tab (confirmedEntry secret.id)
+    find ui ".encrypted-retry" >>= click
+    eventually (find ui ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Read me once confirmed."))
+    opened <- decryptedSince
+    filter (T.isInfixOf secret.id.text) opened `shouldSatisfy` (not . null)
+    run tab endPreload
+    stars <- ok =<< run tab starred
+    [s.title | s <- stars, s.page == made.id] `shouldBe` ["Behind the gate"]
+    inside <- unsafeIOToPageM (heldNow tab)
+    (inside.keys, inside.confirmed) `shouldBe` (Set.singleton secret.id, Set.singleton secret.id)
+    -- Inside, after a write, which empties the backend's cache: another
+    -- page of the space opens without asking again.
+    shown <- ok =<< run tab (getPage secret.id [made.slug])
+    void (ok =<< run tab (savePage made.id shown.updatedAt "Behind the gate" "Read me once confirmed."))
+    links <- findAll ui ".wiki-sidebar .page-tree a"
+    named <- filterM (\l -> (== "Second room") . T.strip <$> textContent l) links
+    maybe (panic "no link to the second page") click (head named)
+    eventually (find ui ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Also behind it."))
+    length <$> findAll ui ".encrypted-space" `shouldReturn` 0
+    -- Left for the front page: nothing of the space is held, its pages and
+    -- attachments are refused, the page shows nothing of them, and they are
+    -- named as a notification names them.
+    find ui ".wiki-brand" >>= click
+    eventually $ unsafeIOToPageM (heldNow tab) `shouldReturn` HeldNow {keys = mempty, found = mempty, confirmed = mempty, attachments = 0, urls = 0}
+    shell <- find ui ".wiki"
+    eventually (textContent shell >>= (`shouldSatisfy` \t -> not (any (`T.isInfixOf` t) ["Behind the gate", "Read me once confirmed.", "Second room", "Also behind it.", "gate.txt"])))
+    run tab (getPage secret.id [made.slug]) >>= (`shouldSatisfy` isLeft)
+    run tab (listPages secret.id) >>= (`shouldSatisfy` isLeft)
+    run tab (listThreads made.id) >>= (`shouldSatisfy` isLeft)
+    urlIn tab attached >>= (`shouldSatisfy` (not . T.isPrefixOf "blob:"))
+    after <- ok =<< run tab starred
+    [s.title | s <- stars, s.page == made.id] `shouldBe` ["Behind the gate"]
+    [s.title | s <- after, s.page == made.id] `shouldBe` ["an encrypted page"]
+    unsafeIOToPageM js_record_decryptions
+    run tab (searchPages (searchQuery "confirmed")) `shouldReturn` []
+    -- Back in the space: asked again, and nothing decrypted until then.
+    unmount ui
+    again <- startServerOver m tab (R.Space [secretSlug])
+    _ <- eventually (find again ".encrypted-confirm-none")
+    filter (T.isInfixOf secret.id.text) <$> decryptedSince `shouldReturn` []
+    -- A key that was being opened when the reader left is not held once
+    -- it opens: confirmed again, the answer with the reader's grant held
+    -- back, and the space left before it comes.
+    let grantAt = endpointUrl (\e -> e.encrypted.space secret.id)
+        askedFor = length . filter (\r -> r.url == grantAt) <$> asked
+    n <- askedFor
+    holdAt "GET" grantAt
+    run tab (confirmedEntry secret.id)
+    find again ".encrypted-retry" >>= click
+    eventually (askedFor >>= (`shouldSatisfy` (> n)))
+    find again ".wiki-brand" >>= click
+    eventually ((\h -> h.confirmed) <$> unsafeIOToPageM (heldNow tab) `shouldReturn` mempty)
+    release
+    -- The grant was opened (HPKE's opening names no additional data), and
+    -- the key it gave was not held.
+    eventually (decryptedSince >>= (`shouldSatisfy` elem ""))
+    (\h -> h.keys) <$> unsafeIOToPageM (heldNow tab) `shouldReturn` mempty
+    filter (T.isInfixOf secret.id.text) <$> decryptedSince `shouldReturn` []
+    unmount again
+
+  it "turns asking each time on in the space's permissions, and asks the administrator who turned it on too" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    void (ok =<< run env (createPage secret.id Nothing "Plans" "First."))
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    ui <- startServer m (R.SpacePages [secretSlug])
+    find ui ".space-settings-toggle" >>= click
+    switch <- eventually (find ui ".entry-switch")
+    getAttribute switch "aria-checked" `shouldReturn` Just "false"
+    click switch
+    eventually (find ui ".encrypted-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "asks for a passkey or your password each time"))
+    stored <- unsafeIOToPageM (fromJSText <$> js_stored)
+    "confirm-each-time" `T.isInfixOf` stored `shouldBe` True
+    unmount ui
+
   it "offers comments and attachments, and no kept draft, in an encrypted space's page and editor" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
@@ -1040,6 +1146,11 @@ spec m = do
 -- | What this browser remembers of a page for a user, set to the version
 -- at an index from the first, as if it had read that one last; nothing for
 -- an index below 0.
+-- | The additional data of every decryption the page made since
+-- 'js_record_decryptions'.
+decryptedSince :: PageM s [Text]
+decryptedSince = unsafeIOToPageM (fromMaybe [] . decodeStrict' . encodeUtf8 . fromJSText <$> js_decrypted)
+
 seenAt :: Text -> PageId -> Int -> PageM s ()
 seenAt user pid index = unsafeIOToPageM (js_seen_at (toJSText user) (toJSText pid.text) index)
 
@@ -1116,6 +1227,7 @@ secret =
     , sealed = True
     , encryption = Nothing
     , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False

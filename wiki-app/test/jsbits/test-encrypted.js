@@ -211,6 +211,13 @@ function wikiTestEncServer(request) {
       return wikiTestEncJson(200, s.space);
     }
     if (!s.space.encryption) return wikiTestEncJson(409, { error: "Conflict", text: "This space is not encrypted." });
+    // Whether its readers confirm each time they open it, set by an
+    // administrator.
+    if (rest === "/entry" && request.method === "PUT") {
+      if (!s.admins.includes(me)) return wikiTestEncJson(403, { error: "Forbidden" });
+      s.space.entry = JSON.parse(request.body).entry;
+      return wikiTestEncJson(200, s.space);
+    }
     // A subspace, made encrypted: open to the parent's readers, who wait
     // for its key.
     if (rest === "/subspaces" && request.method === "POST") {
@@ -553,6 +560,26 @@ async function wiki_test_encrypted_unlock_device(user) {
 function wiki_test_encrypted_stored() {
   const pages = [...wikiTestEncrypted.pages.values()].map((p) => ({ ...p, attachments: (p.attachments ?? []).map((a) => ({ ...a, bytes: String.fromCharCode(...a.bytes) })) }));
   return JSON.stringify({ pages, spaces: [...wikiTestEncrypted.spaces.values()], created: wikiTestEncrypted.created });
+}
+
+// Every decryption the page makes from now on, by WebCrypto, with the
+// additional data it names, as text: an encrypted space's name the space
+// as their second word, and HPKE's opening of a grant names none ("").
+const wikiTestEncDecrypted = [];
+function wiki_test_encrypted_record_decryptions() {
+  wikiTestEncDecrypted.length = 0;
+  if (crypto.subtle.wikiTestRecorded) return;
+  const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+  crypto.subtle.decrypt = (algorithm, key, data) => {
+    const aad = algorithm?.additionalData;
+    wikiTestEncDecrypted.push(aad ? new TextDecoder().decode(aad) : "");
+    return decrypt(algorithm, key, data);
+  };
+  crypto.subtle.wikiTestRecorded = true;
+}
+
+function wiki_test_encrypted_decrypted() {
+  return JSON.stringify(wikiTestEncDecrypted);
 }
 
 // The bytes the server stored for each attachment, in base64, as JSON.

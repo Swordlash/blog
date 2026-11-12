@@ -146,7 +146,7 @@ import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous, sameAsking, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
-import Wiki.App.Backend.Encrypted (MonadEncryption)
+import Wiki.App.Backend.Encrypted (MonadEncryption (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew)
@@ -163,6 +163,7 @@ import Wiki.App.Recent (rememberVisit)
 import Wiki.App.Route (AdminSection, Route (..), adminSections, locationRoute, sectionName, sectionTitle, settledRoute)
 import Wiki.App.Route qualified as R
 import Wiki.App.Security (MonadSecurity)
+import Wiki.App.Vault (forgetUserKeys)
 import Wiki.App.View.Access qualified as AccessView
 import Wiki.App.View.Activity qualified as ActivityView
 import Wiki.App.View.AssistantSettings qualified as AssistantSettingsView
@@ -1511,6 +1512,7 @@ component =
         modify (\st -> st {entry = now})
       -- Someone signed in or out: reload everything, as the new user.
       FromAccount (SignInView.AccountChanged s) -> do
+        forgetFormer s
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
         restartFeed
         reload Nothing
@@ -1569,11 +1571,19 @@ component =
     -- in again is shown, saying why.
     sessionEnded :: Session -> H.HalogenM (State m) Action Slots output m ()
     sessionEnded s = do
+      forgetFormer s
       modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
       restartFeed
       reload Nothing
       when (isNothing s.user) $
         H.tell "signIn" () (SignInView.Prompt "Your session has ended. Sign in again to go on.")
+
+    -- The user who was signed in is no longer: their vault key and private
+    -- key leave this device, in every tab ('Wiki.App.Vault.forgetUserKeys').
+    forgetFormer :: Session -> H.HalogenM (State m) Action Slots output m ()
+    forgetFormer s = do
+      before <- gets (\st -> st.session.user)
+      for_ before $ \u -> when (((\x -> x.id) <$> s.user) /= Just u.id) (lift (forgetUserKeys u.id))
 
     -- Open the live channel again, as the current user.
     restartFeed :: H.HalogenM (State m) Action Slots output m ()
@@ -1618,10 +1628,23 @@ component =
       -- The questions and results about the wiki's data are not shown
       -- again on coming back to the administration.
       shut <- (.) <$> shutMenu <*> shutSwitcher
+      gatesAt (settledRoute r)
       modify (shut . \st -> st {route = settledRoute r, settled = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
       canonicalAdmin
       whatsNewSeen
       loadHere False
+
+    -- Tell the backend where the reader is now, before the route reads
+    -- anything: a space that asks for a passkey or the password each time
+    -- it is opened asks again once the reader has left it
+    -- ('Wiki.App.Backend.Encrypted.readerAt'). Only the backend's memory
+    -- changes, so nothing waits. A path not in the list of spaces yet (a
+    -- space made just now) counts as its nearest space listed.
+    gatesAt :: Route -> H.HalogenM (State m) Action Slots output m ()
+    gatesAt r = for_ (routeSpace r) $ \path -> do
+      spaces <- gets (\st -> st.spaces)
+      let nearest p = listToMaybe [x.id | n <- reverse [1 .. length p], Just chain <- [findSpace spaces (take n p)], Just x <- [lastMay chain]]
+      lift (readerAt spaces (path >>= nearest))
 
     -- After a change: reload everything, and every view's own data too.
     reload :: Maybe Route -> H.HalogenM (State m) Action Slots output m ()
@@ -1630,6 +1653,7 @@ component =
       -- 'arrive' does.
       when (isJust next) (lift endPreload)
       loadWorld
+      gatesAt =<< maybe (gets (\st -> st.route)) (pure . settledRoute) next
       modify (\st -> st {generation = st.generation + 1})
       for_ next $ \r -> modify (\st -> st {route = settledRoute r, settled = False, leaving = Nothing})
       loadHere True
@@ -2152,3 +2176,41 @@ archiveSummary a =
   where
     counted :: Int -> Text -> Text -> Text
     counted n singular plural = show n <> " " <> if n == 1 then singular else plural
+
+-- | The space a route is in, by its path, for the gates of encrypted spaces
+-- ('Wiki.App.Backend.Encrypted.readerAt'): 'Just' 'Nothing' for a route
+-- outside every space, and 'Nothing' for a page's permanent address, which
+-- leads on to the page's own route without leaving where the reader was.
+routeSpace :: Route -> Maybe (Maybe [Slug])
+routeSpace = \case
+  Space p -> inside p
+  Posts p _ -> inside p
+  SpacePages p -> inside p
+  Page p _ -> inside p
+  EditPage p _ -> inside p
+  PageSource p _ -> inside p
+  LivePreview p _ -> inside p
+  NewPage p _ -> inside p
+  PageHistory p _ _ _ -> inside p
+  PageSlides p _ _ _ -> inside p
+  PageAtVersion p _ _ -> inside p
+  NewSpace p -> Just p
+  Search _ p _ -> Just p
+  PermanentLink _ _ -> Nothing
+  Home -> outside
+  EditHome -> outside
+  HomeSource -> outside
+  HomeHistory _ _ -> outside
+  HomeSlides _ _ -> outside
+  Unknown -> outside
+  Admin _ -> outside
+  Invite _ -> outside
+  ResetPassword _ -> outside
+  VerifyEmail _ -> outside
+  Unsubscribe _ -> outside
+  AssistantSettings -> outside
+  WhatsNewPage -> outside
+  UserSpaces -> outside
+  where
+    inside = Just . Just
+    outside = Just Nothing

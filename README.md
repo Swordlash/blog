@@ -838,6 +838,27 @@ How it works:
   it: its pages go under it, and keep their addresses.
 - On a device that does not hold your keys, the space shows as locked and
   offers to unlock them there, with a passkey or your password.
+- **Ask for a passkey or your password each time this space is opened**,
+  a switch in the space's permissions for its administrators, guards
+  against someone using your unlocked computer: nothing of the space, or
+  of the spaces below it, is decrypted until you open it with a passkey
+  (where your vault has one and the browser can use it) or your password.
+  Leaving it, for a page outside it or the front page, forgets its key,
+  its pages decrypted for the search, its attachments' addresses and your
+  confirmation in that tab; a reload asks again too. Outside it, its
+  starred pages are named "an encrypted page", as notifications name
+  them, and a search finds nothing of it. It is a gate in the wiki's own
+  page, not in its encryption: someone who opens the browser's developer
+  tools on a device where your keys are unlocked gets past it. Someone
+  who signs in only with a provider, and has no passkey on the device,
+  cannot open such a space there.
+- Signing out, or a tab finding that your session ended or is someone
+  else's now, deletes your vault's key and your private key from the
+  device, in every tab of the wiki and in the browser's storage; the
+  assistant's own key stays, unless it is the vault's key. Signing in with
+  your password unlocks them again by itself. Signing in with a provider
+  does not: your keys are then locked, and a passkey unlocks them before
+  you read an encrypted space.
 - Slugs in an encrypted space are random, since a title's slug would show
   the title.
 - Each version of a page names its number and the version before it, in

@@ -97,6 +97,7 @@ import Wiki.Api.Activity (ActivityQuery (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), WikiSettings (..), userQueryOf)
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.ContentPolicy (interactiveSvgPolicy)
+import Wiki.Api.Encrypted (SpaceEntry (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Export (documentDisposition, formatMediaType)
@@ -846,6 +847,7 @@ handlers env caller =
           , startEncrypting = \s body -> wiki (startEncrypting s body)
           , startDecrypting = wiki . startDecrypting
           , reverseConversion = wiki . reverseConversion
+          , setEntry = \s body -> wiki (setSpaceEntry s body.entry)
           , stageSealed = \p body -> wiki (stageSealed p body) $> NoContent
           , stagePlain = \p body -> wiki (stagePlain p body) $> NoContent
           , stageBytes = \p a u -> wiki (stageBytesFile p a u.payload) $> NoContent

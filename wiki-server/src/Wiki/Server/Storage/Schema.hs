@@ -428,6 +428,9 @@ data Spaces f = SpaceRow
   , conversion :: Columnar f (Maybe Text)
   -- ^ The conversion of its pages under way, by
   -- 'Wiki.Core.Space.conversionName' (step 20), none when none runs.
+  , confirm_entry :: Columnar f Bool
+  -- ^ Whether a reader confirms with a passkey or the password each time
+  -- the space is opened ('Wiki.Core.Space.ConfirmEach', step 21).
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)

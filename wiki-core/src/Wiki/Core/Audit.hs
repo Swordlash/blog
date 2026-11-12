@@ -109,6 +109,7 @@ actionText a = Map.findWithDefault a a actions
         , ("space.decryption-started", "Started turning a space's encryption off")
         , ("space.decrypted", "Turned a space's encryption off")
         , ("space.conversion-reversed", "Turned the conversion of a space back")
+        , ("space.entry", "Changed whether an encrypted space asks for a passkey or the password each time")
         , ("page.delete", "Deleted a page")
         , ("user.create", "Made a user")
         , ("user.register", "Made themself an account")

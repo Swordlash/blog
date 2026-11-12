@@ -528,6 +528,71 @@ async function wiki_test_other_tab_drops(user) {
   await new Promise((resolve) => setTimeout(resolve, 50));
 }
 
+// Put a key in this device's store of keys, under a slot.
+async function wikiTestPutKey(slot, key) {
+  const db = await new Promise((resolve, reject) => {
+    const request = indexedDB.open("wiki-assistant-keys", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("keys");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction("keys", "readwrite");
+      transaction.objectStore("keys").put(key, slot);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+// The assistant's own key in its slot (the user's id): a key of its own,
+// as when its settings do not sync, or the vault key, as when they do.
+async function wiki_test_assistant_key(user, vaultKey) {
+  const key = vaultKey
+    ? (await wikiTestEntries("wiki-assistant-keys", "keys")).find(([slot]) => slot === `vault:${user}`)?.[1]
+    : await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  if (!(key instanceof CryptoKey)) throw new Error("No vault key to share.");
+  await wikiTestPutKey(String(user), key);
+}
+
+// What the wiki's tabs are told of keys let go, heard from now on as
+// another tab hears it.
+const wikiTestDropsHeard = [];
+let wikiTestDropsChannel = null;
+function wiki_test_hear_drops() {
+  wikiTestDropsHeard.length = 0;
+  if (wikiTestDropsChannel !== null) return;
+  wikiTestDropsChannel = new BroadcastChannel("wiki-assistant-keys");
+  wikiTestDropsChannel.onmessage = (event) => {
+    if (typeof event.data?.dropped === "string") wikiTestDropsHeard.push(event.data.dropped);
+  };
+}
+
+function wiki_test_drops_heard() {
+  return JSON.stringify(wikiTestDropsHeard);
+}
+
+// The slots whose keys the page holds for its life (jsbits/vault.js).
+function wiki_test_page_key_slots() {
+  return JSON.stringify([...(globalThis.wikiVaultPageKeys ?? new Map()).keys()]);
+}
+
+// A key held by the page in a slot, as another tab's would be.
+async function wiki_test_page_key_hold(slot) {
+  if (!(globalThis.wikiVaultPageKeys instanceof Map)) globalThis.wikiVaultPageKeys = new Map();
+  globalThis.wikiVaultPageKeys.set(String(slot), await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]));
+}
+
+// Tell the wiki's tabs that a key was let go, as another tab does.
+function wiki_test_tell_dropped(slot) {
+  const other = new BroadcastChannel("wiki-assistant-keys");
+  other.postMessage({ dropped: String(slot) });
+  other.close();
+}
+
 // How many keys the page still holds that can be exported, through the
 // vault's own functions (Wiki.App.Assistant's): every handle given so far
 // is tried as the key to wrap, with a wrapping key from a passkey the

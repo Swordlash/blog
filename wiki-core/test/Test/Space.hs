@@ -31,6 +31,7 @@ space i name parent =
     , sealed = False
     , encryption = Nothing
     , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False

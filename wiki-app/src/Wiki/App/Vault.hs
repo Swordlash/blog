@@ -46,6 +46,7 @@ module Wiki.App.Vault
   , identitySlot
   , readDevice
   , writeDevice
+  , forgetUserKeys
 
     -- * The user's keys
   , UserKeys (..)
@@ -146,6 +147,43 @@ readDevice u =
 -- | Record what this device holds of the user's vault.
 writeDevice :: (MonadAssistant m) => UserId -> VaultDevice -> m (Either Text ())
 writeDevice u d = keepDeviceRecord (vaultSlot u) (Just (BSL.toStrict (encode d)))
+
+-- | Let go of the user's keys on this device, when they sign out or the
+-- tab learns that their session ended or is someone else's now: the vault
+-- key and the private key of their key pair, in this page and in
+-- IndexedDB, and in the wiki's other tabs, which the browser's channel
+-- tells ('dropDeviceKey'). After this, nothing on the device opens the
+-- vault until a passkey or the password unlocks it again. A sign-in with
+-- the password unlocks it with the key the password gives
+-- ('afterSignIn'); a user who signs in with a provider types no password,
+-- and unlocks with a passkey before an encrypted space can be read.
+--
+-- The assistant's own key stays, as what was typed in its settings is
+-- sealed with it, unless it is the vault key: what the vault key seals,
+-- it opens. Without the vault key here to compare, the assistant's key is
+-- taken for the vault key when the assistant's settings sync, sealed with
+-- the vault key ('shareWithAssistant').
+forgetUserKeys :: (MonadAssistant m) => UserId -> m ()
+forgetUserKeys u = do
+  vaultKey <- deviceKey (vaultSlot u)
+  assistantKey <- deviceKey u
+  same <- case (vaultKey, assistantKey) of
+    (Just v, Just a) ->
+      sealWith v "the same key" probeData >>= \case
+        Right sealed -> isRight <$> openWith a sealed probeData
+        Left _ -> pure False
+    (Nothing, Just _) ->
+      deviceRecord u <&> \case
+        Right (Just bytes) | Right (Current r) <- readStored bytes -> isJust r.server
+        _ -> False
+    _ -> pure False
+  traverse_ forgetKey vaultKey
+  traverse_ forgetKey assistantKey
+  dropDeviceKey (vaultSlot u)
+  dropDeviceKey (identitySlot u)
+  when same (dropDeviceKey u)
+  where
+    probeData = "wiki-vault/1 same-key"
 
 --------------------------------------------------------------------------------
 -- The user's keys

@@ -55,8 +55,32 @@ function wikiVaultListen() {
   if (wikiVaultChannel !== null || typeof BroadcastChannel !== "function") return;
   wikiVaultChannel = new BroadcastChannel("wiki-assistant-keys");
   wikiVaultChannel.onmessage = (event) => {
-    if (typeof event.data?.dropped === "string") globalThis.wikiVaultPageKeys?.delete(event.data.dropped);
+    if (typeof event.data?.dropped === "string") wikiVaultLetGo(event.data.dropped);
   };
+}
+
+// The handles given out for the key of each slot ("vault:<user>",
+// "identity:<user>", the assistant's "<user>"), by slot: each read of the
+// stored key gives an object of its own, so a slot's handles are known by
+// the slot, not by the object.
+function wikiVaultSlotHandles(slot) {
+  if (!(globalThis.wikiVaultSlots instanceof Map)) globalThis.wikiVaultSlots = new Map();
+  let handles = globalThis.wikiVaultSlots.get(slot);
+  if (handles === undefined) {
+    handles = new Set();
+    globalThis.wikiVaultSlots.set(slot, handles);
+  }
+  return handles;
+}
+
+// Let go of the key this page holds in a slot: the page's copy, and every
+// handle given out for it, so that no handle kept somewhere opens anything
+// with it.
+function wikiVaultLetGo(slot) {
+  globalThis.wikiVaultPageKeys?.delete(slot);
+  const registry = wikiVaultRegistry();
+  for (const handle of wikiVaultSlotHandles(slot)) registry.keys.delete(handle);
+  globalThis.wikiVaultSlots.delete(slot);
 }
 
 function wikiVaultHandle(key) {
@@ -220,6 +244,7 @@ async function wiki_vault_keep_key(user, handle, onDisk) {
       wikiVaultRegistry().keys.set(handle, key);
     }
     wikiVaultPageKeys().set(String(user), key);
+    wikiVaultSlotHandles(String(user)).add(handle);
     if (onDisk) await wikiVaultStore("readwrite", (store) => store.put(key, String(user)));
     else await wikiVaultStore("readwrite", (store) => store.delete(String(user)));
     return "";
@@ -237,18 +262,24 @@ async function wiki_vault_device_key(user) {
     const stored = await wikiVaultStore("readonly", (store) => store.get(String(user)));
     if (stored instanceof CryptoKey) {
       wikiVaultPageKeys().set(String(user), stored);
-      return wikiVaultHandle(stored);
+      const handle = wikiVaultHandle(stored);
+      wikiVaultSlotHandles(String(user)).add(handle);
+      return handle;
     }
   } catch {
     // No database, as in some private windows: the page's key, if any.
   }
   const held = wikiVaultPageKeys().get(String(user));
-  return held === undefined ? 0 : wikiVaultHandle(held);
+  if (held === undefined) return 0;
+  const handle = wikiVaultHandle(held);
+  wikiVaultSlotHandles(String(user)).add(handle);
+  return handle;
 }
 
 // Let go of a user's vault key on this device: the page's and the stored.
 async function wiki_vault_drop_key(user) {
-  wikiVaultPageKeys().delete(String(user));
+  wikiVaultPageKeys();
+  wikiVaultLetGo(String(user));
   wikiVaultChannel?.postMessage({ dropped: String(user) });
   try {
     await wikiVaultStore("readwrite", (store) => store.delete(String(user)));

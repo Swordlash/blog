@@ -137,7 +137,7 @@ import Wiki.Core.PageKind (PageKind (..), pageKindName, pageKindOf)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Slug (Slug, slugText)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), rootedPagesOf)
+import Wiki.Core.Space (BoxNumbering (..), Entry (..), Icon (..), Space (..), rootedPagesOf)
 import Wiki.Core.User (Group (..), Login (..), Membership, User (..), loginProblem)
 import Wiki.Core.Version (Author (..), Version (..))
 
@@ -1034,7 +1034,7 @@ parseSpace createdBefore = withObject "space" $ \o -> do
   owner <- fmap UserId <$> o .:? "owner"
   active <- o .:? "active" .!= True
   personalContainer <- o .:? "personalContainer" .!= False
-  pure Space {id, name, slug, parent, public, sealed, encryption = Nothing, conversion = Nothing, owner, active, personalContainer, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
+  pure Space {id, name, slug, parent, public, sealed, encryption = Nothing, conversion = Nothing, entry = EnterAtOnce, owner, active, personalContainer, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog, boxNumbering}
 
 -- | An order as the archive writes it.
 orderText :: ChildOrder -> Text

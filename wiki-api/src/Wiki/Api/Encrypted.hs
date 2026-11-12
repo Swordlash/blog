@@ -54,6 +54,7 @@ module Wiki.Api.Encrypted
   , PlainMeta (..)
   , StagedPage (..)
   , ConversionCommit (..)
+  , SpaceEntry (..)
   , ConversionProgress (..)
   , notConvertedYet
 
@@ -77,7 +78,7 @@ import Wiki.Core.Encrypted (Encapsulated, KeyGrant, PageKey, SealedAnchor, Seale
 import Wiki.Core.Id (AttachmentId, BlobId, CommentId, CommentThreadId, PageId, SpaceId, UserId)
 import Wiki.Core.PageKind (PageKind)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Conversion)
+import Wiki.Core.Space (Conversion, Entry)
 import Wiki.Core.Vault (Ciphertext, KeyId, PublicKey)
 import Wiki.Core.Version (Author)
 
@@ -470,6 +471,15 @@ data StagedPage = StagedPage
 -- browser read it back ('StagedPage''s digest).
 newtype ConversionCommit = ConversionCommit
   { digest :: Text
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'SpaceEntry': what a space's administrator sets of how readers come
+-- into it ('Wiki.Core.Space.Entry'): at once, or after a passkey or the
+-- password each time.
+newtype SpaceEntry = SpaceEntry
+  { entry :: Entry
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

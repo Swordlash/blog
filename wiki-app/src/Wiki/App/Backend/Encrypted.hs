@@ -32,7 +32,7 @@ import Wiki.App.Backend (WikiError (..))
 import Wiki.App.DecryptedExport (DecryptedExport)
 import Wiki.Core.Encrypted (ChainProblem)
 import Wiki.Core.Id (PageId, SpaceId)
-import Wiki.Core.Space (Conversion, Space)
+import Wiki.Core.Space (Conversion, Entry, Space)
 
 -- | 'KeyState': whether this browser can read and write an encrypted
 -- space's pages, and if not, why.
@@ -49,6 +49,11 @@ data KeyState
     -- key: their keys must be unlocked here first (a passkey or the
     -- password), as the account's security does.
     KeysLocked
+  | -- | The space asks for a passkey or the password each time it is
+    -- opened ('Wiki.Core.Space.ConfirmEach'), and the reader has not
+    -- confirmed in this tab since they came into it: nothing of it is
+    -- decrypted until they do ('confirmedEntry').
+    ConfirmFirst
   | -- | No member has shared the space's key with the user yet: a member
     -- shares it when they next open the space. A user without a key pair
     -- waits too, until their first sign-in on a browser makes one.
@@ -63,6 +68,7 @@ keyStateText = \case
   NeedsHttps -> "This space is encrypted, and encryption needs the wiki's HTTPS address: a browser offers it only to a secure page. Open the wiki at its HTTPS address to read it."
   SignInFirst -> "This space is encrypted: sign in to read it."
   KeysLocked -> "This space is encrypted, and this device does not hold your keys yet. Unlock them here to read it."
+  ConfirmFirst -> "This space asks for a passkey or your password each time it is opened."
   WaitingForKey -> "This space is encrypted, and no member has shared its key with you yet. A member shares it when they next open the space; until then its pages cannot be read here."
 
 -- | What a backend without a server answers.
@@ -142,6 +148,34 @@ class (Monad m) => MonadEncryption m where
   reverseConversion :: SpaceId -> m (Either WikiError ConversionInfo)
   default reverseConversion :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> m (Either WikiError ConversionInfo)
   reverseConversion = lift . reverseConversion
+
+  -- | Set whether the space's readers confirm with a passkey or the
+  -- password each time they open it ('Entry'), as its administrators do.
+  setEntry :: SpaceId -> Entry -> m (Either WikiError Space)
+  default setEntry :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> Entry -> m (Either WikiError Space)
+  setEntry s = lift . setEntry s
+
+  -- | Record that the reader confirmed in this tab for the space they are
+  -- coming into: its gate ('Wiki.Core.Space.gateOf') is open to them until
+  -- they leave it ('readerAt'). Only "Wiki.App.View.Encrypted"'s
+  -- 'Wiki.App.View.Encrypted.confirmWith' calls it, once the reader's
+  -- keys were unlocked again with a passkey or the password. The gate is
+  -- the interface's: the keys are on the device all along, and someone who
+  -- opens the browser's developer tools gets past it.
+  confirmedEntry :: SpaceId -> m ()
+  default confirmedEntry :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> m ()
+  confirmedEntry = lift . confirmedEntry
+
+  -- | Where the reader is now: in this space (one of its pages, its list,
+  -- a search of it), or outside every space ('Nothing'), with the spaces
+  -- the shell lists. The shell says so at each route, before the route
+  -- reads anything. Every gate confirmed in this tab that the space is not
+  -- under is closed again, and what the tab holds of the spaces behind it
+  -- is forgotten: their keys, their pages decrypted for the search, their
+  -- attachments' names and object URLs, and the confirmation.
+  readerAt :: [Space] -> Maybe SpaceId -> m ()
+  default readerAt :: (MonadTrans t, m ~ t n, MonadEncryption n) => [Space] -> Maybe SpaceId -> m ()
+  readerAt spaces = lift . readerAt spaces
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadEncryption m) => MonadEncryption (HalogenM st act slots output m)

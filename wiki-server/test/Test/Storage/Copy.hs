@@ -373,6 +373,7 @@ everyTable = do
         , personal_container = False
         , key_id = key
         , conversion = if isJust key then Just "encrypting" else Nothing
+        , confirm_entry = isJust key
         }
     page i parent slug =
       PageRow

@@ -7,6 +7,10 @@ module Wiki.Core.Space
   , Conversion (..)
   , conversionName
   , readsSealed
+  , Entry (..)
+  , entryName
+  , withEntry
+  , gateOf
   , positionSpace
   , withName
   , withMathMacros
@@ -81,7 +85,7 @@ import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..), Sibling (..), childrenInOrder, treeOrder)
 import Wiki.Core.Page qualified as Page
 import Wiki.Core.PageKind (PageKind (..))
-import Wiki.Core.Path (PathError, TreeNode (..), findChild, pathUnder, resolveFromRoot, resolveUnder)
+import Wiki.Core.Path (PathError, TreeNode (..), ancestry, findChild, pathUnder, resolveFromRoot, resolveUnder)
 import Wiki.Core.Slug
 import Wiki.Core.User (Avatar (..))
 import Wiki.Core.Vault (KeyId)
@@ -116,6 +120,11 @@ data Space = Space
   -- which way: its key is set for the whole of it, and each page reads one
   -- way or the other until its turn ('readsSealed'). 'Nothing' for a space
   -- with no conversion under way; absent in JSON means 'Nothing'.
+  , entry :: Entry
+  -- ^ Whether an encrypted space's pages are decrypted as soon as a reader
+  -- opens it, or only once the reader has confirmed it is them ('Entry'),
+  -- for it and every space under it ('gateOf'). Absent in JSON means
+  -- 'EnterAtOnce'.
   , owner :: Maybe UserId
   -- ^ The user whose personal space it is, or 'Nothing' for any other
   -- space. A personal space lives in the container of personal spaces
@@ -199,6 +208,76 @@ instance FromJSON Conversion where
     parseJSON v >>= \t -> case find (\c -> conversionName c == t) [minBound .. maxBound] of
       Just c -> pure c
       Nothing -> fail ("not a conversion: " <> toS t)
+
+-- | 'Entry' is what a reader's browser does before it decrypts anything of
+-- an encrypted space (#213): 'EnterAtOnce', with the keys this
+-- device holds, or 'ConfirmEach', only once the reader has unlocked their
+-- keys again (a passkey, or the password), each time they come into the
+-- space. The space's administrators set it. It guards against someone using
+-- an unlocked computer; it is a gate in the browser's own code, and does
+-- not stop someone who reads the keys from the browser's developer tools.
+-- It covers the space's subspaces too ('gateOf').
+data Entry = EnterAtOnce | ConfirmEach
+  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
+
+-- | A way in by the name JSON gives it.
+entryName :: Entry -> Text
+entryName = \case
+  EnterAtOnce -> "at-once"
+  ConfirmEach -> "confirm-each-time"
+
+instance ToJSON Entry where
+  toJSON = toJSON . entryName
+
+-- | A space written before the setting existed (an older server's, an
+-- archive's, a demo's stored state) is entered at once.
+instance FromJSON Entry where
+  parseJSON v =
+    parseJSON v >>= \t -> case find (\e -> entryName e == t) [minBound .. maxBound] of
+      Just e -> pure e
+      Nothing -> fail ("not a way into a space: " <> toS t)
+  omittedField = Just EnterAtOnce
+
+-- | A space with another 'Entry'. (A function, since a record update of
+-- @entry@ cannot tell a space's field from a 'Wiki.Api.Encrypted.SpaceEntry''s
+-- where both are in scope.)
+withEntry :: Entry -> Space -> Space
+withEntry e s =
+  Space
+    { id = s.id
+    , name = s.name
+    , slug = s.slug
+    , parent = s.parent
+    , public = s.public
+    , sealed = s.sealed
+    , encryption = s.encryption
+    , conversion = s.conversion
+    , entry = e
+    , owner = s.owner
+    , active = s.active
+    , personalContainer = s.personalContainer
+    , mathMacros = s.mathMacros
+    , createdAt = s.createdAt
+    , position = s.position
+    , subspaceOrder = s.subspaceOrder
+    , pageOrder = s.pageOrder
+    , homePage = s.homePage
+    , icon = s.icon
+    , description = s.description
+    , blog = s.blog
+    , boxNumbering = s.boxNumbering
+    }
+
+-- | 'gateOf' is the space whose 'Entry' a reader confirms to read a
+-- space, given the spaces listed: the topmost of the space and the spaces
+-- above it that is encrypted and asks each time ('ConfirmEach'). Once a
+-- reader has confirmed for it, every space under it is open to them, until
+-- they leave it. 'Nothing' for a space that nothing asks for.
+gateOf :: [Space] -> SpaceId -> Maybe SpaceId
+gateOf spaces sid = do
+  let byId = Map.fromList [(x.id, x) | x <- spaces]
+  chain <- ancestry (`Map.lookup` byId) sid
+  (\x -> x.id) <$> find (\x -> x.entry == ConfirmEach && isJust x.encryption) chain
 
 -- | 'readsSealed' is whether a page of this space is read and written
 -- through the encrypted routes ("Wiki.Api.Encrypted"), given whether the
@@ -458,6 +537,7 @@ withProfile p s =
     , sealed = s.sealed
     , encryption = s.encryption
     , conversion = s.conversion
+    , entry = s.entry
     , owner = s.owner
     , active = s.active
     , personalContainer = s.personalContainer
@@ -640,6 +720,7 @@ withHome h s =
     , sealed = s.sealed
     , encryption = s.encryption
     , conversion = s.conversion
+    , entry = s.entry
     , owner = s.owner
     , active = s.active
     , personalContainer = s.personalContainer

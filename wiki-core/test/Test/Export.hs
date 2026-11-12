@@ -29,7 +29,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Entry (..), Icon (..), Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..))
@@ -59,6 +59,7 @@ spaceOf i parent s =
     , sealed = False
     , encryption = Nothing
     , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False
