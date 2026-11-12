@@ -48,6 +48,7 @@ import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
 import Wiki.App.Import
 import Wiki.App.View.Common
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slug (Slug, slugText)
 
 -- | What the import needs from its monad: the server's two steps, and the
@@ -274,7 +275,7 @@ component =
           {% for c in maybeToList node.plan.conflict %}
             {% if not c.sameContent %}
               <div class="import-choice" role="radiogroup" aria-label={{ "Which " <> node.plan.title <> " stays" }}>
-                <span class="import-theirs">This wiki has “{{ c.title }}”, saved {{ savedAt c.updatedAt }}.</span>
+                <span class="import-theirs">This wiki has “{{ c.title }}”, saved {{ savedAt c.updatedAt }}.{{ kindsOf c }}</span>
                 <label>
                   <input
                     type="radio"
@@ -390,6 +391,19 @@ pathText = T.intercalate "/" . map slugText
 -- reader may be anywhere, so the time says which zone it is in.
 savedAt :: UTCTime -> Text
 savedAt = toS . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
+
+-- | How a conflict's two pages differ in kind ("Wiki.Core.PageKind"), in
+-- words after the server's page, or nothing when they are of one kind:
+-- " It is a document here, a presentation in the archive."
+kindsOf :: PageConflict -> Text
+kindsOf c
+  | c.kind == c.importedKind = ""
+  | otherwise = " It is " <> kindWords c.kind <> " here, " <> kindWords c.importedKind <> " in the archive."
+  where
+    kindWords = \case
+      Document -> "a document"
+      Presentation -> "a presentation"
+      OtherKind name -> "a page of the kind “" <> name <> "”"
 
 sizeOf :: Source -> Text
 sizeOf source = fileSize (fromIntegral (BS.length source.zipped))

@@ -237,7 +237,7 @@ genDraft :: Gen Draft
 genDraft = Draft <$> genPageId <*> genUserId <*> genText <*> genText <*> genUtcTime <*> genUtcTime
 
 genPageConflict :: Gen PageConflict
-genPageConflict = PageConflict <$> genText <*> genUtcTime <*> arbitrary
+genPageConflict = PageConflict <$> genText <*> genUtcTime <*> arbitrary <*> elements [Document, Presentation] <*> elements [Document, Presentation]
 
 genPagePlan :: Gen PagePlan
 genPagePlan = PagePlan <$> genSlugs <*> genText <*> chooseInt (0, 5) <*> genMaybe genPageConflict

@@ -48,7 +48,7 @@ where
 
 import Control.Monad.UUID (generateV4)
 import Crypto.Hash.SHA256 qualified as SHA256
-import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict', encode, object, withObject, (.:), (.=))
+import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict', encode, object, withObject, (.!=), (.:), (.:?), (.=))
 import Data.ByteString.Builder (byteStringHex, toLazyByteString)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
@@ -68,6 +68,7 @@ import Wiki.Core.Export qualified as Export
 import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..), savedAs)
+import Wiki.Core.PageKind (PageKind (..), pageKindName)
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Space (..), pageAtExactly, pagePath, rootPage)
 import Wiki.Server.Import (attach, mergeArchive)
@@ -99,17 +100,24 @@ guideArchive now = (toArchive now serverVersion (guideState now)) {Export.homePa
 -- write over it; different, and an administrator changed it. A path the
 -- guide has written and that has no page now was moved or deleted; a path
 -- it never wrote is one a later release adds.
+--
+-- It records the kind the guide last gave each page too
+-- ("Wiki.Core.PageKind"), by the same path: a page whose kind is still
+-- that one gets the release's kind, and a page an administrator gave
+-- another kind keeps it. A record written before pages had kinds has
+-- none, and every page then was a document.
 data Installed = Installed
   { space :: SpaceId
   , pages :: Map Text Text
+  , kinds :: Map Text Text
   }
   deriving stock (Eq, Show)
 
 instance ToJSON Installed where
-  toJSON i = object ["space" .= i.space, "pages" .= i.pages]
+  toJSON i = object ["space" .= i.space, "pages" .= i.pages, "kinds" .= i.kinds]
 
 instance FromJSON Installed where
-  parseJSON = withObject "Installed" $ \o -> Installed <$> o .: "space" <*> o .: "pages"
+  parseJSON = withObject "Installed" $ \o -> Installed <$> o .: "space" <*> o .: "pages" <*> o .:? "kinds" .!= mempty
 
 -- | The hash the record keeps of a page's title and text: the SHA-256 of
 -- both, in hexadecimal. The title's length comes first, so that no other
@@ -201,6 +209,7 @@ install st now actor address = do
       Installed
         { space = g.id
         , pages = Map.fromList [(pathText path, writtenHash p.title p.body) | p <- pages, Just path <- [pagePath g (`Map.lookup` byId) p.id]]
+        , kinds = Map.fromList [(pathText path, pageKindName p.kind) | p <- pages, Just path <- [pagePath g (`Map.lookup` byId) p.id]]
         }
   insertAudit
     Recorded
@@ -263,10 +272,10 @@ releasePages a =
 -- first segment. A path that is already in the record as it is now keeps
 -- its entry. A record written since is unchanged.
 rootedRecord :: Slug -> Installed -> Installed
-rootedRecord rootSlug i = Installed {space = i.space, pages = Map.union kept (Map.fromList (mapMaybe moved (Map.toList i.pages)))}
+rootedRecord rootSlug i = Installed {space = i.space, pages = rooted i.pages, kinds = rooted i.kinds}
   where
     old = slugText rootSlug
-    kept = Map.filterWithKey (\k _ -> isNothing (renamed k)) i.pages
+    rooted m = Map.union (Map.filterWithKey (\k _ -> isNothing (renamed k)) m) (Map.fromList (mapMaybe moved (Map.toList m)))
     moved (k, h) = (,h) <$> renamed k
     renamed k
       | k == old = Just ""
@@ -282,6 +291,8 @@ data Outcome
   | -- | The guide wrote this title and text at this path: the path and
     -- the 'writtenHash', for the record.
     Wrote Text Text
+  | -- | The kind the guide has given the page at this path, by its name.
+    WroteKind Text Text
 
 -- | Bring the wiki's guide up to this release, as this actor asking from
 -- this address, in one transaction: each page that still has the title
@@ -315,6 +326,7 @@ updateGuide st actor address = do
           let addedPaths = [t | Added t <- outcomes]
               rewritten = [p | Rewritten _ p <- outcomes]
               written = Map.fromList [(path, h) | Wrote path h <- outcomes]
+              kindsWritten = Map.fromList [(path, k) | WroteKind path k <- outcomes]
               done =
                 GuideUpdated
                   { updated = [t | Rewritten t _ <- outcomes]
@@ -323,7 +335,8 @@ updateGuide st actor address = do
                   , leftAlone = [t | LeftAlone t <- outcomes]
                   , attachmentsLeftOut = [t | AttachmentsLeftOut t <- outcomes]
                   }
-          unless (Map.null written) $ writeRecord Installed {space = record.space, pages = Map.union written record.pages}
+          unless (Map.null written && Map.null kindsWritten) $
+            writeRecord Installed {space = record.space, pages = Map.union written record.pages, kinds = Map.union kindsWritten record.kinds}
           unless (null rewritten && null addedPaths) $
             insertAudit
               Recorded
@@ -353,16 +366,16 @@ updateGuide st actor address = do
       case found of
         Just p
           | hashOf p == release -> do
-              releaseKind r p
-              pure ([Current] <> [Wrote at release | recorded /= Just release] <> leftOut p)
+              kinded <- releaseKind at record r p
+              pure ([Current] <> [Wrote at release | recorded /= Just release] <> kinded <> leftOut p)
           | recorded == Just (hashOf p) -> do
               -- The guide wrote what the page has, so the release's title
               -- and text go over it, as a new version.
               let new = savedAs (micro now) r.page.title r.page.body p
               updatePageText p.id new.title new.body new.updatedAt
               insertVersion new Nothing
-              releaseKind r p
-              pure ([Rewritten shown new, Wrote at release] <> leftOut p)
+              kinded <- releaseKind at record r p
+              pure ([Rewritten shown new, Wrote at release] <> kinded <> leftOut p)
           | isJust recorded -> pure [LeftAlone (shown <> ": changed by an administrator since the guide wrote it, so left alone")]
           | otherwise -> pure [LeftAlone (shown <> ": a page the guide did not write, so left alone")]
         Nothing
@@ -375,15 +388,21 @@ updateGuide st actor address = do
                 let parent = maybe (Left ()) (Right . Just) (pageAtExactly g pages parentPath)
                 case parent of
                   Left () -> pure [LeftAlone (shown <> ": new in this release, but the page it goes under is not at " <> pathText parentPath <> ", so not added")]
-                  Right under -> [Added shown, Wrote at (writtenHash r.page.title r.page.body)] <$ addPage now archive g under r
+                  Right under -> [Added shown, Wrote at (writtenHash r.page.title r.page.body), WroteKind at (pageKindName r.page.kind)] <$ addPage now archive g under r
 
     -- A page whose text is the release's gets the release's kind too
-    -- ("Wiki.Core.PageKind"): the guide's deck, a document before kinds
-    -- existed, becomes a presentation. The kind is not part of the hash, so
-    -- a page an administrator changed keeps its kind with its text. The
-    -- guide's home page, the tour, is a document in every release.
-    releaseKind :: (Backend be) => ReleasePage -> Page -> Db be ()
-    releaseKind r p = when (p.kind /= r.page.kind) (setPageKindRow p.id r.page.kind)
+    -- ("Wiki.Core.PageKind"), when its kind is still the one the guide
+    -- last gave it (a document, by a record from before kinds): the
+    -- guide's deck, a document before kinds existed, becomes a
+    -- presentation. A page an administrator gave another kind keeps it,
+    -- as a page whose text they changed keeps its text. The guide's home
+    -- page, the tour, is a document in every release.
+    releaseKind :: (Backend be) => Text -> Installed -> ReleasePage -> Page -> Db be [Outcome]
+    releaseKind at record r p
+      | pageKindName p.kind /= Map.findWithDefault (pageKindName Document) at record.kinds = pure []
+      | otherwise = do
+          when (p.kind /= r.page.kind) (setPageKindRow p.id r.page.kind)
+          pure [WroteKind at (pageKindName r.page.kind) | Map.lookup at record.kinds /= Just (pageKindName r.page.kind)]
 
     -- A page of the release the guide never had, under its parent, last
     -- among its siblings, with its attachments.

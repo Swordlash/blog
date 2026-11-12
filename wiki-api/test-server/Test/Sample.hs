@@ -307,7 +307,7 @@ importPlan =
                     { path = [slug "tour"]
                     , title = "Tour"
                     , attachments = 1
-                    , conflict = Just PageConflict {title = "Tour", updatedAt = time, sameContent = False}
+                    , conflict = Just PageConflict {title = "Tour", updatedAt = time, sameContent = False, kind = Kind.Document, importedKind = Kind.Document}
                     }
                 , PagePlan {path = [slug "tour", slug "more"], title = "More", attachments = 0, conflict = Nothing}
                 ]

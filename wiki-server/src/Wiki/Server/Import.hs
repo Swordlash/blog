@@ -179,7 +179,7 @@ toPlan a matches =
                     , title = pm.archived.title
                     , attachments = length pm.archived.attachments
                     , conflict =
-                        (\theirs -> PageConflict {title = theirs.title, updatedAt = theirs.updatedAt, sameContent = sameContent a pm.archived theirs})
+                        (\theirs -> PageConflict {title = theirs.title, updatedAt = theirs.updatedAt, sameContent = sameContent a pm.archived theirs, kind = theirs.kind, importedKind = pm.archived.kind})
                           <$> pm.server
                     }
                 | pm <- m.pages
@@ -190,12 +190,14 @@ toPlan a matches =
     }
 
 -- | Whether an archive's page and a server's page have the same title,
--- body and attachments (by name, media type and content), so that either
--- choice gives the same page.
+-- body, attachments (by name, media type and content) and kind, so that
+-- either choice gives the same page. The kind is part of what a page is:
+-- a presentation is not the same page as a document with its text.
 sameContent :: Archive -> Page -> Page -> Bool
 sameContent a ours theirs =
   ours.title == theirs.title
     && ours.body == theirs.body
+    && ours.kind == theirs.kind
     && map (attachmentKey (\b -> blobOf <$> Map.lookup b a.blobs)) ours.attachments
       == map (attachmentKey Just) theirs.attachments
   where

@@ -335,7 +335,29 @@ conflicts backing = describe "a page at the same path" $ do
     (_, mine) <- setUp r
     plan <- preview r theirs
     [map (\p -> p.conflict) s.pages | s <- plan.spaces]
-      `shouldBe` [[Just PageConflict {title = "Tour", updatedAt = mine.updatedAt, sameContent = False}, Nothing]]
+      `shouldBe` [[Just PageConflict {title = "Tour", updatedAt = mine.updatedAt, sameContent = False, kind = Kind.Document, importedKind = Kind.Document}, Nothing]]
+
+  it "is a conflict when only the kind differs, said so, and the kind is taken with the imported page" $ withRunning backing $ \r -> do
+    -- The server's page and the archive's have the same title, text and
+    -- attachments; the server's is a document, the archive's a
+    -- presentation.
+    let deckOf' =
+          let p = pageOfKind Kind.Presentation "p1" "s1" Nothing "tour" "Same." 0 []
+           in Page {id = p.id, space = p.space, parent = p.parent, title = "Tour", slug = p.slug, body = p.body, attachments = [], createdAt = p.createdAt, updatedAt = p.updatedAt, position = 0, template = False, kind = Kind.Presentation, createdBy = Nothing, updatedBy = Nothing}
+        theirs' = archive [space "s1" Nothing "docs"] [deckOf']
+        taken = importEverything {conflicts = [ConflictChoice {page = PageRef {space = [slug "docs"], page = [slug "tour"]}, resolution = TakeImported}]}
+    ours <- makeSpace r "docs"
+    mine <- makePage r ours "Tour" "Same."
+    plan <- preview r theirs'
+    [map (\p -> p.conflict) s.pages | s <- plan.spaces]
+      `shouldBe` [[Just PageConflict {title = "Tour", updatedAt = mine.updatedAt, sameContent = False, kind = Kind.Document, importedKind = Kind.Presentation}]]
+    -- Kept, the server's page is the document it was.
+    apply r theirs' importEverything `shouldReturn` summary {spacesMerged = 1, pagesKept = 1}
+    pageAt r ["docs"] ["tour"] `shouldReturn` mine
+    -- Taken, it is a presentation, with the same title, text and place.
+    apply r theirs' taken `shouldReturn` summary {spacesMerged = 1, pagesReplaced = 1}
+    now <- pageAt r ["docs"] ["tour"]
+    (now.id, now.title, now.body, now.slug, now.parent, now.kind) `shouldBe` (mine.id, mine.title, mine.body, mine.slug, mine.parent, Kind.Presentation)
 
   it "keeps the server's page unless told otherwise, and brings in the pages under it" $ withRunning backing $ \r -> do
     (_, mine) <- setUp r

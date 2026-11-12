@@ -57,6 +57,7 @@ where
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (UTCTime)
 import Protolude
+import Wiki.Core.PageKind (PageKind)
 import Wiki.Core.Slug (Slug)
 
 -- | 'ImportPlan': what importing an archive would do. It lists the
@@ -112,8 +113,14 @@ data PageConflict = PageConflict
   , updatedAt :: UTCTime
   -- ^ When the server's page was last saved.
   , sameContent :: Bool
-  -- ^ Whether the two pages have the same title, body and attachments, so
-  -- that either choice gives the same page and the dialog can say so.
+  -- ^ Whether the two pages have the same title, body, attachments and
+  -- kind, so that either choice gives the same page and the dialog can
+  -- say so.
+  , kind :: PageKind
+  -- ^ The kind of the server's page ("Wiki.Core.PageKind"). Missing,
+  -- from an older server, it is a document.
+  , importedKind :: PageKind
+  -- ^ The kind of the archive's page, which taking it gives the page.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

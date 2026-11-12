@@ -6,6 +6,8 @@
         {
           "attachments": 1,
           "conflict": {
+            "importedKind": "document",
+            "kind": "document",
             "sameContent": false,
             "title": "Tour",
             "updatedAt": "2026-10-24T09:30:12.345678Z"
