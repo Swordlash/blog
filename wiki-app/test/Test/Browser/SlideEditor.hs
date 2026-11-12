@@ -204,21 +204,54 @@ spec m = do
     eventually $ markdown ui `shouldReturn` titled
     eventually $ rowTitles ui `shouldReturn` ["Deck 😀", "One", "Two", "Three"]
     find ui ".editor-slides > li:nth-child(2) .cm-editor" >>= (`shouldBeSameElement` editor)
+    -- The row above went from the list: the editor kept the focus.
+    rowFocused 1 `shouldReturn` True
 
-  it "keeps the rows below a row that leaves a code block open, and says the presentation takes them in" $ runPage $ do
+  it "keeps the rows below a row that leaves a code block, a spoiler or an HTML comment open, their editors and cursors, and says the presentation takes them in" $ runPage $ do
+    (ui, _) <- openDeck deck
+    for_ ["One", "Two", "Three"] $ \title -> rowHeader ui title >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    two <- find ui ".editor-slides > li:nth-child(3) .cm-editor"
+    three <- find ui ".editor-slides > li:nth-child(4) .cm-editor"
+    rowSelect 3 3 5
+    for_ ["```", "[[!spoiler]]{x}(Q)", "<!--"] $ \block -> do
+      rowSelect 1 14 14
+      rowContent ui "One" >>= (`typeText` ("\n\n" <> block))
+      eventually $ (findAll ui ".editor-slides .slide-row-part" >>= traverse textContent) `shouldReturn` ["part of slide 2", "part of slide 2"]
+      rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+      find ui ".editor-slides > li:nth-child(3) .cm-editor" >>= (`shouldBeSameElement` two)
+      find ui ".editor-slides > li:nth-child(4) .cm-editor" >>= (`shouldBeSameElement` three)
+      rowText 2 `shouldReturn` rowTextOf deck 2
+      rowText 3 `shouldReturn` rowTextOf deck 3
+      rowSelection 3 `shouldReturn` (3, 5)
+      markdown ui `shouldReturn` T.replace "First." ("First.\n\n" <> block) deck
+      eventually $ do
+        marked <- problemsMarked ui
+        [message | (_, _, message) <- marked] `shouldSatisfy` any ("A code block, a box or an HTML block on this slide is not closed" `T.isPrefixOf`)
+      replicateM_ 3 (press "Control+z")
+      eventually $ markdown ui `shouldReturn` deck
+      eventually $ length <$> findAll ui ".editor-slides .slide-row-part" `shouldReturn` 0
+
+  it "has one history in both modes: Ctrl+Z in the raw Markdown takes back a change made in a row, and in a row one made in the raw Markdown" $ runPage $ do
     (ui, _) <- openDeck deck
     rowHeader ui "One" >>= click
     eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
     rowSelect 1 14 14
-    rowContent ui "One" >>= (`typeText` "\n```")
-    eventually $ (findAll ui ".editor-slides .slide-row-part" >>= traverse textContent) `shouldReturn` ["part of slide 2", "part of slide 2"]
-    rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
-    eventually $ do
-      marked <- problemsMarked ui
-      [message | (_, _, message) <- marked] `shouldSatisfy` any ("A code block, a box or an HTML block on this slide is not closed" `T.isPrefixOf`)
-    replicateM_ 2 (press "Control+z")
+    rowContent ui "One" >>= (`typeText` "x")
+    markdown ui `shouldReturn` T.replace "First." "First.x" deck
+    modeButton ui "Raw" >>= click
+    editorText ui >>= shouldBeVisible
+    selectText ui 0 0
+    press "Control+z"
     eventually $ markdown ui `shouldReturn` deck
-    eventually $ length <$> findAll ui ".editor-slides .slide-row-part" `shouldReturn` 0
+    selectText ui (lineEnd deck 11) (lineEnd deck 11)
+    editorText ui >>= (`typeText` "y")
+    markdown ui `shouldReturn` T.replace "Second." "Second.y" deck
+    modeButton ui "Slides" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    rowSelect 1 3 3
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` deck
 
   it "drops a cut of an older text and keeps the typing, the next cut coming after it" $ runPage $ do
     (ui, _) <- openDeck deck

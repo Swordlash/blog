@@ -164,7 +164,11 @@ component =
     handleAction :: Action -> H.HalogenM State Action Empty Output m ()
     handleAction = \case
       Sync -> sync
-      Receive input -> modify (\st -> st {input}) >> sync
+      -- The editor renders its rows again at each of its own changes, a
+      -- keystroke's too: a row whose input is the same does nothing.
+      Receive input -> do
+        old <- gets (\st -> st.input)
+        unless (same old input) $ modify (\st -> st {input}) >> sync
       Gone -> gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . detachRow)
       Clicked -> gets (\st -> st.input.head.key) >>= H.raise . Toggled
       Pressed undoing -> H.raise (History undoing)
@@ -183,6 +187,11 @@ component =
           H.liftEffect (detachRow host)
           modify (\s -> s {attached = False})
         _ -> pass
+
+-- | Whether two inputs of a row show the same: the master compared only by
+-- whether it is there, which it is from one load to the next.
+same :: Input -> Input -> Bool
+same a b = a.head == b.head && a.open == b.open && a.focus == b.focus && isJust a.master == isJust b.master
 
 -- | A header's title: the opener's, "(untitled)" for an empty heading, and
 -- for text before the first slide, what it is.

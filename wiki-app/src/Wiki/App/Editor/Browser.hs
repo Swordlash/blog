@@ -94,7 +94,7 @@ module Wiki.App.Editor.Browser
   , rowsLayout
   , setRows
   , slidesModeIn
-  , keepFocus
+  , holdFocus
   , restoreFocus
   , RowWanted (..)
   , rowWanted
@@ -166,7 +166,7 @@ $( browserJS
      , ("js_rows", "wiki_editor_rows", Safe, [t|Element -> IO JSText|])
      , ("js_set_rows", "wiki_editor_set_rows", Safe, [t|Element -> JSText -> JSText -> IO Bool|])
      , ("js_slides_mode", "wiki_editor_slides_mode", Safe, [t|Element -> Bool -> IO ()|])
-     , ("js_keep_focus", "wiki_editor_keep_focus", Safe, [t|Element -> IO ()|])
+     , ("js_hold_focus", "wiki_editor_hold_focus", Safe, [t|Element -> IO ()|])
      , ("js_restore_focus", "wiki_editor_restore_focus", Safe, [t|Element -> IO ()|])
      , ("js_history", "wiki_editor_history", Safe, [t|Element -> Bool -> IO ()|])
      , ("js_selection_start", "wiki_editor_selection_start", Safe, [t|Element -> IO Int|])
@@ -823,13 +823,14 @@ setRows host text rows =
 slidesModeIn :: (MonadIO m) => Element -> Bool -> m ()
 slidesModeIn host bySlide = liftIO (js_slides_mode host bySlide)
 
--- | Keep, in the rows' list, what had the focus in it, for 'restoreFocus'.
-keepFocus :: (MonadIO m) => Element -> m ()
-keepFocus = liftIO . js_keep_focus
+-- | Keep what has the focus in the rows' list, if anything, before a
+-- change of the list, for 'restoreFocus'.
+holdFocus :: (MonadIO m) => Element -> m ()
+holdFocus = liftIO . js_hold_focus
 
--- | Give the focus back to what had it in the rows' list, when the list's
--- patch moved that element and the focus went nowhere. Run it after a
--- render that may have moved a row.
+-- | Give the focus back to what had it in the rows' list before the
+-- change ('holdFocus'), when the list's patch moved that element and the
+-- focus went nowhere. Run it after a render that may have moved a row.
 restoreFocus :: (MonadIO m) => Element -> m ()
 restoreFocus = liftIO . js_restore_focus
 

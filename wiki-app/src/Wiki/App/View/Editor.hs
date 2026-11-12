@@ -305,8 +305,8 @@ import Wiki.App.Editor.Browser
   , gridKey
   , guardUnload
   , historyBack
+  , holdFocus
   , insertAtCursor
-  , keepFocus
   , mentionAsked
   , nextProblem
   , offerFolds
@@ -2137,7 +2137,6 @@ component =
         H.liftEffect (Storage.setItem LocalStorage rawSlidesKey (not wanted))
         st <- get
         for_ st.hostElement $ \host -> H.liftEffect (slidesModeIn host (slidesShown st))
-        keepRowsFocus
       OneSlide wanted -> modify (\st -> st {oneSlide = wanted})
       CursorAt line -> modify (\st -> st {cursorAt = line})
       -- A row's header: it opens, or closes.
@@ -2151,7 +2150,7 @@ component =
       -- A change took the master's cursor to another row: that row opens,
       -- with the focus, and the row left closes when the author went there
       -- (an undo, a redo, the next problem); other open rows stay open.
-      RowWantedBy wanted -> do
+      RowWantedBy wanted -> keepingRowsFocus $
         modify $ \st ->
           let opened = if wanted.key `elem` st.openRows then st.openRows else st.openRows <> [wanted.key]
               closed = if wanted.close then [l | Just l <- [wanted.left], l /= wanted.key] else []
@@ -2159,7 +2158,6 @@ component =
                 { openRows = filter (`notElem` closed) opened
                 , focusRow = if wanted.key `elem` st.openRows || not wanted.focus then st.focusRow else Just wanted.key
                 }
-        keepRowsFocus
       -- CodeMirror has taken the textarea's place: the master is told the
       -- mode and given the rows of the text it holds, which can open now,
       -- the row its cursor starts in first.
@@ -2184,7 +2182,6 @@ component =
                       modify (\s -> s {rows = Just rows, nextKey, openRows = [r.key | Just r <- [start]]})
                       refreshHeads
                 )
-        keepRowsFocus
       DiscardOffered -> do
         withPage (void . discardDraft)
         modify (\st -> st {hasDraft = False, found = Nothing})
@@ -2477,9 +2474,8 @@ component =
                         opened = [k | (above, k, below) <- neighbours, wasOpen k || (k `notElem` [r.key | r <- old.rows] && any (maybe False wasOpen) [above, below])]
                     unless (new == old) $ do
                       taken <- H.liftEffect (setRows host layout.text new)
-                      when taken $ do
+                      when taken . keepingRowsFocus $
                         modify (\s -> s {rows = Just new, nextKey, openRows = opened})
-                        keepRowsFocus
               )
         _ -> pass
 
@@ -2490,7 +2486,8 @@ component =
     keepFocused :: Layout -> Rows -> Rows
     keepFocused layout rows = case layout.focused of
       Just focused
-        | focused `notElem` [r.key | r <- rows.rows]
+        | focused `elem` map fst layout.starts
+        , focused `notElem` [r.key | r <- rows.rows]
         , Just here <- atMay rows.rows (SlideRows.rowAt rows layout.cursor) ->
             SlideRows.Rows {SlideRows.rows = [if r.key == here.key then SlideRows.Row {SlideRows.key = focused, SlideRows.text = r.text} else r | r <- rows.rows], SlideRows.separators = rows.separators}
       _ -> rows
@@ -2509,10 +2506,16 @@ component =
     rowKeys :: State -> [RowKey]
     rowKeys st = maybe [] (\rows -> [r.key | r <- rows.rows]) st.rows
 
-    -- The list keeps what has the focus in it, and gives it back to the
-    -- element the last render moved, if that lost it.
-    keepRowsFocus :: H.HalogenM State Action Slots ViewOutput m ()
-    keepRowsFocus = gets (\st -> st.rowsList) >>= H.getRef >>= traverse_ (\ol -> H.liftEffect (keepFocus ol >> restoreFocus ol))
+    -- A change of the rows that may move one of them in the list, the
+    -- focus given back to what had it in the list if the move took it
+    -- away, and only then: a focus the author moved out of the list stays
+    -- where it went.
+    keepingRowsFocus :: H.HalogenM State Action Slots ViewOutput m () -> H.HalogenM State Action Slots ViewOutput m ()
+    keepingRowsFocus change = do
+      shown <- gets (\st -> st.rowsList) >>= H.getRef
+      traverse_ (H.liftEffect . holdFocus) shown
+      change
+      traverse_ (H.liftEffect . restoreFocus) shown
 
     -- Check the text for problems once the typing has stopped for the
     -- given time (in microseconds), as the preview follows it: a wait of

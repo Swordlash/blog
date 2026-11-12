@@ -93,7 +93,7 @@ import {
   insertCompletionText,
   pickedCompletion,
 } from "@codemirror/autocomplete";
-import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { Annotation, ChangeSet, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
 import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, redo, standardKeymap, undo } from "@codemirror/commands";
 import {
@@ -982,6 +982,13 @@ const emojiOfOption = {
 // The completion of one editor, of mentions and of emoji, in one of the
 // library's completions (two would fight over the keys and the list), and
 // how the component answers it.
+// A completion source that the master leaves to its rows while a
+// presentation is edited slide by slide (attachRow): a row's typing reaches
+// the master as typing, and the master would ask the same question again
+// and open a list of its own. The rows share the extension, and ask.
+const masterQuiet = (host, source) => (context) =>
+  context.view !== undefined && context.view === host.wikiEditor?.view && host.wikiEditor.slidesShown() ? null : source(context);
+
 const completions = (host) => {
   const people = asker(host, "wiki-mention");
   const names = asker(host, "wiki-emoji");
@@ -1046,7 +1053,7 @@ const completions = (host) => {
   return {
     extension: [
       autocompletion({
-        override: [mentionSource(people), emojiSource(names)],
+        override: [mentionSource(people), emojiSource(names)].map((source) => masterQuiet(host, source)),
         icons: false,
         defaultKeymap: false,
         addToOptions: [emojiOfOption],
@@ -1228,6 +1235,9 @@ const mirror = (key, view, state) => {
     changes: now === shown ? undefined : { from: start, to: shown.length - end, insert: now.slice(start, now.length - end) },
     selection: inside ? EditorSelection.single(anchor - range.from, head - range.from) : undefined,
     annotations: mirrored.of(true),
+    // The master's change as it was made: no filter of the row's (the
+    // first row's title line guard) rewrites it.
+    filter: false,
   });
 };
 
@@ -1610,6 +1620,8 @@ export function attach(textarea, host, original, codeTokens) {
   if (!textarea.isConnected || !host.isConnected) return;
   const before = host.wikiEditor;
   if (before?.textarea === textarea) return;
+  // A new master has no rows yet, nor a row that had the focus.
+  delete host.wikiFocusedRow;
   const hadFocus = before ? before.hasFocus() : false;
   before?.destroy();
 
@@ -1619,11 +1631,9 @@ export function attach(textarea, host, original, codeTokens) {
   const clamp = (at) => Math.min(Math.max(at, 0), doc.length);
   const changes = tracking(host);
   const completion = completions(host);
-  // The master's own completion, off while a presentation is edited slide
-  // by slide (attachRow): a row's typing reaches the master as typing, and
-  // the master would ask the same question again and open a list of its
-  // own. The component says which mode the editor is in (slidesMode).
-  const ownCompletion = new Compartment();
+  // Whether a presentation is edited slide by slide, its rows typing into
+  // this master: the component says (slidesMode). The master's completion
+  // asks nothing then (masterQuiet), and its focus goes to a row.
   let bySlide = false;
   // Whether the change being made is the author going somewhere (the next
   // problem), which a jump from row to row closes the row left for.
@@ -1655,7 +1665,7 @@ export function attach(textarea, host, original, codeTokens) {
       history(),
       titled ? titleLine : [],
       changes.extensions,
-      ownCompletion.of(completion.extension),
+      completion.extension,
       // Enter is a line break and nothing more, as in the textarea, except
       // while the completion's list is open, when it may choose (the
       // completion's keys come first); Tab and the toolbar's shortcuts are
@@ -1756,9 +1766,7 @@ export function attach(textarea, host, original, codeTokens) {
     // into the master: the master's completion is then off, and its focus
     // goes to a row (focus below).
     slidesMode: (on) => {
-      if (on === bySlide) return;
       bySlide = on;
-      view.dispatch({ effects: ownCompletion.reconfigure(on ? [] : completion.extension) });
     },
     slidesShown: () => bySlide,
     // The whole text's undo (true) or redo (false), as Ctrl+Z and Ctrl+Y

@@ -76,23 +76,42 @@ function wiki_editor_history(host, undoing) {
   host.wikiEditor?.history?.(undoing);
 }
 
-// The rows' list keeps what had the focus in it (a row's text, a row's
-// header), so that the focus can be given back when the list's patch moved
-// that element, which loses the focus in the browser.
-function wiki_editor_keep_focus(list) {
-  if (list.wikiKeepsFocus) return;
-  list.wikiKeepsFocus = true;
-  list.addEventListener("focusin", (event) => {
-    list.wikiFocused = event.target;
-  });
+// What has the focus in the rows' list (a row's text, a row's header), if
+// anything, kept before a change of the list, so that the focus can be
+// given back when the list's patch moves that element, which loses the
+// focus in the browser. The patch may come after the change returns (a
+// render of the component's), so the element is watched for a second: if
+// it loses the focus to nothing, with no press of the pointer since, it
+// takes it back in the next frame. A press elsewhere is the author moving
+// the focus, which stays where it went.
+function wiki_editor_hold_focus(list) {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !list.contains(active)) return;
+  if (!globalThis.wikiPointerWatched) {
+    globalThis.wikiPointerWatched = true;
+    document.addEventListener("pointerdown", () => (globalThis.wikiLastPointer = performance.now()), true);
+  }
+  list.wikiHeld = active;
+  const held = performance.now();
+  const back = (event) => {
+    if (event.relatedTarget !== null) return;
+    requestAnimationFrame(() => {
+      const nowhere = document.activeElement === null || document.activeElement === document.body;
+      const pressed = (globalThis.wikiLastPointer ?? 0) > held;
+      if (nowhere && !pressed && active.isConnected) active.focus({ preventScroll: true });
+    });
+  };
+  active.addEventListener("focusout", back, { once: true });
+  setTimeout(() => active.removeEventListener("focusout", back), 1000);
 }
 
-// Give the focus back to what had it in the list, if the focus is now
-// nowhere (on the page's body) and that element is still in the list.
+// The same, at once: the focus back to what had it in the list, if the
+// change's patch has already taken it away to nothing.
 function wiki_editor_restore_focus(list) {
-  const last = list.wikiFocused;
   const nowhere = document.activeElement === null || document.activeElement === document.body;
-  if (nowhere && last instanceof HTMLElement && last.isConnected && list.contains(last)) last.focus({ preventScroll: true });
+  const last = list.wikiHeld;
+  list.wikiHeld = null;
+  if (nowhere && last instanceof HTMLElement && last.isConnected) last.focus({ preventScroll: true });
 }
 
 function wikiCharacters(text, units) {
