@@ -38,15 +38,29 @@
 -- direct-sqlite's own copy was built with (full-text search, JSON, URI
 -- file names, the @dbstat@ table) are not used by the wiki, and are not
 -- checked.
+--
+-- 'oldestSqlite' and 'fewestVariables' are also in @toolchain/pins.env@
+-- (@SQLITE_MIN_VERSION@, @SQLITE_MIN_VARIABLE_NUMBER@), where the check of
+-- a machine before a build reads them (@toolchain/check-native.sh@, the
+-- maker's @check native@). The maker's tests check that the two places
+-- agree.
+--
+-- @wiki-server sqlite@ ('sqliteAnswer') says which library the program
+-- runs on, and refuses it as the server would, without opening a wiki:
+-- the deploy runs it with the new program, in the environment of the
+-- service's unit, before it stops the running server.
 module Wiki.Server.Storage.SqliteLibrary
   ( SqliteLibrary (..)
   , sqliteLibrary
   , readSqliteLibrary
   , oldestSqlite
+  , fewestVariables
   , sqliteRefusal
   , SqliteRefused (..)
   , refuseOldSqlite
   , sqliteLine
+  , sqliteAnswer
+  , answerFor
   )
 where
 
@@ -97,6 +111,11 @@ known = unsafePerformIO (newMVar Nothing)
 oldestSqlite :: Text
 oldestSqlite = "3.32.0"
 
+-- | The fewest parameters in one statement the server needs the library
+-- built with (@MAX_VARIABLE_NUMBER@): SQLite's default since 3.32.0.
+fewestVariables :: Int
+fewestVariables = 32766
+
 -- | Why the server cannot run on a library; 'Nothing' when it can.
 sqliteRefusal :: SqliteLibrary -> Maybe Text
 sqliteRefusal l
@@ -111,7 +130,7 @@ sqliteRefusal l
   | "THREADSAFE=0" `elem` l.options = Just (built "THREADSAFE=0, for programs with one thread, and the server uses its connections from several")
   | "OMIT_WAL" `elem` l.options = Just (built "OMIT_WAL, without the write-ahead log the server's readers read beside its writer with")
   | "OMIT_FOREIGN_KEY" `elem` l.options = Just (built "OMIT_FOREIGN_KEY, without the foreign keys the wiki's schema relies on")
-  | Just n <- maxVariables, n < 32766 = Just (built ("MAX_VARIABLE_NUMBER=" <> show n <> ", below SQLite's default of 32766, which the server's statements of many rows rely on"))
+  | Just n <- maxVariables, n < fewestVariables = Just (built ("MAX_VARIABLE_NUMBER=" <> show n <> ", below SQLite's default of " <> show fewestVariables <> ", which the server's statements of many rows rely on"))
   | otherwise = Nothing
   where
     numbers = fromMaybe [] . versionNumbers
@@ -146,4 +165,20 @@ sqliteLine :: IO Text
 sqliteLine =
   sqliteLibrary <&> \case
     Left why -> "SQLite: its version could not be read: " <> why
-    Right l -> "SQLite " <> l.version <> ", the system's library."
+    Right l -> libraryLine l
+
+-- | The line that names a library the server read.
+libraryLine :: SqliteLibrary -> Text
+libraryLine l = "SQLite " <> l.version <> ", the system's library."
+
+-- | What @wiki-server sqlite@ answers: 'Right' with 'sqliteLine' when the
+-- server runs on the library, 'Left' with the refusal when it does not,
+-- or with why the library could not be read.
+sqliteAnswer :: IO (Either Text Text)
+sqliteAnswer = answerFor <$> sqliteLibrary
+
+-- | 'sqliteAnswer' for a library already read.
+answerFor :: Either Text SqliteLibrary -> Either Text Text
+answerFor = \case
+  Left why -> Left ("The SQLite library's version could not be read: " <> why)
+  Right l -> maybe (Right (libraryLine l)) Left (sqliteRefusal l)
