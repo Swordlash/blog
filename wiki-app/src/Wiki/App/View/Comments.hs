@@ -275,8 +275,10 @@ component =
           _ -> [hh|<div class="comment-body">{{ body }}</div>|]
         who = principalOf st.input.context
         chain = chainOf st.input.context st.input.space
-        mayEdit' = mayEditComment who c
-        mayDelete' = mayDeleteComment who (grantsOf st.input.context) chain c
+        -- Not while a conversion of the space runs ('writable'), as for
+        -- every write: the notice above the view says why.
+        mayEdit' = mayEditComment who c && writable st.input.context st.input.space
+        mayDelete' = mayDeleteComment who (grantsOf st.input.context) chain c && writable st.input.context st.input.space
         actions
           | st.deleting == Just (DeletingComment thread.id c.id) = confirmDelete "Delete this comment?"
           | isJust st.editing = HH.text ""
@@ -301,7 +303,7 @@ component =
                   <button type="button" class="thread-resolve" onClick={{ const (Resolve thread.id True) }}>Resolve</button>
                 {% end %}
               {% end %}
-              {% if mayDeleteThread (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space) thread %}
+              {% if mayDeleteThread (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space) thread && writable st.input.context st.input.space %}
                 <button type="button" class="link thread-delete" onClick={{ const (AskDelete (DeletingThread thread.id)) }}>Delete thread</button>
               {% end %}
             </div>

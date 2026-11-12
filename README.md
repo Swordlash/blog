@@ -822,11 +822,16 @@ What can be done, and what cannot, in one place:
   server's search (your browser searches it).
 - Limits: the gate of a space that asks each time is the page's own, not
   the encryption's (see above); the writing assistant sends the text you
-  ask it about, decrypted, to the provider you chose, as in any space; to
-  show who a page mentions, the browser asks the server which users the
-  logins mentioned belong to, so the server learns the logins, not the
-  text; a version older than one your browser read is caught only in a
-  browser that read the newer one.
+  ask it about, decrypted, to the provider you chose, as in any space, and
+  its panel says so in an encrypted space; a version older than one your
+  browser read is caught only in a browser that read the newer one.
+- A mention in an encrypted page or comment is named from the space's
+  readers, which the browser asks for by the space alone: no login found
+  in the decrypted text, nor letters typed after an @, reach the server.
+  A login that is not a reader's is shown as written.
+- The whole wiki's export leaves encrypted spaces out, and says which,
+  next to its button. "Export, decrypted here" is not offered while a
+  space is being converted, which would miss pages.
 
 How it works:
 

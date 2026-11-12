@@ -227,6 +227,8 @@ function wikiTestEncServer(request) {
       return wikiTestEncJson(200, s.space);
     }
     if (!s.space.encryption) return wikiTestEncJson(409, { error: "Conflict", text: "This space is not encrypted." });
+    // Its readers, as the users a mention names: those the test gives.
+    if (rest === "/readers" && request.method === "GET") return wikiTestEncJson(200, wikiTestEncrypted.readerUsers ?? []);
     // Whether its readers confirm each time they open it, set by an
     // administrator.
     if (rest === "/entry" && request.method === "PUT") {
@@ -480,6 +482,11 @@ function wiki_test_encrypted_live(message) {
   const editor = new BroadcastChannel("wiki-live-preview");
   editor.postMessage(JSON.parse(message));
   editor.close();
+}
+
+// The users the server answers as the space's readers, as JSON.
+function wiki_test_encrypted_reader_users(users) {
+  wikiTestEncrypted.readerUsers = JSON.parse(users);
 }
 
 // The space in the middle of a conversion, as the server lists it.

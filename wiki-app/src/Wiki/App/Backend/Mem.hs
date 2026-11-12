@@ -442,6 +442,9 @@ instance (MonadIO m) => MonadComments (MemWiki m) where
 instance (MonadIO m) => MonadNotifications (MemWiki m) where
   mentionable = query . mentionableIn
   mentionCandidates letters = Right <$> query (mentionCandidatesIn letters)
+
+  -- Nothing is encrypted in the demo.
+  spaceReaders _ = pure (Right [])
   notifications = query notificationsIn
   markRead = write . markReadIn
   watching target = needWatched target >> query (watchingIn target)

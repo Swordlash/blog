@@ -92,7 +92,7 @@ conversionRefusal :: Conversion -> Text
 conversionRefusal c =
   "This space's pages are being "
     <> (case c of Encrypting -> "encrypted"; Decrypting -> "decrypted")
-    <> " in the browser of one of its administrators, so nothing else can be written in it until that is done. An administrator of the space who holds its key continues it from the space's settings."
+    <> " in the browser of one of its administrators, so nothing else can be written in it until that is done, its settings included but for continuing, stopping and turning back the conversion. An administrator of the space who holds its key continues it from the space's settings."
 
 -- | The reason a plain operation is refused in an encrypted space.
 encryptedRefusal :: Text -> Text

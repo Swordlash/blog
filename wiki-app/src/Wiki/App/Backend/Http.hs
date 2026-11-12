@@ -164,6 +164,7 @@ import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody)
 import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), Kept (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), Seen (..), VersionTag (..), anchorData, attachmentBytesData, attachmentMetaData, chainAfter, chainProblemText, commentData, encryptedPageTitle, firstChain, gapIn, headingOf, judgeHead, linkedFrom)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..))
 import Wiki.Core.Notification (Notification (..), PageLocation (..), WatchTarget (..), withTitle)
+import Wiki.Core.Offered qualified as Offered
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.PageKind (PageKind)
@@ -954,6 +955,13 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
         send (endpoints.notifications.searchPeople letters) <&> \case
           Left NotFound -> Right []
           other -> other
+  spaceReaders sid =
+    Map.lookup sid . (\h -> h.heldReaders) <$> readHeld >>= \case
+      Just users -> pure (Right users)
+      Nothing ->
+        send (endpoints.encrypted.readers sid) >>= \case
+          Right users -> modifyHeld (\h -> h {heldReaders = Map.insert sid users h.heldReaders}) $> Right users
+          Left e -> pure (Left e)
   notifications = cached (\c -> c.notices) endpoints.notifications.list withNotices >>= either (pure . Left) (fmap Right . withSealedNotices)
   markRead m = do
     result <- send (endpoints.notifications.markRead m)
@@ -1523,6 +1531,9 @@ data Held = Held
   -- ^ The oldest version, checked by its decryption, of the last page of a
   -- page's history listed here: the next page, asked for before it, must
   -- join it ('sealedVersions').
+  , heldReaders :: Map SpaceId [User]
+  -- ^ The readers of encrypted spaces ('spaceReaders'), kept as long as
+  -- the space's key ('dropSpaces').
   , heldConfirmed :: Set SpaceId
   -- ^ The gates the reader confirmed in this tab ('confirmedEntry'): the
   -- spaces that ask for a passkey or the password each time they are
@@ -1532,7 +1543,7 @@ data Held = Held
   }
 
 noneHeld :: Held
-noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldOwners = mempty, heldNextOwner = 1, heldLowest = mempty, heldConfirmed = mempty}
+noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldOwners = mempty, heldNextOwner = 1, heldLowest = mempty, heldReaders = mempty, heldConfirmed = mempty}
 
 -- | Where the bytes of an attachment of an encrypted page are, and what
 -- decrypts them: its space and page, the key of its page's that encrypts
@@ -1574,6 +1585,7 @@ dropSpaces picked h =
    in ( h
           { heldKeys = keys
           , heldFound = Map.filterWithKey (\sid _ -> not (picked sid)) h.heldFound
+          , heldReaders = Map.filterWithKey (\sid _ -> not (picked sid)) h.heldReaders
           , heldHeads = Map.filterWithKey (\pid _ -> not (pageIn pid)) h.heldHeads
           , heldLowest = Map.filterWithKey (\pid _ -> not (pageIn pid)) h.heldLowest
           , heldAttachments = attachments
@@ -2759,6 +2771,11 @@ decryptedExport top = do
       start <- maybe (throwError NotFound) pure (find (\s -> s.id == top) spaces)
       when (isNothing start.encryption) $
         throwError (Invalid "This space is not encrypted: the wiki's own export holds it.")
+      -- Not while a conversion of it, or of a space below it, runs: the
+      -- pages not converted yet would be missed without a word.
+      let byId = Map.fromList [(s.id, s) | s <- spaces]
+          converting = [s | s <- spaces, isJust s.conversion, any (\x -> x.id == start.id) (fromMaybe [] (ancestry (`Map.lookup` byId) s.id))]
+      for_ (head converting) $ \s -> for_ s.conversion (throwError . Conflict . Offered.conversionRefusal)
       let below s = sortOn (\c -> (c.position, c.name)) [c | c <- spaces, c.parent == Just s.id]
           tree s = s : concatMap tree (below s)
           step (done, left) s

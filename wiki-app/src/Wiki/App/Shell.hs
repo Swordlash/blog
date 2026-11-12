@@ -904,10 +904,23 @@ component =
           <div class="actions">
             <a class="button demo-export" href={{ archiveExportUrl }} download>Export the wiki</a>
           </div>
+          {% if not (null sealed) %}
+            <p class="export-leaves-out" role="note">{{ leftOutLine }}</p>
+          {% end %}
           {{ importer <$> st.migration }}
         </div>
       |]
       where
+        -- The server writes the file, and cannot read an encrypted space:
+        -- the file leaves every one out, which is said here, before it is
+        -- downloaded.
+        sealed = [x.name | x <- st.spaces, isJust x.encryption]
+        leftOutLine =
+          show (length sealed)
+            <> (if length sealed == 1 then " encrypted space is" else " encrypted spaces are")
+            <> " not in this file: "
+            <> T.intercalate ", " sealed
+            <> ". Each is exported from its own list of pages, decrypted in a browser that holds its key."
         importer migration = HH.slot "view" ImporterSlot ImportView.component ImportView.Input {migration} FromView
 
     -- The demo's content as a whole: whether it is saved, exporting it,

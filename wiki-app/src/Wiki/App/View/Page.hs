@@ -356,7 +356,7 @@ component =
             Ready page _ _ _ | commentsHere input -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
             _ -> pure ThreadsLoading
           let logins = Body.unasked Body.noPeople (bodiesOf loaded threads)
-          people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople logins)
+          people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople input.space logins)
           avatars <- fromMaybe mempty <$> atOnce (avatarUrls (peopleOf loaded threads noReaders))
           text <- H.newRefLabel "page-text"
           copiedText <- H.newRefLabel "page-copied-address"
@@ -1144,7 +1144,7 @@ component =
       st <- get
       let logins = Body.unasked st.people (bodiesOf st.loaded st.threads)
       unless (null logins) $
-        lift (attempt (Body.askPeople logins)) >>= \case
+        lift (attempt (Body.askPeople st.input.space logins)) >>= \case
           Right found -> modify (\s -> s {people = Body.answered logins found s.people})
           Left _ -> pass
       resolveAvatars

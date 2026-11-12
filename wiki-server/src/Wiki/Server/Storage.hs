@@ -1980,6 +1980,17 @@ setSpaceEntry sid e = run Writes (setSpaceEntryTx sid e >>= shown)
 sealedPages :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError [SealedSummary])
 sealedPages = run Reads . sealedPagesTx
 
+-- | The users who read an encrypted space ('Wiki.Api.EncryptedApi''s
+-- @readers@), for one of its readers: those a mention in it can name.
+spaceReadersTx :: SpaceId -> Tx [User]
+spaceReadersTx sid = do
+  (s, c) <- findSpace sid
+  requireView c
+  _ <- requireEncrypted s
+  ids <- Set.fromList <$> readersOf c
+  users <- db loadUsers
+  pure (sortOn (\u -> u.login) [u | u <- users, Set.member u.id ids, mentionsWhole u.login.text])
+
 -- | The encrypted titles of pages under the bell or starred
 -- ('Wiki.Api.EncryptedApi''s @headings@).
 sealedHeadings :: (MonadIO m) => [PageId] -> StoredWiki m (Either WikiError [E.PageHeading])
@@ -5574,6 +5585,7 @@ mentionCandidatesTx letters =
 instance (MonadIO m) => MonadNotifications (StoredWiki m) where
   mentionable = answer mempty . mentionableTx
   mentionCandidates = run Reads . mentionCandidatesTx
+  spaceReaders = run Reads . spaceReadersTx
   notifications = run Reads notificationsTx
   markRead = run Writes . markReadTx
   watching = run Reads . watchingTx

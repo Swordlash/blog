@@ -278,7 +278,10 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
   // shows the page's title decrypted in her browser. The canary's check
   // covers what the bell fetched: the notifications and the headings.
   const reply = bea.page.locator("#app .comments-panel .comment-reply");
-  await reply.locator("textarea").fill(marker("reply"));
+  // It mentions a login that is nobody's, a marker too: the browser names a
+  // mention in an encrypted space from the space's readers, and sends no
+  // login it found in decrypted text to the server.
+  await reply.locator("textarea").fill(`${marker("reply")} @${marker("login")}`);
   const replied = bea.page.waitForResponse((r) => r.request().method() === "POST" && /\/api\/v1\/encrypted\/pages\/[^/]+\/threads\/[^/]+\/comments$/.test(new URL(r.url()).pathname), { timeout });
   await reply.locator("button", { hasText: "Reply" }).click();
   assert.equal((await replied).status(), 201, "the reader's encrypted reply");
@@ -428,7 +431,7 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
     const threads = await at(`pages/${encodeURIComponent(imp.id)}/threads`);
     assert.deepEqual(
       threads.map((t) => [t.anchor?.exact, t.comments.map((c) => c.body)]),
-      [[quote, [marker("comment"), marker("reply")]]],
+      [[quote, [marker("comment"), `${marker("reply")} @${marker("login")}`]]],
       "the imported comment and the text it quotes",
     );
     assert.match(threads[0].comments[0].author.name, /Ada Admin/, "the imported comment's author");

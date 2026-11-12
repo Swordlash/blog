@@ -88,5 +88,20 @@ title: Encrypted spaces: a decrypted export, encrypting pages, asking each time
 
   ```text
   This space's pages are being encrypted in the browser of one of its
-  administrators, so nothing else can be written in it until that is done.
+  administrators, so nothing else can be written in it until that is done,
+  its settings included but for continuing, stopping and turning back the
+  conversion.
   ```
+
+- In an encrypted space, a mention is named from the space's readers: no
+  login found in an encrypted page or comment, nor letters typed after an
+  @, are sent to the server. The writing assistant's panel says that what
+  you ask it about leaves your browser decrypted, to the provider named:
+
+  ```text
+  This page is encrypted. What you ask the assistant about leaves this
+  browser decrypted, to Anthropic.
+  ```
+
+- The wiki's export now says which encrypted spaces it leaves out, and
+  how to export each.

@@ -328,6 +328,11 @@ data EncryptedApi form mode = EncryptedApi
   -- ^ The space's pages with their latest versions, encrypted: what the
   -- browser's search reads.
   , headings :: mode :- "headings" :> ReqBody '[JSON] HeadingsQuery :> Post '[JSON] [PageHeading]
+  , readers :: mode :- "spaces" :> Capture "space" SpaceId :> "readers" :> Get '[JSON] [User]
+  -- ^ The users who read an encrypted space, for one of its readers: who
+  -- the browser names a mention in its pages and comments by, and offers
+  -- as one is typed, without sending the server a login found in or typed
+  -- into decrypted text.
   -- ^ The encrypted titles of the pages asked for, of those the caller may
   -- view that are read encrypted: a page the caller may not view, one that
   -- is not there, and one whose title is plain are left out. At most

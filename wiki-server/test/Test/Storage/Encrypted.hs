@@ -985,6 +985,16 @@ spec backing = describe "encrypted spaces in the storage" $ do
       -- At most a hundred at once.
       as p.ada (sealedHeadings (replicate (maxHeadings + 1) pid)) >>= (`shouldSatisfy` invalid)
 
+    it "lists an encrypted space's readers to its readers alone, whom a mention in it names" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+      map (\u -> u.id) <$> (ok =<< as p.ada (spaceReaders secret.id)) `shouldReturn` [p.ada]
+      as p.bob (spaceReaders secret.id) >>= (`shouldSatisfy` isLeft)
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+      sort . map (\u -> u.id) <$> (ok =<< as p.bob (spaceReaders secret.id)) `shouldReturn` sort [p.ada, p.bob]
+      plainSpace <- privateSpace st p.ada "Plain"
+      as p.ada (spaceReaders plainSpace.id) >>= (`shouldSatisfy` isLeft)
+
   -- #213: whether readers confirm each time they open an
   -- encrypted space is the space's administrators' to set, kept by the
   -- server for the space alone, and read by the browser of a reader of a

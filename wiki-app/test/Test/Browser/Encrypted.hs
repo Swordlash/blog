@@ -104,7 +104,7 @@ import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Entry (..), Space (..))
-import Wiki.Core.User (Standing (..))
+import Wiki.Core.User (Login (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (..))
 
 $( browserJS
@@ -140,6 +140,7 @@ $( browserJS
      , ("js_live", "wiki_test_encrypted_live", Safe, [t|JSText -> IO ()|])
      , ("js_document_title", "wiki_test_encrypted_document_title", Safe, [t|IO JSText|])
      , ("js_converting", "wiki_test_encrypted_converting", Safe, [t|JSText -> JSText -> IO ()|])
+     , ("js_reader_users", "wiki_test_encrypted_reader_users", Safe, [t|JSText -> IO ()|])
      , ("js_headings_asked", "wiki_test_encrypted_headings_asked", Safe, [t|IO JSText|])
      , ("js_decrypted", "wiki_test_encrypted_decrypted", Safe, [t|IO JSText|])
      ]
@@ -1275,6 +1276,26 @@ spec m = do
     eventually (find during ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Some text."))
     for_ [".page-kind", ".use-as-template", ".comment-new", ".comment-on-selection"] $ \c -> (c,) . length <$> findAll during c `shouldReturn` (c, 0)
     unmount during
+
+  -- #213: a mention in an encrypted page is named from the space's readers,
+  -- asked for by the space alone: no login found in the decrypted text is
+  -- sent to the server, and one not among the readers is shown as written.
+  it "names the people an encrypted page mentions from its space's readers, sending no login it found" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    readerInfo <- sessionOf "user-reader"
+    let rita = fromMaybe (panic "no rita") readerInfo.user
+    made <- ok =<< run env (createPage secret.id Nothing "Mentions" ("Ask @" <> rita.login.text <> " and @nobody-here."))
+    unsafeIOToPageM (js_reader_users (toJSText (decodeUtf8 (toS (encode [rita])) :: Text)))
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    ui <- startServer m (R.Page [secretSlug] [made.slug])
+    mention <- eventually (find ui ".page-view .page-body a.mention")
+    eventually (getAttribute mention "title" `shouldReturn` Just rita.displayName)
+    find ui ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "@nobody-here")
+    sent <- asked
+    [r.url | r <- sent, "notifications/people" `T.isInfixOf` r.url || "nobody-here" `T.isInfixOf` (r.url <> r.body)] `shouldBe` []
+    unmount ui
 
   it "turns asking each time on in the space's permissions, and asks the administrator who turned it on too" $ runPage $ do
     env <- encryptedSpace "user-admin"

@@ -170,6 +170,10 @@ data Input = Input
   , pending :: Int
   , decisions :: Map Int Decision
   -- ^ The author's decision on each of the assistant's changes, by id.
+  , encrypted :: Bool
+  -- ^ Whether the page is in an encrypted space: the panel then says,
+  -- before anything is sent, that what the assistant is asked about leaves
+  -- this browser decrypted, to the provider named.
   }
 
 -- | 'Query': the panel was closed ('Hide'), and the model's running turn,
@@ -378,6 +382,9 @@ component =
             <a class="assistant-settings-link" {{ Router.linkProps st.input.context.router Followed AssistantSettings }}>Settings</a>
             <button type="button" class="assistant-close" title="Close the assistant (Escape)" onClick={{ const Close }}>Close</button>
           </header>
+          {% for service in maybeToList (leavesFor st) %}
+            <p class="assistant-leaves" role="note">This page is encrypted. What you ask the assistant about leaves this browser decrypted, to {{ service }}.</p>
+          {% end %}
           {{ choicesView st }}
           {{ setupNote st }}
           {% if st.input.pending > 0 %}
@@ -509,6 +516,16 @@ component =
       | sendsMessage ev = Just Send
       | closesPanel ev = Just Close
       | otherwise = Nothing
+
+    -- The service the text goes to, named as the line above names it,
+    -- for a page of an encrypted space.
+    leavesFor :: State -> Maybe Text
+    leavesFor st = case st.input.settings of
+      Just (Right s)
+        | st.input.encrypted ->
+            let ps = settingsOf s.provider s
+             in Just (if isJust (baseUrlOf s.provider ps) then serviceName s.provider ps else providerLabel s.provider)
+      _ -> Nothing
 
     usingLine :: State -> Text
     usingLine st = case st.input.settings of

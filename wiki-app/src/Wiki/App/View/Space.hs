@@ -201,9 +201,11 @@ component =
         <> (if isJust space.encryption then [] else exportMenu (spaceFormats ctx.session.exports) (ExportSpace space.id))
         -- An encrypted space is exported by the browser, which holds its
         -- key, for anyone who may read it: decrypted here into a file
-        -- the server never sees.
+        -- the server never sees. Not while a conversion runs, which some
+        -- pages would be missed by; the notice above the view says why.
         <> [ [hh|<button type="button" class="export-decrypted" onClick={{ const (Open ConfirmingExport) }}>Export, decrypted here</button>|]
            | isJust space.encryption
+           , writable ctx space.id
            ]
       where
         admin = mayAdminister ctx space.id

@@ -834,6 +834,7 @@ handlers env caller =
           , pages = wiki . sealedPages
           , contents = wiki . sealedContents
           , headings = \q -> wiki (sealedHeadings q.pages)
+          , readers = wiki . spaceReaders
           , pageAt = \s path -> versionedSealed <$> wiki (sealedPageAt s path)
           , createPage = \s new -> versionedSealed <$> wiki (createSealedPage s new)
           , save = \p version edit -> versionedSealed <$> wiki (saveSealedPage p version.time edit)

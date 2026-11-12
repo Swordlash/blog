@@ -370,7 +370,7 @@ fetchDeck context owner host (PageLink route _) = case route of
             Right page | isPresentation page.kind -> do
               pages <- if space.id == host.space.id then pure host.pages else either (const []) identity <$> listPages space.id
               addresses <- Body.attachmentAddresses owner page.attachments
-              people <- Body.askPeople (Body.unasked Body.noPeople [page.body])
+              people <- Body.askPeople space (Body.unasked Body.noPeople [page.body])
               let place = Place {context, space, pages, path = pp, attachments = page.attachments, urls = addresses.urls, downloads = addresses.downloads, frames = addresses.frames, people}
               pure (Ready place page (deckOfPage page))
             _ -> pure Link
