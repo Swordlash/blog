@@ -16,7 +16,15 @@
 // loads, or a font arrives, and the pane's width sets the cards' scale
 // (--slide-scale).
 const wikiFitWatches = new Map();
+const wikiFitSchedules = new Set();
 let wikiFitNext = 0;
+
+// For the browser tests: measure again everything watched, once measures
+// held back (wikiFitHold) are let through.
+globalThis.wikiFitRelease = () => {
+  globalThis.wikiFitHold = false;
+  for (const schedule of wikiFitSchedules) schedule();
+};
 
 function wikiFitMeasure(root) {
   const width = root.clientWidth;
@@ -57,6 +65,9 @@ function wiki_fit_watch(root, callback) {
   const measure = () => {
     frame = 0;
     if (!root.isConnected) return;
+    // For the browser tests: measures held back, as on a slow machine, until
+    // released (wikiFitRelease).
+    if (globalThis.wikiFitHold === true) return;
     const start = performance.now();
     const found = wikiFitMeasure(root);
     // For the browser tests: how long each measure of the cards took.
@@ -81,7 +92,9 @@ function wiki_fit_watch(root, callback) {
   document.fonts?.addEventListener("loadingdone", schedule);
   observe();
   schedule();
+  wikiFitSchedules.add(schedule);
   wikiFitWatches.set(id, () => {
+    wikiFitSchedules.delete(schedule);
     cancelAnimationFrame(frame);
     sizes.disconnect();
     changes.disconnect();

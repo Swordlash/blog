@@ -43,21 +43,32 @@ $( browserJS
      , ("js_fit_log_start", "wiki_test_fit_log_start", Safe, [t|IO ()|])
      , ("js_fit_log", "wiki_test_fit_log", Safe, [t|IO JSText|])
      , ("js_slide_cut", "wiki_test_slide_cut", Safe, [t|Int -> IO JSText|])
+     , ("js_fit_hold", "wiki_test_fit_hold", Safe, [t|Bool -> IO ()|])
      ]
  )
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "folds every slide but the cursor's as the editor opens, and opens one at a time by its button, more with Ctrl" $ runPage $ do
+    -- The slides measured late, as on a slow machine: the controls found
+    -- before are the ones there after.
+    unsafeIOToPageM (js_fit_hold True)
     (ui, _) <- openDeck deck
     host <- editorHost ui
     -- The cursor starts under the title line, on the title slide.
     eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(5, 7), (9, 11), (13, 15)]
     -- Each slide has its button; each but the title slide its handle.
-    length <$> findAll ui ".editor-cm .cm-wiki-slide-toggle" `shouldReturn` 4
-    length <$> findAll ui ".editor-cm .cm-wiki-slide-handle" `shouldReturn` 3
+    found <- eventually $ do
+      buttons <- findAll ui ".editor-cm .cm-wiki-slide-toggle"
+      length buttons `shouldBe` 4
+      pure buttons
+    length <$> findAll ui ".editor-cm .cm-wiki-slide-handle:not([hidden])" `shouldReturn` 3
+    editorFits `shouldReturn` replicate 4 "unmeasured"
+    unsafeIOToPageM (js_fit_hold False)
+    eventually $ editorFits `shouldReturn` replicate 4 "fits"
+    traverse isAttached found `shouldReturn` replicate 4 True
     watchEditor ui
-    toggles ui >>= traverse_ click . (`atMay` 2)
+    traverse_ click (atMay found 2)
     eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7), (13, 15)]
     unsafeIOToPageM (js_ctrl_click (toJSText ".editor-cm .cm-wiki-slide-toggle") 3) `shouldReturn` True
     eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7)]
@@ -154,7 +165,7 @@ spec m = do
     -- Measured first: a mark that changes draws its line again.
     eventually $ editorFits >>= (`shouldSatisfy` notElem "unmeasured")
     -- Dropped on another slide's first line, the slide goes before it.
-    handles <- findAll ui ".editor-cm .cm-wiki-slide-handle"
+    handles <- findAll ui ".editor-cm .cm-wiki-slide-handle:not([hidden])"
     target <- lineWith ui "## Three"
     traverse_ (`dragTo` target) (head handles)
     eventually $ markdown ui `shouldReturn` moveSlide 1 2 deck
@@ -168,7 +179,7 @@ spec m = do
     eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7), (9, 11)]
     eventually $ editorFits >>= (`shouldSatisfy` notElem "unmeasured")
     below <- lineWith ui "Third."
-    findAll ui ".editor-cm .cm-wiki-slide-handle" >>= traverse_ (`dragTo` below) . head
+    findAll ui ".editor-cm .cm-wiki-slide-handle:not([hidden])" >>= traverse_ (`dragTo` below) . head
     eventually $ markdown ui `shouldReturn` moveSlide 1 3 deck
     press "Control+z"
     eventually $ markdown ui `shouldReturn` deck

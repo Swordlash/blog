@@ -53,3 +53,10 @@ function wiki_test_slide_cut(width) {
   const cut = lowest > bottom + 0.5 || body.scrollWidth > body.clientWidth + 1;
   return JSON.stringify({ ready, cut, width: slide().getBoundingClientRect().width, slide: Number(frame.dataset.slide) });
 }
+
+// Hold the preview's measures of its cards back, as a slow machine would,
+// or let them through (wiki-app/jsbits/slide-fit.js).
+function wiki_test_fit_hold(hold) {
+  if (hold) globalThis.wikiFitHold = true;
+  else globalThis.wikiFitRelease?.();
+}

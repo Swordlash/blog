@@ -689,48 +689,66 @@ class SlideControls extends WidgetType {
     return other.index === this.index && other.movable === this.movable && other.open === this.open && other.fit === this.fit;
   }
 
+  // The controls are made once for a slide's line and then updated in
+  // place (updateDOM) when what they show changes (opened, closed, its
+  // fit measured): the button the author sees stays the same element, and
+  // a click on it is never on one being replaced. The listeners read the
+  // widget the element shows now (wikiControls), not the one it was made
+  // for.
   toDOM(view) {
     const controls = document.createElement("span");
     controls.className = "cm-wiki-slide-controls";
     controls.contentEditable = "false";
     // The slide's first line as the text has it now.
     const line = () => view.state.doc.lineAt(view.posAtDOM(controls)).number;
-    if (this.movable) {
-      const handle = document.createElement("span");
-      handle.className = "cm-wiki-slide-handle";
-      handle.draggable = true;
-      handle.textContent = "\u283f";
-      handle.title = "Drag to move the slide (or Alt+Up and Alt+Down in it)";
-      handle.addEventListener("dragstart", (event) => {
-        draggedSlide = line();
-        event.dataTransfer?.setData("application/x-wiki-slide", String(draggedSlide));
-        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-      });
-      handle.addEventListener("dragend", () => {
-        draggedSlide = null;
-      });
-      controls.append(handle);
-    }
+    const handle = document.createElement("span");
+    handle.className = "cm-wiki-slide-handle";
+    handle.draggable = true;
+    handle.textContent = "\u283f";
+    handle.title = "Drag to move the slide (or Alt+Up and Alt+Down in it)";
+    handle.addEventListener("dragstart", (event) => {
+      draggedSlide = line();
+      event.dataTransfer?.setData("application/x-wiki-slide", String(draggedSlide));
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    });
+    handle.addEventListener("dragend", () => {
+      draggedSlide = null;
+    });
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "cm-wiki-slide-toggle";
-    toggle.textContent = this.open ? "\u25be" : "\u25b8";
-    toggle.title = this.open ? "Close the slide" : "Open the slide (with Ctrl or Cmd, keep the others open)";
-    toggle.setAttribute("aria-expanded", this.open ? "true" : "false");
     toggle.addEventListener("mousedown", (event) => event.preventDefault());
     toggle.addEventListener("click", (event) => {
       event.preventDefault();
-      const detail = { line: line(), open: !this.open, more: event.ctrlKey || event.metaKey };
-      this.host.dispatchEvent(new CustomEvent("wiki-open-slide", { detail }));
+      const shown = controls.wikiControls;
+      const detail = { line: line(), open: !shown.open, more: event.ctrlKey || event.metaKey };
+      shown.host.dispatchEvent(new CustomEvent("wiki-open-slide", { detail }));
     });
-    controls.append(toggle);
-    // Whether the slide's content fits on it, as the preview measured it.
     const fit = document.createElement("span");
+    controls.append(handle, toggle, fit);
+    this.paint(controls);
+    return controls;
+  }
+
+  updateDOM(dom) {
+    if (!dom.classList.contains("cm-wiki-slide-controls")) return false;
+    this.paint(dom);
+    return true;
+  }
+
+  // Show this widget's state in the controls' element.
+  paint(controls) {
+    controls.wikiControls = this;
+    const [handle, toggle, fit] = controls.children;
+    handle.hidden = !this.movable;
+    const arrow = this.open ? "\u25be" : "\u25b8";
+    if (toggle.textContent !== arrow) toggle.textContent = arrow;
+    toggle.title = this.open ? "Close the slide" : "Open the slide (with Ctrl or Cmd, keep the others open)";
+    toggle.setAttribute("aria-expanded", this.open ? "true" : "false");
+    // Whether the slide's content fits on it, as the preview measured it.
     const name = Object.hasOwn(fitTitles, this.fit) ? this.fit : "unmeasured";
     fit.className = `cm-wiki-slide-fit cm-wiki-fit-${name}`;
     fit.title = fitTitles[name];
-    controls.append(fit);
-    return controls;
   }
 
   ignoreEvent() {
