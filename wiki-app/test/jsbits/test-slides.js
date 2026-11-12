@@ -1,18 +1,62 @@
-// A click with Ctrl held, for the browser tests of a presentation's editor
-// (Test.Browser.SlideEditor): the runner's clicks hold no modifier. The
-// element clicked is the index-th of those the selector finds in the
-// editor; its listener reads the click's ctrlKey, as it does a user's.
-function wiki_test_ctrl_click(selector, index) {
-  const element = document.querySelectorAll(selector)[index];
-  if (!element) return false;
-  element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }));
-  return true;
+// The rows of a presentation's editor slide by slide, for the browser
+// tests (Test.Browser.SlideEditor): the list's items in order, a row's
+// CodeMirror reached through the object web/src/editor.js's attachRow puts
+// on its host. Offsets are characters (code points).
+function wikiTestSlideRow(index) {
+  return document.querySelectorAll(".editor-slides > li")[index]?.querySelector(".slide-row-body")?.wikiRow ?? null;
 }
 
-// The fits the editor marks beside its slides' handles, as JSON.
+// The fits the rows' headers show, as JSON, in the order of the rows.
 function wiki_test_slide_fits() {
-  const editor = document.querySelector(".editor-cm .cm-content")?.wikiEditor;
-  return JSON.stringify(editor ? editor.slideFits() : []);
+  return JSON.stringify([...document.querySelectorAll(".editor-slides .slide-row")].map((row) => row.dataset.fit ?? ""));
+}
+
+// The text of the row at an index, "" when it is closed.
+function wiki_test_slide_row_text(index) {
+  return wikiTestSlideRow(index)?.text() ?? "";
+}
+
+// Select from anchor to head in the row at an index, and give the row the
+// focus, as a click would; and the row's selection, as JSON [anchor, head].
+function wiki_test_slide_row_select(index, anchor, head) {
+  wikiTestSlideRow(index)?.select(anchor, head);
+}
+
+function wiki_test_slide_row_selection(index) {
+  return JSON.stringify(wikiTestSlideRow(index)?.selection() ?? []);
+}
+
+// Whether the row at an index has the focus.
+function wiki_test_slide_row_focused(index) {
+  return wikiTestSlideRow(index)?.hasFocus() ?? false;
+}
+
+// Give the open editor's master a layout cut for another text than the one
+// it holds, as a cut of an older text that arrives late: whether the master
+// took it, and whether its layout has the key the cut gave.
+function wiki_test_stale_rows(text) {
+  const host = document.querySelector(".editor-cm:not(.slide-row-body)");
+  const taken = host?.wikiEditor?.setRows?.(text, "[[999, 0, 1]]") ?? false;
+  const keys = JSON.parse(host?.wikiEditor?.rows?.() || "{\"rows\": []}").rows.map((row) => row[0]);
+  return JSON.stringify([taken, keys.includes(999)]);
+}
+
+// The page's islands without the editor ("absent"), with an editor that
+// waits until released ("hold"), or as they were ("as-is"): what a page
+// without its editor's script, or one still loading it, gives the editor.
+function wiki_test_editor_script(how) {
+  const islands = globalThis.wikiTestIslands ?? globalThis.wikiIslands;
+  globalThis.wikiTestIslands = islands;
+  if (how === "as-is") {
+    globalThis.wikiIslands = islands;
+    for (const held of globalThis.wikiTestHeld ?? []) islands.attachEditor(...held);
+    globalThis.wikiTestHeld = [];
+  } else if (how === "absent") {
+    globalThis.wikiIslands = { ...islands, attachEditor: undefined };
+  } else {
+    globalThis.wikiTestHeld = [];
+    globalThis.wikiIslands = { ...islands, attachEditor: (...args) => globalThis.wikiTestHeld.push(args) };
+  }
 }
 
 // Start, or read, the log of the preview's measures of its cards

@@ -94,26 +94,18 @@ function wiki_test_editor_host() {
   return hosts.length > 0 ? hosts[hosts.length - 1] : null;
 }
 
-// Count the open editor's "wiki-input" events, and keep the detail of each
-// "wiki-folds" event, from now on (web/src/editor.js).
+// Count the open editor's "wiki-input" events, from now on
+// (web/src/editor.js).
 function wiki_test_editor_watch() {
   const host = wiki_test_editor_host();
   if (!host) return;
   host.wikiTestInputs = 0;
-  host.wikiTestFolds = [];
   host.addEventListener("wiki-input", () => host.wikiTestInputs++);
-  host.addEventListener("wiki-folds", (event) => host.wikiTestFolds.push(JSON.parse(event.detail)));
 }
 
 // How many "wiki-input" events the open editor made since it was watched.
 function wiki_test_editor_inputs() {
   return wiki_test_editor_host()?.wikiTestInputs ?? 0;
-}
-
-// The folds each "wiki-folds" event told since the editor was watched, as
-// JSON [[[first, last]]].
-function wiki_test_editor_folds_told() {
-  return JSON.stringify(wiki_test_editor_host()?.wikiTestFolds ?? []);
 }
 
 // Replace from..to (UTF-16 units) in the open editor's text with `text`, as

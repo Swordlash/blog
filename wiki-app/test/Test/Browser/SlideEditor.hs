@@ -1,14 +1,17 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | The editor of a presentation (WP5.97 of docs/PLAN.md), in a browser,
--- in the shell, over the demo's wiki with its "Hello, world" made a
--- presentation: slide by slide, every slide folded but the cursor's when
--- the editor opens, one opened at a time by its button and more with
--- Ctrl; the switch to the raw Markdown and back, which the browser keeps
--- and which changes no byte, of a text with carriage returns too; a slide
--- moved by Alt+Up and Alt+Down and by its handle, before or after the
--- slide it is dropped on, as one edit that one undo takes back; a new slide; and the preview, which shows the cursor's
--- slide, or the whole deck.
+-- | The editor of a presentation (WP5.97 and WP5.103 of docs/PLAN.md), in
+-- a browser, in the shell, over the demo's wiki with its "Hello, world"
+-- made a presentation: slide by slide, a list of rows, the cursor's open as
+-- the editor opens, each opened and closed by its header and several open
+-- at once, each open row an editor of its own over one text with one
+-- history (an undo in one row of a change in another opens that row and
+-- closes the row left); rows split and joined as headings are typed and
+-- taken away; a row's problems, fits and spoilers' folds; the headers
+-- before CodeMirror is there, and the Markdown without it; the switch to
+-- the raw Markdown and back, which the browser keeps and which changes no
+-- byte, of a text with carriage returns too; and the preview, which shows
+-- the cursor's slide, or the whole deck.
 module Test.Browser.SlideEditor (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -21,25 +24,29 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, startOn, startWith)
-import Test.Browser.Text (editorHost, editorText, inputsSeen, insertText, markdown, problemsMarked, selectText, setMarkdown, watchEditor)
+import Test.Browser.Text (completing, editorText, inputsSeen, insertText, markdown, problemsMarked, proposeText, selectText, setMarkdown, watchEditor)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Mem (runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState)
-import Wiki.App.Editor.Browser (foldedLines)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Page (Page (id, updatedAt))
 import Wiki.Core.PageKind qualified as Kind
-import Wiki.Core.Slides (moveSlide)
+import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), cutRows)
 import Wiki.Core.Space (Space (id))
 
 $( browserJS
      ["jsbits/test-slides.js"]
-     [ ("js_ctrl_click", "wiki_test_ctrl_click", Safe, [t|JSText -> Int -> IO Bool|])
-     , ("js_slide_fits", "wiki_test_slide_fits", Safe, [t|IO JSText|])
+     [ ("js_slide_fits", "wiki_test_slide_fits", Safe, [t|IO JSText|])
+     , ("js_row_text", "wiki_test_slide_row_text", Safe, [t|Int -> IO JSText|])
+     , ("js_row_select", "wiki_test_slide_row_select", Safe, [t|Int -> Int -> Int -> IO ()|])
+     , ("js_row_selection", "wiki_test_slide_row_selection", Safe, [t|Int -> IO JSText|])
+     , ("js_row_focused", "wiki_test_slide_row_focused", Safe, [t|Int -> IO Bool|])
+     , ("js_stale_rows", "wiki_test_stale_rows", Safe, [t|JSText -> IO JSText|])
+     , ("js_editor_script", "wiki_test_editor_script", Safe, [t|JSText -> IO ()|])
      , ("js_fit_log_start", "wiki_test_fit_log_start", Safe, [t|IO ()|])
      , ("js_fit_log", "wiki_test_fit_log", Safe, [t|IO JSText|])
      , ("js_slide_cut", "wiki_test_slide_cut", Safe, [t|Int -> IO JSText|])
@@ -50,159 +57,262 @@ $( browserJS
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
-  it "folds every slide but the cursor's as the editor opens, and opens one at a time by its button, more with Ctrl" $ runPage $ do
-    -- The slides measured late, as on a slow machine: the controls found
+  it "lists the slides as rows, the cursor's open as the editor opens, each opened and closed by its header, several at once" $ runPage $ do
+    -- The slides measured late, as on a slow machine: the headers found
     -- before are the ones there after.
     unsafeIOToPageM (js_fit_hold True)
     (ui, _) <- openDeck deck
-    host <- editorHost ui
-    -- The cursor starts under the title line, on the title slide.
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(5, 7), (9, 11), (13, 15)]
-    -- Each slide has its button; each but the title slide its handle.
-    found <- eventually $ do
-      buttons <- findAll ui ".editor-cm .cm-wiki-slide-toggle"
-      length buttons `shouldBe` 4
-      pure buttons
-    length <$> findAll ui ".editor-cm .cm-wiki-slide-handle:not([hidden])" `shouldReturn` 3
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    (findAll ui ".editor-slides .slide-row-number" >>= traverse textContent) `shouldReturn` ["1.", "2.", "3.", "4."]
+    -- The cursor starts under the title line, in the title slide's row.
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    headers <- findAll ui ".editor-slides .slide-row-toggle"
     editorFits `shouldReturn` replicate 4 "unmeasured"
     unsafeIOToPageM (js_fit_hold False)
     eventually $ editorFits `shouldReturn` replicate 4 "fits"
-    traverse isAttached found `shouldReturn` replicate 4 True
+    traverse isAttached headers `shouldReturn` replicate 4 True
     watchEditor ui
-    traverse_ click (atMay found 2)
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7), (13, 15)]
-    unsafeIOToPageM (js_ctrl_click (toJSText ".editor-cm .cm-wiki-slide-toggle") 3) `shouldReturn` True
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7)]
-    -- An open slide's button closes it.
-    toggles ui >>= traverse_ click . (`atMay` 3)
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7), (13, 15)]
-    -- Folds change what is shown, never the text.
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    rowHeader ui "Two" >>= (`getAttribute` "aria-expanded") >>= (`shouldBe` Just "true")
+    rowHeader ui "Deck" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Two"]
+    length <$> findAll ui ".editor-slides .cm-editor" `shouldReturn` 1
+    rowHeader ui "Deck" >>= (`getAttribute` "aria-expanded") >>= (`shouldBe` Just "false")
+    -- Rows change what is shown, never the text.
     inputsSeen ui `shouldReturn` 0
     markdown ui `shouldReturn` deck
 
-  it "opens one slide and closes the others by its fold's mark and by the keys too, keeps them open with Ctrl, and leaves them as they are when an edit opens one" $ runPage $ do
-    (ui, _) <- openDeck deck
-    host <- editorHost ui
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(5, 7), (9, 11), (13, 15)]
-    -- The marks of "One", "Two" and "Three", in the order of the text.
-    findAll ui ".editor-cm .cm-wiki-folded" >>= traverse_ click . (`atMay` 1)
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7), (13, 15)]
-    -- Now the title slide's, "One"'s and "Three"'s: Ctrl on the click on
-    -- "Three"'s keeps "Two" open.
-    unsafeIOToPageM (js_ctrl_click (toJSText ".editor-cm .cm-wiki-folded") 2) `shouldReturn` True
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7)]
-    -- The key that unfolds the cursor's line.
-    selectText ui (lineStart deck 5) (lineStart deck 5)
-    press "Control+Shift+BracketRight"
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (9, 11), (13, 15)]
-    -- Backspace at the start of the line after "Two" joins it to the
-    -- hidden last line: an edit opens the fold, and the others stay.
-    selectText ui (lineStart deck 12) (lineStart deck 12)
-    press "Backspace"
-    eventually $ markdown ui `shouldReturn` T.replace "Second.\n\n" "Second.\n" deck
-    unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (12, 14)]
-    press "Control+z"
-    eventually $ markdown ui `shouldReturn` deck
-
-  it "switches to the raw Markdown and back, which the browser keeps, changing no byte, of a text with carriage returns and no final line break too" $ runPage $ do
+  it "switches to the raw Markdown and back, which the browser keeps, changing no byte and opening the rows open before, of a text with carriage returns too" $ runPage $ do
     (ui, wiki) <- openDeck deck
-    host <- editorHost ui
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(5, 7), (9, 11), (13, 15)]
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
     watchEditor ui
     modeButton ui "Raw" >>= click
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` []
-    eventually $ length <$> findAll ui ".editor-cm .cm-wiki-slide-toggle" `shouldReturn` 0
+    eventually $ length <$> findAll ui ".editor-slides" `shouldReturn` 0
+    editorText ui >>= shouldBeVisible
     modeButton ui "Raw" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
     inputsSeen ui `shouldReturn` 0
     markdown ui `shouldReturn` deck
     -- The browser keeps the mode: the editor opened again is in it.
     again <- startOn m wiki helloEditor
-    againHost <- editorHost again
+    _ <- editorText again
     modeButton again "Raw" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
-    unsafeIOToPageM (foldedLines againHost) `shouldReturn` []
-    modeButton again "Slides" >>= click
-    eventually $ unsafeIOToPageM (foldedLines againHost) `shouldReturn` [(5, 7), (9, 11), (13, 15)]
-    markdown again `shouldReturn` deck
-    -- A text with carriage returns has no slides to fold or move: the
-    -- editor says so, and either mode leaves every byte as it is.
+    length <$> findAll again ".editor-slides" `shouldReturn` 0
+    unmount again
+    -- Back slide by slide: the rows open before open again.
+    modeButton ui "Slides" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    markdown ui `shouldReturn` deck
+    -- A text with carriage returns is cut into rows too, and either mode
+    -- leaves every byte of it as it is.
     let returns = T.replace "\n" "\r\n" deck
-    setMarkdown again returns
-    watchEditor again
-    find again ".editor-slides-note" >>= (`shouldHaveText` "This text has carriage returns, so its slides cannot be folded or moved here.")
-    eventually $ length <$> findAll again ".editor-cm .cm-wiki-slide-toggle" `shouldReturn` 0
-    modeButton again "Raw" >>= click
-    modeButton again "Slides" >>= click
-    unsafeIOToPageM (foldedLines againHost) `shouldReturn` []
-    inputsSeen again `shouldReturn` 0
-    markdown again `shouldReturn` returns
+    setMarkdown ui returns
+    watchEditor ui
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    modeButton ui "Raw" >>= click
+    modeButton ui "Slides" >>= click
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    inputsSeen ui `shouldReturn` 0
+    markdown ui `shouldReturn` returns
 
-  it "moves the cursor's slide with Alt+Up and Alt+Down as one edit that one undo takes back, the title slide staying first" $ runPage $ do
+  it "completes in the raw Markdown after a visit to the rows, and in a row slide by slide, one list in each mode" $ runPage $ do
     (ui, _) <- openDeck deck
-    host <- editorHost ui
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(5, 7), (9, 11), (13, 15)]
-    selectText ui (lineStart deck 9) (lineStart deck 9)
-    press "Alt+ArrowUp"
-    let moved = moveSlide 2 1 deck
-    eventually $ markdown ui `shouldReturn` moved
-    moved `shouldBe` T.intercalate "\n" ["# Deck", "", "By me.", "", "## Two", "", "Second.", "", "## One", "", "First.", "", "## Three", "", "Third."]
-    -- The slides folded before ("One" and "Three") are folded at their new
-    -- places; the slide moved is open, with the cursor in it, and the
-    -- title slide, open before, is still.
-    unsafeIOToPageM (foldedLines host) `shouldReturn` [(9, 11), (13, 15)]
-    -- Up again would put it before the title slide: no move.
-    press "Alt+ArrowUp"
-    markdown ui `shouldReturn` moved
-    press "Alt+ArrowDown"
-    eventually $ markdown ui `shouldReturn` deck
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    modeButton ui "Raw" >>= click
+    editorText ui >>= shouldBeVisible
+    selectText ui (lineEnd deck 7) (lineEnd deck 7)
+    editorText ui >>= (`typeText` " :smi")
+    eventually $ completing ui `shouldReturn` "active"
+    length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 1
+    press "Escape"
+    modeButton ui "Slides" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    text <- markdown ui
+    rowSelect 1 (T.length (rowTextOf text 1)) (T.length (rowTextOf text 1))
+    rowContent ui "One" >>= (`typeText` " :smi")
+    eventually $ length <$> findAll ui ".editor-slides .cm-tooltip-autocomplete" `shouldReturn` 1
+    length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 1
+    completing ui `shouldReturn` ""
+
+  it "has one history: Ctrl+Z in a row takes back a change in another, which opens, and the row left closes; the others stay" $ runPage $ do
+    (ui, _) <- openDeck deck
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    -- Typed at the end of "First.".
+    rowSelect 1 14 14
+    rowContent ui "One" >>= (`typeText` "x")
+    let typed = T.replace "First." "First.x" deck
+    markdown ui `shouldReturn` typed
+    -- From row "Three", Ctrl+Z: the change in "One" is undone there, which
+    -- takes the focus, "Three" closes, and "Deck" stays open.
+    rowHeader ui "Three" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One", "Three"]
+    rowSelect 3 2 2
     press "Control+z"
-    eventually $ markdown ui `shouldReturn` moved
+    eventually $ markdown ui `shouldReturn` deck
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    eventually $ rowFocused 1 `shouldReturn` True
+    -- An undo inside the row with the focus closes nothing.
+    rowContent ui "One" >>= (`typeText` "y")
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` deck
+    openTitles ui `shouldReturn` ["Deck", "One"]
+    -- To a row that is closed: it opens, with the focus and the cursor at
+    -- the change.
+    rowSelect 1 14 14
+    rowContent ui "One" >>= (`typeText` "z")
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    rowSelect 0 2 2
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` deck
+    eventually $ openTitles ui `shouldReturn` ["One"]
+    eventually $ rowFocused 0 `shouldReturn` False
+    rowSelection 1 `shouldReturn` (14, 14)
+    -- The assistant writing in another row opens it, and closes none.
+    proposeText ui (lineStart deck 15) (lineStart deck 15) "Proposed. "
+    eventually $ openTitles ui `shouldReturn` ["One", "Three"]
+    rowFocused 1 `shouldReturn` True
+    -- Ctrl+Z on a header is the history's too.
+    rowHeader ui "One" >>= focus
     press "Control+z"
     eventually $ markdown ui `shouldReturn` deck
 
-  it "moves a slide dragged by its handle onto another, and adds a new slide at the end, its title selected" $ runPage $ do
+  it "splits a row where a heading is typed and joins it again when the heading goes, after a pause, the editor with the focus kept, past an emoji" $ runPage $ do
+    let titled = T.replace "# Deck" "# Deck 😀" deck
+    (ui, _) <- openDeck titled
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀", "One"]
+    editor <- find ui ".editor-slides > li:nth-child(2) .cm-editor"
+    rowSelect 1 14 14
+    rowContent ui "One" >>= (`typeText` "\n## Mid")
+    let split = T.replace "First." "First.\n## Mid" titled
+    markdown ui `shouldReturn` split
+    eventually $ rowTitles ui `shouldReturn` ["Deck 😀", "One", "Mid", "Two", "Three"]
+    -- The part above the cursor is a new row, open; the cursor's part has
+    -- the editor it was typed in, still with the focus.
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀", "One", "Mid"]
+    find ui ".editor-slides > li:nth-child(3) .cm-editor" >>= (`shouldBeSameElement` editor)
+    rowFocused 2 `shouldReturn` True
+    rowText 2 `shouldReturn` "## Mid\n"
+    -- Undone: the heading goes, and the rows join, in the same editor.
+    replicateM_ 4 (press "Control+z")
+    eventually $ markdown ui `shouldReturn` titled
+    eventually $ rowTitles ui `shouldReturn` ["Deck 😀", "One", "Two", "Three"]
+    find ui ".editor-slides > li:nth-child(2) .cm-editor" >>= (`shouldBeSameElement` editor)
+
+  it "keeps the rows below a row that leaves a code block open, and says the presentation takes them in" $ runPage $ do
     (ui, _) <- openDeck deck
-    host <- editorHost ui
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(5, 7), (9, 11), (13, 15)]
-    -- Measured first: a mark that changes draws its line again.
-    eventually $ editorFits >>= (`shouldSatisfy` notElem "unmeasured")
-    -- Dropped on another slide's first line, the slide goes before it.
-    handles <- findAll ui ".editor-cm .cm-wiki-slide-handle:not([hidden])"
-    target <- lineWith ui "## Three"
-    traverse_ (`dragTo` target) (head handles)
-    eventually $ markdown ui `shouldReturn` moveSlide 1 2 deck
-    press "Control+z"
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    rowSelect 1 14 14
+    rowContent ui "One" >>= (`typeText` "\n```")
+    eventually $ (findAll ui ".editor-slides .slide-row-part" >>= traverse textContent) `shouldReturn` ["part of slide 2", "part of slide 2"]
+    rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    eventually $ do
+      marked <- problemsMarked ui
+      [message | (_, _, message) <- marked] `shouldSatisfy` any ("A code block, a box or an HTML block on this slide is not closed" `T.isPrefixOf`)
+    replicateM_ 2 (press "Control+z")
     eventually $ markdown ui `shouldReturn` deck
-    -- Dropped below a slide's first line, a slide goes after it. The
-    -- controls of the slides the undo rewrote come back with the check of
-    -- the text.
-    eventually $ length <$> toggles ui `shouldReturn` 4
-    toggles ui >>= traverse_ click . (`atMay` 3)
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7), (9, 11)]
-    eventually $ editorFits >>= (`shouldSatisfy` notElem "unmeasured")
-    below <- lineWith ui "Third."
-    findAll ui ".editor-cm .cm-wiki-slide-handle:not([hidden])" >>= traverse_ (`dragTo` below) . head
-    eventually $ markdown ui `shouldReturn` moveSlide 1 3 deck
-    press "Control+z"
-    eventually $ markdown ui `shouldReturn` deck
-    find ui ".editor-new-slide" >>= click
-    eventually $ markdown ui `shouldReturn` (deck <> "\n\n## New slide\n")
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(1, 3), (5, 7), (9, 11), (13, 15)]
-    editorText ui >>= (`typeText` "Four")
-    markdown ui `shouldReturn` (deck <> "\n\n## Four\n")
+    eventually $ length <$> findAll ui ".editor-slides .slide-row-part" `shouldReturn` 0
+
+  it "drops a cut of an older text and keeps the typing, the next cut coming after it" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    rowSelect 1 14 14
+    rowContent ui "One" >>= (`typeText` "x")
+    -- A cut of the text before the keystroke, arriving late: not taken.
+    unsafeIOToPageM (fromJSText <$> js_stale_rows (toJSText deck)) `shouldReturn` "[false,false]"
+    let typed = T.replace "First." "First.x" deck
+    markdown ui `shouldReturn` typed
+    rowContent ui "One" >>= (`typeText` "\n## Late")
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Late", "Two", "Three"]
+    markdown ui `shouldReturn` T.replace "First." "First.x\n## Late" deck
+
+  it "counts a row's problems on its header, and takes the cursor to a problem in a closed row, which opens, past an emoji" $ runPage $ do
+    let broken = T.intercalate "\n" ["# Deck 😀", "", "## One", "", "Fine.", "", "## Two", "", "Half: $\\frac{1}$ here.", "", "## Three", "", "Fine."]
+    (ui, _) <- openDeck broken
+    eventually $ (findAll ui ".editor-slides .slide-row-problems" >>= traverse textContent) `shouldReturn` ["1 problem"]
+    -- The cursor starts in "One", under the title line.
+    eventually $ openTitles ui `shouldReturn` ["One"]
+    find ui ".editor-problems" >>= click
+    eventually $ openTitles ui `shouldReturn` ["One", "Two"]
+    eventually $ rowFocused 2 `shouldReturn` True
+    (a, b) <- rowSelection 2
+    shown <- rowText 2
+    T.take (b - a) (T.drop a shown) `shouldSatisfy` T.isInfixOf "frac"
+
+  it "folds a spoiler's section and a block spoiler in an open row, and unfolds them" $ runPage $ do
+    let quiz = T.intercalate "\n" ["# Deck", "", "## Quiz", "", "### [[!spoiler]] Question", "", "Hidden answer.", "", "[[!spoiler]]{a}(The answer)", "Forty-two.", "[[/spoiler]]{a}", "", "## Next", "", "Text."]
+    (ui, _) <- openDeck quiz
+    -- The cursor starts in "Quiz", which is open.
+    eventually $ openTitles ui `shouldReturn` ["Quiz"]
+    let markers = eventually $ do
+          found <- findAll ui ".editor-slides .cm-foldGutter .cm-wiki-fold-open"
+          length found `shouldBe` 2
+          pure found
+    -- The block spoiler, by its marker, and open again by its mark.
+    markers >>= traverse_ click . (`atMay` 1)
+    eventually $ length <$> findAll ui ".editor-slides .cm-wiki-folded" `shouldReturn` 1
+    eventually $ rowContent ui "Quiz" >>= textContent >>= (`shouldSatisfy` (not . T.isInfixOf "Forty-two."))
+    find ui ".editor-slides .cm-wiki-folded" >>= click
+    eventually $ length <$> findAll ui ".editor-slides .cm-wiki-folded" `shouldReturn` 0
+    -- The heading spoiler's section.
+    markers >>= traverse_ click . head
+    eventually $ rowContent ui "Quiz" >>= textContent >>= (`shouldSatisfy` (not . T.isInfixOf "Hidden answer."))
+    find ui ".editor-slides .cm-wiki-folded" >>= click
+    eventually $ rowContent ui "Quiz" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Hidden answer.")
+    markdown ui `shouldReturn` quiz
+
+  it "draws the rows' headers before CodeMirror is there, not to be opened, and without the editor's script shows the Markdown with a note" $ runPage $ do
+    unsafeIOToPageM (js_editor_script (toJSText "hold"))
+    (ui, wiki) <- openDeckWith False deck
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    (findAll ui ".editor-slides .slide-row-toggle" >>= traverse (`getProperty` "disabled")) `shouldReturn` replicate 4 "true"
+    unsafeIOToPageM (js_editor_script (toJSText "as-is"))
+    eventually $ (findAll ui ".editor-slides .slide-row-toggle" >>= traverse (`getProperty` "disabled")) `shouldReturn` replicate 4 "false"
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    unmount ui
+    unsafeIOToPageM (js_editor_script (toJSText "absent"))
+    bare <- startOn m wiki helloEditor
+    find bare ".editor-slides-note" >>= (`shouldHaveText` "Slide by slide needs the editor's script, which this page has not loaded: the presentation is shown as its Markdown.")
+    length <$> findAll bare ".editor-slides" `shouldReturn` 0
+    find bare ".editor-text" >>= shouldBeVisible
+    unsafeIOToPageM (js_editor_script (toJSText "as-is"))
 
   it "shows the cursor's slide in the preview, and in the raw Markdown the whole deck or one slide" $ runPage $ do
     (ui, _) <- openDeck deck
-    host <- editorHost ui
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(5, 7), (9, 11), (13, 15)]
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
     find ui ".editor-side-by-side" >>= click
     eventually $ cardTitles ui `shouldReturn` ["Deck"]
-    selectText ui (lineStart deck 9) (lineStart deck 9)
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    rowSelect 2 1 1
     eventually $ cardTitles ui `shouldReturn` ["Two"]
     find ui ".editor-preview .slide-frame:not(.slide-offstage) .slide-number" >>= (`shouldHaveText` "3 / 4")
     modeButton ui "Raw" >>= click
     eventually $ cardTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
     find ui ".editor-one-slide" >>= click
     eventually $ cardTitles ui `shouldReturn` ["Two"]
+
+  it "disables the toolbar's commands while no row is open, and runs them in the row with the cursor" $ runPage $ do
+    (ui, _) <- openDeck deck
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    rowHeader ui "Deck" >>= click
+    eventually $ openTitles ui `shouldReturn` []
+    bold <- find ui ".editor-toolbar button.tool[aria-label=\"Bold\"]"
+    getProperty bold "disabled" `shouldReturn` "true"
+    rowHeader ui "Two" >>= click
+    eventually $ getProperty bold "disabled" `shouldReturn` "false"
+    rowSelect 2 8 15
+    click bold
+    eventually $ markdown ui `shouldReturn` T.replace "Second." "**Second.**" deck
+    rowText 2 `shouldReturn` "## Two\n\n**Second.**\n"
 
   it "renders the deck whole for one slide's preview: a macro of an earlier slide, a footnote's number, the same slide in every view" $ runPage $ do
     (ui, wiki) <- openDeck macros
@@ -234,11 +344,11 @@ spec m = do
       marked <- problemsMarked ui
       [a >= lineStart broken 9 && b <= lineStart broken 10 | (a, b, _) <- marked] `shouldBe` [True]
 
-  it "marks whether each slide fits, grey until measured, beside its handle, on its card and among the problems" $ runPage $ do
+  it "marks whether each slide fits, grey until measured, on its row, on its card and among the problems" $ runPage $ do
     let fitting = T.intercalate "\n\n" (["# Deck", "## Short", "One line."] <> ["## Long"] <> replicate 30 "A paragraph of its own, one line long.")
     (ui, _) <- openDeck fitting
     eventually $ editorFits `shouldReturn` ["fits", "fits", "overflowing"]
-    length <$> findAll ui ".editor-cm .cm-wiki-fit-overflowing" `shouldReturn` 1
+    length <$> findAll ui ".editor-slides .slide-row-fit.slide-fit-overflowing" `shouldReturn` 1
     length <$> findAll ui ".editor-preview .slide-frame.slide-fit-overflowing" `shouldReturn` 1
     eventually $ do
       marked <- problemsMarked ui
@@ -248,7 +358,7 @@ spec m = do
     -- A slide changed is grey until it is measured again; the others keep
     -- their marks.
     selectText ui (lineStart fitting 5) (lineStart fitting 5)
-    editorText ui >>= (`typeText` "Still ")
+    openRowContent ui >>= (`typeText` "Still ")
     eventually $ editorFits `shouldReturn` ["fits", "fits", "overflowing"]
     -- A change that leaves every card laid out as it was (a blank line in
     -- a slide, the look's line naming the default theme) is measured
@@ -356,7 +466,7 @@ spec m = do
     -- A keystroke on the second slide: its card shows it, measured again.
     selectText ui (lineStart fifty 5) (lineStart fifty 5)
     typed <- unsafeIOToPageM getCurrentTime
-    editorText ui >>= (`typeText` "x")
+    openRowContent ui >>= (`typeText` "x")
     eventually $ do
       findAll ui ".editor-preview .slide-frame[data-slide='2'].slide-fit-fits .slide-body" >>= traverse textContent >>= (`shouldSatisfy` any (T.isInfixOf "xA first paragraph."))
       editorFits >>= (`shouldSatisfy` notElem "unmeasured")
@@ -379,8 +489,7 @@ spec m = do
   it "starts with the slide the cursor starts on open and in the preview, when the first slide follows the title line" $ runPage $ do
     let early = T.intercalate "\n" ["# Deck", "", "## One", "", "First.", "", "## Two", "", "Second."]
     (ui, _) <- openDeck early
-    host <- editorHost ui
-    eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` [(7, 9)]
+    eventually $ openTitles ui `shouldReturn` ["One"]
     find ui ".editor-side-by-side" >>= click
     eventually $ cardTitles ui `shouldReturn` ["One"]
   where
@@ -418,7 +527,11 @@ spec m = do
     -- The demo's "Hello, world", made a presentation with the deck as its
     -- text, open in the editor.
     openDeck :: forall s. Text -> PageM s (Mounted s Shell.Query Void m, IORef MemState)
-    openDeck text = do
+    openDeck = openDeckWith True
+
+    -- The same, waiting for CodeMirror or not.
+    openDeckWith :: forall s. Bool -> Text -> PageM s (Mounted s Shell.Query Void m, IORef MemState)
+    openDeckWith waiting text = do
       (opener, wiki) <- startWith m (Just "user-editor") (Page (slugs ["blog"]) (slugs ["hello-world"]))
       -- One shell at a time: the editor's, which a route followed moves.
       unmount opener
@@ -428,7 +541,7 @@ spec m = do
         made <- either (panic . show) identity <$> setPageKind hello.id Kind.Presentation
         void (either (panic . show) identity <$> savePage made.id made.updatedAt "Deck" text)
       ui <- startOn m wiki helloEditor
-      _ <- editorText ui
+      when waiting (void (editorText ui))
       pure (ui, wiki)
 
 -- | The presentation the tests edit: a title slide and three others,
@@ -516,9 +629,56 @@ bodyText ui title = eventually $ do
   titled <- filterM (\f -> (== title) <$> (findIn f ".slide-title" >>= textContent)) frames
   maybe (expectationFailure ("no card " <> title)) (\f -> findIn f ".slide-body" >>= textContent) (head titled)
 
--- | The slides' buttons, in the order of the text.
-toggles :: Mounted s q o m -> PageM s [Element s]
-toggles ui = findAll ui ".editor-cm .cm-wiki-slide-toggle"
+-- | The rows' titles, in the order of the rows; and the open rows'.
+rowTitles :: Mounted s q o m -> PageM s [Text]
+rowTitles ui = findAll ui ".editor-slides .slide-row-title" >>= traverse textContent
+
+openTitles :: Mounted s q o m -> PageM s [Text]
+openTitles ui = findAll ui ".editor-slides .slide-row.open .slide-row-title" >>= traverse textContent
+
+-- | The header of the row with this title.
+rowHeader :: Mounted s q o m -> Text -> PageM s (Element s)
+rowHeader ui title = eventually $ do
+  rows <- findAll ui ".editor-slides .slide-row"
+  named <- filterM (\r -> (== title) <$> (findIn r ".slide-row-title" >>= textContent)) rows
+  maybe (expectationFailure ("no row " <> title)) (`findIn` ".slide-row-toggle") (head named)
+
+-- | What one types into in the open row with this title.
+rowContent :: Mounted s q o m -> Text -> PageM s (Element s)
+rowContent ui title = eventually $ do
+  rows <- findAll ui ".editor-slides .slide-row.open"
+  named <- filterM (\r -> (== title) <$> (findIn r ".slide-row-title" >>= textContent)) rows
+  maybe (expectationFailure ("no open row " <> title)) (`findIn` ".cm-content") (head named)
+
+-- | What one types into in the open row whose editor has the focus.
+openRowContent :: Mounted s q o m -> PageM s (Element s)
+openRowContent ui = find ui ".editor-slides .cm-editor.cm-focused .cm-content"
+
+-- | The text of the row at an index ("" when it is closed), its
+-- selection, and whether it has the focus; select in it, in characters.
+rowText :: Int -> PageM s Text
+rowText i = unsafeIOToPageM (fromJSText <$> js_row_text i)
+
+rowSelect :: Int -> Int -> Int -> PageM s ()
+rowSelect i anchor h = unsafeIOToPageM (js_row_select i anchor h) >> settle
+
+rowSelection :: Int -> PageM s (Int, Int)
+rowSelection i = do
+  json <- unsafeIOToPageM (fromJSText <$> js_row_selection i)
+  pure $ case decodeStrict (encodeUtf8 json) of
+    Just [a, b] -> (a, b)
+    _ -> (-1, -1)
+
+rowFocused :: Int -> PageM s Bool
+rowFocused i = unsafeIOToPageM (js_row_focused i)
+
+-- | The text of a row of a text's fresh cut.
+rowTextOf :: Text -> Int -> Text
+rowTextOf text i = maybe "" (\r -> r.text) (atMay (fst (cutRows (RowKey 0) text)).rows i)
+
+-- | Where a line of a text ends.
+lineEnd :: Text -> Int -> Int
+lineEnd text n = lineStart text n + maybe 0 T.length (atMay (T.splitOn "\n" text) (n - 1))
 
 -- | One of the two buttons of the switch between slide by slide and the
 -- raw Markdown, by its text.
@@ -527,13 +687,6 @@ modeButton ui label = eventually $ do
   buttons <- findAll ui ".editor-slides-mode button"
   named <- filterM (fmap (== label) . textContent) buttons
   maybe (expectationFailure ("no button " <> label)) pure (head named)
-
--- | The editor's line shown with this text.
-lineWith :: Mounted s q o m -> Text -> PageM s (Element s)
-lineWith ui text = eventually $ do
-  lines' <- findAll ui ".editor-cm .cm-line"
-  named <- filterM (fmap (T.isInfixOf text) . textContent) lines'
-  maybe (expectationFailure ("no line with " <> text)) pure (head named)
 
 -- | The titles of the slides the preview shows.
 cardTitles :: Mounted s q o m -> PageM s [Text]
