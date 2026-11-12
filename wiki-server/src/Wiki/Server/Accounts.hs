@@ -155,7 +155,7 @@ import Wiki.Core.User (Email (..), Login (..), Password (..), User (..), parseLo
 import Wiki.Core.Version (namedAuthor)
 import Wiki.Server.Opaque (Proof (..), storedRecordOf)
 import Wiki.Server.Password (SessionToken (..), checkNewPassword, newPublicId, newToken, tokenHash, verifyPassword)
-import Wiki.Server.Storage (Storage, readServerSettings, readSettings, reading, recordHere, writing, writingEither)
+import Wiki.Server.Storage (Storage, readServerSettings, readSettings, reading, recordHere, writing, writingEither, writingTelling)
 import Wiki.Server.Storage.Audit (Recorded (..), consoleAddress, insertAudit, operator)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Renewal (noticeRenewals)
@@ -237,7 +237,7 @@ setAdministrator st u administrator =
 -- its audit log row, and return their account afterwards; 'NotFound' for a
 -- user who does not exist.
 changeAccount :: Storage -> UserId -> Text -> [(Text, Text)] -> (forall be. (Backend be) => Db be ()) -> IO (Either WikiError Account)
-changeAccount st u action detail change = writingEither st $ do
+changeAccount st u action detail change = writingTelling st $ do
   loadAccount u >>= \case
     Nothing -> pure (Left NotFound)
     Just a -> do
@@ -247,8 +247,8 @@ changeAccount st u action detail change = writingEither st $ do
       -- key pair), may make a reader of an encrypted space one no longer:
       -- the space's administrators are told its key must be renewed.
       now <- liftIO getCurrentTime
-      noticeRenewals (namedAuthor (UserId "~administrator") "The server's console") now
-      maybe (Left NotFound) Right <$> loadAccount u
+      told <- noticeRenewals (namedAuthor (UserId "~administrator") "The server's console") now
+      maybe (Left NotFound) (\x -> Right (x, told)) <$> loadAccount u
 
 -- | Record what the console did to a user.
 fromConsole :: (Backend be) => Text -> User -> [(Text, Text)] -> Db be ()

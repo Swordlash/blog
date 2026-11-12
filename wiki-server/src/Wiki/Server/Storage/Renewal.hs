@@ -77,24 +77,40 @@ renewalToldSetting sid = "renewal-told:" <> sid.text
 -- the space's name, by whoever made the change. A space with no page has
 -- nothing a rotation would protect yet, and its administrators are not
 -- told. Every write that may make a reader one no longer runs this, in
--- its transaction, as the database is at its end.
-noticeRenewals :: (Backend be) => Author -> UTCTime -> Db be ()
+-- its transaction, as the database is at its end. The result is the
+-- notifications made, by user, which the caller publishes once the
+-- transaction is committed (the storage's @notify@), as every other
+-- notification is.
+noticeRenewals :: (Backend be) => Author -> UTCTime -> Db be [(UserId, Notification)]
 noticeRenewals actor now = do
   spaces <- loadSpaces
   let encrypted = [(s, k) | s <- Map.elems spaces, Just k <- [s.encryption]]
-  unless (null encrypted) $ do
-    grants <- loadGrants
-    membership <- loadMembership
-    users <- loadUsers
-    (disabled, _) <- loadAccountFlags
-    for_ encrypted $ \(s, k) -> do
-      let c = fromMaybe [] (ancestry (`Map.lookup` spaces) s.id)
-      due <- renewalDue s.id k (readersIn grants membership users disabled c)
-      told <- settingValue (renewalToldSetting s.id)
-      when (due && told /= Just k.text) $ do
-        first' <- head . sortOn (\n -> (n.createdAt, n.id)) <$> pageNodes s.id
-        for_ first' $ \page -> do
-          for_ (administratorsIn grants membership users disabled c) $ \u -> do
-            i <- liftIO (UUID.toText <$> generateV4)
-            insertNotification u Notification {id = NotificationId i, kind = KeyToRenew, page = page.id, thread = Nothing, actor, title = s.name, excerpt = "", createdAt = now, read = False, location = Nothing} False
-          storeSetting (renewalToldSetting s.id) k.text
+  if null encrypted
+    then pure []
+    else do
+      grants <- loadGrants
+      membership <- loadMembership
+      users <- loadUsers
+      (disabled, _) <- loadAccountFlags
+      fmap concat . for encrypted $ \(s, k) -> do
+        let c = fromMaybe [] (ancestry (`Map.lookup` spaces) s.id)
+        due <- renewalDue s.id k (readersIn grants membership users disabled c)
+        told <- settingValue (renewalToldSetting s.id)
+        if not due || told == Just k.text
+          then pure []
+          else do
+            -- The notice is about a page of the space, as every
+            -- notification is: until every encrypted space has a home
+            -- page (WP5.74b3's stage 4), a space with no page has nothing
+            -- to point at, and nothing written that a new key protects.
+            first' <- head . sortOn (\n -> (n.createdAt, n.id)) <$> pageNodes s.id
+            case first' of
+              Nothing -> pure []
+              Just page -> do
+                made <- for (administratorsIn grants membership users disabled c) $ \u -> do
+                  i <- liftIO (UUID.toText <$> generateV4)
+                  let n = Notification {id = NotificationId i, kind = KeyToRenew, page = page.id, thread = Nothing, actor, title = s.name, excerpt = "", createdAt = now, read = False, location = Nothing}
+                  insertNotification u n False
+                  pure (u, n)
+                storeSetting (renewalToldSetting s.id) k.text
+                pure made

@@ -62,6 +62,9 @@ spec = describe "Wiki.Core.Encrypted" $ do
       -- Version 6 is missing, or out of order.
       linkedFrom seen (v 7) [v 7, v 5] `shouldBe` Left (Gap 5)
       linkedFrom seen (v 7) [v 7, v 5, v 6] `shouldBe` Left (Gap 5)
+      -- Another editor saved since the page was read: the history starts
+      -- above the version checked, which it still joins to the one seen.
+      linkedFrom seen (v 7) [v 9, v 8, v 7, v 6, v 5] `shouldBe` Right ()
 
     it "refuses a later version that the history does not join to the version seen" $ do
       let v n = (VersionTag ("t" <> show n), Just (Chain n (Just (VersionTag ("t" <> show (n - 1 :: Int))))))
@@ -69,8 +72,9 @@ spec = describe "Wiki.Core.Encrypted" $ do
       -- The review's case: a forked version 6 shown, a history of the
       -- authentic version 5 alone.
       linkedFrom seen forked6 [v 5] `shouldBe` Left (Unlinked 5 6)
-      -- The history without the version shown at its top.
+      -- The history without the version shown.
       linkedFrom seen forked6 [v 6, v 5] `shouldBe` Left (Unlinked 5 6)
+      linkedFrom seen forked6 [v 7, v 6, v 5] `shouldBe` Left (Unlinked 5 6)
       linkedFrom seen (v 7) [v 6, v 5] `shouldBe` Left (Unlinked 5 7)
       linkedFrom seen (v 7) [] `shouldBe` Left (Unlinked 5 7)
       -- A history that stops above the version seen.

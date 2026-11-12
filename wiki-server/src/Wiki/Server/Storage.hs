@@ -101,6 +101,7 @@ module Wiki.Server.Storage
   , postgresAt
   , writing
   , writingEither
+  , writingTelling
   , writingThen
   , publishing
   , reading
@@ -305,7 +306,7 @@ import Wiki.Server.Storage.Migrate (databaseVersion, knownVersion, migrateSaying
 import Wiki.Server.Storage.Notifications qualified as Notifications
 import Wiki.Server.Storage.Renewal (noticeRenewals, readersIn, renewalDue)
 import Wiki.Server.Storage.Rows
-import Wiki.Server.Storage.Sealed (currentPublicKeys, deleteGrantsOfSpace, deleteSpaceGrants, grantsOfKey, insertGrant, insertPageKey, insertSealedVersion, loadPageKey, loadPageKeys, loadSealedLatest, loadSealedVersion, loadSpaceAllPageKeys, loadSpacePageKeys, replacePageKeys, setSpaceKey, spaceKind)
+import Wiki.Server.Storage.Sealed (currentPublicKeys, deleteGrantsOfSpace, deleteSpaceGrants, grantsOfKey, insertGrant, insertPageKey, insertSealedVersion, loadPageKey, loadPageKeys, loadSealedLatest, loadSealedVersion, loadSpaceAllPageKeys, replacePageKeys, setSpaceKey, spaceKind)
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
 import Wiki.Server.Storage.Stars qualified as Stars
 import Wiki.Server.WaysIn (AccountWays (..), WaysIn, brokenCredentials, brokenLogins, waysIn)
@@ -736,6 +737,12 @@ writing st action = either absurd identity <$> writingEither st (Right <$> actio
 -- the transaction back, as an exception does.
 writingEither :: Storage -> (forall be. (Backend be) => Db be (Either e a)) -> IO (Either e a)
 writingEither st action = writingEitherThen st action (const pass)
+
+-- | 'writingEither' for a transaction that makes notifications outside a
+-- 'Tx' (a password reset, the console): they are published once it is
+-- committed (the storage's @notify@), as a 'Tx''s are.
+writingTelling :: Storage -> (forall be. (Backend be) => Db be (Either e (a, [(UserId, Notification)]))) -> IO (Either e a)
+writingTelling st action = fmap fst <$> writingEitherThen st action (\(_, told) -> unless (null told) (st.config.notify told))
 
 -- | Commit a successful transaction, then update its cache before another write.
 writingEitherThen :: Storage -> (forall be. (Backend be) => Db be (Either e a)) -> (a -> IO ()) -> IO (Either e a)
@@ -3070,7 +3077,10 @@ noticeNow = do
   ctx <- ask
   for_ ctx.author $ \actor -> do
     time <- now
-    db (noticeRenewals (maybe (namedAuthor actor actor.text) authorOf ctx.user) time)
+    made <- db (noticeRenewals (maybe (namedAuthor actor actor.text) authorOf ctx.user) time)
+    -- Published after the commit, with the transaction's other
+    -- notifications, as 'tellTx''s are.
+    liftIO (modifyIORef' ctx.told (reverse made <>))
 
 -- | An encrypted space's key as the caller sees it ('SpaceEncryption').
 spaceEncryptionTx :: SpaceId -> Tx SpaceEncryption
@@ -3302,12 +3312,12 @@ sealedPagesTx sid = do
   requireView c
   _ <- requireEncrypted s
   summaries <- db (loadPageSummaries sid)
-  keys <- db (loadSpacePageKeys sid)
+  keys <- db (loadSpaceAllPageKeys sid)
   latest <- db (loadSealedLatest sid)
   pure
-    [ SealedSummary {id = p.id, space = p.space, parent = p.parent, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, pageKey = pk, heading = headingOf content}
+    [ SealedSummary {id = p.id, space = p.space, parent = p.parent, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, pageKey = pk, heading = headingOf content, pageKeys = all'}
     | p <- sortOn (\x -> (x.createdAt, x.id)) summaries
-    , Just pk <- [Map.lookup p.id keys]
+    , Just all'@(pk : _) <- [Map.lookup p.id keys]
     , Just content <- [Map.lookup p.id latest]
     ]
 

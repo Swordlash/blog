@@ -34,6 +34,7 @@ module Wiki.App.Encrypted
   , openTitle
   , openHeadings
   , openVersionTitles
+  , keyNamed
   , openPages
   , newPageId
   , forgetSpaceKey
@@ -278,11 +279,19 @@ openTitle (PageKeyRef k) sid pid h = whenHere $ do
   answer <- evaluate . fromJSText =<< js_open k (toJSText h.title.nonce.text) (toJSText h.title.ciphertext.text) (toJSText (contentData sid pid h.keyId h.tag h.chain TitleField))
   pure (answered (.: "text") answer)
 
--- | Decrypt the titles of many pages of a space at once, each with its
--- page's key: the title of each page whose title opens.
-openHeadings :: SpaceKey -> SpaceId -> [(PageId, PageKey, SealedHeading)] -> IO (Map PageId Text)
+-- | The key of a page's that a ciphertext names, among the page's keys:
+-- each ciphertext is opened with the key its own key id names, whatever
+-- generation that key is of (one from before a renewal of the space's key
+-- for what was not written since), never with the key the page holds now
+-- by default.
+keyNamed :: KeyId -> [PageKey] -> Maybe PageKey
+keyNamed k = find (\x -> x.keyId == k)
+
+-- | Decrypt the titles of many pages of a space at once, each with the key
+-- of its page's that it names: the title of each page whose title opens.
+openHeadings :: SpaceKey -> SpaceId -> [(PageId, [PageKey], SealedHeading)] -> IO (Map PageId Text)
 openHeadings space sid pages =
-  openMany space sid [(pid, k, [(TitleField, h.tag, h.keyId, h.chain, h.title)]) | (pid, k, h) <- pages] <&> Map.mapMaybe (\case [Just t] -> Just t; _ -> Nothing)
+  openMany space sid [(pid, k, [(TitleField, h.tag, h.keyId, h.chain, h.title)]) | (pid, keys, h) <- pages, Just k <- [keyNamed h.keyId keys]] <&> Map.mapMaybe (\case [Just t] -> Just t; _ -> Nothing)
 
 -- | Decrypt the titles of many versions of one page at once, each with the
 -- key of the page's it names (one of the page's keys given): the title of
@@ -290,7 +299,7 @@ openHeadings space sid pages =
 -- whose titles all open is a run whose tags and chains are the browser's.
 openVersionTitles :: SpaceKey -> SpaceId -> PageId -> [PageKey] -> [SealedHeading] -> IO [Maybe Text]
 openVersionTitles space sid pid keys headings = do
-  let keyOf h = find (\k -> k.keyId == h.keyId) keys
+  let keyOf h = keyNamed h.keyId keys
       items = [(pid, k, [(TitleField, h.tag, h.keyId, h.chain, h.title)]) | h <- headings, Just k <- [keyOf h]]
   opened <- openItems space sid items
   let go hs os = case hs of
@@ -305,9 +314,9 @@ openVersionTitles space sid pid keys headings = do
 
 -- | Decrypt the titles and texts of many pages of a space at once: the
 -- title and text of each page whose content opens.
-openPages :: SpaceKey -> SpaceId -> [(PageId, PageKey, SealedContent)] -> IO (Map PageId (Text, Text))
+openPages :: SpaceKey -> SpaceId -> [(PageId, [PageKey], SealedContent)] -> IO (Map PageId (Text, Text))
 openPages space sid pages =
-  openMany space sid [(pid, k, [(TitleField, c.tag, c.keyId, c.chain, c.title), (BodyField, c.tag, c.keyId, c.chain, c.body)]) | (pid, k, c) <- pages] <&> Map.mapMaybe (\case [Just t, Just b] -> Just (t, b); _ -> Nothing)
+  openMany space sid [(pid, k, [(TitleField, c.tag, c.keyId, c.chain, c.title), (BodyField, c.tag, c.keyId, c.chain, c.body)]) | (pid, keys, c) <- pages, Just k <- [keyNamed c.keyId keys]] <&> Map.mapMaybe (\case [Just t, Just b] -> Just (t, b); _ -> Nothing)
 
 -- | Decrypt fields of many pages in one call to the browser: the fields of
 -- each page, 'Nothing' for one that does not open. Natively, or without

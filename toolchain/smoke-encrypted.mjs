@@ -106,6 +106,10 @@ export async function encryptedSpaces({ browser, url, origin, data, timeout, eve
   // ---- A page in two versions ----------------------------------------------
 
   const title = marker("title");
+  // A word the search looks for, which is no marker: a search page's
+  // address carries its words to the server when the page is loaded, as
+  // any address does, and the test loads one.
+  const searchWord = `zebracrossing${Date.now()}`;
   await page.goto(url("/s/smoke-secret/"));
   await page.locator("#app .space-view .actions a", { hasText: "New page" }).click();
   await page.locator("#app .new-page-title").pressSequentially(title);
@@ -125,7 +129,7 @@ export async function encryptedSpaces({ browser, url, origin, data, timeout, eve
   await editor.pressSequentially(`# ${title}`);
   await editor.press("Enter");
   await editor.press("Enter");
-  await editor.pressSequentially(`Now: ${marker("text")}.`);
+  await editor.pressSequentially(`Now: ${marker("text")}, and ${searchWord}.`);
   answered = saved();
   await editor.press("Control+s");
   assert.ok((await answered).ok(), "the second save of the encrypted page");
@@ -174,6 +178,42 @@ export async function encryptedSpaces({ browser, url, origin, data, timeout, eve
   await fresh.locator("#app .page-view .page-body", { hasText: marker("text") }).waitFor({ timeout });
   await read(fresh);
   console.log("ok: a browser without the keys shows the space locked, and the space's own form unlocks it with the password");
+
+  // ---- A reader removed: a new key, and the pages read after ---------------
+
+  // The administrator revokes the reader in the space's permissions: her
+  // browser gives the space a new key at once, without the space being
+  // opened again. The page nobody saved since stays under its older page
+  // key, and is read, with its history and in the search, in a new
+  // browser's tab, and in the tab of the browser opened before.
+  await page.goto(url("/s/smoke-secret/pages/"));
+  await page.locator("#app .space-settings-toggle").click();
+  const rotated = page.waitForResponse((r) => r.request().method() === "POST" && /\/api\/v1\/encrypted\/spaces\/[^/]+\/rotation$/.test(new URL(r.url()).pathname), { timeout });
+  await page.locator(`#app .grant-row[data-subject=${reader.login}] .grant-revoke`).click();
+  assert.equal((await rotated).status(), 204, "the new key's rotation");
+  const word = marker("text");
+  const readsAfter = async (p, who) => {
+    await p.goto(url("/s/smoke-secret/pages/"));
+    await p.locator("#app .space-view", { hasText: title }).waitFor({ timeout });
+    await p.goto(url(pageAddress));
+    await p.locator("#app .page-view .page-body", { hasText: word }).waitFor({ timeout });
+    await p.locator("#app .page-view .actions a", { hasText: "History" }).click();
+    await p.locator("#app .history-view", { hasText: marker("older version") }).waitFor({ timeout });
+    await p.goto(url(`/search/?q=${encodeURIComponent(searchWord)}&space=smoke-secret`));
+    await p.locator("#app .search-hits .search-hit-title", { hasText: title }).waitFor({ timeout });
+    await read(p);
+    console.log(`ok: after the new key, ${who} reads the page nobody saved since, its history and its search`);
+  };
+  const { context: afterwards, page: newTab } = await contextOf();
+  await afterwards.addCookies([{ name: "wiki_session", value: ada.cookie.replace(/^wiki_session=/, ""), url: origin }]);
+  // A browser that holds none of her keys yet: unlocked first.
+  await newTab.goto(url(pageAddress));
+  await newTab.locator("#app .encrypted-unlock input[name=encrypted-password]").fill(admin.password);
+  await newTab.locator("#app .encrypted-unlock-password").click();
+  await newTab.locator("#app .page-view .page-body", { hasText: marker("text") }).waitFor({ timeout });
+  await readsAfter(newTab, "a new browser");
+  await readsAfter(fresh, "the browser opened before");
+  await afterwards.close();
 
   // ---- What the server keeps and sends -------------------------------------
 

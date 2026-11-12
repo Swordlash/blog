@@ -446,6 +446,59 @@ spec m = do
     first' <- ok =<< run admin (getVersion made.id made.updatedAt)
     first'.body `shouldBe` "Before the removal."
 
+  -- After a rotation, a page nobody saved since is under its older page
+  -- key: every read opens each ciphertext with the key it names, in a new
+  -- tab, in a tab open before the rotation, and on the opening that
+  -- renews.
+  it "reads the pages nobody saved since a renewal, in a new tab, in a tab open before it, and on the opening that renews" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Untouched" "A zebra crossing.")
+    resaved <- ok =<< run env (savePage made.id made.updatedAt "Untouched" "A zebra crossing, twice.")
+    unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
+    void (ok =<< run env (listPages secret.id))
+    -- A tab of the administrator's open before the renewal, holding the key.
+    before <- as "user-admin"
+    void (run before listSpaces)
+    void (ok =<< run before (getPage secret.id [made.slug]))
+    unsafeIOToPageM (js_remove_reader (toJSText ("user-reader" :: Text)))
+    -- The opening that renews reads the list with the new wraps.
+    renewing <- as "user-admin"
+    map (\p -> p.title) <$> (ok =<< run renewing (listPages secret.id)) `shouldReturn` ["Untouched"]
+    unsafeIOToPageM (fromJSText <$> js_rotations) >>= (`shouldSatisfy` (/= "[]"))
+    let readsAll label tab = do
+          void (run tab listSpaces)
+          titles <- map (\p -> p.title) <$> (ok =<< run tab (listPages secret.id))
+          (label, titles) `shouldBe` (label, ["Untouched"])
+          page <- ok =<< run tab (getPage secret.id [made.slug])
+          (label, page.body) `shouldBe` (label, "A zebra crossing, twice.")
+          versions <- ok =<< run tab (listVersions made.id (VersionsQuery Nothing 50))
+          (label, map (\v -> v.title) versions) `shouldBe` (label, ["Untouched", "Untouched"])
+          first' <- ok =<< run tab (getVersion made.id made.updatedAt)
+          (label, first'.body) `shouldBe` (label, "A zebra crossing.")
+          hits <- run tab (searchPages ((searchQuery "zebra") {space = Just secret.id, includeSubspaces = True}))
+          (label, map (\h -> h.page) hits) `shouldBe` (label, [made.id])
+    fresh <- as "user-admin"
+    readsAll ("a new tab" :: Text) fresh
+    readsAll "a tab open before the renewal" before
+    resaved.updatedAt `shouldSatisfy` (> made.updatedAt)
+
+  it "renews the key at once when the administrator revokes a reader in the permissions dialog" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    void (ok =<< run env (createPage secret.id Nothing "Plans" "First."))
+    unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
+    void (ok =<< run env (listPages secret.id))
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    ui <- startServer m (R.SpacePages [secretSlug])
+    find ui ".space-settings-toggle" >>= click
+    eventually (find ui ".grant-row[data-subject=reader] .grant-revoke" >>= click)
+    eventually (unsafeIOToPageM (fromJSText <$> js_rotations) >>= (`shouldSatisfy` (/= "[]")))
+    rotations <- unsafeIOToPageM (fromJSText <$> js_rotations)
+    "user-reader" `T.isInfixOf` rotations `shouldBe` False
+    unmount ui
+
   it "refuses a save while the key must be renewed, saying why, until an administrator's browser renews it" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))

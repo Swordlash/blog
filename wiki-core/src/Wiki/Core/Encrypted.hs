@@ -240,17 +240,20 @@ numberOf = maybe 0 (\c -> c.number)
 
 -- | The latest version of a page the server sent, which is later than the
 -- one this browser read before ('judgeHead''s 'Advanced'), checked against
--- the page's history: 'Right' only when the history starts at that very
+-- the page's history: 'Right' only when the history holds that very
 -- version (its tag and chain as its own decryption gave them) and joins
--- it, version by version, to the version read. A history that does not
--- start there, has a break, stops above the version read, or reaches its
--- number with another version, is the problem it is. The history is the
--- latest first, its titles decrypted, so that its tags and chains are the
--- browser's; it may be several pages of the history, in order.
+-- it, version by version, down to the version read. What the history
+-- holds above it, saved since the page was read, is not this check's
+-- business: the next read checks it. A history that does not hold the
+-- version, has a break below it, stops above the version read, or
+-- reaches its number with another version, is the problem it is. The
+-- history is the latest first, its titles decrypted, so that its tags and
+-- chains are the browser's; it may be several pages of the history, in
+-- order.
 linkedFrom :: Seen -> (VersionTag, Maybe Chain) -> [(VersionTag, Maybe Chain)] -> Either ChainProblem ()
-linkedFrom seen latest = \case
-  top : rest | top == latest -> go (top : rest)
-  _ -> Left unlinked
+linkedFrom seen latest history = case dropWhile (/= latest) history of
+  [] -> Left unlinked
+  run -> go run
   where
     unlinked = Unlinked seen.number (numberOf (snd latest))
     go = \case

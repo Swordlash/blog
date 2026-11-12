@@ -189,6 +189,10 @@ data SealedSummary = SealedSummary
   , position :: Int
   , pageKey :: PageKey
   , heading :: SealedHeading
+  , pageKeys :: [PageKey]
+  -- ^ Every key the page has had, its current one ('pageKey') first: its
+  -- latest version is encrypted with an older one when nothing was saved
+  -- since its space's key was renewed.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

@@ -59,7 +59,7 @@ import Wiki.Core.User (Email (..), parseEmail)
 import Wiki.Core.Version (namedAuthor)
 import Wiki.Server.Opaque (storedRecordOf)
 import Wiki.Server.Password (newToken, tokenHash)
-import Wiki.Server.Storage (Storage, readServerSettings, reading, writing, writingEither)
+import Wiki.Server.Storage (Storage, readServerSettings, reading, writing, writingEither, writingTelling)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Renewal (noticeRenewals)
 import Wiki.Server.Storage.Rows (insertResetToken, micro, noPasswordToSet, providerNames, replaceRecord, resetsSince)
@@ -227,7 +227,7 @@ resetPassword :: Storage -> UTCTime -> ResetToken -> PasswordRecord -> IO (Eithe
 resetPassword st now token new = do
   configured <- providerNames <$> readServerSettings st
   let key = tokenHash token.text
-  writingEither st $
+  writingTelling st $
     usableReset now key >>= \case
       Just uid -> do
         let u = UserId uid
@@ -240,9 +240,9 @@ resetPassword st now token new = do
                 replaceRecord now u stored
                 -- A reset that retires the user's key pair makes the keys
                 -- of the encrypted spaces sealed to it due for renewal.
-                noticeRenewals (namedAuthor u "A password reset") now
+                told <- noticeRenewals (namedAuthor u "A password reset") now
                 runUpdate (update wikiDb.reset_tokens (\r -> r.used_at <-. val_ (Just (micro now))) (\r -> r.user_id ==. val_ uid &&. isNothing_ r.used_at))
-                pure (Right ())
+                pure (Right ((), told))
       Nothing -> pure (Left NotFound)
 
 -- | The user a reset link sets a password for, if the link works now:

@@ -22,6 +22,7 @@ module Test.Storage.Encrypted (spec) where
 
 import Data.Aeson (eitherDecode)
 import Data.ByteString qualified as BS
+import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
@@ -33,6 +34,8 @@ import Test.Storage.Fixture (demoArchive, ok, withPlaceIn)
 import Wiki.Api.Account (Account (..))
 import Wiki.Api.Encrypted
 import Wiki.Api.Notifications (Notifications (..))
+import Wiki.Api.Opaque (PasswordRecord (..))
+import Wiki.Api.Opaque qualified as Opaque
 import Wiki.Api.Vault (NewPublicKey (..), VaultChange (..))
 import Wiki.App.Backend (MonadWiki (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -54,8 +57,10 @@ import Wiki.Core.Vault
 import Wiki.Core.Version (VersionsQuery (..))
 import Wiki.Server.Accounts (createAccount)
 import Wiki.Server.Import (intoEncrypted)
+import Wiki.Server.Opaque (defaultStretch)
+import Wiki.Server.Reset (ResetMail (..), requestReset, resetPassword, setEmail, verifyEmail)
 import Wiki.Server.Storage
-import Wiki.Server.Storage.Rows (SitemapNode (..))
+import Wiki.Server.Storage.Rows (SitemapNode (..), StoredRecord (..))
 import Wiki.Server.Storage.Schema (KeyGrants (..), PageKeys (..), PageLinks (..), Pages (..), PublicKeys (..), SealedVersions (..), Vaults (..), WikiDb (..), wikiDb)
 import Wiki.Server.Vault (keyIdOf, storeVault)
 import Wiki.Server.WebAuthn (toBase64Url)
@@ -291,6 +296,41 @@ spec backing = describe "encrypted spaces in the storage" $ do
         -- The rotation lifts it.
         rotateAs st p.ada secret
         (\x -> x.rotationDue) <$> (ok =<< as p.ada (spaceEncryption secret.id)) `shouldReturn` False
+
+    -- The notices are published after the commit, as every notification
+    -- is, to a subscriber of the storage's (the server's live channel):
+    -- for a reader removed in the permissions, and for one whose password
+    -- is reset through a link, by the reset's own path.
+    it "publishes the notice to the administrators as it is made, for a reader removed and for a password reset" $ do
+      published <- newIORef []
+      let config = defaultConfig {notify = \told -> modifyIORef' published (<> told)}
+      withPeopleIn config backing $ \st p -> do
+        let as :: UserId -> StoredWiki IO a -> IO a
+            as u = runStoredWiki st (AsUser u)
+        secret <- encryptedOf st p
+        void (ok =<< as p.ada (createSealedPage secret.id (newPage (PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f") Nothing 'a')))
+        let readsAgain = do
+              void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+              e <- ok =<< as p.ada (spaceEncryption secret.id)
+              ok =<< as p.ada (grantSpaceKey secret.id (grantsAt e.keyId))
+            grantsAt k = NewGrants {keyId = k, grants = [newGrant p.bob p.bobKey]}
+            renewalsTo = (\told -> [u | (u, n) <- told, n.kind == KeyToRenew]) <$> readIORef published
+        readsAgain
+        void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View False))
+        renewalsTo `shouldReturn` [p.ada]
+        rotateAs st p.ada secret
+        -- Bob again, then his password reset through a link: his key pair
+        -- is retired, the key is due again, and Ada is told.
+        readsAgain
+        now <- getCurrentTime
+        Right (Just (_, token)) <- setEmail st now p.bob "bob@example.org"
+        verifyEmail st now token `shouldReturn` Right ()
+        mails <- requestReset st now "bob"
+        mail <- maybe (panic "no reset was mailed") pure (head mails)
+        record <- recordHere st p.bob (Password "a password set again") >>= either panic pure
+        resetPassword st now mail.token PasswordRecord {credential = p.bob.text, record = Opaque.Message record.record, stretch = defaultStretch} `shouldReturn` Right ()
+        (\x -> x.rotationDue) <$> (ok =<< as p.ada (spaceEncryption secret.id)) `shouldReturn` True
+        renewalsTo `shouldReturn` [p.ada, p.ada]
 
     it "takes a rotation that seals the new key to every reader and wraps every page key again, and keeps the old versions readable" $ withEncrypted backing $ \st p secret -> do
       let as :: UserId -> StoredWiki IO a -> IO a
@@ -571,7 +611,11 @@ data People = People
   }
 
 withPeople :: Backing -> (Storage -> People -> IO a) -> IO a
-withPeople backing action = withPlaceIn backing $ \at -> withStorage defaultConfig at $ \st -> do
+withPeople = withPeopleIn defaultConfig
+
+-- | 'withPeople', on a storage of this configuration.
+withPeopleIn :: Config -> Backing -> (Storage -> People -> IO a) -> IO a
+withPeopleIn config backing action = withPlaceIn backing $ \at -> withStorage config at $ \st -> do
   let person login = (\a -> a.user.id) <$> (ok =<< createAccount st login (T.toTitle login) (Just (Password "correct horse")))
   ada <- person "ada"
   bob <- person "bob"
@@ -585,10 +629,13 @@ withPeople backing action = withPlaceIn backing $ \at -> withStorage defaultConf
 
 -- | A storage with the people and Ada's encrypted space.
 withEncrypted :: Backing -> (Storage -> People -> Space -> IO a) -> IO a
-withEncrypted backing action = withPeople backing $ \st p -> do
+withEncrypted backing action = withPeople backing $ \st p -> encryptedOf st p >>= action st p
+
+-- | Ada's encrypted space, made.
+encryptedOf :: Storage -> People -> IO Space
+encryptedOf st p = do
   s <- privateSpace st p.ada "Secret"
-  encrypted <- ok =<< runStoredWiki st (AsUser p.ada) (encryptSpace s.id (encryptAs p.ada p.adaKey))
-  action st p encrypted
+  ok =<< runStoredWiki st (AsUser p.ada) (encryptSpace s.id (encryptAs p.ada p.adaKey))
 
 -- | A new private space of someone's.
 privateSpace :: Storage -> UserId -> Text -> IO Space

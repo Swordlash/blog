@@ -97,6 +97,26 @@ function wikiTestEncServer(request) {
     const s = [...wikiTestEncrypted.spaces.values()].find((x) => x.space.slug === decodeURIComponent(spaceAt[1]));
     return s && s.readers.includes(me) ? wikiTestEncJson(200, s.space) : null;
   }
+  // The space's permissions (Wiki.App.View.Permissions): each reader
+  // granted to view it, the administrator to administer it; a grant
+  // revoked there takes the reader out of the space's readers.
+  const grantsAt = path.match(/^spaces\/([^/]+)\/grants$/);
+  if (grantsAt) {
+    const s = wikiTestEncrypted.spaces.get(decodeURIComponent(grantsAt[1]));
+    if (s && request.method === "GET") {
+      const user = (u) => ({ id: u, login: u.replace(/^user-/, ""), displayName: u });
+      return wikiTestEncJson(200, {
+        grants: s.readers.map((u) => ({ space: s.space.id, subject: { tag: "SubjectUser", contents: u }, permission: s.admins.includes(u) ? "AdministerSpace" : "View" })),
+        users: s.readers.map(user),
+        groups: [],
+      });
+    }
+    if (s && request.method === "PUT") {
+      const sent = JSON.parse(request.body);
+      if (!sent.granted) s.readers = s.readers.filter((u) => u !== sent.subject.contents);
+      return { status: 204, body: "" };
+    }
+  }
   let m = path.match(/^account\/public-keys\/([^/]+)$/);
   if (m && request.method === "GET") {
     const k = wikiTestEncrypted.directory.get(decodeURIComponent(m[1]));
