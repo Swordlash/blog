@@ -3,7 +3,8 @@
 -- always what following every page's links now gives, however the tree
 -- changed; that the program fills it when it opens a database that has
 -- none, from before step 14 too; and that @wiki-server check@ reports a
--- row that breaks its rules.
+-- row that breaks its rules. Also what the check says of pages' kinds
+-- ("Wiki.Core.PageKind"), whose rows it reads in the same pass.
 module Test.Storage.Links (spec) where
 
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
@@ -27,7 +28,32 @@ import Wiki.Server.Storage.Rows (PageNode (..), deleteSettingsLike, linksVersion
 import Wiki.Server.Storage.Schema (PageLinks (..), WikiDb (..), nodeColumns, wikiDb)
 
 spec :: Backing -> Spec
-spec backing = describe "the table of links" $ do
+spec backing = do
+  links backing
+  kinds backing
+
+-- | What @wiki-server check@ says of pages' kinds: a page of a kind this
+-- program does not know, and a space's home page that is not a document.
+kinds :: Backing -> Spec
+kinds backing = describe "the pages' kinds, in the check" $ do
+  it "passes the demo, whose deck is a presentation" $
+    withDemoClosed backing $
+      \at -> checkDatabase at >>= (`shouldSatisfy` isRight)
+  it "names a page of a kind this program does not know, and a home page that is not a document" $
+    withDemoClosed backing $ \at -> do
+      script
+        at
+        [ "UPDATE pages SET kind = 'calendar' WHERE slug = 'hello-world';"
+        , "UPDATE pages SET kind = 'presentation' WHERE id IN (SELECT home_page FROM spaces WHERE slug = 'docs');"
+        ]
+      checkDatabase at >>= \case
+        Left (BrokenRecords lines') -> do
+          lines' `shouldSatisfy` any (\l -> "is of a kind this program does not know: calendar" `T.isInfixOf` l)
+          lines' `shouldSatisfy` any (\l -> "a home page is a document" `T.isInfixOf` l)
+        other -> expectationFailure ("the check said " <> show other)
+
+links :: Backing -> Spec
+links backing = describe "the table of links" $ do
   it "holds what following every page's links now gives, through random changes to pages and spaces" $
     for_ [1 .. 4 :: Word64] $ \seed -> withDemoAt backing $ \_ st -> do
       gen <- newIORef seed

@@ -703,7 +703,7 @@ checkConnection c = do
             | (u, login, disabled, password) <- columns
             ]
       links <- loadLinkEnds
-      pure (rootProblems spaces pages <> linkProblems pages links <> brokenCredentials accounts <> brokenLogins accounts, waysIn (providerNames kept) accounts)
+      pure (rootProblems spaces pages <> kindProblems spaces pages <> linkProblems pages links <> brokenCredentials accounts <> brokenLogins accounts, waysIn (providerNames kept) accounts)
     -- Each space with a home page has that page as the only one with no
     -- parent.
     rootProblems spaces pages =
@@ -712,6 +712,22 @@ checkConnection c = do
       , let stray = strayRoots s [p | p <- pages, p.space == s.id]
       , not (null stray)
       ]
+    -- Each page is of a kind this program knows ("Wiki.Core.PageKind"),
+    -- which a page of another kind (a newer program's, or a plugin's this
+    -- one lacks) is not: it would be shown as a document. And each
+    -- space's home page is a document.
+    kindProblems spaces pages =
+      [ "The page " <> p.title <> " (" <> p.id.text <> ") is of a kind this program does not know: " <> pageKindName p.kind <> "."
+      | p <- pages
+      , p.kind `notElem` knownKinds
+      ]
+        <> [ "The page " <> p.title <> " (" <> p.id.text <> ") is the home page of the space " <> s.name <> " and a " <> pageKindName p.kind <> ": a home page is a document."
+           | p <- pages
+           , p.kind /= Document
+           , p.kind `elem` knownKinds
+           , Just s <- [Map.lookup p.space spaces]
+           , s.homePage == Just p.id
+           ]
     -- Each link is on a page there is, and leads to a page there is or to
     -- none, and none is left pending ("Wiki.Server.Storage.Rows", "Links").
     linkProblems pages links =

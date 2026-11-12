@@ -154,33 +154,37 @@ readOf pages = PagesRead {pages, homes = Map.fromList [("s1", Just "p1"), ("s2",
 
 pagesUnitSpec :: Spec
 pagesUnitSpec = describe "the upgrade's rehearsal, the pages check" $ do
-  let first' = PageRead {space = "s1", page = "p1", title = "First", body = "# First\n\nText."}
-      second' = PageRead {space = "s1", page = "p2", title = "Second", body = "More."}
+  let first' = PageRead {space = "s1", page = "p1", title = "First", body = "# First\n\nText.", kind = "document"}
+      second' = PageRead {space = "s1", page = "p2", title = "Second", body = "More.", kind = "document"}
   it "passes when every page reads the same, in whatever order" $
     comparePages (readOf [first', second']) (readOf [second', first']) `shouldBe` Right ()
   it "names a page whose source changed, one whose title changed, one gone and one new" $ do
     let changed = first' {body = "# First\n\nOther text."}
         renamed = second' {title = "Second, renamed"}
-        third = PageRead {space = "s2", page = "p3", title = "Third", body = ""}
+        third = PageRead {space = "s2", page = "p3", title = "Third", body = "", kind = "document"}
         why = either identity (const "") (comparePages (readOf [first', second']) (readOf [changed, renamed, third]))
     why `shouldSatisfy` T.isInfixOf "page p1 (First) has another source"
     why `shouldSatisfy` T.isInfixOf "page p2 (Second) has another title: Second, renamed"
     why `shouldSatisfy` T.isInfixOf "page p3 (Third) is new"
     comparePages (readOf [first', second']) (readOf [first']) `shouldSatisfy` isLeft
+  it "names a page whose kind changed" $ do
+    let deck = first' {kind = "presentation"}
+        why = either identity (const "") (comparePages (readOf [deck, second']) (readOf [first', second']))
+    why `shouldSatisfy` T.isInfixOf "page p1 (First) is a document, not a presentation"
   it "tells the same page id in two spaces apart" $
-    comparePages (readOf [first']) (readOf [PageRead {space = "s2", page = first'.page, title = first'.title, body = first'.body}]) `shouldSatisfy` isLeft
+    comparePages (readOf [first']) (readOf [PageRead {space = "s2", page = first'.page, title = first'.title, body = first'.body, kind = "document"}]) `shouldSatisfy` isLeft
   it "names five differences and counts the rest" $ do
-    let pages = [PageRead {space = "s", page = show i, title = "t", body = "b"} | i <- [1 .. 8 :: Int]]
+    let pages = [PageRead {space = "s", page = show i, title = "t", body = "b", kind = "document"} | i <- [1 .. 8 :: Int]]
         why = either identity (const "") (comparePages (readOf pages) (readOf []))
     why `shouldSatisfy` T.isInfixOf "and 3 more"
   it "takes a new page only as the home page given to a space that had none" $ do
-    let home = PageRead {space = "s2", page = "p9", title = "Home", body = "Welcome to **Two**.\n"}
+    let home = PageRead {space = "s2", page = "p9", title = "Home", body = "Welcome to **Two**.\n", kind = "document"}
         given = PagesRead {pages = [first', home], homes = Map.fromList [("s1", Just "p1"), ("s2", Just "p9")]}
     comparePages (readOf [first']) given `shouldBe` Right ()
     -- Not a page that is not the space's home page, nor a new home page
     -- of a space that had one.
     comparePages (readOf [first']) given {homes = Map.fromList [("s1", Just "p1"), ("s2", Just "p8")]} `shouldSatisfy` isLeft
-    let elsewhere = PageRead {space = "s1", page = home.page, title = home.title, body = home.body}
+    let elsewhere = PageRead {space = "s1", page = home.page, title = home.title, body = home.body, kind = "document"}
     comparePages (readOf [first']) PagesRead {pages = [first', elsewhere], homes = Map.fromList [("s1", Just "p9"), ("s2", Nothing)]} `shouldSatisfy` isLeft
 
 homesUnitSpec :: Spec
