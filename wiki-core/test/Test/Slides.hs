@@ -7,9 +7,10 @@ import Data.Text qualified as T
 import Protolude
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
-import Test.QuickCheck (Gen, conjoin, elements, forAll, listOf, (===))
+import Test.QuickCheck (Gen, choose, conjoin, counterexample, elements, forAll, listOf, suchThat, (.&&.), (===), (==>))
 import Wiki.Core.Markdown.Ast
-import Wiki.Core.Markdown.Problems (Problem (..), kindProblems)
+import Wiki.Core.Markdown.Folds qualified as Folds
+import Wiki.Core.Markdown.Problems (Checked (..), Problem (..), checkText, kindProblems)
 import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slides
 
@@ -238,6 +239,124 @@ spec = describe "Slides" $ do
                    ]
       atStep 3 (showingStep 1 s) `shouldBe` atStep 3 s
 
+  describe "slideSpans" $ do
+    it "finds each slide's lines, its level and its title, and what comes before the first" $ do
+      let spans = slideSpans "Notes first.\n\n# Deck\n\nBy me.\n\n## One\n\nText.\n\n\nTwo\n---\n- a\n"
+      map (\sp -> (sp.from, sp.to, sp.level, sp.title)) spans
+        `shouldBe` [(1, 1, Nothing, ""), (3, 5, Just 1, "Deck"), (7, 9, Just 2, "One"), (12, 14, Just 2, "Two")]
+      fixedSlides spans `shouldBe` 2
+      map (slideAtLine spans) [1, 2, 6, 7, 15] `shouldBe` [Just 0, Just 0, Just 1, Just 2, Just 3]
+
+    it "opens a slide inside a heading spoiler, as 'deckOf' does, and none at a quoted heading" $
+      map (\sp -> sp.title) (slideSpans "# [[!spoiler]] A\n\n## Inside\n\n[[!style]]{theme=dark}\n\n# B\n\n> ## Quoted\n")
+        `shouldBe` ["A", "Inside", "B"]
+
+    prop "has the slides 'deckOf' has, with the same titles" $
+      forAll aDeck $ \source ->
+        let slides = (deck source).slides
+            blankDeck = case slides of
+              [s] -> isNothing s.title && null s.body && null s.notes
+              _ -> False
+         in [sp.title <$ sp.level | sp <- slideSpans source]
+              === if blankDeck then [] else [plainText . (.text) <$> s.title | s <- slides]
+
+    prop "are what the editor's check finds, from its one parse, for a presentation, and none for a document" $
+      forAll aDeck $ \source ->
+        (checkText Presentation source).slides === slideSpans source
+          .&&. (checkText Document source).slides === []
+
+    it "makes no slide of a look, footnotes or a pause alone before the first opener" $
+      map (\sp -> sp.title) (slideSpans "[[!style]]{theme=dark}\n\n[^n]: A note.\n\n[[!pause]]\n\n## A\n\nSee[^n].\n")
+        `shouldBe` ["A"]
+
+    prop "starts a slide where the editor's fold of a page's section, or of a heading spoiler's, of level one or two starts" $
+      forAll aDeck $ \source ->
+        let starts = map (\sp -> sp.from) (slideSpans source)
+            level f = case f.kind of
+              Folds.Section n -> Just n
+              Folds.HeadingSpoiler n -> Just n
+              Folds.BlockSpoiler -> Nothing
+         in [f.from | f <- Folds.folds source, Just n <- [level f], n <= 2, f.from `notElem` starts] === []
+
+    it "has no slides in a text with a carriage return" $
+      slideSpans "## A\r\n\r\nText\r\n\r\n## B\r\n" `shouldBe` []
+
+    it "fixes nothing but the preamble when the first opener is of level two" $
+      fixedSlides (slideSpans "## A\n\n# B\n") `shouldBe` 0
+
+    prop "cuts the text into chunks that are the text again" $
+      forAll aDeck $ \source ->
+        let (lead, chunks) = slideChunks source
+         in lead <> T.concat chunks === source
+
+  describe "moveSlide" $ do
+    it "moves a slide's whole text, blank lines included" $
+      moveSlide 1 0 "## A\n\nOne.\n\n## B\n\nTwo.\n" `shouldBe` "## B\n\nTwo.\n## A\n\nOne.\n\n"
+
+    it "ends the last slide's text with a line break when another comes after it, and adds nothing else" $
+      moveSlide 1 0 "## A\n\nOne.\n\n## B\nTwo." `shouldBe` "## B\nTwo.\n## A\n\nOne.\n\n"
+
+    it "puts a blank line before a setext title that would end the paragraph above it" $
+      moveSlide 1 2 "## A\n\nB\n---\n## C\nText." `shouldBe` "## A\n\n## C\nText.\n\nB\n---\n"
+
+    it "moves neither the preamble nor the title slide, nor any slide before them" $ do
+      let source = "Notes.\n\n# Deck\n\n## A\n\n## B\n"
+      map (\(i, j) -> moveSlide i j source) [(0, 2), (1, 3), (3, 1), (2, 0), (2, 2), (2, 4), (4, 2)]
+        `shouldBe` replicate 7 source
+      moveSlide 3 2 source `shouldBe` "Notes.\n\n# Deck\n\n## B\n## A\n\n"
+
+    it "moves nothing in a text with a carriage return" $
+      moveSlide 1 0 "## A\r\n\r\n## B\r\n" `shouldBe` "## A\r\n\r\n## B\r\n"
+
+    it "makes no move that would put slides in a fence or a box left open at the end" $ do
+      let source = "## A\n\nOne.\n\n## B\n\n```\nopen"
+      moveSlide 1 0 source `shouldBe` source
+      let boxed = "## A\n\nOne.\n\n## B\n\n[[!notes]]\nopen"
+      moveSlide 1 0 boxed `shouldBe` boxed
+      moveSlide 0 1 source `shouldBe` source
+
+    prop "puts the same slides in the new order, each slide's lines as they were, or makes no move" $
+      forAll aMove $ \(source, i, j) ->
+        let spans = slideSpans source
+            (lead, chunks) = slideChunks source
+            moved = moveSlide i j source
+            spansAfter = slideSpans moved
+            linesOf text sp = take (sp.to - sp.from + 1) (drop (sp.from - 1) (T.splitOn "\n" text))
+            key sp = (sp.level, sp.title)
+         in counterexample (show moved) $
+              if i < fixedSlides spans || j < fixedSlides spans || i == j || i >= length spans || j >= length spans || moved == source
+                then moved === source
+                else
+                  conjoin
+                    [ map key spansAfter === map key (reorderAt i j spans)
+                    , map (linesOf moved) spansAfter === map (linesOf source) (reorderAt i j spans)
+                    , T.filter (/= '\n') moved === T.filter (/= '\n') (lead <> T.concat (reorderAt i j chunks))
+                    ]
+
+    prop "leaves the preamble and the title slide where and as they were" $
+      forAll aMove $ \(source, i, j) ->
+        let spans = slideSpans source
+            fixed = take (fixedSlides spans) spans
+            kept = take (length fixed) (slideSpans (moveSlide i j source))
+            linesOf text sp = take (sp.to - sp.from + 1) (drop (sp.from - 1) (T.splitOn "\n" text))
+         in map (linesOf (moveSlide i j source)) kept === map (linesOf source) fixed
+              .&&. map (\sp -> sp.from) kept === map (\sp -> sp.from) fixed
+
+    prop "adds at most one line break, and one more before a setext title at each of the three places a move joins slides" $
+      forAll aMove $ \(source, i, j) ->
+        let added = T.length (moveSlide i j source) - T.length source
+            firstLine sp = fromMaybe "" (atMay (T.splitOn "\n" source) (sp.from - 1))
+            setextTitles = [sp | sp <- slideSpans source, isJust sp.level, not ("#" `T.isPrefixOf` T.stripStart (firstLine sp))]
+         in counterexample (show added) $
+              added >= 0 && added <= (if null setextTitles then 1 else 4)
+
+    prop "moves every slide of a deck whose blocks are all closed" $
+      forAll aClosedMove $ \(source, i, j) ->
+        let spans = slideSpans source
+            texts = snd (slideChunks source)
+         in i >= fixedSlides spans && j >= fixedSlides spans && i /= j && max i j < length spans && ordNub texts == texts
+              ==> moveSlide i j source /= source
+
   describe "options" $ do
     it "are Beamer's look on a wide slide unless the page says otherwise" $
       (deck "## A\n\n## B").options `shouldBe` DeckOptions {theme = Beamer, aspect = Wide}
@@ -337,3 +456,37 @@ piece = do
     , ("[[!pause]]", Nothing)
     , ("[[!notes]]\n## " <> word <> "\n[[/notes]]", Nothing)
     ]
+
+-- | A presentation's source to move slides in: what may come before the
+-- first opener, then the pieces of 'piece', apart by one, two or three
+-- line breaks, and with or without a line break at the end.
+aDeck :: Gen Text
+aDeck = do
+  preamble <- elements ["", "Notes first.\n\n", "\n\n"]
+  title <- elements ["", "# Deck\n\nBy me.\n\n"]
+  pieces <- listOf ((,) <$> piece <*> elements ["\n", "\n\n", "\n\n\n"])
+  end <- elements ["", "\n", "\n```\nleft open", "\n[[!notes]]\nleft open"]
+  pure (preamble <> title <> T.concat [t <> sep | ((t, _), sep) <- pieces] <> end)
+
+-- | A move in a deck of 'aDeck' whose blocks are all closed: no fence or
+-- box left open at its end.
+aClosedMove :: Gen (Text, Int, Int)
+aClosedMove = aMove `suchThat` (\(source, _, _) -> not ("left open" `T.isInfixOf` source))
+
+-- | A source with slides and two of its slides' indices, the first among
+-- the slides there are, the second one more, so that a move out of range
+-- comes up too.
+aMove :: Gen (Text, Int, Int)
+aMove = do
+  source <- aDeck
+  let count = length (slideSpans source)
+  i <- choose (0, max 0 count)
+  j <- choose (0, max 0 count)
+  pure (source, i, j)
+
+-- | A list with the element at one index taken out and put back at
+-- another, as 'moveSlide' moves slides.
+reorderAt :: Int -> Int -> [a] -> [a]
+reorderAt i j xs = take j rest <> take 1 (drop i xs) <> drop j rest
+  where
+    rest = take i xs <> drop (i + 1) xs

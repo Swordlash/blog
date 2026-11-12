@@ -96,6 +96,15 @@ module Wiki.Core.Slides
     -- * Rendering
   , RenderedSlide (..)
   , renderDeck
+
+    -- * Slides in the source, for the editor
+  , SlideSpan (..)
+  , slideSpans
+  , slideSpansParsed
+  , fixedSlides
+  , slideAtLine
+  , moveSlide
+  , slideChunks
   )
 where
 
@@ -533,3 +542,160 @@ slideScheme = \case
   Dark -> DarkScheme
   Beamer -> LightScheme
   Light -> LightScheme
+
+----------------------------------------------------------------------
+-- Slides in the source
+
+-- | 'SlideSpan' is a slide as the editor finds it in a presentation's
+-- source: its lines, from 1 and both included, as CodeMirror counts them
+-- (@\\n@ alone ends a line), the level of its opener ('Nothing' for what
+-- comes before the first opener), and its title's text. The last line is
+-- the last that is not blank before the next slide's first.
+data SlideSpan = SlideSpan
+  { from :: Int
+  , to :: Int
+  , level :: Maybe Int
+  , title :: Text
+  }
+  deriving stock (Eq, Show)
+
+-- | Forcing a 'SlideSpan' forces its lines, level and title, so that the
+-- editor can find the slides on a worker thread.
+instance NFData SlideSpan where
+  rnf sp = rnf (sp.from, sp.to, sp.level, sp.title)
+
+-- | The slides of a presentation's source, in order, as the editor lists
+-- and folds them: one for each opener among the blocks 'deckLevel' gives
+-- ('isOpener'), read from 'parseDeckSpans', so that the editor's slides
+-- are those 'deckOf' cuts; and, first, what comes before the first
+-- opener, when 'deckOf' makes a slide of it. A setext heading's slide
+-- starts at its title's first line. None for a text with a carriage
+-- return, whose lines the parser and CodeMirror count differently (a
+-- @\\r@ ends a line for the one and not for the other): the editor then
+-- has no slides to fold or move.
+slideSpans :: Text -> [SlideSpan]
+slideSpans source = slideSpansParsed source (either (const []) (map (first (fmap fst))) (parseDeckSpans source))
+
+-- | 'slideSpans' of a text the caller has parsed already, as
+-- 'parseDeckSpans' or 'Wiki.Core.Markdown.Ast.parseWithLinesMarkersAndDeck'
+-- gives its blocks, each with its first line: one parse serves the
+-- editor's check of the text and its slides.
+slideSpansParsed :: Text -> [(Maybe Int, Block)] -> [SlideSpan]
+slideSpansParsed source spans
+  | T.any (== '\r') source = []
+  | otherwise =
+      let openers = [(l, lvl, plainText xs) | (Just l, Heading lvl _ xs) <- deckLevel spans, lvl <= 2]
+          starts = [l | (l, _, _) <- openers]
+          ends = map (subtract 1) (drop 1 starts) <> [lineCount]
+          -- The slide of what comes before the first opener, when
+          -- 'deckOf' makes one: not of a look, footnotes or pauses alone.
+          untitled = case (deckOf (map snd spans)).slides of
+            s : _ -> isNothing s.title && not (null s.body && null s.notes)
+            [] -> False
+          preamble = [SlideSpan {from = 1, to = lastNonBlank 1 (maybe lineCount (subtract 1) (head starts)), level = Nothing, title = ""} | untitled]
+       in preamble <> [SlideSpan {from = l, to = lastNonBlank l e, level = Just lvl, title} | ((l, lvl, title), e) <- zip openers ends]
+  where
+    sourceLines = T.splitOn "\n" source
+    lineCount = length sourceLines
+    lineAt n = fromMaybe "" (atMay sourceLines (n - 1))
+    blank n = T.all isSpace (lineAt n)
+    lastNonBlank start n
+      | n > start && blank n = lastNonBlank start (n - 1)
+      | otherwise = n
+
+-- | How many of a presentation's first slides stay where they are when
+-- slides are moved: what comes before the first opener, and the title
+-- slide, a level-one opener that is the first.
+fixedSlides :: [SlideSpan] -> Int
+fixedSlides spans = length (takeWhile fixed (zip [0 :: Int ..] spans))
+  where
+    firstOpener = length (takeWhile (isNothing . (.level)) spans)
+    fixed (i, sp) = isNothing sp.level || (i == firstOpener && sp.level == Just 1)
+
+-- | The index of the slide a line is on, if any: the last slide that
+-- starts on or before it.
+slideAtLine :: [SlideSpan] -> Int -> Maybe Int
+slideAtLine spans line = lastMay [i | (i, sp) <- zip [0 ..] spans, sp.from <= line]
+
+-- | A presentation's source as its slides' chunks ('slideSpans'): the
+-- text before the first slide (blank lines, when no slide starts on the
+-- first line), then each slide's text from its first line up to the next
+-- slide's first, the blank lines between them included. Their
+-- concatenation is the text, byte for byte. A text without slides is one
+-- chunk.
+slideChunks :: Text -> (Text, [Text])
+slideChunks source = case slideSpans source of
+  [] -> (source, [])
+  spans ->
+    let offsets = map lineStart (map (.from) spans) <> [T.length source]
+        before = T.take (fromMaybe 0 (head offsets)) source
+        chunk a b = T.take (b - a) (T.drop a source)
+     in (before, zipWith chunk offsets (drop 1 offsets))
+  where
+    -- The character the line starts at.
+    lineStart n = sum (map ((+ 1) . T.length) (take (n - 1) (T.splitOn "\n" source)))
+
+-- | Move a presentation's slide, by its index in 'slideSpans', to be the
+-- slide at another index: its whole text, from its first line up to the
+-- next slide's, blank lines included, and nothing else, so that every
+-- slide's text is the same, only in another order. The slides that stay
+-- first ('fixedSlides') do not move, and none moves before them: a move
+-- that would is no move. A text with no slides, or an index out of range,
+-- is left as it is.
+--
+-- Line breaks are added where the slides would otherwise run together,
+-- and nowhere else. The last slide's text, which may end without one,
+-- gets a line break when another slide comes after it. A slide whose
+-- title is a setext heading (@Title@, then @---@) can still be read as the
+-- end of the paragraph or the list above it: when the moved text does not
+-- have the same slides in the new order, a blank line goes before each
+-- such slide that the move put after another and that has none
+-- ('joined'). When even that does not give the same slides (a last slide
+-- with a fence or a box left open, which would take in the slides moved
+-- after it), the move is no move.
+moveSlide :: Int -> Int -> Text -> Text
+moveSlide i j source
+  | i == j || i < fixed || j < fixed || i >= count || j >= count = source
+  | sameSlides plain = plain
+  | sameSlides apart = apart
+  | otherwise = source
+  where
+    spans = slideSpans source
+    count = length spans
+    fixed = fixedSlides spans
+    (before, chunks) = slideChunks source
+    order = reorder [0 .. count - 1]
+    placed = [(k, c) | k <- order, Just c <- [atMay chunks k]]
+    plain = before <> joined False placed
+    apart = before <> joined True placed
+    -- The same slides, in the new order: each with its level, its title
+    -- and its lines as they were.
+    sameSlides text = map (written text) (slideSpans text) == map (written source) (reorder spans)
+    written text sp = (sp.level, sp.title, take (sp.to - sp.from + 1) (drop (sp.from - 1) (T.splitOn "\n" text)))
+    reorder :: [a] -> [a]
+    reorder xs = case atMay xs i of
+      Nothing -> xs
+      Just x -> let rest = take i xs <> drop (i + 1) xs in take j rest <> [x] <> drop j rest
+
+-- | Slides' texts, each with its index in the text before the move, one
+-- after the other, each but the last ending with a line break and, when
+-- asked, with a blank line before a slide whose title is a setext
+-- heading, where the move put it after another slide than before
+-- ('moveSlide').
+joined :: Bool -> [(Int, Text)] -> Text
+joined apartSetext = \case
+  [] -> ""
+  [(_, c)] -> c
+  (k, c) : next@(k', c') : rest ->
+    let ended = if "\n" `T.isSuffixOf` c then c else c <> "\n"
+        moved = k' /= k + 1
+        apart = if apartSetext && moved && setext c' && not (endsBlank ended) then ended <> "\n" else ended
+     in apart <> joined apartSetext (next : rest)
+  where
+    -- A slide's text starts with its opener's first line: an ATX heading
+    -- starts with a hash after at most three spaces, a setext one not.
+    setext c = not ("#" `T.isPrefixOf` T.dropWhile (== ' ') (T.take 4 c))
+    -- Whether a text that ends with a line break has a blank line last.
+    endsBlank t = case reverse (T.splitOn "\n" t) of
+      _ : lastLine : _ : _ -> T.all isSpace lastLine
+      _ -> False

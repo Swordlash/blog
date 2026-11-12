@@ -132,6 +132,9 @@ data Checked = Checked
   { problems :: [Problem]
   , islands :: Map IslandKey IslandPlace
   , folds :: [Fold]
+  , slides :: [Slides.SlideSpan]
+  -- ^ A presentation's slides, as its editor lists them
+  -- ('Slides.slideSpans'); none for a document.
   }
   deriving stock (Eq, Show)
 
@@ -143,6 +146,7 @@ instance NFData Checked where
     rnf [(p.from, p.to, p.kind, p.severity, p.message) | p <- c.problems]
       `seq` rnf [(k.source, k.occurrence, p.from, p.to, p.kind) | (k, p) <- Map.toList c.islands]
       `seq` rnf c.folds
+      `seq` rnf c.slides
 
 instance NFData ProblemKind where
   rnf k = k `seq` ()
@@ -151,14 +155,16 @@ instance NFData Severity where
   rnf k = k `seq` ()
 
 -- | The problems in a page's text, the parser's ('parserProblems') and
--- those of its kind ('kindProblems'), the places of its islands, and its
--- spoilers' folds, from one parse of the text.
+-- those of its kind ('kindProblems'), the places of its islands, its
+-- spoilers' folds and a presentation's slides, from one parse of the
+-- text.
 checkText :: PageKind -> Text -> Checked
 checkText pageKind source =
   Checked
     { problems = sort (problemsParsed parsed <> kindProblemsParsed pageKind (deck, markers))
     , islands = islandsIn source located
     , folds = filter isSpoiler (foldsParsed source parsed)
+    , slides = if pageKind == Presentation then Slides.slideSpansParsed source deck else []
     }
   where
     (located, markers, deck) = either (const ([], [], [])) identity (A.parseWithLinesMarkersAndDeck source)
