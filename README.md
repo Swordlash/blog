@@ -784,12 +784,19 @@ deletes the spaces' keys at the end. Meanwhile each page reads the way it
 did until its turn, and nothing else can be written in these spaces; a
 conversion that stops (the tab closed, a refusal) is continued from the
 space's permissions by an administrator of the space who holds its key
-("Continue", with the pages left). A page encrypted gets a new address
+("Continue", with the pages left), or turned back ("Stop and turn
+back"): the pages converted so far are converted back, the others stay as
+they are, and the space ends as it began. A page that stops a conversion
+is named, with why, so that it can be mended (shortened, an attachment
+deleted) before it continues. A page encrypted gets a new address
 made of random letters, since its old one spelled its title; its link by
-id (`/l/<id>`) keeps working. What cannot be converted is said before
+id (`/l/<id>`) keeps working, and it keeps that address if the
+encryption is turned back. What cannot be converted is said before
 anything starts: templates, a blog, a public space, the wiki's front page,
-an attachment on the web, someone else's draft of a page, and, to turn it
-off, a parent space that is encrypted too. Afterwards the plain text is
+an attachment on the web, someone else's draft of a page, a version whose
+title is longer than 6,128 bytes or whose text is longer than 6,291,440
+bytes (what an encrypted page's ciphertext holds; a plain page has no such
+limit), and, to turn it off, a parent space that is encrypted too. Afterwards the plain text is
 gone from the wiki's database: SQLite's files are written over where it
 was, and its log emptied; on PostgreSQL old rows stay in the database's
 files until it is vacuumed. **Backups made before keep the plain text**,

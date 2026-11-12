@@ -378,6 +378,10 @@ data EncryptedApi form mode = EncryptedApi
   -- ^ Start turning the encryption of a space, and of the spaces below
   -- it, off: every page reads encrypted until the caller's browser commits
   -- it decrypted; at the end the spaces' keys and grants are deleted.
+  , reverseConversion :: mode :- "spaces" :> Capture "space" SpaceId :> "conversion" :> "reverse" :> Post '[JSON] ConversionInfo
+  -- ^ Turn the conversion the space is in round ("Stop and turn back"):
+  -- it goes the other way over the pages converted so far, and the space
+  -- ends as it began.
   , stageSealed :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "sealed" :> ReqBody '[JSON] StagedSealed :> PostNoContent
   -- ^ Stage ciphertexts of a page while its space is encrypted.
   , stagePlain :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "plain" :> ReqBody '[JSON] StagedPlain :> PostNoContent

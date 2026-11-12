@@ -43,7 +43,6 @@ where
 
 import Data.Map.Strict qualified as Map
 import Data.Row (Empty)
-import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -86,6 +85,9 @@ data State = State
   , problem :: Maybe WikiError
   , confirming :: Bool
   -- ^ "Encrypt this space…" was pressed, and waits for its confirmation.
+  , stopping :: Bool
+  -- ^ "Stop" was pressed while this browser converts the space's pages:
+  -- it stops once the page it is on is done.
   , confirmingOff :: Bool
   -- ^ "Turn encryption off…" was pressed, and waits for its confirmation.
   , conversionInfo :: Maybe ConversionInfo
@@ -106,6 +108,8 @@ data Action
   | AskDecrypt Bool
   | Decrypt
   | Continue
+  | Stop
+  | TurnBack
   | ChooseWho Int
   | ChooseWhat Int
   | Grant
@@ -119,7 +123,7 @@ component =
           -- Read here when the backend answers at once, as the other views
           -- read their data; otherwise in 'Initialize'.
           loaded <- maybe Loading (either Failed Ready) <$> atOnce (spaceAccess input.space.id)
-          pure State {input, loaded, who = 0, what = View, busy = False, problem = Nothing, confirming = False, confirmingOff = False, conversionInfo = Nothing, converting = Nothing}
+          pure State {input, loaded, who = 0, what = View, busy = False, problem = Nothing, confirming = False, stopping = False, confirmingOff = False, conversionInfo = Nothing, converting = Nothing}
       , render
       , eval =
           H.mkEval
@@ -169,10 +173,13 @@ component =
             <div class="permissions-conversion">
               {% for n in toList st.converting %}
                 <p class="permissions-intro conversion-progress" role="status">{{ conversionWord }}: {{ pagesLeft n }} left. Keep this page open until it is done.</p>
+                <button type="button" class="conversion-stop" disabled={{ st.stopping }} onClick={{ const Stop }}>Stop</button>
               {% end %}
               {% if isNothing st.converting %}
-                <p class="permissions-intro conversion-stopped">{{ conversionWord }} stopped, with {{ pagesLeft leftNow }} left: nothing else can be written in this space until it is done. An administrator of the space who holds its key continues it here.</p>
+                <p class="permissions-intro conversion-stopped">{{ conversionWord }} stopped, with {{ pagesLeft leftNow }} left: nothing else can be written in this space until it is done. An administrator of the space who holds its key continues it here, or turns it back.</p>
+                <p class="permissions-intro conversion-back-explained">Turning it back converts the pages done so far back, and leaves the others as they are: the space ends as it began. Pages encrypted so far keep the new addresses they got; their links by id keep working.</p>
                 <button type="button" class="primary conversion-continue" disabled={{ st.busy }} onClick={{ const Continue }}>Continue</button>
+                <button type="button" class="conversion-reverse" disabled={{ st.busy }} onClick={{ const TurnBack }}>Stop and turn back</button>
               {% end %}
             </div>
           {% end %}
@@ -360,18 +367,21 @@ component =
         change (void <$> setSpaceSealed space.id (not space.sealed))
       AskEncrypt asking -> modify (\st -> st {confirming = asking})
       -- A space with nothing written in it is encrypted at once; one that
-      -- has pages, which the server refuses so, page by page.
+      -- has pages, page by page. The server says which it is
+      -- ('ConversionInfo''s @nothingWritten@).
       Encrypt -> do
         space <- gets (\st -> st.input.space)
+        untouched <- gets (\st -> maybe False (\i -> i.nothingWritten) st.conversionInfo)
         modify (\st -> st {busy = True, problem = Nothing})
-        encryptSpace space.id >>= \case
-          Right _ -> modify (\st -> st {confirming = False}) >> H.raise (Changed Nothing)
-          Left (Conflict why)
-            | "nothing written in it" `T.isInfixOf` why ->
-                startConversion space.id Encrypting >>= \case
-                  Left e -> modify (\st -> st {busy = False, problem = Just e})
-                  Right info -> modify (\st -> st {confirming = False}) >> convertAll (length info.left)
-          Left e -> modify (\st -> st {busy = False, problem = Just e})
+        if untouched
+          then
+            encryptSpace space.id >>= \case
+              Right _ -> modify (\st -> st {confirming = False}) >> H.raise (Changed Nothing)
+              Left e -> modify (\st -> st {busy = False, problem = Just e})
+          else
+            startConversion space.id Encrypting >>= \case
+              Left e -> modify (\st -> st {busy = False, problem = Just e})
+              Right info -> modify (\st -> st {confirming = False}) >> convertAll (length info.left)
       AskDecrypt asking -> modify (\st -> st {confirmingOff = asking})
       Decrypt -> do
         space <- gets (\st -> st.input.space)
@@ -382,6 +392,16 @@ component =
       Continue -> do
         modify (\st -> st {busy = True, problem = Nothing})
         convertAll =<< gets (\st -> maybe 0 (\i -> length i.left) st.conversionInfo)
+      Stop -> modify (\st -> st {stopping = True})
+      -- The conversion goes the other way over the pages done so far.
+      TurnBack -> do
+        space <- gets (\st -> st.input.space)
+        modify (\st -> st {busy = True, problem = Nothing})
+        reverseConversion space.id >>= \case
+          Left e -> modify (\st -> st {busy = False, problem = Just e})
+          Right info
+            | isNothing info.running -> H.raise (Changed Nothing)
+            | otherwise -> convertAll (length info.left)
       ChooseWho n -> modify (\st -> st {who = n})
       ChooseWhat n -> for_ (atMay permissions n) $ \p -> modify (\st -> st {what = p})
       Grant ->
@@ -410,7 +430,10 @@ component =
       sid <- gets (\st -> st.input.space.id)
       convertNext sid >>= \case
         Right 0 -> modify (\st -> st {converting = Nothing}) >> H.raise (Changed Nothing)
-        Right n -> convertAll n
+        Right n ->
+          gets (\st -> st.stopping) >>= \case
+            True -> modify (\st -> st {converting = Nothing, stopping = False}) >> H.raise (Changed Nothing)
+            False -> convertAll n
         Left e -> do
           modify (\st -> st {converting = Nothing, busy = False, problem = Just e})
           H.raise (Changed Nothing)

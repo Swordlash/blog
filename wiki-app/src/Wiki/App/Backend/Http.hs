@@ -2810,6 +2810,13 @@ decryptOnePage sid k pid =
     unless (same (\a -> a.id) staged.plain.attachments metas && all (\(a, _) -> isJust (lookup' a.id staged.blobs)) files) $ throwError (notAsStaged "attachments")
     void (ExceptT (write (endpoints.encrypted.commit pid ConversionCommit {digest = staged.digest})))
 
+-- | What a refusal says, for a reader.
+wikiErrorText :: WikiError -> Text
+wikiErrorText = \case
+  Invalid t -> t
+  Conflict t -> t
+  other -> show other
+
 -- | The value of a key in a list of pairs.
 lookup' :: (Eq k) => k -> [(k, v)] -> Maybe v
 lookup' k = fmap snd . find (\(x, _) -> x == k)
@@ -2841,9 +2848,17 @@ convertNextPage sid = runExceptT $ do
       current <- ExceptT (send (endpoints.encrypted.space next.space))
       when (way == Encrypting) (void (lift (openKey Refresh next.space current.keyId)))
       e <- ExceptT (send (endpoints.encrypted.space next.space))
-      ExceptT $ case way of
+      converted <- lift $ case way of
         Encrypting -> encryptOnePage next.space e.keyId next.page
         Decrypting -> decryptOnePage next.space e.keyId next.page
+      -- A page that stops the conversion is named, with why, so that it
+      -- can be mended (shortened, an attachment deleted) or the
+      -- conversion turned back.
+      for_ (leftToMaybe converted) $ \why -> do
+        at <- lift (send (endpoints.pages.location next.page))
+        name <- lift (spaceNameOf next.space)
+        let path = either (const next.page.text) (\l -> T.intercalate "/" (map slugText l.page)) at
+        throwError (Invalid ("The page " <> (if T.null path then "at the top" else path) <> " of " <> name <> " was not converted: " <> wikiErrorText why <> " Mend it and continue, or stop and turn back."))
       lift forgetFound
       when (way == Decrypting) (lift (forgetSealedPage next.page))
       left <- ExceptT (send (endpoints.encrypted.conversion sid))
@@ -2930,3 +2945,4 @@ instance (MonadIO m) => MonadEncryption (HttpWiki m) where
   conversionOf sid = send (endpoints.encrypted.conversion sid)
   startConversion = startConversionOf
   convertNext = convertNextPage
+  reverseConversion sid = write (endpoints.encrypted.reverseConversion sid) <* freshSpaces

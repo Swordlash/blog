@@ -38,4 +38,12 @@ title: Encrypted spaces: a decrypted export, and encrypting a space with pages
   ```
 
   Each encrypted page gets a new address; its link by id keeps working.
-  Backups made before keep the plain text until they are pruned.
+  Backups made before keep the plain text until they are pruned. A
+  conversion can always be turned back: **Stop and turn back** converts
+  the pages done so far back, and the space ends as it began. A page that
+  stops a conversion is named, with why:
+
+  ```text
+  The page p-3f2a9c of Plans was not converted: … Mend it and continue,
+  or stop and turn back.
+  ```

@@ -322,6 +322,10 @@ data ConversionInfo = ConversionInfo
   -- ^ The pages not converted yet, the oldest first.
   , cannotEncrypt :: [Text]
   , cannotDecrypt :: [Text]
+  , nothingWritten :: Bool
+  -- ^ Whether the space has nothing written in it, its home page as it
+  -- was made: such a space is encrypted at once
+  -- ('Wiki.Api.EncryptedApi''s @encrypt@), any other by a conversion.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

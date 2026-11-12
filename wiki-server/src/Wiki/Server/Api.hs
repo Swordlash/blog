@@ -845,6 +845,7 @@ handlers env caller =
           , conversion = wiki . conversionInfo
           , startEncrypting = \s body -> wiki (startEncrypting s body)
           , startDecrypting = wiki . startDecrypting
+          , reverseConversion = wiki . reverseConversion
           , stageSealed = \p body -> wiki (stageSealed p body) $> NoContent
           , stagePlain = \p body -> wiki (stagePlain p body) $> NoContent
           , stageBytes = \p a u -> wiki (stageBytesFile p a u.payload) $> NoContent

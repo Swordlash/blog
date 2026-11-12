@@ -136,6 +136,13 @@ class (Monad m) => MonadEncryption m where
   default convertNext :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> m (Either WikiError Int)
   convertNext = lift . convertNext
 
+  -- | Turn the conversion the space is in round ("Stop and turn back"):
+  -- it goes the other way over the pages converted so far, which
+  -- 'convertNext' then converts back, and the space ends as it began.
+  reverseConversion :: SpaceId -> m (Either WikiError ConversionInfo)
+  default reverseConversion :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> m (Either WikiError ConversionInfo)
+  reverseConversion = lift . reverseConversion
+
 -- | A component's handlers reach the backend through its monad.
 instance (MonadEncryption m) => MonadEncryption (HalogenM st act slots output m)
 

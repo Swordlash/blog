@@ -15,6 +15,8 @@ module Wiki.Server.Storage.Conversion
   , pageConverted
   , setPageConverted
   , clearConverted
+  , flipConverted
+  , oversizedIn
   , unconvertedIn
   , draftsIn
   , templatesIn
@@ -51,13 +53,14 @@ module Wiki.Server.Storage.Conversion
   )
 where
 
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime)
 import Database.Beam (all_, delete, filter_, in_, insert, insertValues, join_, runDelete, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (&&.), (<-.), (==.))
 import Database.Beam qualified as Beam
 import Protolude
-import Wiki.Core.Encrypted (SealedAnchor (..), SealedComment (..), SealedContent, SealedMeta (..))
+import Wiki.Core.Encrypted (SealedAnchor (..), SealedComment (..), SealedContent, SealedMeta (..), maxBodyCiphertext, maxTitleCiphertext)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Space (Conversion, conversionName)
 import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), Sealed (..))
@@ -96,6 +99,42 @@ setPageConverted pid = runUpdate (update wikiDb.pages (\p -> p.converted <-. val
 -- | Every page of a space unmarked, as no conversion runs.
 clearConverted :: (Backend be) => SpaceId -> Db be ()
 clearConverted sid = runUpdate (update wikiDb.pages (\p -> p.converted <-. val_ False) (\p -> p.space_id ==. val_ sid.text))
+
+-- | Every page of a space marked the other way: a conversion turned round
+-- converts back the pages it converted, and has done the others.
+flipConverted :: (Backend be) => SpaceId -> Db be ()
+flipConverted sid = runUpdate (update wikiDb.pages (\p -> p.converted <-. Beam.not_ (Beam.current_ p.converted)) (\p -> p.space_id ==. val_ sid.text))
+
+-- | The pages of these spaces a version of which is too large to be
+-- encrypted, each with what is too large: a title longer than
+-- 'maxTitleBytes', or a text longer than 'maxBodyBytes', in UTF-8. The
+-- plain wiki has no such limit; the ciphertexts do ('maxTitleCiphertext',
+-- 'maxBodyCiphertext'). Every version's texts are read, once, as a
+-- conversion's start does.
+oversizedIn :: (Backend be) => [SpaceId] -> Db be [(PageId, Text)]
+oversizedIn sids
+  | null sids = pure []
+  | otherwise = do
+      rows <- runSelectReturningList . select $ do
+        v <- all_ wikiDb.page_versions
+        _ <- join_ wikiDb.pages (\p -> p.id ==. v.page_id &&. p.space_id `in_` map (\x -> val_ x.text) sids)
+        pure (v.page_id, v.title, v.body)
+      let sized = Map.fromListWith (\(a, b) (c, d) -> (max a c, max b d)) [(r, (BS.length (encodeUtf8 t), BS.length (encodeUtf8 b))) | (r, t, b) <- rows]
+      pure
+        [ (PageId pid, what)
+        | (pid, (title, body)) <- Map.toList sized
+        , let what
+                | title > maxTitleBytes = "a title of " <> show title <> " bytes, more than the " <> show maxTitleBytes <> " an encrypted page's title holds"
+                | otherwise = "a text of " <> show body <> " bytes, more than the " <> show maxBodyBytes <> " an encrypted page's text holds"
+        , title > maxTitleBytes || body > maxBodyBytes
+        ]
+
+-- | The longest title, and the longest text, in bytes of UTF-8, whose
+-- ciphertext (the bytes, AES-GCM's 16-byte tag, in base64url) is within
+-- 'maxTitleCiphertext' and 'maxBodyCiphertext'.
+maxTitleBytes, maxBodyBytes :: Int
+maxTitleBytes = (maxTitleCiphertext * 3) `div` 4 - 16
+maxBodyBytes = (maxBodyCiphertext * 3) `div` 4 - 16
 
 -- | The pages of these spaces not converted yet, each with its space, the
 -- oldest first.

@@ -193,6 +193,7 @@ module Wiki.Server.Storage
   , stageBytesFile
   , stagedPage
   , commitConverted
+  , reverseConversion
 
     -- * Accounts
   , PasswordLink (..)
@@ -1963,6 +1964,10 @@ commitConverted pid commit = do
       when (ended && isJust st.lock) (collectGarbage c st.place.dataDir)
   pure (fst <$> result)
 
+-- | Turn a conversion round.
+reverseConversion :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError E.ConversionInfo)
+reverseConversion = run Writes . reverseConversionTx
+
 -- | The pages of an encrypted space, with their encrypted titles.
 sealedPages :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError [SealedSummary])
 sealedPages = run Reads . sealedPagesTx
@@ -3350,24 +3355,9 @@ encryptSpaceTx sid req = do
   when (isJust s.owner || s.personalContainer || s.blog) $ failWith (Conflict "A personal space or a blog cannot be encrypted.")
   when (any (\x -> x.parent == Just sid) (Map.elems ctx.spaces)) $
     failWith (Conflict "A space with subspaces cannot be encrypted yet: only a space with nothing written in it can.")
-  nodes <- db (pageNodes sid)
-  untouched <- case nodes of
-    [] -> pure Nothing
-    [home] | s.homePage == Just home.id -> do
-      (versions, _) <- db (loadVersionsPage home.id Nothing 1)
-      page <- findPage home.id
-      comments <- Map.findWithDefault 0 home.id . Map.fromList <$> db (loadCommentCounts sid)
-      -- The page the space was created with ('withHomePage'), never
-      -- edited: the starter's title and text, one version. Its version
-      -- names the space's creator as author, as a page they wrote would,
-      -- so the text is what tells the two apart. A page someone wrote and
-      -- made the home page is not deleted, even with one version: the
-      -- space is then refused, as one with content.
-      let generated = page.title == homeTitle && isHomeBody page.body
-      if generated && versions == 1 && null page.attachments && comments == 0 then pure (Just home.id) else pure Nothing
-    _ -> pure Nothing
-  unless (null nodes || isJust untouched) $
-    failWith (Conflict "Only a space with nothing written in it can be encrypted: its pages are plain text, which the server has read. Make a new private space and encrypt it before writing.")
+  untouched <-
+    nothingWrittenIn s
+      >>= maybe (failWith (Conflict "Only a space with nothing written in it can be encrypted at once: one whose pages are plain text is encrypted page by page, by a conversion.")) pure
   me <- maybe (failWith Forbidden) pure ctx.author
   checkGrantParts req.keyId req.grant.enc req.grant.sealed
   keys <- db (currentPublicKeys [me])
@@ -3390,6 +3380,26 @@ encryptSpaceTx sid req = do
   requireEncryptionRule sid
   record "space.encrypted" (spaceSubject s') [("key", req.keyId.text)]
   pure s'
+
+-- | Whether a space has nothing written in it: 'Just' its untouched home
+-- page, the page the space was created with ('withHomePage'), never
+-- edited (the starter's title and text, one version, no attachment or
+-- comment), or 'Just' 'Nothing' for a space with no page; 'Nothing' for a
+-- space with anything else. Its version names the space's creator as
+-- author, as a page they wrote would, so the text is what tells the two
+-- apart: a page someone wrote and made the home page is not untouched,
+-- even with one version.
+nothingWrittenIn :: Space -> Tx (Maybe (Maybe PageId))
+nothingWrittenIn s =
+  db (pageNodes s.id) >>= \case
+    [] -> pure (Just Nothing)
+    [home] | s.homePage == Just home.id -> do
+      (versions, _) <- db (loadVersionsPage home.id Nothing 1)
+      page <- findPage home.id
+      comments <- Map.findWithDefault 0 home.id . Map.fromList <$> db (loadCommentCounts s.id)
+      let generated = page.title == homeTitle && isHomeBody page.body
+      pure (if generated && versions == 1 && null page.attachments && comments == 0 then Just (Just home.id) else Nothing)
+    _ -> pure Nothing
 
 -- | A subspace of an encrypted space, made encrypted
 -- ('Wiki.Api.EncryptedApi''s @subspace@): checked as 'createSpaceTx'
@@ -4676,11 +4686,12 @@ conversionInfoTx sid = do
       root <- conversionRootOf s
       covered <- filter (\x -> isJust x.conversion) <$> subtreeOf root.id
       left <- db (unconvertedIn (map (\x -> x.id) (filter viewable covered)))
-      pure E.ConversionInfo {running = Just running, root = (\x -> x.id) <$> mfilter viewable (Just root), spaces = map (\x -> x.id) (filter viewable covered), left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = []}
+      pure E.ConversionInfo {running = Just running, root = (\x -> x.id) <$> mfilter viewable (Just root), spaces = map (\x -> x.id) (filter viewable covered), left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False}
     Nothing -> do
       tree <- subtreeOf sid
       enc <- if isJust s.encryption then pure [] else encryptRefusals s c tree
       dec <- if isJust s.encryption then decryptRefusals s c tree else pure []
+      untouched <- if isJust s.encryption || length tree > 1 then pure False else isJust <$> nothingWrittenIn s
       pure
         E.ConversionInfo
           { running = Nothing
@@ -4689,6 +4700,7 @@ conversionInfoTx sid = do
           , left = []
           , cannotEncrypt = enc
           , cannotDecrypt = dec
+          , nothingWritten = untouched
           }
 
 -- | Start encrypting a space that has pages, and the plain spaces below
@@ -4703,6 +4715,15 @@ startEncryptingTx sid req = do
   me <- asks (\x -> x.author) >>= maybe (failWith Forbidden) pure
   let plainTree = filter (\x -> isNothing x.encryption) tree
       sent = Map.fromList [(k.space, k) | k <- req.keys]
+  -- A page that could not be encrypted would stop the conversion halfway:
+  -- such a page is refused now, before anything starts, by its address.
+  tooLarge <- db (oversizedIn (map (\x -> x.id) plainTree))
+  unless (null tooLarge) $ do
+    named <- for tooLarge $ \(pid, what) -> do
+      p <- findNode pid
+      (x, _) <- findSpace p.space
+      pure ("The page " <> slugText p.slug <> " of " <> x.name <> " has " <> what <> ".")
+    failWith (Conflict (T.unwords (named <> ["Shorten it, or delete the version, and encrypt the space then."])))
   unless (length req.keys == Map.size sent && Map.keysSet sent == Set.fromList (map (\x -> x.id) plainTree)) $
     failWith (Conflict "The spaces below this one have changed since the keys were made: open the space again.")
   unless (length (ordNub (map (\k -> k.keyId) req.keys)) == length req.keys) $
@@ -4726,7 +4747,7 @@ startEncryptingTx sid req = do
   requireEncryptionRule sid
   left <- db (unconvertedIn (map (\x -> x.id) plainTree))
   record "space.encryption-started" (spaceSubject s) [("spaces", show (length plainTree)), ("pages", show (length left))]
-  pure E.ConversionInfo {running = Just Encrypting, root = Just sid, spaces = map (\x -> x.id) plainTree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = []}
+  pure E.ConversionInfo {running = Just Encrypting, root = Just sid, spaces = map (\x -> x.id) plainTree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False}
 
 -- | Start turning the encryption of a space, and of the spaces below it,
 -- off.
@@ -4740,7 +4761,7 @@ startDecryptingTx sid = do
   for_ tree $ \x -> db (clearConverted x.id >> setConversion x.id (Just Decrypting))
   left <- db (unconvertedIn (map (\x -> x.id) tree))
   record "space.decryption-started" (spaceSubject s) [("spaces", show (length tree)), ("pages", show (length left))]
-  pure E.ConversionInfo {running = Just Decrypting, root = Just sid, spaces = map (\x -> x.id) tree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = []}
+  pure E.ConversionInfo {running = Just Decrypting, root = Just sid, spaces = map (\x -> x.id) tree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False}
 
 -- | A page a conversion stages or commits, checked: its space is being
 -- converted this way, the page is not converted yet, and the caller may
@@ -5027,18 +5048,53 @@ endIfConverted :: Space -> Tx Int
 endIfConverted s = do
   root <- conversionRootOf s
   covered <- filter (\x -> isJust x.conversion) <$> subtreeOf root.id
+  endIfDone (fromMaybe Encrypting root.conversion) root covered
+
+-- | 'endIfConverted' for a conversion going this way over these spaces,
+-- from that root: what a conversion turned back ends with, whose spaces
+-- the transaction's context still shows going the other way.
+endIfDone :: Conversion -> Space -> [Space] -> Tx Int
+endIfDone way root covered = do
   left <- db (unconvertedIn (map (\x -> x.id) covered))
   when (null left) $ do
     for_ covered $ \x -> db $ do
       setConversion x.id Nothing
       clearConverted x.id
-      when (x.conversion == Just Decrypting) $ do
+      when (way == Decrypting) $ do
         clearSpaceKey x.id
         deleteGrantsOfSpace x.id
-    case root.conversion of
-      Just Decrypting -> record "space.decrypted" (spaceSubject root) [("spaces", show (length covered))]
-      _ -> record "space.encrypted" (spaceSubject root) [("spaces", show (length covered))]
+    case way of
+      Decrypting -> record "space.decrypted" (spaceSubject root) [("spaces", show (length covered))]
+      Encrypting -> record "space.encrypted" (spaceSubject root) [("spaces", show (length covered))]
   pure (length left)
+
+-- | Turn a conversion round ("Stop and turn back"): from now on it goes the
+-- other way, over the pages converted so far, and the space ends as it
+-- began. A page converted so far is converted back; a page not reached
+-- yet stays as it is, and what was staged of it is dropped. A page
+-- encrypted and turned back keeps the random address it got, since its
+-- old one is not kept. Asked of an administrator of each of the spaces
+-- who holds its key ('requireConverter'), at any point of the
+-- conversion: a conversion that cannot go on can always be turned round.
+reverseConversionTx :: SpaceId -> Tx E.ConversionInfo
+reverseConversionTx sid = do
+  (s, c) <- findSpace sid
+  requireView c
+  way <- maybe (failWith (Conflict "No conversion of this space runs.")) pure s.conversion
+  root <- conversionRootOf s
+  covered <- filter (\x -> isJust x.conversion) <$> subtreeOf root.id
+  for_ covered requireConverter
+  let back = case way of Encrypting -> Decrypting; Decrypting -> Encrypting
+  for_ covered $ \x -> do
+    pages <- db (pageNodes x.id)
+    done <- db (convertedIn x.id)
+    for_ [p | p <- pages, Set.notMember p.id done] $ \p ->
+      db (case way of Encrypting -> dropStagedSealed p.id; Decrypting -> dropStagedPlain p.id)
+    db (flipConverted x.id >> setConversion x.id (Just back))
+  record "space.conversion-reversed" (spaceSubject root) [("was", Space.conversionName way), ("spaces", show (length covered))]
+  left <- db (unconvertedIn (map (\x -> x.id) covered))
+  _ <- endIfDone back root covered
+  pure E.ConversionInfo {running = if null left then Nothing else Just back, root = Just root.id, spaces = map (\x -> x.id) covered, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False}
 
 --------------------------------------------------------------------------------
 -- Comments and attachments in an encrypted space

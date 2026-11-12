@@ -395,6 +395,7 @@ stubs =
           , conversion = \_ -> refuse NotFound
           , startEncrypting = \_ _ -> refuse NotFound
           , startDecrypting = \_ -> refuse NotFound
+          , reverseConversion = \_ -> refuse NotFound
           , stageSealed = \_ _ -> refuse NotFound
           , stagePlain = \_ _ -> refuse NotFound
           , stageBytes = \_ _ _ -> refuse NotFound
