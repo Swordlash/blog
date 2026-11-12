@@ -55,8 +55,33 @@ function wikiVaultListen() {
   if (wikiVaultChannel !== null || typeof BroadcastChannel !== "function") return;
   wikiVaultChannel = new BroadcastChannel("wiki-assistant-keys");
   wikiVaultChannel.onmessage = (event) => {
-    if (typeof event.data?.dropped === "string") wikiVaultLetGo(event.data.dropped);
+    const slot = event.data?.dropped;
+    if (typeof slot !== "string") return;
+    wikiVaultLetGo(slot);
+    // A user's vault key or private key let go in another tab, as its
+    // sign-out does: the page lets go of everything it opened with them
+    // (Wiki.App.Shell listens for this event).
+    if (slot.startsWith("vault:") || slot.startsWith("identity:")) globalThis.dispatchEvent?.(new CustomEvent("wiki-keys-dropped"));
   };
+}
+
+// Listen to the wiki's other tabs from the page's start, not only from the
+// first use of a key here: a tab that never touched the vault must hear a
+// sign-out elsewhere too.
+function wiki_vault_listen() {
+  wikiVaultListen();
+}
+
+// The slots this device keeps a key in, in IndexedDB and in the page, as
+// JSON: what a page that finds nobody signed in looks through.
+async function wiki_vault_slots() {
+  const slots = new Set(globalThis.wikiVaultPageKeys instanceof Map ? globalThis.wikiVaultPageKeys.keys() : []);
+  try {
+    for (const key of await wikiVaultStore("readonly", (store) => store.getAllKeys())) slots.add(String(key));
+  } catch {
+    // No database.
+  }
+  return JSON.stringify([...slots]);
 }
 
 // The handles given out for the key of each slot ("vault:<user>",

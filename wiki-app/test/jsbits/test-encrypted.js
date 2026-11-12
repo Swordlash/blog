@@ -428,6 +428,32 @@ function wiki_test_encrypted_start(space, readers) {
   globalThis.wikiTestHandlers = [wikiTestEncServer, ...(globalThis.wikiTestHandlers ?? []).filter((h) => h !== wikiTestEncServer)];
 }
 
+// A user of the vault's own server (test-passkeys.js) as a reader and an
+// administrator of the space, with the public key that server keeps for
+// them.
+function wiki_test_encrypted_member(space, user, keyId, publicKey) {
+  const s = wikiTestEncrypted.spaces.get(space);
+  if (!s.readers.includes(user)) s.readers.push(user);
+  if (!s.admins.includes(user)) s.admins.push(user);
+  wikiTestEncrypted.directory.set(user, { keyId, publicKey });
+}
+
+// What another tab tells the wiki's tabs when it lets go of a key, as its
+// sign-out does (jsbits/vault.js).
+function wiki_test_encrypted_tell_dropped(slot) {
+  const other = new BroadcastChannel("wiki-assistant-keys");
+  other.postMessage({ dropped: String(slot) });
+  other.close();
+}
+
+// What a page's editor in another window says to its detached preview
+// (jsbits/editor.js's "wiki-live-preview" channel), as JSON.
+function wiki_test_encrypted_live(message) {
+  const editor = new BroadcastChannel("wiki-live-preview");
+  editor.postMessage(JSON.parse(message));
+  editor.close();
+}
+
 // A reader of one space alone (a subspace), not of the spaces around it.
 function wiki_test_encrypted_add_reader(space, user) {
   wikiTestEncrypted.spaces.get(space).readers.push(user);

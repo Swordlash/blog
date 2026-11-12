@@ -3100,3 +3100,9 @@ instance (MonadIO m) => MonadEncryption (HttpWiki m) where
   confirmedEntry sid =
     spacesNow >>= traverse_ (\spaces -> for_ (Space.gateOf spaces sid) (\gate -> modifyHeld (\h -> h {heldConfirmed = Set.insert gate h.heldConfirmed})))
   readerAt = leaveGates
+
+  -- What is cached was read in a session the other tab ended: the cache
+  -- is emptied too, the session with it, which is asked for again.
+  forgetEncrypted = HttpWiki . ReaderT $ \env -> liftIO $ do
+    atomicModifyIORef' env.cache (const (emptyCache, ()))
+    forgetHeldOf env

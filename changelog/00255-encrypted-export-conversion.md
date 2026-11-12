@@ -64,7 +64,8 @@ title: Encrypted spaces: a decrypted export, encrypting pages, asking each time
 
 ## Other changes
 
-- Signing out now deletes your keys from the device, in every tab. Signing
-  in with your password unlocks them again by itself; after signing in
-  with a provider, unlock them with a passkey before reading an encrypted
-  space.
+- Signing out now deletes your keys from the device, in every tab, and
+  closes every encrypted space open in another tab; so does opening the
+  wiki once your session has ended. Signing in with your password unlocks
+  them again by itself; after signing in with a provider, unlock them with
+  a passkey before reading an encrypted space.

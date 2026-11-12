@@ -177,6 +177,15 @@ class (Monad m) => MonadEncryption m where
   default readerAt :: (MonadTrans t, m ~ t n, MonadEncryption n) => [Space] -> Maybe SpaceId -> m ()
   readerAt spaces = lift . readerAt spaces
 
+  -- | Forget everything this tab holds of encrypted spaces, for every
+  -- space: keys, pages decrypted for the search, attachments' names and
+  -- object URLs, and every confirmation; and what the backend cached,
+  -- the session among it, which is asked for again. What the tab does
+  -- when another tab signs out, as its own sign-out does.
+  forgetEncrypted :: m ()
+  default forgetEncrypted :: (MonadTrans t, m ~ t n, MonadEncryption n) => m ()
+  forgetEncrypted = lift forgetEncrypted
+
 -- | A component's handlers reach the backend through its monad.
 instance (MonadEncryption m) => MonadEncryption (HalogenM st act slots output m)
 

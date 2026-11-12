@@ -141,7 +141,7 @@ import Web.Storage.Storage qualified as Storage
 import Wiki.Api.Links (archiveExportUrl)
 import Wiki.Api.ServerSettings (HomePage (showAnonymous, title))
 import Wiki.App.Account (Accounts (..))
-import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Assistant (MonadAssistant, keysDroppedElsewhere, listenToOtherTabs)
 import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous, sameAsking, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin)
@@ -163,7 +163,7 @@ import Wiki.App.Recent (rememberVisit)
 import Wiki.App.Route (AdminSection, Route (..), adminSections, locationRoute, sectionName, sectionTitle, settledRoute)
 import Wiki.App.Route qualified as R
 import Wiki.App.Security (MonadSecurity)
-import Wiki.App.Vault (forgetUserKeys)
+import Wiki.App.Vault (forgetEveryUsersKeys, forgetUserKeys)
 import Wiki.App.View.Access qualified as AccessView
 import Wiki.App.View.Activity qualified as ActivityView
 import Wiki.App.View.AssistantSettings qualified as AssistantSettingsView
@@ -461,6 +461,7 @@ data Told = Told
 data Action
   = Initialize
   | Arrived Route
+  | KeysDropped
   | Followed (Follow Route)
   | ToggleSwitcher
   | CloseSwitcher
@@ -1360,6 +1361,11 @@ component =
           modify (\st -> st {offlineCopy = copy, offline = isJust copy || not online})
         installs <- H.liftEffect installChanges
         void $ H.subscribe (InstallChanged <$ installs)
+        -- Another tab's sign-out lets go of the keys there: this tab lets
+        -- go of what it opened with them.
+        H.liftEffect (liftIO listenToOtherTabs)
+        dropped <- H.liftEffect keysDroppedElsewhere
+        void $ H.subscribe (KeysDropped <$ dropped)
         handleAction InstallChanged
         router <- gets (\st -> st.router)
         void $ H.subscribe (Arrived <$> Router.changes router)
@@ -1405,6 +1411,12 @@ component =
       Install -> do
         void install
         handleAction InstallChanged
+      -- Another tab let go of the user's keys (a sign-out there): nothing
+      -- of an encrypted space stays open here, and the session is asked
+      -- for again, with everything shown.
+      KeysDropped -> do
+        lift forgetEncrypted
+        reload Nothing
       Arrived r -> do
         now <- H.liftEffect historyEntry
         before <- gets (\st -> st.route)
@@ -1675,6 +1687,14 @@ component =
       demo <- gets (\st -> st.demo)
       lift (attempt (fetchWorld demo)) >>= \case
         Right w -> do
+          -- The server says nobody is signed in in this browser: no user's
+          -- keys stay on the device, as after a sign-out, even when the
+          -- session ended with no tab open. Not from a copy kept offline,
+          -- which may be older than a sign-in since, nor in the demo, whose
+          -- users are its own.
+          copy <- gets (\st -> st.offlineCopy)
+          network <- gets overNetwork
+          when (isNothing w.asking.user && network && isNothing copy && inBrowser) (lift forgetEveryUsersKeys)
           modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady, stale = Nothing})
           -- A session loaded now may name a newer entry than the page
           -- shown has marked seen.

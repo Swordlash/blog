@@ -11,7 +11,11 @@
 -- no server between them; this window renders the text with the editor's
 -- own preview ("Wiki.App.View.Preview"), and scrolls to the block of that
 -- line ('followLine'). When the editor goes (saved and closed, cancelled,
--- its window closed), the window says so and keeps the last text. A window
+-- its window closed), the window says so and keeps the last text, but in
+-- an encrypted space: there it shows nothing more, since the editor that
+-- fed it may have gone because its reader left the space, signed out, or
+-- closed a space that asks each time it is opened, and this window is not
+-- to keep the page's text open on the screen after it. A window
 -- opened, or loaded again, while the editor is open asks it for what it
 -- has, and follows it from there. When a file is uploaded in the editor,
 -- the window fetches the page's attachments again. In the demo, whose wiki
@@ -44,7 +48,7 @@ import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Id (SpaceId (..))
 import Wiki.Core.Page (Page (..), PageSummary)
 import Wiki.Core.Slug (Slug, slugText)
-import Wiki.Core.Space (Space (id))
+import Wiki.Core.Space (Space (encryption, id))
 
 -- | The window's input: the page, where it is.
 data Input = Input
@@ -68,6 +72,9 @@ data Shown
   = Loading
   | Failed WikiError
   | Shows Source Text Text
+  | -- | The editor of a page of an encrypted space has gone: nothing of
+    -- the page is shown.
+    Closed
 
 data State = State
   { input :: Input
@@ -159,12 +166,14 @@ component =
       Shows _ title text -> HH.slot_ "preview" () Preview.component Preview.Input {place = place st, title, body = text, slides = Nothing}
       Failed e -> errorView e
       Loading -> [hh|<p class="loading">Loading…</p>|]
+      Closed -> HH.text ""
 
     stateText :: Shown -> Text
     stateText = \case
       Shows Saved _ _ -> "The page as saved. Once its editor is open in another window, this follows what is typed there."
       Shows Editor _ _ -> "Following the editor."
       Shows Gone _ _ -> "The editor was closed: this is the text as it was last typed."
+      Closed -> "The editor was closed. This space is encrypted, so nothing of the page is kept here: open the page again to read it."
       _ -> ""
 
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
@@ -194,6 +203,7 @@ component =
                   -- under its title, or the page's if it sent none.
                   (Shows source typed body, Shows _ title _) -> Shows source (if T.null typed then title else typed) body
                   (Shows {}, _) -> st.shown
+                  (Closed, _) -> Closed
                   _ -> saved
               }
         H.raise Loaded
@@ -215,6 +225,7 @@ component =
         Left _ -> pass
         Right heard
           | heard.closed -> modify $ \st -> case st.shown of
+              _ | isJust st.input.space.encryption -> st {shown = Closed}
               Shows _ title body -> st {shown = Shows Gone title body}
               _ -> st
           | heard.uploaded -> do

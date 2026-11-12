@@ -30,6 +30,7 @@ import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, i
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
+import Test.Browser.Encrypted qualified as E
 import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, release, serveDemo, serverStarts, serverStops, startServer)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
@@ -39,17 +40,21 @@ import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Assistant (MonadAssistant, assistantDatabase)
 import Wiki.App.Assistant.Keys (Keys (..), readKeys)
-import Wiki.App.Backend (Session (..), session)
+import Wiki.App.Backend (MonadWiki (..), Session (..), session)
+import Wiki.App.Backend.Encrypted (MonadEncryption (..))
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State qualified as M
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.App.Route qualified as R
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Assistant (ApiKey (..), Provider (..), ProviderSettings (..), Settings, defaultSettings, settingsOf, withKey, withModel)
-import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Id (SpaceId (..), UserId (..))
+import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (Grants (..))
+import Wiki.Core.Space (Entry (..), Space (..))
 import Wiki.Core.User (Standing (..))
 
 $( browserJS
@@ -895,6 +900,62 @@ userKeys m = describe "the user's keys" $ do
       find again ".account-toggle" >>= click
       eventually (find again ".keys-device" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "does not hold your keys"))
       closed again
+
+  -- A session can end with no tab open. A page that starts and hears from
+  -- the server that nobody is signed in in this browser lets go of every
+  -- user's keys this device keeps, as a sign-out would have.
+  it "lets go of every user's keys when a page starts with nobody signed in" $ runPage $ do
+    ui <- signedOut "editor's password"
+    signIn ui "editor's password"
+    _ <- madeKeys
+    eventually (stored "vault:user-editor" `shouldReturn` True)
+    stored "identity:user-editor" `shouldReturn` True
+    unmount ui
+    again <- restarted
+    _ <- find again ".sign-in-toggle"
+    eventually (stored "vault:user-editor" `shouldReturn` False)
+    stored "identity:user-editor" `shouldReturn` False
+    closed again
+
+  -- The view of a space that asks each time, pressed as a reader does: a
+  -- wrong password leaves it shut, with nothing of it decrypted; the right
+  -- one opens it; and, once a passkey unlocks the keys, the passkey.
+  it "opens a space that asks each time with the password typed in its view, not with a wrong one, and with a passkey" $ runPage $ do
+    ui <- signedOut "editor's password"
+    signIn ui "editor's password"
+    made <- madeKeys
+    let text' path = case field path made of
+          Just (Aeson.String t) -> t
+          _ -> panic "no public key"
+    env <- E.memberSpace "user-editor" (text' ["publicKey", "keyId"]) (text' ["publicKey", "publicKey"])
+    void (either (panic . show) pure =<< E.run env (encryptSpace E.secret.id))
+    page <- either (panic . show) pure =<< E.run env (createPage E.secret.id Nothing "Behind the password" "Opened with the password.")
+    void (either (panic . show) pure =<< E.run env (setEntry E.secret.id ConfirmEach))
+    unmount ui
+    E.recordDecryptions
+    gated <- startServer m (R.Page [E.secretSlug] [page.slug])
+    _ <- eventually (find gated ".encrypted-confirm-password")
+    length <$> findAll gated ".encrypted-confirm-passkey" `shouldReturn` 0
+    find gated "input[name=encrypted-password]" >>= (`typeText` "not the password")
+    find gated ".encrypted-confirm-password" >>= click
+    _ <- eventually (find gated ".encrypted-error")
+    length <$> findAll gated ".page-view" `shouldReturn` 0
+    filter (T.isInfixOf E.secret.id.text) <$> E.decryptedSince `shouldReturn` []
+    find gated "input[name=encrypted-password]" >>= (`typeText` "editor's password")
+    find gated ".encrypted-confirm-password" >>= click
+    eventually (find gated ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Opened with the password."))
+    -- A passkey added to the keys: the view offers it, and it opens the
+    -- space in another tab.
+    find gated ".account-toggle" >>= click
+    find gated ".account-keys input[name=keys-password]" >>= (`typeText` "editor's password")
+    find gated ".keys-passkey-add" >>= click
+    eventually $ length <$> findAll gated ".keys-unlock-passkey" `shouldReturn` 1
+    find gated ".account-toggle" >>= click
+    unmount gated
+    other <- startServer m (R.Page [E.secretSlug] [page.slug])
+    eventually (find other ".encrypted-confirm-passkey") >>= click
+    eventually (find other ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Opened with the password."))
+    closed other
 
   it "unlocks the key pair with a passkey added to it, on a device where the password was not typed" $ runPage $ do
     ui <- signedOut "editor's password"

@@ -66,6 +66,9 @@ module Wiki.App.Assistant
   , forgetHeld
   , holdKey
   , deviceKeyIO
+  , deviceSlotsIO
+  , listenToOtherTabs
+  , keysDroppedElsewhere
   , heldHandle
   , PasskeyTicket
   , Used (..)
@@ -90,12 +93,15 @@ import Data.Type.Equality (type (~))
 import Halogen.JSBits (Callback, Inert (..), JSText, JSVal, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, jsValText, mkSyncCallback, toJSText)
 import Halogen.JSBits.Fields (Member (..), inlineJS, jsFields)
 import Halogen.JSBits.Promise (Promise (..), wait)
+import Halogen.Query.Event.Window qualified as WindowEvent
+import Halogen.Subscription (Emitter)
 import Halogen.VDom.DOM.Monad (BrowserDOM)
+import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Halogen.VDom.DOM.Monad.Mem (MemDOM)
 import Protolude hiding (wait)
 import Web.DOM.Element qualified as Element
 import Web.DOM.Internal.Types (Window (..))
-import Web.Event.Event (Event (..))
+import Web.Event.Event (Event (..), EventType (..))
 import Web.HTML.Window qualified as Window
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
@@ -134,6 +140,8 @@ $( browserJS
      , ("js_keep_keyPromise", "wiki_vault_keep_key", Safe, [t|JSText -> Int -> Bool -> IO (Promise JSText)|])
      , ("js_device_keyPromise", "wiki_vault_device_key", Safe, [t|JSText -> IO (Promise Int)|])
      , ("js_drop_keyPromise", "wiki_vault_drop_key", Safe, [t|JSText -> IO (Promise ())|])
+     , ("js_listen", "wiki_vault_listen", Safe, [t|IO ()|])
+     , ("js_slotsPromise", "wiki_vault_slots", Safe, [t|IO (Promise JSText)|])
      , ("js_passkeys_here", "wiki_vault_passkeys_here", Safe, [t|IO Bool|])
      , ("js_sealing_here", "wiki_vault_sealing_here", Safe, [t|IO Bool|])
      , ("js_createPromise", "wiki_vault_create", Safe, [t|JSText -> JSText -> JSText -> IO (Promise JSText)|])
@@ -202,6 +210,9 @@ js_device_key a1 = if inBrowser then wait =<< js_device_keyPromise a1 else pure 
 
 js_drop_key :: JSText -> IO ()
 js_drop_key a1 = if inBrowser then wait =<< js_drop_keyPromise a1 else pure inert
+
+js_slots :: IO JSText
+js_slots = if inBrowser then wait =<< js_slotsPromise else pure inert
 
 js_create :: JSText -> JSText -> JSText -> IO JSText
 js_create a1 a2 a3 = if inBrowser then wait =<< js_createPromise a1 a2 a3 else pure inert
@@ -792,6 +803,24 @@ deviceKeyIO :: UserId -> IO (Maybe KeyRef)
 deviceKeyIO user
   | not inBrowser = pure Nothing
   | otherwise = keyRefOf <$> (evaluate =<< js_device_key (toJSText user.text))
+
+-- | Listen to the wiki's other tabs from now on: a key let go in one of them
+-- is let go here ('dropDeviceKey'), and a vault key or private key let go
+-- there (a sign-out) is announced in this window ('keysDroppedElsewhere').
+listenToOtherTabs :: IO ()
+listenToOtherTabs = when inBrowser js_listen
+
+-- | The announcement that another tab let go of a user's vault key or
+-- private key, as its sign-out does.
+keysDroppedElsewhere :: (MonadBrowserDOM m, MonadUnliftIO m) => m (Emitter IO ())
+keysDroppedElsewhere = WindowEvent.windowEvent (EventType "wiki-keys-dropped") (const (Just ()))
+
+-- | The slots this device keeps a key in (a user's id, or "vault:" or
+-- "identity:" before it), in IndexedDB and in the page. Natively none.
+deviceSlotsIO :: IO [Text]
+deviceSlotsIO
+  | not inBrowser = pure []
+  | otherwise = fromMaybe [] . rightToMaybe . eitherDecodeStrict . encodeUtf8 . fromJSText <$> (evaluate =<< js_slots)
 
 -- | Why the browser would refuse a request to another service's base URL,
 -- if it would: the page's Content Security Policy ("Wiki.Api.ContentPolicy")

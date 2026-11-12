@@ -855,7 +855,15 @@ How it works:
 - Signing out, or a tab finding that your session ended or is someone
   else's now, deletes your vault's key and your private key from the
   device, in every tab of the wiki and in the browser's storage; the
-  assistant's own key stays, unless it is the vault's key. Signing in with
+  assistant's own key stays, unless it is the vault's key. The other tabs
+  let go at once of every encrypted space they hold open (its keys, its
+  pages, its attachments' addresses) and ask the server who is signed in.
+  A page that opens and hears from the server that nobody is signed in
+  deletes every user's keys on the device the same way, so that a session
+  that ended with no tab open (expired, or signed out from another
+  device) leaves no key behind either. The preview of a page detached
+  from its editor keeps nothing of a page of an encrypted space once its
+  editor closes. Signing in with
   your password unlocks them again by itself. Signing in with a provider
   does not: your keys are then locked, and a passkey unlocks them before
   you read an encrypted space.

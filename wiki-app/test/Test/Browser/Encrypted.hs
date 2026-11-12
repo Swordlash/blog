@@ -38,10 +38,19 @@
 -- their first sign-in makes them (a private key kept in this browser that
 -- cannot be exported, its public half in the directory); the vault that
 -- carries a private key to another device is "Test.Browser.Vault"'s.
-module Test.Browser.Encrypted (spec) where
+module Test.Browser.Encrypted
+  ( spec
+  , memberSpace
+  , recordDecryptions
+  , decryptedSince
+  , secret
+  , secretSlug
+  , run
+  )
+where
 
 import Control.Monad.UUID (MonadUUID)
-import Data.Aeson (Value (..), decodeStrict', encode)
+import Data.Aeson (Value (..), decodeStrict', encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -76,6 +85,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Encrypted (keepSeen, seenOf)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route qualified as R
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
@@ -87,8 +97,9 @@ import Wiki.Core.Markdown.Box (BoxNumbering (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.PageKind qualified as Kind
+import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
-import Wiki.Core.Slug (Slug, mkSlug)
+import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Entry (..), Space (..))
 import Wiki.Core.User (Standing (..))
 import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..))
@@ -121,6 +132,9 @@ $( browserJS
      , ("js_made", "wiki_test_encrypted_made", Safe, [t|IO JSText|])
      , ("js_blobs", "wiki_test_encrypted_blobs", Safe, [t|IO JSText|])
      , ("js_record_decryptions", "wiki_test_encrypted_record_decryptions", Safe, [t|IO ()|])
+     , ("js_member", "wiki_test_encrypted_member", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
+     , ("js_tell_dropped", "wiki_test_encrypted_tell_dropped", Safe, [t|JSText -> IO ()|])
+     , ("js_live", "wiki_test_encrypted_live", Safe, [t|JSText -> IO ()|])
      , ("js_decrypted", "wiki_test_encrypted_decrypted", Safe, [t|IO JSText|])
      ]
  )
@@ -1094,6 +1108,54 @@ spec m = do
     filter (T.isInfixOf secret.id.text) <$> decryptedSince `shouldReturn` []
     unmount again
 
+  -- Another tab's sign-out lets go of the user's keys there, and tells this
+  -- tab, which lets go of everything it opened with them at once: its
+  -- spaces' keys, pages and addresses, and its confirmations. Its own
+  -- sign-out does the same ('Wiki.App.Backend.Http.startOver').
+  it "lets go of every encrypted space it holds, at once, when another tab signs out" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Open in a tab" "Read in the tab left open.")
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    tab <- unsafeIOToPageM (newHttpEnv browserTransport)
+    ui <- startServerOver m tab (R.Page [secretSlug] [made.slug])
+    eventually (find ui ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Read in the tab left open."))
+    (\h -> h.keys) <$> unsafeIOToPageM (heldNow tab) `shouldReturn` Set.singleton secret.id
+    -- Signed out in another tab: the server's answer for this browser, and
+    -- the other tab's message.
+    answerWith "GET" "api/v1/session" 200 signedOut
+    unsafeIOToPageM (js_tell_dropped (toJSText ("vault:user-admin" :: Text)))
+    shell <- find ui ".wiki"
+    eventually (textContent shell >>= (`shouldSatisfy` \t -> not (any (`T.isInfixOf` t) ["Open in a tab", "Read in the tab left open."])))
+    _ <- eventually (find ui ".sign-in-toggle")
+    unsafeIOToPageM (heldNow tab) `shouldReturn` HeldNow {keys = mempty, found = mempty, confirmed = mempty, attachments = 0, urls = 0}
+    run tab (getPage secret.id [made.slug]) >>= (`shouldSatisfy` isLeft)
+    unmount ui
+
+  -- The preview of a page detached from its editor, in a window of its own,
+  -- shows nothing of a page of an encrypted space once its editor goes:
+  -- the editor's reader may have left the space or signed out.
+  it "keeps nothing of an encrypted page in its detached preview once the editor goes" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Previewed" "As saved.")
+    void (ok =<< run env (setEntry secret.id ConfirmEach))
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    tab <- unsafeIOToPageM (newHttpEnv browserTransport)
+    run tab (confirmedEntry secret.id)
+    ui <- startServerOver m tab (R.LivePreview [secretSlug] [made.slug])
+    eventually (find ui ".live-preview-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "As saved."))
+    let key = secret.id.text <> "/" <> slugText made.slug
+        say message = unsafeIOToPageM (js_live (toJSText (decodeUtf8 (toS (encode message)) :: Text)))
+    say (object ["key" .= key, "text" .= ("# Previewed\n\nTyped behind the gate." :: Text), "title" .= ("Previewed" :: Text)])
+    eventually (find ui ".live-preview-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Typed behind the gate."))
+    say (object ["key" .= key, "closed" .= True])
+    eventually (find ui ".live-preview-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "nothing of the page is kept here"))
+    find ui ".live-preview-body" >>= textContent >>= (`shouldSatisfy` \t -> not (any (`T.isInfixOf` t) ["Typed behind the gate.", "As saved.", "Previewed"]))
+    unmount ui
+
   it "turns asking each time on in the space's permissions, and asks the administrator who turned it on too" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
@@ -1143,14 +1205,28 @@ spec m = do
       unsafeIOToPageM (js_key_pair (toJSText user))
       as user
 
--- | What this browser remembers of a page for a user, set to the version
--- at an index from the first, as if it had read that one last; nothing for
--- an index below 0.
+-- | Record every decryption the page makes from now on ('decryptedSince').
+recordDecryptions :: PageM s ()
+recordDecryptions = unsafeIOToPageM js_record_decryptions
+
+-- | The space to encrypt, over the encrypted spaces' server played here,
+-- with a user of the vault's own server (as "Test.Browser.Vault" plays it)
+-- as its reader and administrator, by the id and public key that server
+-- keeps for them; and a tab of theirs.
+memberSpace :: Text -> Text -> Text -> PageM s HttpEnv
+memberSpace user keyId publicKey = do
+  unsafeIOToPageM (js_start (toJSText (decodeUtf8 (toS (encode secret)))) (toJSText ("[]" :: Text)))
+  unsafeIOToPageM (js_member (toJSText secret.id.text) (toJSText user) (toJSText keyId) (toJSText publicKey))
+  as user
+
 -- | The additional data of every decryption the page made since
 -- 'js_record_decryptions'.
 decryptedSince :: PageM s [Text]
 decryptedSince = unsafeIOToPageM (fromMaybe [] . decodeStrict' . encodeUtf8 . fromJSText <$> js_decrypted)
 
+-- | What this browser remembers of a page for a user, set to the version
+-- at an index from the first, as if it had read that one last; nothing for
+-- an index below 0.
 seenAt :: Text -> PageId -> Int -> PageM s ()
 seenAt user pid index = unsafeIOToPageM (js_seen_at (toJSText user) (toJSText pid.text) index)
 
@@ -1174,6 +1250,10 @@ urlIn env a = run env (newUrlOwner >>= \o -> attachmentUrl o a)
 -- | A program of the backend, in a tab.
 run :: HttpEnv -> HttpWiki IO a -> PageM s a
 run env program = unsafeIOToPageM (runHttpWiki env program)
+
+-- | Nobody signed in, in an open wiki.
+signedOut :: SessionInfo
+signedOut = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access = Open}, standing = NotSignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
 
 -- | One of the demo's users, signed in.
 sessionOf :: Text -> PageM s SessionInfo

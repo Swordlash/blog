@@ -47,6 +47,7 @@ module Wiki.App.Vault
   , readDevice
   , writeDevice
   , forgetUserKeys
+  , forgetEveryUsersKeys
 
     -- * The user's keys
   , UserKeys (..)
@@ -91,11 +92,12 @@ where
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, encode, object, withObject, (.!=), (.:?), (.=))
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Protolude
 import Wiki.Api.Account (PasswordChange (..), SignInMethods)
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), NewPublicKey (..), PublicKeyEntry (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..), VaultChange (..))
 import Wiki.App.Account (SignInError (..), passwordErrorText)
-import Wiki.App.Assistant (KeyRef, Made (..), MonadAssistant (..), NewIdentity (..), PasskeyRefusal (..), Used (..))
+import Wiki.App.Assistant (KeyRef, Made (..), MonadAssistant (..), NewIdentity (..), PasskeyRefusal (..), Used (..), deviceSlotsIO)
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..), Rewrap (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Assistant.Vault (DeviceRecord (..), Stored (..), assistantItem, readStored, sealingData, wrappingData, wrappingInfo)
@@ -184,6 +186,18 @@ forgetUserKeys u = do
   when same (dropDeviceKey u)
   where
     probeData = "wiki-vault/1 same-key"
+
+-- | Let go of the keys of every user this device keeps them for, as
+-- 'forgetUserKeys' does for one: what a page does when the server says
+-- that nobody is signed in in this browser. A session can end with no tab
+-- open (it expires, or is signed out from another device), and a page
+-- opened after it does not know whose keys were here: so every user's go,
+-- as a sign-out would have done.
+forgetEveryUsersKeys :: (MonadAssistant m, MonadIO m) => m ()
+forgetEveryUsersKeys = do
+  slots <- liftIO deviceSlotsIO
+  let users = ordNub [UserId u | s <- slots, Just u <- [T.stripPrefix "vault:" s <|> T.stripPrefix "identity:" s]]
+  traverse_ forgetUserKeys users
 
 --------------------------------------------------------------------------------
 -- The user's keys
