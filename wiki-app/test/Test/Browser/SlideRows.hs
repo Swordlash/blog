@@ -61,6 +61,8 @@ $( browserJS
      , ("js_master_shown", "wiki_test_rows_master_shown", Safe, [t|IO Bool|])
      , ("js_errors", "wiki_test_rows_errors", Safe, [t|IO JSText|])
      , ("js_master_completing", "wiki_test_rows_master_completing", Safe, [t|IO JSText|])
+     , ("js_row_focused", "wiki_test_rows_focused", Safe, [t|Int -> IO Bool|])
+     , ("js_master_shown_text", "wiki_test_rows_master_shown_text", Safe, [t|IO JSText|])
      ]
  )
 
@@ -113,6 +115,13 @@ spec m = do
     eventually $ masterText `shouldReturn` deck
     (_, head'') <- masterSelection
     head'' `shouldSatisfy` within (rowRange deck 2)
+    -- Opened and given the focus there, row 2 starts at the master's
+    -- cursor, which stays where the undo put it.
+    void (query ui (H.mkTell (OpenRow 2)))
+    eventually $ unsafeIOToPageM (js_row_ready 2) `shouldReturn` True
+    rowContent ui 2 >>= focus
+    masterSelection `shouldReturn` (head'', head'')
+    rowSelection 2 `shouldReturn` (head'' - rowStart deck 2, head'' - rowStart deck 2)
 
   it "takes a row's selection to the master when the row takes the focus without a click, so that an undo goes back to that row" $ runPage $ do
     ui <- start deck [1, 2]
@@ -159,6 +168,26 @@ spec m = do
     unsafeIOToPageM (threadDelay 100_000)
     errorsLogged `shouldReturn` []
 
+  it "builds a master in a host hidden from the start, which rows type into and undo in, and which shows their text once shown" $ runPage $ do
+    ui <- mount m harness (Harness deck True)
+    unsafeIOToPageM js_watch
+    eventuallyWithin 10000 $ unsafeIOToPageM js_master_ready `shouldReturn` True
+    unsafeIOToPageM js_master_shown `shouldReturn` False
+    void (query ui (H.mkTell (OpenRow 2)))
+    eventually $ unsafeIOToPageM (js_row_ready 2) `shouldReturn` True
+    typeAt ui 2 (rowLength deck 2) " hidden"
+    let typed = insertAt (rowEnd deck 2) " hidden" deck
+    masterText `shouldReturn` typed
+    press "Control+z"
+    eventually $ masterText `shouldReturn` deck
+    press "Control+y"
+    eventually $ masterText `shouldReturn` typed
+    void (query ui (H.mkTell (HideMaster False)))
+    eventually $ unsafeIOToPageM js_master_shown `shouldReturn` True
+    eventually $ (fromJSText <$> unsafeIOToPageM js_master_shown_text) >>= (`shouldSatisfy` T.isInfixOf "Beta.\n hidden")
+    unsafeIOToPageM (threadDelay 100_000)
+    errorsLogged `shouldReturn` []
+
   it "completes a mention and an emoji in the row that asked, through the master's host, and nowhere else" $ runPage $ do
     ui <- start deck [1, 2]
     typeAt ui 2 (rowLength deck 2) " :smi"
@@ -196,6 +225,9 @@ spec m = do
     after1 <- find ui ".rows-list li[data-key=\"1\"] .cm-editor"
     after2 `shouldBeSameElement` before2
     after1 `shouldBeSameElement` before1
+    -- Moved, row 2's CodeMirror lost the focus it had, as an element
+    -- moved in the page does: the slide mode gives it back after a move.
+    unsafeIOToPageM (js_row_focused 2) `shouldReturn` False
     rowText 2 `shouldReturn` rowOf deck 2
     rowSelection 2 `shouldReturn` (3, 6)
     -- And it is still the master's: typing in it after the move.
@@ -226,7 +258,7 @@ spec m = do
   where
     start :: forall s. Text -> [Int] -> PageM s (Mounted s Query Void m)
     start text open = do
-      ui <- mount m harness text
+      ui <- mount m harness (Harness text False)
       eventuallyWithin 10000 $ unsafeIOToPageM js_master_ready `shouldReturn` True
       for_ open $ \k -> do
         void (query ui (H.mkTell (OpenRow k)))
@@ -322,6 +354,10 @@ insertAt at piece text = T.take at text <> piece <> T.drop at text
 ----------------------------------------------------------------------
 -- The harness
 
+-- | The harness's input: the text, and whether the master's host is
+-- hidden from the start.
+data Harness = Harness Text Bool
+
 -- | What a test asks of the harness: a row opened or closed, the list in
 -- another order of keys, the master hidden or shown.
 data Query a
@@ -350,16 +386,16 @@ type Slots = ("row" .== H.Slot (Const Void) Void Int)
 
 -- | The master, with the textarea it takes the place of, and a keyed list
 -- of rows over a text, one per row of its fresh cut, closed.
-harness :: forall m. (MonadIO m, MonadUUID m) => H.Component Query Text Void m
+harness :: forall m. (MonadIO m, MonadUUID m) => H.Component Query Harness Void m
 harness =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \text -> do
+      { initialState = \(Harness text hidden) -> do
           ref <- H.newRefLabel "rows-master"
           let cut = rowsOf text
               starts = rowStarts cut
               ranges = [(k, (s, s + T.length r.text)) | (k, r, s) <- zip3 [0 ..] cut.rows starts]
-          pure State {text, ranges, order = map fst ranges, opened = [], hidden = False, masterRef = ref, masterHost = Nothing}
+          pure State {text, ranges, order = map fst ranges, opened = [], hidden, masterRef = ref, masterHost = Nothing}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.handleQuery = handleQuery, H.initialize = Just Initialize}
       }

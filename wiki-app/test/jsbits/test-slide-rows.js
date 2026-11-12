@@ -60,6 +60,16 @@ function wiki_test_rows_select(key, anchor, head) {
   wikiTestRow(key)?.select(anchor, head);
 }
 
+// Whether a row's CodeMirror has the focus.
+function wiki_test_rows_focused(key) {
+  return wikiTestRow(key)?.hasFocus() ?? false;
+}
+
+// The text the master shows, as its lines' text.
+function wiki_test_rows_master_shown_text() {
+  return [...document.querySelectorAll(".rows-master .cm-line")].map((line) => line.textContent).join("\n");
+}
+
 // Where a row's completion is: "active", "pending" or "".
 function wiki_test_rows_completing(key) {
   return wikiTestRow(key)?.completing() ?? "";
@@ -77,12 +87,18 @@ function wiki_test_rows_watch() {
   host.wikiTestErrors = [];
   host.addEventListener("wiki-input", () => host.wikiTestTold.push("input"));
   host.addEventListener("wiki-cursor-line", (event) => host.wikiTestTold.push("line " + event.detail));
-  const logError = console.error;
-  console.error = (...args) => {
-    host.wikiTestErrors.push(args.map(String).join(" "));
-    logError.apply(console, args);
-  };
-  window.addEventListener("error", (event) => host.wikiTestErrors.push(String(event.message)));
+  // Once for the page, which the whole suite shares: the console's error
+  // is still logged, and kept by the master being watched, if any.
+  if (!globalThis.wikiTestRowsErrors) {
+    globalThis.wikiTestRowsErrors = true;
+    const keep = (message) => document.querySelector(".rows-master")?.wikiTestErrors?.push(message);
+    const logError = console.error;
+    console.error = (...args) => {
+      keep(args.map(String).join(" "));
+      logError.apply(console, args);
+    };
+    window.addEventListener("error", (event) => keep(String(event.message)));
+  }
 }
 
 // The errors kept since wiki_test_rows_watch, as JSON.

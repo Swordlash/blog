@@ -1421,9 +1421,15 @@ export function attachRow(masterHost, rowHost, fromCharacters, toCharacters, foc
     { key: "Mod-y", mac: "Mod-Shift-z", run: () => redo(masterView), preventDefault: true },
     { linux: "Mod-Shift-z", run: () => redo(masterView), preventDefault: true },
   ];
+  // The row's cursor starts where the master's is, when that is in the row
+  // (the row opened where an undo or a problem took the master's cursor),
+  // and at the row's start otherwise.
+  const { anchor, head } = masterView.state.selection.main;
+  const inside = (at) => at >= row.from && at <= row.to;
   row.view = new EditorView({
     state: EditorState.create({
       doc: masterView.state.sliceDoc(row.from, row.to),
+      selection: inside(anchor) && inside(head) ? EditorSelection.single(anchor - row.from, head - row.from) : undefined,
       extensions: [
         // As the master's: a "\r" is a character of the text, not a line
         // break, so that the row's offsets are the master's.
@@ -1470,6 +1476,7 @@ export function attachRow(masterHost, rowHost, fromCharacters, toCharacters, foc
       row.view.focus();
     },
     completing: () => completionStatus(row.view.state) ?? "",
+    hasFocus: () => row.view.hasFocus,
     destroy: () => {
       masterHost.wikiRows?.delete(row);
       masterHost.wikiEditor?.rowsChanged();
