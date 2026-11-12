@@ -66,6 +66,17 @@ title: Presentations, a kind of page
   ▸ ⠿ ● ## Results          (red: more than a line is cut)
   ```
 
+- A presentation can be shown in another page, one slide at a time, with
+  buttons, the arrow keys while it has the focus, and **Present**:
+
+  ```markdown
+  ![Quarterly review](/s/team/p/quarterly-review/){.presentation}
+  ```
+
+  Without `{.presentation}`, or for a page that is not a presentation or
+  that the reader may not read, it is the link it always was. The page of
+  a presentation shows the same viewer above the page itself.
+
 - The editor marks in yellow what a page's kind does not read: a pause,
   speaker notes or `[[!style]]` in a document, and in a presentation a
   `##` heading inside a list or a box, which opens no slide.

@@ -104,6 +104,8 @@ A video on the web is embedded the same way, by its extension: `![Talk](https://
 
 Width and height in pixels can follow an image or a video in braces: `![Logo](attachment:logo.png){width=120}`.
 
+A presentation embedded with the class `presentation`, `![Quarterly review](/s/team/p/review/){.presentation}` (any form of a page's address: a path, a relative one, its permanent address), is shown in the page one slide at a time ([Presentations](#presentations)). Without the class, in a link's text, for a page that is a document, or for one the reader may not read, it is the link to the page, as any embedded page is.
+
 An SVG attachment is an image, in which nothing runs. With the class `interactive` it is shown in a frame that runs its scripts, for an SVG that needs them, such as a flame graph that zooms on a click and searches:
 
 ```
@@ -451,7 +453,7 @@ Exported, a document cannot hide anything: a block spoiler is a box titled with 
 
 ## Presentations
 
-A presentation is a kind of page: "New page" offers a document or a presentation, a presentation starting blank or from the starter deck, and "Presentation", among a page's actions, makes a page one or a document again (not a space's home page, which is a document). "Present", above a presentation, opens it full screen, one slide at a time; a document is not presented, and its address of slides says so. The kind decides how a page is shown, not what its Markdown means: a presentation's text read as a document is the same page. How a presentation is cut into slides is written in it:
+A presentation is a kind of page: "New page" offers a document or a presentation, a presentation starting blank or from the starter deck, and "Presentation", among a page's actions, makes a page one or a document again (not a space's home page, which is a document). "Present", above a presentation, opens it full screen, one slide at a time; a document is not presented, and its address of slides says so. The page of a presentation shows it in a viewer, one slide at a time, and under it the page as a document, where comments, the contents and the headings' links work as on any page. The kind decides how a page is shown, not what its Markdown means: a presentation's text read as a document is the same page. How a presentation is cut into slides is written in it:
 
 - Each `##` heading at the page's top level starts a slide and is its title, shown in the slide's title bar; so does a setext heading of level two (a line underlined with `---`). Each `#` heading starts a title slide: the title large in the middle, the rest under it, as for a talk's first slide or a section's. The page's own title line, `# Title`, is the first, and the lines under it, up to the first `##`, are its subtitle. Anything before the first such heading is a slide without a title.
 - A `###` heading or deeper is a heading on its slide, and so is a heading of any level inside a list, a quotation or a box; the editor marks a `#` or `##` heading there in yellow, as opening no slide. A thematic break, `---` after a blank line, is a rule on its slide.
@@ -486,6 +488,10 @@ Then this.
 On the page, where nothing is presented, a pause shows nothing and an `incremental` box is an ordinary box.
 
 Everything a page shows a slide shows: formulas set with the macros defined on the slides before them, diagrams, pictures, code, tables, images and the HTML a page may hold.
+
+### Embedding a presentation
+
+`![Caption](page){.presentation}` shows a presentation in another page: the slide, as a card of the deck's shape and look, with buttons to the first slide, the step before, the step after and the last slide, the slide's number out of the deck's, and "Present", which opens the slides view at that slide. With the focus in the viewer (a click on it, or Tab), the left and right arrows go through the steps and Home and End to the first and the last slide; with the focus elsewhere these keys are the page's. Printed, the viewer is the slide shown, whole. The viewer starts as the embed's link, which is what a reader sees first and what the page is without its script, and becomes the viewer once the page has been read, as the reader may read it: for a document, a page of a space the reader cannot see, or one the server refuses, it stays the link, with nothing of that page's text in the page. In an encrypted space the page is read with the reader's key, as any page is. Inside a viewer, and in a feed, an export or the slides view, an embedded presentation is its link, so a presentation that embeds itself shows one viewer, with the link in it.
 
 ### Editing a presentation
 
