@@ -146,6 +146,7 @@ library
         Wiki.Server.Storage.Renewal
         Wiki.Server.Storage.Sealed
         Wiki.Server.Storage.Sqlite
+        Wiki.Server.Storage.SqliteLibrary
         Wiki.Server.Storage.Stars
         Wiki.Server.Tls
         Wiki.Server.Totp
@@ -378,6 +379,7 @@ test-suite wiki-server-test
         Test.Storage.Keys
         Test.Storage.Links
         Test.Storage.SearchText
+        Test.Storage.SqliteLibrary
         Test.Storage.Migrate
         Test.Storage.Permissions
         Test.Storage.Removal

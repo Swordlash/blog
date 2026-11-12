@@ -1,3 +1,4 @@
 libpq-dev
+libsqlite3-dev
 libxml2-utils
 libncurses-dev

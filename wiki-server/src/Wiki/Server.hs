@@ -65,6 +65,7 @@ import Wiki.Server.Static (openStaticSite)
 import Wiki.Server.Storage (Config (..), DataDirInUse (..), Database (..), Place (..), readServerSettings, storageMigrated, withStorage)
 import Wiki.Server.Storage.Layout (PgDatabase (..), withoutPassword)
 import Wiki.Server.Storage.Migrate (OldSchema, SchemaTooNew, StepsMissing)
+import Wiki.Server.Storage.SqliteLibrary (SqliteLibrary (..), SqliteRefused, sqliteLibrary)
 import Wiki.Server.Tls (loadTls)
 import Wiki.Server.Vault (newCeremonies)
 import Wiki.Server.Version (serverVersion)
@@ -156,6 +157,9 @@ withServerUsing given raw sendMail action = do
     . handle (\(e :: OldSchema) -> throwIO (ServerError [toS (displayException e)]))
     . handle (\(e :: SchemaTooNew) -> throwIO (ServerError [toS (displayException e)]))
     . handle (\(e :: StepsMissing) -> throwIO (ServerError [toS (displayException e)]))
+    -- So is a SQLite library too old for the wiki, refused as the database
+    -- is opened ("Wiki.Server.Storage.SqliteLibrary").
+    . handle (\(e :: SqliteRefused) -> throwIO (ServerError [toS (displayException e)]))
     $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, avatarAddress = avatarUrl, passwordStretch = options.passwordStretch, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake, permissionsChanged = Events.permissionsChanged events} place
     $ \storage -> Ki.scoped $ \resetTasks -> do
       backups <- newBackupService logger options.rclone storage
@@ -205,6 +209,11 @@ withServerUsing given raw sendMail action = do
           -- speak TLS.
           listeners = (options.listen, (public, tls)) : [(a, (admin, Nothing)) | Just a <- [options.adminListen]]
       logWith logger Info [("event", "starting"), ("version", serverVersion), ("data", toS options.dataDir), ("database", databaseName place.database), ("static", maybe "none" toS options.staticDir), ("base", options.basePath)]
+      -- The SQLite library the server runs on, the operating system's: a
+      -- wiki in SQLite depends on its version.
+      case (place.database, sqliteLibrary) of
+        (SqliteFile _, Right l) -> logWith logger Info [("event", "sqlite"), ("version", l.version), ("library", "system")]
+        _ -> pass
       -- What the migration as the storage opened has to tell, such as a
       -- login it renamed: a deploy that does not run wiki-server migrate
       -- first (the Docker image) sees it here.

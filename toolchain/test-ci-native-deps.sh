@@ -140,9 +140,11 @@ libxmlextra1 1.1
 libxml2 2.9.14+dfsg-1.3ubuntu3.10
 libpq-dev 16.15-0ubuntu0.24.04.1
 libncurses-dev 6.4+20240113-1ubuntu2.2
+libsqlite3-dev 3.45.1-1ubuntu2.8
 '
 on_image='libpq-dev 16.15-0ubuntu0.24.04.1
 libncurses-dev 6.4+20240113-1ubuntu2.2
+libsqlite3-dev 3.45.1-1ubuntu2.8
 libxml2 2.9.14+dfsg-1.3ubuntu3.10
 '
 current='libxml2-utils_2.9.14+dfsg-1.3ubuntu3.10_amd64.deb libxmlextra1_1.1_amd64.deb'

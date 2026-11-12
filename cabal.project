@@ -168,6 +168,19 @@ program-options
 package pandoc
   flags: +embed_data_files -http
 
+-- SQLite is the operating system's, not the copy direct-sqlite bundles:
+-- direct-sqlite 2.3.29 bundles SQLite 3.45.0 (January 2024) and has had no
+-- release since, while a distribution keeps its SQLite patched. With
+-- systemlib, direct-sqlite (under sqlite-simple and beam-sqlite) links
+-- -lsqlite3 and compiles against the system's sqlite3.h, so the machine
+-- that builds wiki-server needs SQLite's development files (Debian's
+-- libsqlite3-dev, RHEL's sqlite-devel) and the one that runs it the
+-- library. The server refuses a library older than it needs, or built
+-- without what it relies on (Wiki.Server.Storage.SqliteLibrary). The wasm
+-- build has no direct-sqlite: the server is not built for the browser.
+package direct-sqlite
+  flags: +systemlib
+
 -- libsodium comes from the toolchain: toolchain/libsodium.sh builds the
 -- release toolchain/pins.env pins as a static library, and its libsodium.pc
 -- names the library libsodium-static, which no system has. Both packages

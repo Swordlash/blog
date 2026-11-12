@@ -1,6 +1,6 @@
 -- | The check of what the native build of wiki-server needs from the
 -- machine: the commands cc, make, curl, git and pkg-config, and the C
--- libraries GMP, libpq and zlib (terminfo too for the configuration
+-- libraries GMP, libpq, zlib and SQLite (terminfo too for the configuration
 -- wizard). It prints one line per item, ok or missing, with how
 -- the item was found or what was tried, then a summary that names the Debian
 -- and RHEL packages of what is missing. It installs nothing.
@@ -22,6 +22,12 @@
 --   directories @WIKI_PG_CONFIG_DIRS@ names, for the tests), to name the one
 --   to put on PATH. A build without PostgreSQL needs no libpq.
 -- * zlib: through pkg-config (@zlib.pc@), as the zlib package finds it.
+-- * SQLite: direct-sqlite is built with its flag @systemlib@
+--   (cabal.project), so it compiles against the system's @sqlite3.h@ and
+--   links @-lsqlite3@. The check builds a one-line program that way
+--   through cc, then refuses a header older than SQLite 3.32.0, the
+--   oldest the server runs on ("Wiki.Server.Storage.SqliteLibrary" in
+--   wiki-server says why).
 -- * libsodium is not looked for: the bootstrap builds the release
 --   @toolchain/pins.env@ pins from source (@toolchain/libsodium.sh@), as a
 --   static library in the toolchain's directory, so the machine needs none.
@@ -186,11 +192,12 @@ findings root options = do
   gmp <- gmpItem hasCc
   (libpq, elsewhere) <- libpqItem options hasPkgConfig
   zlib <- zlibItem hasPkgConfig
+  sqlite <- sqliteItem hasCc
   sodium <- sodiumLine root
   terminfo <- terminfoItem options hasCc
   pure
     Findings
-      { lines' = commands <> [texLine, gmp, libpq, zlib, sodium, terminfo]
+      { lines' = commands <> [texLine, gmp, libpq, zlib, sqlite, sodium, terminfo]
       , texNote = texNote'
       , pgConfigElsewhere = elsewhere
       }
@@ -291,6 +298,26 @@ zlibItem hasPkgConfig
       pure (if ok then Ok "zlib" "pkg-config --exists zlib" else lacks "pkg-config --exists zlib failed")
   where
     lacks = Missing . Lack "zlib" "zlib1g-dev" "zlib-devel"
+
+-- | SQLite, as direct-sqlite links it: a program with @sqlite3.h@ and
+-- @-lsqlite3@ through cc, then the header's version, through cc's
+-- preprocessor, against the oldest the server runs on.
+sqliteItem :: Bool -> IO Line
+sqliteItem hasCc
+  | not hasCc = pure (lacks "not checked: needs cc")
+  | otherwise = do
+      linked <- probe "sqlite" "#include <sqlite3.h>\nint main(void) { return sqlite3_libversion_number() > 0 ? 0 : 1; }\n" "-lsqlite3"
+      recent <-
+        if linked
+          then (== ExitSuccess) <$> runProcess (setStdin (byteStringInput "#include <sqlite3.h>\n#if SQLITE_VERSION_NUMBER < 3032000\n#error older than 3.32.0\n#endif\n") (quiet (proc "cc" ["-E", "-x", "c", "-"])))
+          else pure False
+      pure (found' linked recent)
+  where
+    found' linked recent
+      | not linked = lacks "cc cannot build a program with sqlite3.h and -lsqlite3"
+      | not recent = lacks "sqlite3.h is older than SQLite 3.32.0, the oldest wiki-server runs on"
+      | otherwise = Ok "SQLite" "sqlite3.h and -lsqlite3, through cc (3.32.0 or later)"
+    lacks = Missing . Lack "SQLite" "libsqlite3-dev" "sqlite-devel"
 
 -- | libsodium's line, which is not counted: the bootstrap builds the
 -- pinned release from source, so nothing is needed from the machine. The

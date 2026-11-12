@@ -56,6 +56,7 @@ import Test.Storage.Permissions qualified as Permissions
 import Test.Storage.Removal qualified as Removal
 import Test.Storage.Scale qualified as Scale
 import Test.Storage.SearchText qualified as SearchText
+import Test.Storage.SqliteLibrary qualified as SqliteLibrary
 import Test.Storage.Transactions qualified as Transactions
 
 main :: IO ()
@@ -77,6 +78,7 @@ main = secureMain $ do
         Metrics.spec
         Compress.spec
         Sha256.spec
+        SqliteLibrary.unitSpec
         Tls.keySpec
         WhatsNew.unitSpec
         Opaque.unitSpec

@@ -914,12 +914,12 @@ jobs:
         sh toolchain/bootstrap.sh path >> "$GITHUB_PATH"
 
     # The prerender is built natively with every package's dependencies,
-    # the server's among them: libpq's development files, as in the native
-    # job, and libsodium (below). A self-hosted runner has libpq from the
-    # bootstrap.
-    - name: Install libpq (hosted)
+    # the server's among them: libpq's and SQLite's development files, as in
+    # the native job, and libsodium (below). A self-hosted runner has both
+    # from the bootstrap.
+    - name: Install libpq and SQLite (hosted)
       if: runner.environment == 'github-hosted'
-      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev
+      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev libsqlite3-dev
 
     # libsodium, which every native build links statically:
     # toolchain/libsodium.sh builds the release toolchain/pins.env pins into
