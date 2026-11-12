@@ -340,8 +340,11 @@ everyTable = do
     , PublicKeyRow {key_id = "copy-old-key", user_id = "copy-u1", public_key = "old", created_at = time 0, retired_at = Just (time 1), retired_because = Just "replaced"}
     ]
   row wikiDb.key_grants [KeyGrantRow {resource_kind = "space", resource_id = "copy-sealed", key_id = "copy-space-key", recipient = "copy-u1", recipient_key_id = "copy-key", enc = "enc", sealed = "sealed", created_at = time 1}]
-  row wikiDb.page_keys [PageKeyRow {page_id = "copy-late", key_id = "copy-page-key", space_key_id = "copy-space-key", nonce = "nonce", wrapped = "wrapped"}]
-  row wikiDb.sealed_versions [SealedVersionRow {page_id = "copy-page", updated_at = time 1, tag = "tag", key_id = "copy-page-key", title_nonce = "n1", title = "t", body_nonce = "n2", body = "b"}]
+  row wikiDb.page_keys [PageKeyRow {page_id = "copy-late", key_id = "copy-page-key", space_key_id = "copy-space-key", nonce = "nonce", wrapped = "wrapped", current = True}]
+  row wikiDb.sealed_versions [SealedVersionRow {page_id = "copy-page", updated_at = time 1, tag = "tag", key_id = "copy-page-key", title_nonce = "n1", title = "t", body_nonce = "n2", body = "b", chain_number = Just 2, previous_tag = Just "earlier-tag"}]
+  row wikiDb.sealed_threads [SealedThreadRow {thread_id = "copy-thread", key_id = "copy-page-key", anchored = True, anchor_nonce = Just "n", anchor = Just "a"}]
+  row wikiDb.sealed_comments [SealedCommentRow {comment_id = "copy-comment", key_id = "copy-page-key", tag = "tag", nonce = "n", body = "b"}]
+  row wikiDb.sealed_attachments [SealedAttachmentRow {attachment_id = "copy-att", key_id = "copy-page-key", meta_nonce = "n", meta = "m", bytes_nonce = "b", staged_blob = Just "copy-staged-blob"}]
   row wikiDb.settings [SettingRow {key = "copy-setting", value = "ünïcode ✓"}]
   row wikiDb.sign_in_providers [ProviderRow {name = "copy-github", position = 0, kind = "github", client_id = "copy-client", issuer = Nothing, secret = Nothing}]
   row wikiDb.audit_log [AuditRow {id = "copy-audit", at = time 1, actor_id = "copy-u1", actor_login = "copy.one", action = "space.create", subject_kind = "space", subject_id = Just "copy-space", subject_name = "Copy", detail = "{}", address = "192.0.2.1"}]
@@ -412,6 +415,9 @@ comparedTables =
   , ("key_grants", rowsIn wikiDb.key_grants)
   , ("page_keys", rowsIn wikiDb.page_keys)
   , ("sealed_versions", rowsIn wikiDb.sealed_versions)
+  , ("sealed_threads", rowsIn wikiDb.sealed_threads)
+  , ("sealed_comments", rowsIn wikiDb.sealed_comments)
+  , ("sealed_attachments", rowsIn wikiDb.sealed_attachments)
   , ("spaces", rowsIn wikiDb.spaces)
   , ("pages", rowsIn wikiDb.pages)
   , ("page_versions", rowsIn wikiDb.page_versions)

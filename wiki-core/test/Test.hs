@@ -7,6 +7,7 @@ import Test.Attachment qualified as Attachment
 import Test.Blog qualified as Blog
 import Test.Comment qualified as Comment
 import Test.Diff qualified as Diff
+import Test.Encrypted qualified as Encrypted
 import Test.Export qualified as Export
 import Test.Hspec (hspec, parallel)
 import Test.Json qualified as Json
@@ -70,6 +71,7 @@ main = hspec . parallel $ do
   Attachment.spec
   Search.spec
   Diff.spec
+  Encrypted.spec
   Json.spec
   Anchor.spec
   Comment.spec

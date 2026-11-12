@@ -39,6 +39,15 @@ module Wiki.App.View.Body
   , Addresses (..)
   , noAddresses
   , attachmentAddresses
+  , linkUrlOf
+
+    -- * Who holds the attachments' addresses
+  , Owners (..)
+  , ownersOf
+  , beginOwned
+  , settleOwned
+  , ensureOwned
+  , releaseOwned
   , People (..)
   , noPeople
   , unasked
@@ -74,7 +83,7 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude
 import Web.Event.Event (EventType (..))
-import Wiki.App.Backend (MonadWiki (..), Session (boxes, user))
+import Wiki.App.Backend (MonadWiki (..), Session (boxes, user), UrlOwner, noUrlOwner)
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Browser (ArticleLink, articleLink)
 import Wiki.App.Islands (MonadIslands)
@@ -107,6 +116,9 @@ data Place = Place
   , attachments :: [Attachment]
   , urls :: Map AttachmentId Text
   -- ^ The URL of each attachment ('Wiki.App.Backend.attachmentUrl').
+  , downloads :: Map AttachmentId Text
+  -- ^ The URL a link to an attachment leads to, where it is not its URL
+  -- ('Wiki.App.Backend.attachmentDownloadUrl').
   , frames :: Map AttachmentId Text
   -- ^ The URL of the interactive form of each attachment that has one
   -- ('Wiki.App.Backend.attachmentFrameUrl'): an SVG the server stores.
@@ -121,21 +133,100 @@ data Place = Place
 -- the page it shows, and puts them into its 'Place'.
 data Addresses = Addresses
   { urls :: Map AttachmentId Text
+  , downloads :: Map AttachmentId Text
   , frames :: Map AttachmentId Text
   }
   deriving stock (Eq, Show)
 
 -- | No attachments' addresses, before any are fetched.
 noAddresses :: Addresses
-noAddresses = Addresses {urls = mempty, frames = mempty}
+noAddresses = Addresses {urls = mempty, downloads = mempty, frames = mempty}
 
--- | The addresses of these attachments, asked of the backend
--- ('Wiki.App.Backend.attachmentUrl', 'Wiki.App.Backend.attachmentFrameUrl').
-attachmentAddresses :: (MonadWiki m) => [Attachment] -> m Addresses
-attachmentAddresses attachments = do
-  urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) attachments
+-- | The addresses of these attachments, asked of the backend for the
+-- owner given, which holds them until it lets them go
+-- ('Wiki.App.Backend.attachmentUrl', 'Wiki.App.Backend.releaseUrls',
+-- 'Wiki.App.Backend.attachmentFrameUrl').
+attachmentAddresses :: (MonadWiki m) => UrlOwner -> [Attachment] -> m Addresses
+attachmentAddresses owner attachments = do
+  urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl owner a) attachments
+  downloads <- Map.fromList . catMaybes <$> traverse (\a -> fmap (a.id,) <$> attachmentDownloadUrl owner a) attachments
   frames <- Map.fromList . catMaybes <$> traverse (\a -> fmap (a.id,) <$> attachmentFrameUrl a) attachments
-  pure Addresses {urls, frames}
+  pure Addresses {urls, downloads, frames}
+
+-- | 'Owners' are the owners of attachments' addresses a view holds
+-- ("Wiki.App.Backend"'s 'UrlOwner'): the one whose addresses it shows,
+-- and those of its fetches not answered yet. Every owner a view asks for
+-- is registered here before any address is asked for under it, so that
+-- 'releaseOwned', which the view runs when it goes to another page or
+-- closes, lets go of every address the view made, those of a fetch that
+-- was cut short included. Every view that shows attachments keeps its
+-- owners this way.
+data Owners = Owners
+  { shown :: UrlOwner
+  , pending :: [UrlOwner]
+  }
+
+-- | The owners of a view that shows the addresses of this owner, and has
+-- no fetch out.
+ownersOf :: UrlOwner -> Owners
+ownersOf o = Owners {shown = o, pending = []}
+
+-- | A new owner for a fetch of the view's, registered in its state, through
+-- the field given, before anything is asked under it.
+beginOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m UrlOwner
+beginOwned get' set' = do
+  o <- newUrlOwner
+  modify (\st -> let os = get' st in set' Owners {shown = os.shown, pending = o : os.pending} st)
+  pure o
+
+-- | A fetch answered: its owner is no longer pending. Taken ('True'), its
+-- addresses are the ones the view shows, and those shown before are let
+-- go; dropped ('False'), its own are.
+settleOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> UrlOwner -> Bool -> m ()
+settleOwned get' set' o taken = do
+  before <- gets get'
+  let pending' = filter (/= o) before.pending
+  if taken
+    then do
+      modify (set' Owners {shown = o, pending = pending'})
+      when (before.shown /= o) (releaseUrls before.shown)
+    else do
+      modify (set' Owners {shown = before.shown, pending = pending'})
+      releaseUrls o
+
+-- | The owner a view asks under for what it shows, registered the first
+-- time it is asked for. A view's initial state asks under 'noUrlOwner',
+-- which no backend registers: an initial state may run for a component
+-- that never starts, and then never ends to let go of what it registered.
+-- Nor does a view register anything as it starts: a start's first step is
+-- what the server's rendering waits for, and what the first render shows
+-- is decided before it. So the owner is registered where the view first
+-- asks for addresses under it.
+ensureOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m UrlOwner
+ensureOwned get' set' = do
+  os <- gets get'
+  if os.shown /= noUrlOwner
+    then pure os.shown
+    else do
+      o <- newUrlOwner
+      modify (set' Owners {shown = o, pending = os.pending})
+      pure o
+
+-- | Let go of every owner the view registered, those of its fetches not
+-- answered included, which then make no address, and register none: the
+-- view goes to another page, or closes. What comes next registers its own
+-- ('beginOwned', 'ensureOwned'). What a view registers, the view releases,
+-- and a view that is going away registers nothing, so the backend's owners
+-- are as many after a view as before.
+releaseOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m ()
+releaseOwned get' set' = do
+  os <- gets get'
+  traverse_ releaseUrls (filter (/= noUrlOwner) (os.shown : os.pending))
+  modify (set' (ownersOf noUrlOwner))
+
+-- | The URL a link to an attachment leads to: its download's, or its own.
+linkUrlOf :: Addresses -> AttachmentId -> Text
+linkUrlOf addresses aid = fromMaybe (Map.findWithDefault "" aid addresses.urls) (Map.lookup aid addresses.downloads)
 
 -- | What a view knows about the people its Markdown mentions: the users
 -- found, and every login looked up, found or not.
@@ -390,7 +481,7 @@ spoilerScope place =
 resolve :: Place -> Text -> Md.LinkTarget PageLink
 resolve place destination = case Md.classifyDestination destination of
   Md.ToAttachment name -> case findAttachment name place.attachments of
-    Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = Map.findWithDefault "" a.id place.urls, mediaType = Just a.mediaType.text, frameUrl = Map.lookup a.id place.frames}
+    Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = Map.findWithDefault "" a.id place.urls, downloadUrl = fromMaybe (Map.findWithDefault "" a.id place.urls) (Map.lookup a.id place.downloads), mediaType = Just a.mediaType.text, frameUrl = Map.lookup a.id place.frames}
     Nothing -> Md.Unresolved
   Md.ToUrl url -> Md.External url
   Md.ToAnchor fragment -> Md.External ("#" <> fragment)

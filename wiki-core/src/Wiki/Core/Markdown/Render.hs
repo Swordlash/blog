@@ -666,7 +666,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
           | otherwise -> asText
         Page page -> anchor [HP.href (opts.pageHref page)]
         Attachment ref
-          | safeHref ref.url -> anchor [HP.href ref.url, HP.download ref.name]
+          | safeHref ref.downloadUrl -> anchor [HP.href ref.downloadUrl, HP.download ref.name]
           | otherwise -> asText
         Unresolved -> [PNode (HH.span [classesProp ["link-unresolved"], HP.title dest] inner)]
 
@@ -677,7 +677,7 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
     renderEmbed :: Bool -> Attributes -> Text -> Text -> Text -> R [Piece w i]
     renderEmbed inLink attrs dest title caption = case opts.resolveLink dest of
       External url
-        | safeSrc url -> pure [PNode (media (mediaKindOfPath url) url Nothing)]
+        | safeSrc url -> pure [PNode (media (mediaKindOfPath url) url url Nothing)]
         | otherwise -> pure [PText caption]
       Attachment ref
         | not inLink
@@ -692,11 +692,11 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
                   ( HH.span
                       (idAndClasses attrs ["svg-frame"])
                       [ draw k shown
-                      , HH.a [HP.href ref.url, HP.download ref.name, classesProp ["svg-frame-download"], HP.attr (HH.AttrName "aria-label") ("Download " <> ref.name)] []
+                      , HH.a [HP.href ref.downloadUrl, HP.download ref.name, classesProp ["svg-frame-download"], HP.attr (HH.AttrName "aria-label") ("Download " <> ref.name)] []
                       ]
                   )
               ]
-        | safeSrc ref.url -> pure [PNode (media (maybe (mediaKindOfPath ref.name) mediaKindOfType ref.mediaType) ref.url (Just ref.name))]
+        | safeSrc ref.url -> pure [PNode (media (maybe (mediaKindOfPath ref.name) mediaKindOfType ref.mediaType) ref.url ref.downloadUrl (Just ref.name))]
         | otherwise -> pure [PText caption]
       Page page -> pure [PNode (HH.a [HP.href (opts.pageHref page)] [HH.text (nonEmptyOr dest caption)])]
       Unresolved -> pure [PNode (HH.span [classesProp ["embed-unresolved"], HP.title dest] [HH.text (nonEmptyOr dest caption)])]
@@ -713,10 +713,12 @@ renderSectionsWithIds opts prefixed = evalState (traverse section prefixed) (Cou
           ]
         label :: [HP.IProp r i]
         label = [HP.attr (HH.AttrName "aria-label") caption | not (T.null caption)]
-        media kind url name = case (kind, name) of
+        -- What is shown is fetched from the first URL; a link leads to the
+        -- second ('AttachmentRef''s downloadUrl).
+        media kind url linkTo name = case (kind, name) of
           (VideoMedia, _) -> HH.video ([HP.src url, HP.controls True] <> label <> common) []
           (AudioMedia, _) -> HH.audio ([HP.src url, HP.controls True] <> label <> common) []
-          (OtherMedia, Just file) -> HH.a ([HP.href url, HP.download file] <> idAndClasses attrs []) [HH.text (nonEmptyOr file caption)]
+          (OtherMedia, Just file) -> HH.a ([HP.href linkTo, HP.download file] <> idAndClasses attrs []) [HH.text (nonEmptyOr file caption)]
           _ -> HH.img ([HP.src url, HP.alt caption] <> common)
 
     island :: Text -> R IslandKey
@@ -1123,7 +1125,7 @@ resolvedAttributes opts attrs = concatMap prop attrs <> unresolvedClass
         | safeHref url -> ("href", url) : [("rel", "noopener") | isExternal url]
       Page page -> [("href", opts.pageHref page)]
       Attachment ref
-        | safeHref ref.url -> [("href", ref.url), ("download", ref.name)]
+        | safeHref ref.downloadUrl -> [("href", ref.downloadUrl), ("download", ref.name)]
       _ -> []
     sourceProp key dest = case relativeFirst True dest of
       External url | safeSrc url -> [(key, url)]

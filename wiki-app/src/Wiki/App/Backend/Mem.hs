@@ -84,7 +84,7 @@ import Web.URL qualified as URL
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Assistant (MonadAssistant)
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), UrlOwner (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), noServer)
@@ -262,7 +262,12 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   listVersions pid q = needVersions (unreadHistory pid) >> query (listVersionsIn pid q)
   getVersion pid at = needVersions (unreadHistory pid) >> query (getVersionIn pid at)
   restoreVersion pid at base = needVersions (unreadHistory pid) >> writeAt (restoreVersionIn pid at base) >>= withWritersRead
-  attachmentUrl a = case a.source of
+
+  -- The demo's object URLs are its own attachments' bytes, which it keeps
+  -- for as long as it holds the attachment: no view owns them.
+  newUrlOwner = pure (UrlOwner 0)
+  releaseUrls _ = pass
+  attachmentUrl _ a = case a.source of
     SourceUrl url -> pure url.text
     SourceBlob blob -> blobUrl a.mediaType blob
 
@@ -271,6 +276,10 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   -- A frame of the object URL would be refused anyway, as the page's
   -- frame-src does not allow blob: addresses.
   attachmentFrameUrl _ = pure Nothing
+
+  -- The demo's object URLs are its own attachments' bytes, which nobody
+  -- else wrote.
+  attachmentDownloadUrl _ _ = pure Nothing
 
   -- The demo has no pandoc, offers no formats, and makes no document.
   fetchExport _ _ = pure (Left (Invalid "The demo makes no documents: exporting needs the server, which makes them with pandoc."))
@@ -450,6 +459,7 @@ instance (Monad m) => MonadEncryption (MemWiki m) where
   keyState _ = pure (Right NotEncrypted)
   encryptSpace _ = pure (Left noServer)
   spaceEncryption _ = pure (Left noServer)
+  chainProblem _ = pure Nothing
 
 instance (MonadIO m) => MonadStars (MemWiki m) where
   starred = query starredIn

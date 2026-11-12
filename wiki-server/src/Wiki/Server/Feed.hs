@@ -363,6 +363,7 @@ notificationTitle n = case n.kind of
   Replied -> n.actor.name <> " replied in a thread of yours on " <> n.title
   Commented -> n.actor.name <> " commented on " <> n.title
   Changed -> n.actor.name <> " changed " <> n.title
+  KeyToRenew -> n.actor.name <> " removed a reader of " <> n.title <> ": its key must be renewed"
 
 --------------------------------------------------------------------------------
 -- A post as HTML
@@ -399,7 +400,7 @@ postHtml base boxes spaces space pages p = case Md.parseMarkdown p.body of
       Md.ToAttachment name -> case findAttachment name p.attachments of
         -- A feed reader has no sandbox to show a frame in: an interactive SVG
         -- is the image there.
-        Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = absolute (attachmentUrl a), mediaType = Just a.mediaType.text, frameUrl = Nothing}
+        Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = absolute (attachmentUrl a), downloadUrl = absolute (attachmentUrl a), mediaType = Just a.mediaType.text, frameUrl = Nothing}
         Nothing -> Md.Unresolved
       Md.ToUrl url -> Md.External url
       Md.ToAnchor fragment -> Md.External (addressOf base (Duplex.print route (pageRoute spacePath postPath)) <> "#" <> fragment)

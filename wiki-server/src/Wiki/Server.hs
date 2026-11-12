@@ -64,7 +64,7 @@ import Wiki.Server.Session (CookieSettings (..))
 import Wiki.Server.Static (openStaticSite)
 import Wiki.Server.Storage (Config (..), DataDirInUse (..), Database (..), Place (..), readServerSettings, storageMigrated, withStorage)
 import Wiki.Server.Storage.Layout (PgDatabase (..), withoutPassword)
-import Wiki.Server.Storage.Migrate (OldSchema, SchemaTooNew)
+import Wiki.Server.Storage.Migrate (OldSchema, SchemaTooNew, StepsMissing)
 import Wiki.Server.Tls (loadTls)
 import Wiki.Server.Vault (newCeremonies)
 import Wiki.Server.Version (serverVersion)
@@ -155,6 +155,7 @@ withServerUsing given raw sendMail action = do
   handle (\(DataDirInUse why) -> throwIO (ServerError [why]))
     . handle (\(e :: OldSchema) -> throwIO (ServerError [toS (displayException e)]))
     . handle (\(e :: SchemaTooNew) -> throwIO (ServerError [toS (displayException e)]))
+    . handle (\(e :: StepsMissing) -> throwIO (ServerError [toS (displayException e)]))
     $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, avatarAddress = avatarUrl, passwordStretch = options.passwordStretch, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake, permissionsChanged = Events.permissionsChanged events} place
     $ \storage -> Ki.scoped $ \resetTasks -> do
       backups <- newBackupService logger options.rclone storage

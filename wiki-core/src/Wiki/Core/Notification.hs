@@ -105,6 +105,12 @@ data Kind
     Commented
   | -- | Someone saved a page they watch.
     Changed
+  | -- | A reader of an encrypted space they administer is a reader no
+    -- longer, and the space's key must be renewed (WP5.74b3 of
+    -- docs/PLAN.md): the page is one of the space's, the title the space's
+    -- name. Never one of the rules' ('recipients'): the storage tells the
+    -- space's administrators itself.
+    KeyToRenew
   deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
 
 instance ToJSON Kind where
@@ -119,6 +125,7 @@ kindName = \case
   Replied -> "replied"
   Commented -> "commented"
   Changed -> "changed"
+  KeyToRenew -> "renew-key"
 
 -- | Where a page is now, for a link to it: its space's path and its own
 -- path there.
@@ -166,6 +173,7 @@ notificationText n = n.actor.name <> " " <> verb
       Replied -> "replied in a thread of yours"
       Commented -> "commented"
       Changed -> "changed the page"
+      KeyToRenew -> "removed a reader of an encrypted space you administer: open the space to renew its key"
 
 --------------------------------------------------------------------------------
 -- Watching
@@ -328,6 +336,7 @@ recipients grants watchers a =
         CommentedIn _ _ -> watched r
         _ -> False
       Changed -> a.occasion == PageSaved && watched r
+      KeyToRenew -> False
 
 -- | The logins a Markdown text mentions; none if it cannot be parsed.
 mentionedIn :: Text -> Set Text

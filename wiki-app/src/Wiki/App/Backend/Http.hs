@@ -61,6 +61,7 @@ module Wiki.App.Backend.Http
   , newImmediateHttpEnv
   , runHttpWiki
   , cacheOf
+  , ownersHeld
   , frameUrlIn
   , FrameReach (..)
 
@@ -88,9 +89,12 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 import Control.Monad.Primitive (PrimMonad)
 import Control.Monad.UUID (MonadUUID (..))
-import Data.Aeson (eitherDecode)
+import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecode, eitherDecodeStrict', encode, object, withObject, (.:), (.=))
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Halogen.JSBits (inBrowser)
@@ -112,7 +116,7 @@ import Wiki.Api.Activity (ActivityQuery (..), firstPage)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..), UserQuery (..))
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
-import Wiki.Api.Encrypted (EncryptSpace (..), NewGrant (..), NewGrants (..), NewSealedPage (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..))
+import Wiki.Api.Encrypted (EncryptSpace (..), NewEncryptedSubspace (..), NewGrant (..), NewGrants (..), NewSealedComment (..), NewSealedPage (..), NewSealedThread (..), RotatedPage (..), Rotation (..), RotationInfo (..), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedThread (..), SealedThreads (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..))
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Export (dispositionFileName, formatExtension, formatMediaType)
@@ -125,13 +129,13 @@ import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), OneTimeCode (.
 import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Stars (StarredPage (..), Starring (..), StarsApi (..))
 import Wiki.Api.Types
-import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
+import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..), SealedAttachmentUpload (..), SealedUpload (..))
 import Wiki.Api.Vault (PublicKeyEntry (..), VaultChange (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Assistant (KeyRef, MonadAssistant, deviceKeyIO, forgetHeld, wrapForPassword)
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..), Rewrap (..))
-import Wiki.App.Backend (Document (..), ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), withOwnUser)
+import Wiki.App.Backend (Document (..), ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (..), UrlOwner (..), WikiError (..), sessionPrincipal, withOwnUser)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), keyStateText)
@@ -143,27 +147,29 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Opaque qualified as Opaque
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew (..))
-import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, newPageId, newPageKey, newSpaceKey, noEncryption, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openTitle, sealContent, shareSpaceKey)
+import Wiki.App.Encrypted (NewSpaceKey (..), PageKeyRef, SpaceKey, encryptionHere, forgetPageKey, forgetSpaceKey, keepSeen, keyNamed, newPageId, newPageKey, newSpaceKey, newTag, noEncryption, objectUrls, openAttachmentBytes, openContent, openHeadings, openPageKey, openPages, openSpaceKey, openText, openVersionTitles, revokeUrl, rotateKeys, sealBytes, sealContent, sealText, seenOf, shareSpaceKey)
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (browserOnline, forgetReads, offlineCopy)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.Vault (identitySlot)
-import Wiki.Core.Attachment (Attachment)
-import Wiki.Core.Comment (Thread (..))
-import Wiki.Core.Encrypted (KeyGrant (..), PageKey (..))
-import Wiki.Core.Id (PageId (..), SpaceId)
+import Wiki.Core.Anchor (Anchor)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), mimeEssence, parseFileName, shownInBrowser, uploadedMimeType)
+import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody)
+import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), Kept (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), Seen (..), VersionTag (..), anchorData, attachmentBytesData, attachmentMetaData, chainAfter, chainProblemText, commentData, firstChain, gapIn, headingOf, judgeHead, linkedFrom)
+import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..))
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.Path (ancestry, pathOf)
+import Wiki.Core.Permission (canAdministerSpace)
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), searchPlain)
 import Wiki.Core.Search qualified as Search
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Space (..), homeBody, homeTitle)
 import Wiki.Core.User (Password (..), Standing (..), User (..), checkNewPassword)
-import Wiki.Core.Vault (KeyId)
-import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..), versionsPageSize)
+import Wiki.Core.Vault (KeyId, Nonce)
+import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..), maxVersionsPageSize, versionsPageSize)
 
 -- | The HTTP backend's state: where requests go, and the cache.
 data HttpEnv = HttpEnv
@@ -523,8 +529,38 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
       cachedAlways (fmap sessionInfo . (\c -> c.session)) endpoints.session (withSession . fromSessionInfo)
   getHomeDocument = pageContent (\c -> c.homeDocument) endpoints.homeDocument (\a c -> c {Cache.homeDocument = Just a})
   listSpaces = orThrow (cachedAlways (\c -> c.spaces) endpoints.spaces.list withSpaces)
-  getSpace path = cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path)
-  createSpace parent name = write (endpoints.spaces.create NewSpace {parent, name})
+
+  -- An encrypted space made before encrypted spaces had home pages gets
+  -- its home page here, when one of its administrators opens it, before
+  -- its pages are listed ('ensureHome'). Until it has one, its record is
+  -- not taken from the cache: another tab may have made its home page
+  -- since, which every page now hangs from, and a path read with the old
+  -- record would not be found.
+  getSpace path =
+    cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path) >>= \case
+      Right s
+        | isJust s.encryption
+        , isNothing s.homePage -> do
+            cacheOnly <- HttpWiki (asks (\env -> env.cacheOnly))
+            fresh <-
+              if cacheOnly
+                then pure (Right s)
+                else do
+                  modifyCache (\c -> c {Cache.spaceAt = Map.delete path c.spaceAt})
+                  cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path)
+            case fresh of
+              Right now | Just k <- now.encryption, isNothing now.homePage -> ensureHome path now k
+              other -> pure other
+      other -> pure other
+
+  -- A subspace of an encrypted space is made encrypted, with a key of its
+  -- own and its home page made here ('sealedSubspace'); never by the plain
+  -- route, which refuses it.
+  createSpace parent name = do
+    listed <- maybe (pure Nothing) (const (rightToMaybe <$> spacesNow)) parent
+    case parent >>= \p -> (p,) <$> (listed >>= encryptionIn p) of
+      Just (p, _) -> sealedSubspace p name
+      Nothing -> write (endpoints.spaces.create NewSpace {parent, name})
   renameSpace sid name = write (endpoints.spaces.rename sid SpaceName {name})
   setSpacePublic sid public = write (endpoints.spaces.setPublic sid SpacePublic {public})
   setSpaceSealed sid sealed = write (endpoints.spaces.setSealed sid SpaceSealed {sealed})
@@ -560,7 +596,18 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- Not cached: it is read when the space's permissions are opened, which
   -- the server never prerenders, and read again after every change there.
   spaceAccess sid = send (endpoints.spaces.access sid)
-  setSpaceGrant sid subject permission granted = write_ (endpoints.spaces.setGrant sid SpaceGrantChange {subject, permission, granted})
+
+  -- Removing a reader of an encrypted space makes its key due for renewal:
+  -- an administrator who holds the key renews it at once, here.
+  setSpaceGrant sid subject permission granted = do
+    -- Whether the space is encrypted, read before the write, which empties
+    -- the cache.
+    encrypted <- either (const False) (isJust . encryptionIn sid) <$> spacesNow
+    result <- write_ (endpoints.spaces.setGrant sid SpaceGrantChange {subject, permission, granted})
+    when (isRight result && not granted && encrypted) $
+      -- Opening the key renews it too ('openKey').
+      send (endpoints.encrypted.space sid) >>= traverse_ (\e -> ifM (isJust . Map.lookup sid . (\h -> h.heldKeys) <$> readHeld) (renewIfDue sid e) (void (openKey NoRefresh sid e.keyId)))
+    pure result
   moveSpace sid parent = write (endpoints.spaces.move sid SpaceMove {parent})
   deleteSpace sid = write_ (endpoints.spaces.delete sid)
   setSpaceOrder sid children order = write (endpoints.spaces.setOrder sid SpaceOrder {children, order})
@@ -586,27 +633,56 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- cannot read the text of the pages there.
   pageBacklinks pid = pageContent (\c -> Map.lookup pid c.backlinks) (endpoints.pages.backlinks pid) (withBacklinks pid)
   createPage sid parent title body =
-    encryptedFetched sid (write (getResponse <$> endpoints.spaces.createPage sid NewPage {parent, title, body})) (sealedCreatePage sid parent title body)
+    encryptedFetched sid (write (getResponse <$> endpoints.spaces.createPage sid NewPage {parent, title, body})) (\current -> renewingThen sid (freshKey sid current >>= sealedCreatePage sid parent title body))
       >>= keepingSpaces (\p -> [(p.id, p.space)])
   savePage pid base title body =
     sealedPage pid >>= \case
       Nothing -> plainPageWrite pid (write (getResponse <$> endpoints.pages.save pid (PageVersion base) PageEdit {title, body}))
-      Just (sid, k) -> sealedSavePage sid pid k base title body
+      -- The page's key as held when the save is sent: a renewal of the
+      -- space's key gives the page a new one.
+      Just (sid, _) -> renewingThen sid (sealedPage pid >>= maybe (pure (Left (Conflict inEncryptedSpace))) (\(_, k) -> sealedSavePage sid pid k base title body))
   movePage pid space parent = write (endpoints.pages.move pid PageMove {space, parent})
   setPageTemplate pid template = write (endpoints.pages.template pid PageTemplate {template})
   deletePage pid = write_ (endpoints.pages.delete pid)
 
-  -- An attachment of a page of an encrypted space is not sent: the server
-  -- would keep its bytes, which are not encrypted yet.
+  -- An attachment of a page of an encrypted space is encrypted here, its
+  -- bytes and its name and media type, and sent as ciphertext
+  -- ('sealedUpload'); never as plain bytes, even to be refused.
   uploadAttachment pid name mediaType bytes =
-    plainPageWrite pid (write (withBoundary (endpoints.pages.upload pid) AttachmentUpload {name, mediaType, payload = toS bytes}))
-  deleteAttachment aid = write_ (endpoints.attachments.delete aid)
+    sealedPage pid >>= \case
+      Nothing -> plainPageWrite pid (write (withBoundary (endpoints.pages.upload pid) AttachmentUpload {name, mediaType, payload = toS bytes}))
+      Just (sid, _) -> renewingThen sid (sealedPage pid >>= maybe (pure (Left (Conflict inEncryptedSpace))) (\(_, k) -> sealedUpload sid pid k name mediaType bytes))
+  deleteAttachment aid = write_ (endpoints.attachments.delete aid) <* forgetAttachments (\i _ -> i == aid)
 
   -- The server serves an attachment's bytes at an API address, which the
-  -- program can build without a request.
-  attachmentUrl = pure . Links.attachmentUrl
+  -- program can build without a request. An attachment of an encrypted
+  -- page is fetched from there, encrypted, and decrypted here into an
+  -- object URLs the owner given holds ('sealedAttachmentUrls').
+  attachmentUrl owner a =
+    Map.lookup a.id . (\h -> h.heldAttachments) <$> readHeld >>= \case
+      Nothing -> pure (Links.attachmentUrl a)
+      Just held -> (\u -> u.shown) <$> sealedAttachmentUrls owner a.id held
 
-  -- Only where the frame can reach the server: see 'frameUrlIn'.
+  -- The link to an attachment of an encrypted page leads to its own
+  -- object URL, of the type 'linkType' gives.
+  attachmentDownloadUrl owner a =
+    Map.lookup a.id . (\h -> h.heldAttachments) <$> readHeld >>= \case
+      Nothing -> pure Nothing
+      Just held -> Just . (\u -> u.link) <$> sealedAttachmentUrls owner a.id held
+
+  newUrlOwner = atomicHeld (\h -> let o = UrlOwner h.heldNextOwner in (h {heldNextOwner = h.heldNextOwner + 1, heldOwners = Set.insert o h.heldOwners}, o))
+
+  -- The owner's URLs are let go, and the bytes they hold with them.
+  releaseUrls owner = do
+    urls <- atomicHeld $ \h ->
+      let (gone, kept') = Map.partitionWithKey (\(o, _) _ -> o == owner) h.heldUrls
+       in (h {heldUrls = kept', heldOwners = Set.delete owner h.heldOwners}, Map.elems gone)
+    liftIO (traverse_ revokeUrls urls)
+
+  -- Only where the frame can reach the server: see 'frameUrlIn'. An
+  -- interactive SVG of an encrypted page is shown as the image, as on an
+  -- offline copy (decision 73): a frame loads its address from the server,
+  -- which holds only its ciphertext.
   attachmentFrameUrl a = HttpWiki $ do
     env <- ask
     liftIO $ do
@@ -614,7 +690,8 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
       online <- browserOnline
       copy <- if inBrowser then offlineCopy else pure Nothing
       preloading <- readIORef env.preloading
-      pure (frameUrlIn FrameReach {secure, online, keptCopy = isJust copy && preloading} a)
+      sealed <- Map.member a.id . (\h -> h.heldAttachments) <$> readIORef env.held
+      pure (guard (not sealed) *> frameUrlIn FrameReach {secure, online, keptCopy = isJust copy && preloading} a)
 
   -- The document's address answers with its bytes, or with the API's
   -- refusal, which 'send' reads as any other ("Wiki.App.Backend.Http.Client").
@@ -783,22 +860,37 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
 -- applies its result to the cached threads instead of emptying the cache
 -- (see "Wiki.App.Backend.Http.Cache").
 instance (MonadIO m) => MonadComments (HttpWiki m) where
-  -- A page of an encrypted space has no comments yet: the server refuses
-  -- them, and none is asked for.
+  -- A page of an encrypted space has its comments encrypted: its threads
+  -- are read and written through the encrypted routes, their anchors and
+  -- comments encrypted here, and never sent as plain text, even to be
+  -- refused. Deleting and resolving carry no text, and go by the plain
+  -- routes.
   listThreads pid =
     sealedPage pid >>= \case
-      Just _ -> pure (Right [])
+      Just (sid, _) -> sealedListThreads sid pid
       Nothing -> cached (\c -> Map.lookup pid c.threads) (endpoints.comments pid).list (withThreads pid)
-
-  -- No comment write is sent for a page of an encrypted space: a new
-  -- thread carries the quoted text of the page, and a comment is as
-  -- private as the page it is on.
-  openThread pid anchor body = commentWrite pid ThreadOpened ((endpoints.comments pid).open NewThread {anchor, body})
-  reply pid tid body = commentWrite pid CommentAdded ((endpoints.comments pid).reply tid CommentText {body})
-  editComment pid tid cid body = commentWrite pid CommentEdited ((endpoints.comments pid).edit tid cid CommentText {body})
+  openThread pid anchor body =
+    sealedPage pid >>= \case
+      Just (sid, _) -> renewingThen sid (sealedOpenThread sid pid anchor body)
+      Nothing -> commentWrite pid ThreadOpened ((endpoints.comments pid).open NewThread {anchor, body})
+  reply pid tid body =
+    sealedPage pid >>= \case
+      Just (sid, _) -> renewingThen sid (sealedComment sid pid tid Nothing body)
+      Nothing -> commentWrite pid CommentAdded ((endpoints.comments pid).reply tid CommentText {body})
+  editComment pid tid cid body =
+    sealedPage pid >>= \case
+      Just (sid, _) -> renewingThen sid (sealedComment sid pid tid (Just cid) body)
+      Nothing -> commentWrite pid CommentEdited ((endpoints.comments pid).edit tid cid CommentText {body})
   deleteComment pid tid cid = commentWrite_ pid (CommentDeleted tid cid) ((endpoints.comments pid).deleteComment tid cid)
   deleteThread pid tid = commentWrite_ pid (ThreadDeleted tid) ((endpoints.comments pid).delete tid)
-  setResolved pid tid resolved = commentWrite pid (\t -> ThreadResolved t.id t.resolved) ((endpoints.comments pid).resolve tid ThreadResolution {resolved})
+  setResolved pid tid resolved =
+    sealedPage pid >>= \case
+      Just (sid, _) ->
+        send ((endpoints.comments pid).resolve tid ThreadResolution {resolved}) >>= \case
+          Left e -> pure (Left e)
+          -- The thread as the server answers it has no text: read again.
+          Right _ -> sealedListThreads sid pid <&> (>>= maybe (Left NotFound) Right . find (\t -> t.id == tid))
+      Nothing -> commentWrite pid (\t -> ThreadResolved t.id t.resolved) ((endpoints.comments pid).resolve tid ThreadResolution {resolved})
 
 -- | A write to a page's comments, whose result is applied to the page's
 -- cached threads. Refused here for a page of an encrypted space
@@ -812,7 +904,9 @@ commentWrite pid event endpoint = do
 -- | The same, for a write whose response has no body.
 commentWrite_ :: (MonadIO m) => PageId -> PageEvent -> HttpWiki IO NoContent -> HttpWiki m (Either WikiError ())
 commentWrite_ pid event endpoint = do
-  result <- plainPageWrite pid (send_ endpoint)
+  -- A deletion carries no text: sent for a page of an encrypted space too.
+  encrypted <- isJust <$> sealedPage pid
+  result <- if encrypted then send_ endpoint else plainPageWrite pid (send_ endpoint)
   modifyCache (afterComment pid (event <$ result))
   pure result
 
@@ -1359,10 +1453,48 @@ data Held = Held
   -- fetched at the first search that needs them, and forgotten at every
   -- write, when the live channel says a page was saved, and when a list
   -- of the space's pages shows pages added, removed or saved since.
+  , heldHeads :: Map PageId (UTCTime, VersionTag, Maybe Chain)
+  -- ^ The latest version of each page of an encrypted space read here, by
+  -- its time, with its tag and chain, checked by its decryption: what the
+  -- next version saved on top of it is chained to ('sealedSavePage').
+  , heldProblems :: Map PageId ChainProblem
+  -- ^ What this tab found wrong with the versions the server sent of a
+  -- page ('checkHead', "Wiki.Core.Encrypted"'s chain of versions). A page
+  -- with a problem is not saved from this tab, until a reload.
+  , heldPageKeys :: Map PageId [PageKey]
+  -- ^ Every key of each page of an encrypted space read here, its current
+  -- one first: its versions written before a rotation of its space's key
+  -- are encrypted with older ones.
+  , heldAttachments :: Map AttachmentId SealedAt
+  -- ^ The attachments of pages of encrypted spaces read here, with what
+  -- decrypts their bytes ('sealedAttachmentUrls').
+  , heldUrls :: Map (UrlOwner, AttachmentId) ObjectUrls
+  -- ^ The object URLs made of those attachments' bytes, decrypted, by the
+  -- owner that holds them ('UrlOwner'): let go when it lets them go.
+  , heldOwners :: Set UrlOwner
+  -- ^ The owners not let go yet.
+  , heldNextOwner :: Int
+  -- ^ The number of the next owner made.
+  , heldLowest :: Map PageId (UTCTime, (VersionTag, Maybe Chain))
+  -- ^ The oldest version, checked by its decryption, of the last page of a
+  -- page's history listed here: the next page, asked for before it, must
+  -- join it ('sealedVersions').
   }
 
 noneHeld :: Held
-noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty}
+noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldOwners = mempty, heldNextOwner = 1, heldLowest = mempty}
+
+-- | Where the bytes of an attachment of an encrypted page are, and what
+-- decrypts them: its space and page, the key of its page's that encrypts
+-- them, the nonce, and its media type.
+data SealedAt = SealedAt
+  { space :: SpaceId
+  , page :: PageId
+  , key :: PageKey
+  , nonce :: Nonce
+  , name :: FileName
+  , mediaType :: Text
+  }
 
 -- | Let go of what is held of encrypted spaces for the user who was signed
 -- in: the keys the page holds are forgotten, and the pages decrypted with
@@ -1371,14 +1503,25 @@ noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, hel
 -- encrypted (or not at all), never as plain text.
 forgetHeldOf :: HttpEnv -> IO ()
 forgetHeldOf env = do
-  was <- atomicModifyIORef' env.held (\h -> (h {heldKeys = mempty, heldFound = mempty}, h))
+  was <- atomicModifyIORef' env.held (\h -> (h {heldKeys = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldLowest = mempty, heldAttachments = mempty, heldUrls = mempty}, h))
   traverse_ (forgetSpaceKey . snd) (Map.elems was.heldKeys)
+  traverse_ revokeUrls (Map.elems was.heldUrls)
 
 modifyHeld :: (MonadIO m) => (Held -> Held) -> HttpWiki m ()
 modifyHeld f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.held (\h -> (f h, ()))))
 
+-- | How many owners of attachments' addresses the tab holds
+-- ("Wiki.App.Backend"'s 'UrlOwner'): those of the views open now, which
+-- each lets go when it closes. The browser tests count them.
+ownersHeld :: HttpEnv -> IO Int
+ownersHeld env = Set.size . (\h -> h.heldOwners) <$> readIORef env.held
+
 readHeld :: (MonadIO m) => HttpWiki m Held
 readHeld = HttpWiki (ask >>= \env -> liftIO (readIORef env.held))
+
+-- | Change what is held and read something of it, in one step.
+atomicHeld :: (MonadIO m) => (Held -> (Held, a)) -> HttpWiki m a
+atomicHeld f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.held f))
 
 -- | Forget the pages decrypted for the search: a write may have changed
 -- them.
@@ -1388,6 +1531,15 @@ forgetFound = modifyHeld (\h -> h {heldFound = mempty})
 -- | Remember pages of an encrypted space read here.
 rememberPages :: (MonadIO m) => SpaceId -> [(PageId, PageKey)] -> HttpWiki m ()
 rememberPages sid ps = modifyHeld (\h -> h {heldPages = Map.union (Map.fromList [(p, (sid, k)) | (p, k) <- ps]) h.heldPages})
+
+-- | Remember every key of a page read here, its current one first.
+rememberPageKeys :: (MonadIO m) => PageId -> [PageKey] -> HttpWiki m ()
+rememberPageKeys pid keys = unless (null keys) (modifyHeld (\h -> h {heldPageKeys = Map.insert pid keys h.heldPageKeys}))
+
+-- | Every key of a page this tab knows, the one given first: the current
+-- key, and the others read with the page.
+keysOfPage :: (MonadIO m) => PageId -> PageKey -> HttpWiki m [PageKey]
+keysOfPage pid k = (\h -> k : filter (\x -> x.keyId /= k.keyId) (Map.findWithDefault [] pid h.heldPageKeys)) <$> readHeld
 
 -- | Remember the spaces of the pages a read or a write returned
 -- ('heldSpaces'), and return the result unchanged.
@@ -1442,6 +1594,11 @@ encryptedOr sid plain sealed =
               sealed k
             _ -> pure refused
         other -> pure other
+
+-- | The space's current key id: the one given, or the one a renewal made
+-- since.
+freshKey :: (MonadIO m) => SpaceId -> KeyId -> HttpWiki m KeyId
+freshKey sid given = maybe given fst . Map.lookup sid . (\h -> h.heldKeys) <$> readHeld
 
 -- | 'encryptedOr' for a write, which sends a title and a text, with the
 -- list of spaces fetched first ('freshSpaces'), so that no plain text is
@@ -1503,9 +1660,28 @@ openKey refresh sid current =
     True ->
       Map.lookup sid . (\h -> h.heldKeys) <$> readHeld >>= \case
         Just (k, key) | k == current -> do
-          when (refresh == Refresh) $
-            ((\s -> s.user) <$> session) >>= traverse_ (\u -> send (endpoints.encrypted.space sid) >>= traverse_ (shareFrom u))
-          pure (Right (Right key))
+          changed <-
+            if refresh == Refresh
+              then
+                ((\s -> s.user) <$> session) >>= \case
+                  Nothing -> pure Nothing
+                  Just u ->
+                    send (endpoints.encrypted.space sid) >>= \case
+                      -- Another administrator renewed the key since this tab
+                      -- opened it: the new one is opened as if for the
+                      -- first time.
+                      Right e | e.keyId /= k -> pure (Just e.keyId)
+                      Right e -> renewIfDue sid e >> shareFrom u e $> Nothing
+                      Left _ -> pure Nothing
+              else pure Nothing
+          case changed of
+            Just newer -> do
+              liftIO (forgetSpaceKey key)
+              modifyHeld (\h -> h {heldKeys = Map.delete sid h.heldKeys})
+              void freshSpaces
+              openKey NoRefresh sid newer
+            -- The key held now: a renewal just made gives a new one.
+            Nothing -> Right . Right . maybe key snd . Map.lookup sid . (\h -> h.heldKeys) <$> readHeld
         _ ->
           ((\s -> s.user) <$> session) >>= \case
             Nothing -> pure (Right (Left SignInFirst))
@@ -1525,13 +1701,198 @@ openKey refresh sid current =
                         Left _ -> pure (Right (Left KeysLocked))
                         Right key -> do
                           modifyHeld (\h -> h {heldKeys = Map.insert sid (g.keyId, key) h.heldKeys})
-                          pure (Right (Right key))
+                          renewIfDue sid e
+                          Right . Right . maybe key snd . Map.lookup sid . (\h -> h.heldKeys) <$> readHeld
   where
     shareFrom u e = for_ (ownGrant e) (\g -> unless (null e.pending) (void (withDeviceKey u (\idKey -> sharePending idKey sid g e))))
     -- The user's grant of the space's current key. The server lists only
     -- that one; a grant of another key would open a key the space no
     -- longer uses, and would be held under the wrong id.
     ownGrant e = mfilter (\g -> g.keyId == e.keyId) e.grant
+
+-- | Renew the space's key when the server says it is due and the user may
+-- administer the space ('renewKey'): what an administrator's browser does
+-- whenever it opens the space's key. A renewal that fails is left for the
+-- next opening; the writes refused meanwhile say why.
+renewIfDue :: (MonadIO m) => SpaceId -> SpaceEncryption -> HttpWiki m ()
+renewIfDue sid e = when e.rotationDue (whenM (mayAdministerHere sid) (void (renewKey sid e)))
+
+-- | A new key for a space, sealed to the signed-in user's own public key,
+-- with the grant that carries it. The public key comes from the server,
+-- which could give a key of its own choosing and then open the space's
+-- key. So the new grant is opened here with the private key this device
+-- holds for the user before anything is sent: it opens only if the public
+-- key is the user's. The caller sends it, and keeps or forgets the key.
+newCheckedKey :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError (NewSpaceKey, NewGrant))
+newCheckedKey sid =
+  liftIO encryptionHere >>= \case
+    False -> pure (Left (Invalid noEncryption))
+    True ->
+      ((\s -> s.user) <$> session) >>= \case
+        Nothing -> pure (Left (Invalid (keyStateText SignInFirst)))
+        Just u ->
+          send (endpoints.account.publicKey u.id) >>= \case
+            Left NotFound -> pure (Left (Invalid "You have no keys yet: open your account's security to make them, then encrypt the space."))
+            Left e -> pure (Left e)
+            Right mine ->
+              liftIO (newSpaceKey sid mine.publicKey) >>= \case
+                Left why -> pure (Left (Invalid why))
+                Right made -> do
+                  let grant = KeyGrant {keyId = made.keyId, recipient = u.id, recipientKeyId = mine.keyId, enc = made.enc, sealed = made.sealed}
+                  checked <-
+                    withDeviceKey u (\idKey -> liftIO (openSpaceKey idKey sid grant)) >>= \case
+                      Nothing -> pure (Left (Invalid "This device does not hold your keys yet: unlock them in your account's security, then encrypt the space."))
+                      Just (Left _) -> pure (Left (Invalid "The server gave a public key for you that is not the one this device holds: nothing was encrypted. Open your account's security to check your keys."))
+                      Just (Right opened) -> liftIO (forgetSpaceKey opened) $> Right ()
+                  case checked of
+                    Left e -> liftIO (forgetSpaceKey made.key) $> Left e
+                    Right () -> pure (Right (made, NewGrant {recipient = u.id, recipientKeyId = mine.keyId, enc = made.enc, sealed = made.sealed}))
+
+-- | A space's home page, written and encrypted here with a new page key
+-- under the space's key: the starter page a plain space is made with
+-- ("Wiki.Core.Space"'s 'homeTitle' and 'homeBody'), at the top of its
+-- pages, the first of its chain of versions.
+sealedHomeOf :: (MonadIO m) => SpaceKey -> SpaceId -> Text -> KeyId -> HttpWiki m (Either WikiError NewSealedPage)
+sealedHomeOf key sid name k = liftIO . runExceptT $ do
+  pid <- ExceptT (first Invalid <$> newPageId)
+  (pk, pageKey) <- ExceptT (first Invalid <$> newPageKey key k sid pid)
+  content <- ExceptT (first Invalid <$> sealContent pk sid pid pageKey.keyId firstChain homeTitle (homeBody name))
+  lift (forgetPageKey pk)
+  pure NewSealedPage {id = pid, parent = Nothing, pageKey, content}
+
+-- | A space's name, as the list of spaces has it; empty if not listed.
+spaceNameOf :: (MonadIO m) => SpaceId -> HttpWiki m Text
+spaceNameOf sid = spacesNow <&> either (const "") (maybe "" (\s -> s.name) . find (\s -> s.id == sid))
+
+-- | A subspace of an encrypted space, made encrypted: an id chosen here,
+-- which its key and home page are bound to; a new key, sealed to the user
+-- ('newCheckedKey'); its home page ('sealedHomeOf'). The tab keeps the
+-- key. The parent's readers wait for it until a member's browser opens
+-- the subspace and shares it.
+sealedSubspace :: (MonadIO m) => SpaceId -> Text -> HttpWiki m (Either WikiError Space)
+sealedSubspace parent name =
+  liftIO newPageId >>= \case
+    Left why -> pure (Left (Invalid why))
+    Right made -> do
+      let sid = SpaceId made.text
+      newCheckedKey sid >>= \case
+        Left e -> pure (Left e)
+        Right (new, grant) ->
+          sealedHomeOf new.key sid name new.keyId >>= \case
+            Left e -> liftIO (forgetSpaceKey new.key) $> Left e
+            Right homePage -> do
+              result <- write (endpoints.encrypted.subspace parent NewEncryptedSubspace {id = sid, name, keyId = new.keyId, grant, homePage})
+              case result of
+                Right _ -> modifyHeld (\h -> h {heldKeys = Map.insert sid (new.keyId, new.key) h.heldKeys})
+                Left _ -> liftIO (forgetSpaceKey new.key)
+              pure result
+
+-- | Give an encrypted space made before encrypted spaces had home pages
+-- its home page, when the signed-in user may administer it and holds its
+-- key: written and encrypted here, after any renewal of the key that is
+-- due, and sent once ('Wiki.Api.EncryptedApi''s @home@). The space is
+-- then read again, with its home page, which every page now hangs from.
+-- Another tab's home page made first counts as made. Anything else leaves
+-- the space as it was: its pages stay readable at the same addresses.
+ensureHome :: (MonadIO m) => [Slug] -> Space -> KeyId -> HttpWiki m (Either WikiError Space)
+ensureHome path s current = do
+  cacheOnly <- HttpWiki (asks (\env -> env.cacheOnly || env.immediate))
+  may <- if cacheOnly then pure False else mayAdministerHere s.id
+  if not may
+    then pure (Right s)
+    else do
+      made <-
+        send (endpoints.encrypted.space s.id) >>= \case
+          Left e -> pure (Left e)
+          Right e -> do
+            renewIfDue s.id e
+            k <- either (const current) (\x -> x.keyId) <$> send (endpoints.encrypted.space s.id)
+            withSpaceKey NoRefresh s.id k $ \key ->
+              sealedHomeOf key s.id s.name k >>= \case
+                Left err -> pure (Left err)
+                Right home ->
+                  write (endpoints.encrypted.home s.id home) <&> \case
+                    Left (Conflict _) -> Right ()
+                    Left err -> Left err
+                    Right _ -> Right ()
+      case made of
+        Left _ -> pure (Right s)
+        Right () -> do
+          modifyCache (\c -> c {Cache.spaceAt = Map.delete path c.spaceAt, Cache.spaces = Nothing})
+          cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path)
+
+-- | Whether the signed-in user may administer the space, by the session's
+-- grants and the list of spaces: the only ones who may renew its key.
+mayAdministerHere :: (MonadIO m) => SpaceId -> HttpWiki m Bool
+mayAdministerHere sid = do
+  s <- session
+  spacesNow <&> \case
+    Right spaces -> canAdministerSpace (sessionPrincipal s) s.grants (fromMaybe [] (ancestry (\i -> find (\x -> x.id == i) spaces) sid))
+    Left _ -> False
+
+-- | Give the space a new key ("Wiki.Api.Encrypted"'s 'Rotation'): from the
+-- user's own grant of the current one ('SpaceEncryption'), sealed to every
+-- reader the server lists, every page key wrapped again and a new one for
+-- each page. The browser opens all of it before it sends it
+-- ('rotateKeys'); a key that does not open sends nothing. The new key is
+-- then the one held here, and each page's new key the one it is saved
+-- with.
+renewKey :: (MonadIO m) => SpaceId -> SpaceEncryption -> HttpWiki m (Either WikiError ())
+renewKey sid e =
+  ((\s -> s.user) <$> session) >>= \case
+    Nothing -> pure (Left (Invalid (keyStateText SignInFirst)))
+    Just u -> case mfilter (\g -> g.keyId == e.keyId) e.grant of
+      Nothing -> pure (Left (Invalid "You do not hold this space's key, so you cannot renew it: another administrator of the space who holds it can."))
+      Just g ->
+        send (endpoints.encrypted.rotation sid) >>= \case
+          Left err -> pure (Left err)
+          Right info ->
+            withDeviceKey u (\idKey -> liftIO (rotateKeys idKey sid g u.id info.readers info.pages)) >>= \case
+              Nothing -> pure (Left (Invalid (keyStateText KeysLocked)))
+              Just (Left why) -> pure (Left (Invalid why))
+              Just (Right (key, rotation)) ->
+                write_ (endpoints.encrypted.rotate sid rotation) >>= \case
+                  Left err -> liftIO (forgetSpaceKey key) $> Left err
+                  Right () -> do
+                    was <- Map.lookup sid . (\h -> h.heldKeys) <$> readHeld
+                    traverse_ (liftIO . forgetSpaceKey . snd) was
+                    modifyHeld $ \h ->
+                      h
+                        { heldKeys = Map.insert sid (rotation.keyId, key) h.heldKeys
+                        , heldPages = Map.union (Map.fromList [(p.page, (sid, p.current)) | p <- rotation.pages]) h.heldPages
+                        , heldPageKeys = Map.union (Map.fromList [(p.page, p.current : p.rewrapped) | p <- rotation.pages]) h.heldPageKeys
+                        , heldFound = Map.delete sid h.heldFound
+                        }
+                    pure (Right ())
+
+-- | Whether a write was refused because the space's key must be renewed
+-- first ("Wiki.Server.Storage"'s refusal while a rotation is due).
+renewalRefused :: Either WikiError a -> Bool
+renewalRefused = \case
+  Left (Conflict why) -> "key must be renewed" `T.isInfixOf` why
+  _ -> False
+
+-- | A write of a page of an encrypted space, renewed and sent once more
+-- when the space's key must be renewed first and this user may renew it;
+-- otherwise the refusal says why, as an error rather than a conflict with
+-- another edit.
+renewingThen :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError a) -> HttpWiki m (Either WikiError a)
+renewingThen sid sending =
+  sending >>= \case
+    r | renewalRefused r -> do
+      may <- mayAdministerHere sid
+      renewed <-
+        if may
+          then send (endpoints.encrypted.space sid) >>= either (pure . Left) (renewKey sid)
+          else pure (Left (Invalid ""))
+      case renewed of
+        Right () -> sending
+        Left _ -> pure (either (Left . Invalid . errorText) Right r)
+    r -> pure r
+  where
+    errorText = \case
+      Conflict why -> why
+      other -> show other
 
 -- | 'Refresh': whether 'openKey' asks the server for the readers waiting
 -- for a key held already. A list of the space's pages does (the shell
@@ -1599,9 +1960,102 @@ withPageKey space sid pid k step =
 unreadable :: Text
 unreadable = "(a page this browser cannot decrypt)"
 
+--------------------------------------------------------------------------------
+-- The chain of versions
+
+-- | Remember the latest versions of pages read here ('heldHeads').
+rememberHeads :: (MonadIO m) => [(PageId, (UTCTime, VersionTag, Maybe Chain))] -> HttpWiki m ()
+rememberHeads heads = modifyHeld (\h -> h {heldHeads = Map.union (Map.fromList heads) h.heldHeads})
+
+-- | Record what this tab found wrong with a page's versions.
+foundProblem :: (MonadIO m) => PageId -> ChainProblem -> HttpWiki m ()
+foundProblem pid problem = modifyHeld (\h -> h {heldProblems = Map.insert pid problem h.heldProblems})
+
+-- | A version this tab saved: the page's latest now, and the one this
+-- browser has seen.
+savedHead :: (MonadIO m) => PageId -> UTCTime -> SealedContent -> HttpWiki m ()
+savedHead pid at content = do
+  rememberHeads [(pid, (at, content.tag, content.chain))]
+  for_ content.chain $ \c -> rememberSeen pid Seen {number = c.number, tag = content.tag}
+
+-- | Remember the version seen of a page, only forward ('keepSeen'): a
+-- fork of what another tab remembered meanwhile is the problem it is.
+rememberSeen :: (MonadIO m) => PageId -> Seen -> HttpWiki m ()
+rememberSeen pid seen =
+  withUser $ \u ->
+    liftIO (keepSeen u.id pid seen) >>= \case
+      KeptFork -> foundProblem pid (Forked seen.number)
+      _ -> pass
+
+-- | A step with the signed-in user, if any.
+withUser :: (MonadIO m) => (User -> HttpWiki m ()) -> HttpWiki m ()
+withUser step = ((\s -> s.user) <$> session) >>= traverse_ step
+
+-- | Check the latest version of a page the server sent (its tag and chain,
+-- as the decryption of the page's own ciphertext gave them) against the
+-- latest one this browser read before ("Wiki.Core.Encrypted"'s
+-- 'judgeHead'). A later one must be joined to the one read by the page's
+-- history, from that very version down, version by version
+-- ('linkedFrom'): the history is read a page at a time until it reaches
+-- the version read, or ends. Then the latest is the version seen, unless
+-- something was wrong, which is recorded instead.
+checkHead :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> VersionTag -> Maybe Chain -> HttpWiki m ()
+checkHead key sid pid k tag chain = withUser $ \u -> do
+  seen <- liftIO (seenOf u.id pid)
+  verdict <- case (judgeHead seen tag chain, seen) of
+    (Left problem, _) -> pure (Left problem)
+    (Right (Advanced n), Just s) ->
+      historyDown key sid pid k s.number (min maxVersionsPageSize (n + 1)) Nothing [] <&> \case
+        Left problem -> Left problem
+        Right run -> linkedFrom s (tag, chain) run
+    _ -> pure (Right ())
+  case verdict of
+    Left problem -> foundProblem pid problem
+    Right () -> for_ chain $ \c -> rememberSeen pid Seen {number = c.number, tag}
+
+-- | A page's history, the latest first, read a page at a time from a
+-- version on (all of it for 'Nothing'), each page's titles decrypted,
+-- until it reaches a version numbered so or below, or ends: the versions,
+-- their tags and chains checked by the decryption. A version whose title
+-- does not open is not the browser's, and is a problem; a history that
+-- cannot be read is read no further.
+historyDown :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> Int -> Int -> Maybe UTCTime -> [(VersionTag, Maybe Chain)] -> HttpWiki m (Either ChainProblem [(VersionTag, Maybe Chain)])
+historyDown key sid pid k down size before got =
+  send (endpoints.encrypted.versions pid (VersionTime <$> before) (Just size)) >>= \case
+    Left _ -> pure (Right got)
+    Right listed -> do
+      titles <- liftIO (openVersionTitles key sid pid k [v.heading | v <- listed])
+      case [v | (v, Nothing) <- zip listed titles] of
+        v : _ -> pure (Left (Gap (maybe 0 (\c -> c.number) v.heading.chain)))
+        [] -> do
+          let run = got <> [(v.heading.tag, v.heading.chain) | v <- listed]
+              reached = any (\v -> maybe 0 (\c -> c.number) v.heading.chain <= down) listed
+          case lastMay listed of
+            Just oldest | not reached, length listed == size -> historyDown key sid pid k down maxVersionsPageSize (Just oldest.updatedAt) run
+            _ -> pure (Right run)
+
+-- | The tag and chain of the version a save is made on top of: the one
+-- read here, or else that version fetched, and checked by the decryption
+-- of its title.
+baseHead :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> UTCTime -> HttpWiki m (Either WikiError (VersionTag, Maybe Chain))
+baseHead key sid pid keys base =
+  Map.lookup pid . (\h -> h.heldHeads) <$> readHeld >>= \case
+    Just (at, tag, chain) | at == base -> pure (Right (tag, chain))
+    _ ->
+      send (endpoints.encrypted.version pid (VersionTime base)) >>= \case
+        Left e -> pure (Left e)
+        Right v ->
+          liftIO (openVersionTitles key sid pid keys [headingOf v.content]) <&> \case
+            [Just _] -> Right (v.content.tag, v.content.chain)
+            _ -> Left (Invalid "The version this edit began from does not open with the page's keys: open the page again.")
+
 -- | A page of an encrypted space, decrypted.
 pageFrom :: SealedPage -> Text -> Text -> Page
-pageFrom p title body =
+pageFrom p = pageWith p []
+
+-- | 'pageFrom', with the page's attachments, decrypted.
+pageWith :: SealedPage -> [Attachment] -> Text -> Text -> Page
+pageWith p attachments title body =
   Page
     { id = p.id
     , space = p.space
@@ -1609,7 +2063,7 @@ pageFrom p title body =
     , title
     , slug = p.slug
     , body
-    , attachments = []
+    , attachments
     , createdAt = p.createdAt
     , updatedAt = p.updatedAt
     , position = p.position
@@ -1628,28 +2082,87 @@ pageOrderOf sid = either (const ByName) (maybe ByName (\s -> s.pageOrder) . find
 
 sealedListPages :: (MonadIO m) => SpaceId -> KeyId -> HttpWiki m (Either WikiError [PageSummary])
 sealedListPages sid current =
-  send (endpoints.encrypted.pages sid) >>= \case
-    Left e -> pure (Left e)
-    Right listed -> withSpaceKey Refresh sid current $ \key -> do
-      titles <- liftIO (openHeadings key sid [(p.id, p.pageKey, p.heading) | p <- listed])
-      rememberPages sid [(p.id, p.pageKey) | p <- listed]
-      -- The pages the search holds decrypted are fetched again when the
-      -- space's pages have changed since: one more, one fewer, one saved.
-      let now' = Map.fromList [(p.id, p.updatedAt) | p <- listed]
-      modifyHeld $ \h -> case Map.lookup sid h.heldFound of
-        Just found | Map.fromList [(p.id, p.updatedAt) | (p, _) <- found] /= now' -> h {heldFound = Map.delete sid h.heldFound}
-        _ -> h
-      order <- pageOrderOf sid
-      pure (Right (pageTreeOrder order [summaryFrom p (Map.findWithDefault unreadable p.id titles) | p <- listed]))
+  -- The key first: opening it may renew it, which wraps every page's key
+  -- again, and the list read after carries the new wraps.
+  readingSealed Refresh sid current $ \key ->
+    send (endpoints.encrypted.pages sid) >>= \case
+      Left e -> pure (Left e, True)
+      Right listed -> do
+        titles <- liftIO (openHeadings key sid [(p.id, p.pageKeys, p.heading) | p <- listed])
+        rememberPages sid [(p.id, p.pageKey) | p <- listed]
+        for_ listed (\p -> rememberPageKeys p.id p.pageKeys)
+        rememberHeads [(p.id, (p.updatedAt, p.heading.tag, p.heading.chain)) | p <- listed, Map.member p.id titles]
+        -- The pages the search holds decrypted are fetched again when the
+        -- space's pages have changed since: one more, one fewer, one saved.
+        let now' = Map.fromList [(p.id, p.updatedAt) | p <- listed]
+        modifyHeld $ \h -> case Map.lookup sid h.heldFound of
+          Just found | Map.fromList [(p.id, p.updatedAt) | (p, _) <- found] /= now' -> h {heldFound = Map.delete sid h.heldFound}
+          _ -> h
+        order <- pageOrderOf sid
+        pure (Right (pageTreeOrder order [summaryFrom p (Map.findWithDefault unreadable p.id titles) | p <- listed]), Map.size titles == length listed)
 
 sealedGetPage :: (MonadIO m) => SpaceId -> [Slug] -> KeyId -> HttpWiki m (Either WikiError Page)
 sealedGetPage sid path current =
-  send (getResponse <$> endpoints.encrypted.pageAt sid path) >>= \case
-    Left e -> pure (Left e)
-    Right p -> withSpaceKey NoRefresh sid current $ \key -> do
-      rememberPages sid [(p.id, p.pageKey)]
-      withPageKey key sid p.id p.pageKey $ \pk ->
-        liftIO (openContent pk sid p.id p.content) <&> bimap Invalid (uncurry (pageFrom p))
+  readingSealed NoRefresh sid current $ \key ->
+    send (getResponse <$> endpoints.encrypted.pageAt sid path) >>= \case
+      Left e -> pure (Left e, True)
+      Right p -> do
+        rememberPages sid [(p.id, p.pageKey)]
+        rememberPageKeys p.id p.pageKeys
+        -- The latest version opens with the key of the page's it names: its
+        -- current one, or, when nothing was saved since its space's key was
+        -- renewed, an older one.
+        opened <- case keyNamed p.content.keyId p.pageKeys of
+          Nothing -> pure (Left (Invalid "This page's latest version names no key of the page's."))
+          Just contentKey -> do
+            attachments <- openAttachments key sid p.id p.pageKeys p.attachments
+            withPageKey key sid p.id contentKey $ \pk ->
+              liftIO (openContent pk sid p.id p.content) <&> bimap Invalid (uncurry (pageWith p attachments))
+        -- The version opened, so its tag and chain are the ones it was
+        -- encrypted with: checked against what this browser read before.
+        when (isRight opened) $ do
+          rememberHeads [(p.id, (p.updatedAt, p.content.tag, p.content.chain))]
+          checkHead key sid p.id p.pageKeys p.content.tag p.content.chain
+        pure (opened, isRight opened)
+
+-- | A read of an encrypted space's ciphertexts with the space's key: when
+-- some do not open ('False' beside the answer), the server is asked which
+-- key is the space's now, and when it is not the one held here (another
+-- administrator renewed it since this tab opened it), that one is opened,
+-- the pages' keys are read again, and the read is made once more. A
+-- ciphertext that does not open with the key held is first a reason to
+-- ask which key is current, and only then an error shown to the reader.
+readingSealed :: (MonadIO m) => Refresh -> SpaceId -> KeyId -> (SpaceKey -> HttpWiki m (Either WikiError a, Bool)) -> HttpWiki m (Either WikiError a)
+readingSealed refresh sid current step =
+  withSpaceKey refresh sid current $ \key -> do
+    (result, opened) <- step key
+    if opened
+      then pure result
+      else
+        reopenIfChanged sid >>= \case
+          Nothing -> pure result
+          Just key' -> fst <$> step key'
+
+-- | The space's key as the server names it now, opened here when it is not
+-- the one held, with the keys of its pages read again; 'Nothing' when the
+-- key held is the current one, or the current one does not open here.
+reopenIfChanged :: (MonadIO m) => SpaceId -> HttpWiki m (Maybe SpaceKey)
+reopenIfChanged sid =
+  send (endpoints.encrypted.space sid) >>= \case
+    Left _ -> pure Nothing
+    Right e -> do
+      held <- Map.lookup sid . (\h -> h.heldKeys) <$> readHeld
+      if (fst <$> held) == Just e.keyId
+        then pure Nothing
+        else do
+          traverse_ (liftIO . forgetSpaceKey . snd) held
+          modifyHeld (\h -> h {heldKeys = Map.delete sid h.heldKeys})
+          void freshSpaces
+          openKey NoRefresh sid e.keyId >>= \case
+            Right (Right key) -> do
+              send (endpoints.encrypted.pages sid) >>= traverse_ (\listed -> rememberPages sid [(p.id, p.pageKey) | p <- listed] >> for_ listed (\p -> rememberPageKeys p.id p.pageKeys))
+              pure (Just key)
+            _ -> pure Nothing
 
 sealedCreatePage :: (MonadIO m) => SpaceId -> Maybe PageId -> Text -> Text -> KeyId -> HttpWiki m (Either WikiError Page)
 sealedCreatePage sid parent title body current =
@@ -1657,10 +2170,11 @@ sealedCreatePage sid parent title body current =
     when (T.null (T.strip title)) $ throwError (Invalid "A page's title cannot be blank.")
     pid <- ExceptT (first Invalid <$> liftIO newPageId)
     (pk, pageKey) <- ExceptT (first Invalid <$> liftIO (newPageKey key current sid pid))
-    content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid pageKey.keyId (T.strip title) body))
+    content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid pageKey.keyId firstChain (T.strip title) body))
     liftIO (forgetPageKey pk)
     made <- ExceptT (write (getResponse <$> endpoints.encrypted.createPage sid NewSealedPage {id = pid, parent, pageKey, content}))
     lift (rememberPages sid [(pid, pageKey)])
+    lift (savedHead pid made.updatedAt content)
     pure (pageFrom made (T.strip title) body)
 
 sealedSavePage :: (MonadIO m) => SpaceId -> PageId -> PageKey -> UTCTime -> Text -> Text -> HttpWiki m (Either WikiError Page)
@@ -1668,26 +2182,283 @@ sealedSavePage sid pid k base title body =
   encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
     withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> runExceptT $ do
       when (T.null (T.strip title)) $ throwError (Invalid "A page's title cannot be blank.")
-      content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid k.keyId (T.strip title) body))
+      -- Not on top of versions this tab found wrong: the reader is shown
+      -- why, and reloads.
+      lift (Map.lookup pid . (\h -> h.heldProblems) <$> readHeld) >>= traverse_ (throwError . Invalid . chainProblemText)
+      keys <- lift (keysOfPage pid k)
+      (tag, chain) <- ExceptT (baseHead key sid pid keys base)
+      content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid k.keyId (chainAfter tag chain) (T.strip title) body))
       saved <- ExceptT (write (getResponse <$> endpoints.encrypted.save pid (PageVersion base) SealedEdit {content}))
-      pure (pageFrom saved (T.strip title) body)
+      lift (savedHead pid saved.updatedAt content)
+      attachments <- lift (openAttachments key sid pid saved.pageKeys saved.attachments)
+      pure (pageWith saved attachments (T.strip title) body)
 
 sealedVersions :: (MonadIO m) => SpaceId -> PageId -> PageKey -> VersionsQuery -> HttpWiki m (Either WikiError [VersionInfo])
 sealedVersions sid pid k q =
-  send (endpoints.encrypted.versions pid (VersionTime <$> q.before) (mfilter (/= versionsPageSize) (Just q.limit))) >>= \case
-    Left e -> pure (Left e)
-    Right listed -> encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
-      withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> do
-        titles <- liftIO (for listed (\v -> either (const unreadable) identity <$> openTitle pk sid pid v.heading))
-        pure (Right [VersionInfo {page = pid, updatedAt = v.updatedAt, title, author = v.author, number = v.number} | (v, title) <- zip listed titles])
+  encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+    readingSealed NoRefresh sid current $ \key ->
+      send (endpoints.encrypted.versions pid (VersionTime <$> q.before) (mfilter (/= versionsPageSize) (Just q.limit))) >>= \case
+        Left e -> pure (Left e, True)
+        Right listed -> do
+          keys <- keysOfPage pid k
+          opened <- liftIO (openVersionTitles key sid pid keys [v.heading | v <- listed])
+          (,all isJust opened) <$> listedVersions pid q listed opened
+
+-- | The versions of a page's history listed, each with its title if it
+-- opened, checked for breaks in the chain: within the page of the history,
+-- and against the oldest version of the page listed before it.
+listedVersions :: (MonadIO m) => PageId -> VersionsQuery -> [SealedVersionInfo] -> [Maybe Text] -> HttpWiki m (Either WikiError [VersionInfo])
+listedVersions pid q listed opened = do
+  -- The versions whose titles opened are those whose tags and chains
+  -- are the browser's: each must follow on the next one, and the
+  -- latest of them on the oldest of the page of the history listed
+  -- before, when this page is the one after it.
+  lowest <- Map.lookup pid . (\h -> h.heldLowest) <$> readHeld
+  let checked = [(v.updatedAt, (v.heading.tag, v.heading.chain)) | (v, Just _) <- zip listed opened]
+      joined = [above | Just (at, above) <- [lowest], q.before == Just at]
+  for_ (gapIn (joined <> map snd checked)) (foundProblem pid)
+  modifyHeld (\h -> h {heldLowest = maybe (Map.delete pid h.heldLowest) (\x -> Map.insert pid x h.heldLowest) (lastMay checked)})
+  pure (Right [VersionInfo {page = pid, updatedAt = v.updatedAt, title = fromMaybe unreadable title, author = v.author, number = v.number} | (v, title) <- zip listed opened])
 
 sealedVersion :: (MonadIO m) => SpaceId -> PageId -> PageKey -> UTCTime -> HttpWiki m (Either WikiError Version)
 sealedVersion sid pid k at =
-  send (endpoints.encrypted.version pid (VersionTime at)) >>= \case
-    Left e -> pure (Left e)
-    Right v -> encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
-      withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk ->
-        liftIO (openContent pk sid pid v.content) <&> bimap Invalid (\(title, body) -> Version {page = pid, updatedAt = v.updatedAt, title, body, author = v.author})
+  encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+    readingSealed NoRefresh sid current $ \key ->
+      send (endpoints.encrypted.version pid (VersionTime at)) >>= \case
+        Left e -> pure (Left e, True)
+        Right v -> do
+          keys <- keysOfPage pid k
+          opened <- case keyNamed v.content.keyId keys of
+            Nothing -> pure (Left (Invalid "This version names no key of the page's this browser holds."))
+            Just vk ->
+              withPageKey key sid pid vk $ \pk ->
+                liftIO (openContent pk sid pid v.content) <&> bimap Invalid (\(title, body) -> Version {page = pid, updatedAt = v.updatedAt, title, body, author = v.author})
+          pure (opened, isRight opened)
+
+-- | The attachments of a page of an encrypted space, their names and media
+-- types decrypted, each with the key of its page's it names; one that does
+-- not open is left out. Each is remembered with what decrypts its bytes.
+openAttachments :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> [SealedAttachment] -> HttpWiki m [Attachment]
+openAttachments key sid pid keys sealed = do
+  -- The page's attachments as the server lists them now replace those
+  -- remembered of it: one replaced or deleted since is forgotten.
+  let listed = Set.fromList (map (\a -> a.id) sealed)
+  forgetAttachments (\i at -> at.page == pid && not (Set.member i listed))
+  catMaybes <$> traverse (openAttachment key sid pid keys) sealed
+
+-- | An attachment of a page of an encrypted space, its name and media type
+-- decrypted with the key of its page's it names, and remembered with what
+-- decrypts its bytes; 'Nothing' when it does not open.
+openAttachment :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> SealedAttachment -> HttpWiki m (Maybe Attachment)
+openAttachment key sid pid keys a = case keyNamed a.meta.keyId keys of
+  Nothing -> pure Nothing
+  Just k -> do
+    opened <- withPageKey key sid pid k $ \pk -> liftIO (first Invalid <$> openText pk a.meta.meta (attachmentMetaData sid pid k.keyId a.id))
+    case opened >>= first (Invalid . toS) . eitherDecodeStrict' . encodeUtf8 of
+      Right (AttachmentMeta name mediaType) | Right n <- parseFileName name -> do
+        modifyHeld (\h -> h {heldAttachments = Map.insert a.id SealedAt {space = sid, page = pid, key = k, nonce = a.meta.bytesNonce, name = n, mediaType} h.heldAttachments})
+        -- Its size without AES-GCM's tag: the file's own.
+        pure (Just Attachment {id = a.id, name = n, mediaType = uploadedMimeType mediaType, size = fromIntegral (max 0 (a.size - 16)), source = SourceBlob (BlobId a.id.text)})
+      _ -> pure Nothing
+
+-- | Forget the attachments of encrypted pages remembered here that the
+-- test picks, and let their object URLs go.
+forgetAttachments :: (MonadIO m) => (AttachmentId -> SealedAt -> Bool) -> HttpWiki m ()
+forgetAttachments gone = do
+  urls <- atomicHeld $ \h ->
+    let (dropped, kept') = Map.partitionWithKey gone h.heldAttachments
+        (lost, urls') = Map.partitionWithKey (\(_, i) _ -> Map.member i dropped) h.heldUrls
+     in (h {heldAttachments = kept', heldUrls = urls'}, Map.elems lost)
+  liftIO (traverse_ revokeUrls urls)
+
+-- | An attachment's name and media type, as they are encrypted together.
+data AttachmentMeta = AttachmentMeta Text Text
+
+instance ToJSON AttachmentMeta where
+  toJSON (AttachmentMeta name mediaType) = object ["name" .= name, "mediaType" .= mediaType]
+
+instance FromJSON AttachmentMeta where
+  parseJSON = withObject "AttachmentMeta" $ \o -> AttachmentMeta <$> o .: "name" <*> o .: "mediaType"
+
+-- | An attachment of a page of an encrypted space: its bytes and its name
+-- and media type encrypted here with the page's current key, under an id
+-- chosen here, and sent as ciphertext. One of the same name on the page is
+-- replaced, which only this browser can tell.
+sealedUpload :: (MonadIO m) => SpaceId -> PageId -> PageKey -> Text -> Text -> ByteString -> HttpWiki m (Either WikiError Attachment)
+sealedUpload sid pid k name mediaType bytes =
+  encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+    withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> runExceptT $ do
+      n <- either (throwError . Invalid) pure (parseFileName name)
+      aid <- AttachmentId . (\p -> p.text) <$> ExceptT (first Invalid <$> liftIO newPageId)
+      meta <- ExceptT (first Invalid <$> liftIO (sealText pk (decodeUtf8 (BSL.toStrict (encode (AttachmentMeta n.text mediaType)))) (attachmentMetaData sid pid k.keyId aid)))
+      (nonce, sealedBytes) <- ExceptT (first Invalid <$> liftIO (sealBytes pk bytes (attachmentBytesData sid pid k.keyId aid)))
+      held <- lift ((\h -> h.heldAttachments) <$> readHeld)
+      let replaces = head [i | (i, at) <- Map.toList held, at.page == pid, at.name == n]
+      _ <- ExceptT (write (withBoundary (endpoints.encrypted.upload pid) SealedAttachmentUpload {sealed = SealedUpload {id = aid, meta = SealedMeta {keyId = k.keyId, meta, bytesNonce = nonce}, replaces}, payload = toS sealedBytes}))
+      lift (forgetAttachments (\i _ -> Just i == replaces))
+      lift (modifyHeld (\h -> h {heldAttachments = Map.insert aid SealedAt {space = sid, page = pid, key = k, nonce, name = n, mediaType} h.heldAttachments}))
+      pure Attachment {id = aid, name = n, mediaType = uploadedMimeType mediaType, size = fromIntegral (BS.length bytes), source = SourceBlob (BlobId aid.text)}
+
+-- | 'ObjectUrls': the object URLs of an attachment's decrypted bytes:
+-- the one the page shows it from ('blobType'), and the one a link to it
+-- leads to ('linkType'), which is the same URL when the types are one.
+data ObjectUrls = ObjectUrls {shown :: Text, link :: Text}
+
+-- | Let both URLs go.
+revokeUrls :: ObjectUrls -> IO ()
+revokeUrls u = revokeUrl u.shown >> when (u.link /= u.shown) (revokeUrl u.link)
+
+-- | The bytes of an attachment of an encrypted page, fetched encrypted
+-- from the server's address of them and decrypted here, as object URLs
+-- that the owner given holds until it lets them go ('releaseUrls'). An
+-- owner let go gets none, and a URL made while the owner was let go is
+-- let go at once: a view that no longer shows a page holds nothing of it.
+-- An attachment whose bytes do not open has no address (@""@).
+sealedAttachmentUrls :: (MonadIO m) => UrlOwner -> AttachmentId -> SealedAt -> HttpWiki m ObjectUrls
+sealedAttachmentUrls owner aid at =
+  readHeld >>= \h -> case Map.lookup (owner, aid) h.heldUrls of
+    Just urls -> pure urls
+    Nothing
+      | not (Set.member owner h.heldOwners) -> pure none
+      | otherwise ->
+          encryptedOr
+            at.space
+            (pure (Left (Conflict "This space is no longer encrypted.")))
+            ( \current -> withSpaceKey NoRefresh at.space current $ \key -> withPageKey key at.space at.page at.key $ \pk ->
+                liftIO (first Invalid <$> openAttachmentBytes pk (Links.links.attachments.content aid (FileName aid.text)) at.nonce (attachmentBytesData at.space at.page at.key.keyId aid))
+            )
+            >>= \case
+              Left _ -> pure none
+              -- The owner may have been let go, or another URL made for it,
+              -- while the bytes were fetched: the URLs are made only for an
+              -- owner still held, and made and kept with nothing able to
+              -- stop between the two, so that none is made and lost.
+              Right opened -> HttpWiki . ReaderT $ \env -> liftIO . mask_ $ do
+                now <- readIORef env.held
+                case Map.lookup (owner, aid) now.heldUrls of
+                  Just other -> pure other
+                  Nothing
+                    | not (Set.member owner now.heldOwners) -> pure none
+                    | otherwise ->
+                        objectUrls opened (blobType at.mediaType) (linkType at.mediaType) >>= \case
+                          Left _ -> pure none
+                          Right (shownAt, linkedAt) -> do
+                            let urls = ObjectUrls {shown = shownAt, link = linkedAt}
+                            atomicModifyIORef' env.held (\held -> (held {heldUrls = Map.insert (owner, aid) urls held.heldUrls}, ()))
+                            pure urls
+  where
+    none = ObjectUrls {shown = "", link = ""}
+
+-- | The media type of the object URL an attachment's decrypted bytes are
+-- shown from, in an @\<img>@, a @\<video>@ or an @\<audio>@: what the
+-- browser may show by itself ('shownInBrowser'), and an SVG, which an
+-- @\<img>@ draws without running anything in it. Anything else is
+-- @application\/octet-stream@.
+blobType :: Text -> Text
+blobType given
+  | shownInBrowser (MimeType given) || essence == "image/svg+xml" = essence
+  | otherwise = "application/octet-stream"
+  where
+    essence = mimeEssence (MimeType given)
+
+-- | The media type of the object URL a link to an attachment leads to.
+-- The URL is the wiki's own address, and has none of the server's
+-- protections of a plain attachment (its sandbox, its download
+-- disposition), so it follows the server's rule for a link: what the
+-- browser may show by itself keeps its type (an image, a video, a sound,
+-- plain text, which a tab shows as text, as the server's answer does);
+-- anything else, an SVG among them, is @application\/octet-stream@,
+-- which a browser downloads, and never opens as a document.
+linkType :: Text -> Text
+linkType given
+  | shownInBrowser (MimeType given) = mimeEssence (MimeType given)
+  | otherwise = "application/octet-stream"
+
+-- | A page's threads, in an encrypted space: their anchors and comments
+-- decrypted, each with the key of its page's it names.
+sealedListThreads :: (MonadIO m) => SpaceId -> PageId -> HttpWiki m (Either WikiError [Thread])
+sealedListThreads sid pid =
+  encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+    readingSealed NoRefresh sid current $ \key ->
+      send (endpoints.encrypted.threads pid) >>= \case
+        Left e -> pure (Left e, True)
+        -- Each anchor and comment opens with the key of the page's it
+        -- names, among those the answer carries: an older key after a
+        -- renewal, whatever this tab read of the page before.
+        Right listed -> do
+          opened <- for listed.threads (openThreadWith key sid pid listed.pageKeys)
+          pure (Right (catMaybes opened), all isJust opened)
+
+-- | A thread of an encrypted page, decrypted; 'Nothing' when its anchor or
+-- one of its comments does not open.
+openThreadWith :: forall m. (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> SealedThread -> HttpWiki m (Maybe Thread)
+openThreadWith key sid pid keys t = do
+  anchor <- case t.anchor of
+    Nothing -> pure (Right Nothing)
+    Just a -> withNamed a.keyId $ \pk -> liftIO (openText pk a.anchor (anchorData sid pid a.keyId t.id)) <&> (>>= bimap (toS :: [Char] -> Text) Just . eitherDecodeStrict' . encodeUtf8)
+  comments <- for t.comments (openCommentWith key sid pid keys)
+  pure $ case (anchor, sequence comments) of
+    (Right a, Just cs) | t.anchored == isJust a -> Just Thread {id = t.id, page = pid, anchor = a, resolved = t.resolved, createdAt = t.createdAt, comments = cs}
+    _ -> Nothing
+  where
+    withNamed :: KeyId -> (PageKeyRef -> HttpWiki m (Either Text b)) -> HttpWiki m (Either WikiError b)
+    withNamed k step = case keyNamed k keys of
+      Nothing -> pure (Left (Invalid "No key of the page's opens it."))
+      Just pageKey -> withPageKey key sid pid pageKey (fmap (first Invalid) . step)
+
+-- | A comment of an encrypted page, decrypted.
+openCommentWith :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> SealedCommentInfo -> HttpWiki m (Maybe Comment)
+openCommentWith key sid pid keys c = case keyNamed c.content.keyId keys of
+  Nothing -> pure Nothing
+  Just pageKey ->
+    rightToMaybe
+      <$> withPageKey key sid pid pageKey (\pk -> liftIO (first Invalid <$> openText pk c.content.body (commentData sid pid c.content.keyId c.thread c.id c.content.tag)))
+      <&> fmap (\body -> Comment {id = c.id, thread = c.thread, author = c.author, body, createdAt = c.createdAt, editedAt = c.editedAt})
+
+-- | A comment encrypted with a page's current key, under a new tag: its
+-- text checked first, as the server checks a plain one.
+sealCommentText :: PageKeyRef -> SpaceId -> PageId -> KeyId -> CommentThreadId -> CommentId -> Text -> IO (Either Text SealedComment)
+sealCommentText pk sid pid k tid cid body = case checkCommentBody body of
+  Left why -> pure (Left why)
+  Right checked -> do
+    tag <- newTag
+    fmap (\s -> SealedComment {keyId = k, tag, body = s}) <$> sealText pk checked (commentData sid pid k tid cid tag)
+
+-- | A new thread of an encrypted page, its anchor and first comment
+-- encrypted here, under ids chosen here.
+sealedOpenThread :: (MonadIO m) => SpaceId -> PageId -> Maybe Anchor -> Text -> HttpWiki m (Either WikiError Thread)
+sealedOpenThread sid pid anchor body =
+  sealedPage pid >>= \case
+    Nothing -> pure (Left (Conflict inEncryptedSpace))
+    Just (_, k) ->
+      encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+        withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> runExceptT $ do
+          tid <- CommentThreadId . (\p -> p.text) <$> ExceptT (first Invalid <$> liftIO newPageId)
+          cid <- CommentId . (\p -> p.text) <$> ExceptT (first Invalid <$> liftIO newPageId)
+          sealedAnchor <- for anchor $ \a -> SealedAnchor k.keyId <$> ExceptT (first Invalid <$> liftIO (sealText pk (decodeUtf8 (BSL.toStrict (encode a))) (anchorData sid pid k.keyId tid)))
+          content <- ExceptT (first Invalid <$> liftIO (sealCommentText pk sid pid k.keyId tid cid body))
+          made <- ExceptT (send (endpoints.encrypted.openThread pid NewSealedThread {id = tid, anchor = sealedAnchor, comment = NewSealedComment {id = cid, content}}))
+          pure Thread {id = tid, page = pid, anchor, resolved = False, createdAt = made.createdAt, comments = [Comment {id = cid, thread = tid, author = x.author, body = fromMaybe body (checkedBody body), createdAt = x.createdAt, editedAt = x.editedAt} | x <- take 1 made.comments]}
+
+-- | A comment as the server keeps it: checked, as 'checkCommentBody' gives it.
+checkedBody :: Text -> Maybe Text
+checkedBody = rightToMaybe . checkCommentBody
+
+-- | A reply in a thread of an encrypted page, or a comment written again
+-- (with its id), encrypted here.
+sealedComment :: (MonadIO m) => SpaceId -> PageId -> CommentThreadId -> Maybe CommentId -> Text -> HttpWiki m (Either WikiError Comment)
+sealedComment sid pid tid editing body =
+  sealedPage pid >>= \case
+    Nothing -> pure (Left (Conflict inEncryptedSpace))
+    Just (_, k) ->
+      encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+        withSpaceKey NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> runExceptT $ do
+          cid <- maybe (CommentId . (\p -> p.text) <$> ExceptT (first Invalid <$> liftIO newPageId)) pure editing
+          content <- ExceptT (first Invalid <$> liftIO (sealCommentText pk sid pid k.keyId tid cid body))
+          made <- ExceptT $ case editing of
+            Nothing -> send (endpoints.encrypted.reply pid tid NewSealedComment {id = cid, content})
+            Just _ -> send (endpoints.encrypted.editComment pid tid cid SealedCommentEdit {content})
+          pure Comment {id = cid, thread = tid, author = made.author, body = fromMaybe body (checkedBody body), createdAt = made.createdAt, editedAt = made.editedAt}
 
 -- | The search over the encrypted spaces whose keys this browser holds or
 -- can open, in the browser: each space's pages are fetched and decrypted
@@ -1729,12 +2500,19 @@ foundIn sid current =
     Nothing -> do
       immediate <- HttpWiki (asks (\env -> env.immediate))
       key <- if immediate then pure (Left NotFound) else openKey NoRefresh sid current
+      let decrypted space listed = liftIO (openPages space sid [(p.id, p.pageKeys, p.content) | p <- listed])
       case key of
-        Right (Right space) ->
+        Right (Right held) ->
           send (endpoints.encrypted.contents sid) >>= \case
             Left _ -> pure []
             Right listed -> do
-              opened <- liftIO (openPages space sid [(p.id, p.pageKey, p.content) | p <- listed])
+              first' <- decrypted held listed
+              -- Pages that do not open with the key held: the key may have
+              -- been renewed since this tab opened it.
+              opened <-
+                if Map.size first' == length listed
+                  then pure first'
+                  else reopenIfChanged sid >>= maybe (pure first') (\space -> send (endpoints.encrypted.contents sid) >>= either (const (pure first')) (decrypted space))
               let pages = [(PageSummary {id = p.id, space = p.space, parent = p.parent, title, slug = p.slug, createdAt = p.createdAt, updatedAt = p.updatedAt, position = p.position, template = False}, body) | p <- listed, Just (title, body) <- [Map.lookup p.id opened]]
               modifyHeld (\h -> h {heldFound = Map.insert sid pages h.heldFound})
               pure pages
@@ -1756,32 +2534,18 @@ instance (MonadIO m) => MonadEncryption (HttpWiki m) where
   -- own choosing and then open the space's key. So the new grant is opened
   -- here with the private key this device holds for the user before
   -- anything is sent: it opens only if the public key is the user's.
-  encryptSpace sid =
-    liftIO encryptionHere >>= \case
-      False -> pure (Left (Invalid noEncryption))
-      True ->
-        ((\s -> s.user) <$> session) >>= \case
-          Nothing -> pure (Left (Invalid (keyStateText SignInFirst)))
-          Just u ->
-            send (endpoints.account.publicKey u.id) >>= \case
-              Left NotFound -> pure (Left (Invalid "You have no keys yet: open your account's security to make them, then encrypt the space."))
-              Left e -> pure (Left e)
-              Right mine ->
-                liftIO (newSpaceKey sid mine.publicKey) >>= \case
-                  Left why -> pure (Left (Invalid why))
-                  Right made -> do
-                    let grant = KeyGrant {keyId = made.keyId, recipient = u.id, recipientKeyId = mine.keyId, enc = made.enc, sealed = made.sealed}
-                    checked <-
-                      withDeviceKey u (\idKey -> liftIO (openSpaceKey idKey sid grant)) >>= \case
-                        Nothing -> pure (Left (Invalid "This device does not hold your keys yet: unlock them in your account's security, then encrypt the space."))
-                        Just (Left _) -> pure (Left (Invalid "The server gave a public key for you that is not the one this device holds: the space was not encrypted. Open your account's security to check your keys."))
-                        Just (Right opened) -> liftIO (forgetSpaceKey opened) $> Right ()
-                    case checked of
-                      Left e -> liftIO (forgetSpaceKey made.key) $> Left e
-                      Right () -> do
-                        result <- write (endpoints.encrypted.encrypt sid EncryptSpace {keyId = made.keyId, grant = NewGrant {recipient = u.id, recipientKeyId = mine.keyId, enc = made.enc, sealed = made.sealed}})
-                        case result of
-                          Right _ -> modifyHeld (\h -> h {heldKeys = Map.insert sid (made.keyId, made.key) h.heldKeys})
-                          Left _ -> liftIO (forgetSpaceKey made.key)
-                        pure result
+  encryptSpace sid = do
+    name <- spaceNameOf sid
+    newCheckedKey sid >>= \case
+      Left e -> pure (Left e)
+      Right (made, grant) ->
+        sealedHomeOf made.key sid name made.keyId >>= \case
+          Left e -> liftIO (forgetSpaceKey made.key) $> Left e
+          Right homePage -> do
+            result <- write (endpoints.encrypted.encrypt sid EncryptSpace {keyId = made.keyId, grant, homePage})
+            case result of
+              Right _ -> modifyHeld (\h -> h {heldKeys = Map.insert sid (made.keyId, made.key) h.heldKeys})
+              Left _ -> liftIO (forgetSpaceKey made.key)
+            pure result
   spaceEncryption sid = send (endpoints.encrypted.space sid)
+  chainProblem pid = Map.lookup pid . (\h -> h.heldProblems) <$> readHeld

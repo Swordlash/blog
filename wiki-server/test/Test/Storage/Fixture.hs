@@ -121,6 +121,9 @@ tableRows st = reading st rows
         , dump "key_grants" wikiDb.key_grants
         , dump "page_keys" wikiDb.page_keys
         , dump "sealed_versions" wikiDb.sealed_versions
+        , dump "sealed_threads" wikiDb.sealed_threads
+        , dump "sealed_comments" wikiDb.sealed_comments
+        , dump "sealed_attachments" wikiDb.sealed_attachments
         , dump "spaces" wikiDb.spaces
         , dump "pages" wikiDb.pages
         , dump "page_versions" wikiDb.page_versions

@@ -99,7 +99,7 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, TexEngine, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
-import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedPage, SealedEdit, SealedPage, SealedSummary, SealedVersion, SealedVersionInfo, SpaceEncryption, sealedVersion)
+import Wiki.Api.Encrypted (EncryptSpace, NewEncryptedSubspace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedThreads, SealedVersion, SealedVersionInfo, SpaceEncryption, sealedVersion)
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -109,7 +109,7 @@ import Wiki.Api.Security (CurrentPassword, EmailChange, EmailState, OneTimeCode,
 import Wiki.Api.ServerSettings (HomePage, MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.Api.Stars (StarsApi (..))
 import Wiki.Api.Types
-import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
+import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply, SealedAttachmentUpload)
 import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, PublicKeyEntry, RegistrationOptions, RegistrationResponse, StoredVault, VaultChange)
 import Wiki.Api.Version (PageVersion, VersionTime, pageVersion)
 import Wiki.Api.WhatsNew (WhatsNew)
@@ -268,7 +268,7 @@ data WikiApi form mode = WikiApi
   , assistant :: mode :- "assistant" :> NamedRoutes AssistantApi
   -- ^ The writing assistant's keys across devices: the vault and the
   -- passkeys that unlock it ("Wiki.Api.Vault").
-  , encrypted :: mode :- "encrypted" :> NamedRoutes EncryptedApi
+  , encrypted :: mode :- "encrypted" :> NamedRoutes (EncryptedApi form)
   -- ^ Encrypted spaces: their keys, and their pages as ciphertext
   -- ("Wiki.Api.Encrypted").
   }
@@ -282,7 +282,7 @@ data WikiApi form mode = WikiApi
 -- page the caller may not view is 'Wiki.Api.Error.NotFound'. A plain space
 -- or page given to these routes is 'Wiki.Api.Error.Conflict', as an
 -- encrypted one given to the plain routes is.
-data EncryptedApi mode = EncryptedApi
+data EncryptedApi form mode = EncryptedApi
   { space :: mode :- "spaces" :> Capture "space" SpaceId :> Get '[JSON] SpaceEncryption
   -- ^ The space's current key id, the caller's grant of it, and who waits
   -- for one.
@@ -292,14 +292,35 @@ data EncryptedApi mode = EncryptedApi
   -- not private, has subspaces or pages other than its untouched home page,
   -- or is encrypted already is 'Wiki.Api.Error.Conflict'; a caller without a
   -- current public key, or a grant of the wrong length, is
-  -- 'Wiki.Api.Error.Invalid'. The untouched home page is deleted, since its
-  -- text is plain.
+  -- 'Wiki.Api.Error.Invalid'. The untouched home page is replaced by the
+  -- one the request gives, encrypted, since its text is plain.
+  , subspace :: mode :- "spaces" :> Capture "space" SpaceId :> "subspaces" :> ReqBody '[JSON] NewEncryptedSubspace :> PostCreated '[JSON] Space
+  -- ^ A subspace of an encrypted space, made encrypted, with its key granted
+  -- to the caller and its home page. A plain subspace of an encrypted space
+  -- is refused by the plain route.
+  , home :: mode :- "spaces" :> Capture "space" SpaceId :> "home" :> ReqBody '[JSON] NewSealedPage :> PostCreated '[JSON] SealedPage
+  -- ^ The home page of an encrypted space made before encrypted spaces had
+  -- home pages: written and encrypted by the browser of an administrator of
+  -- the space, at the top of its pages; every other page at the top goes
+  -- under it, so that every page keeps its address. A space with a home
+  -- page already is 'Wiki.Api.Error.Conflict'.
   , grant :: mode :- "spaces" :> Capture "space" SpaceId :> "grants" :> ReqBody '[JSON] NewGrants :> PostNoContent
   -- ^ Grant the space's current key to readers waiting for it: only a
   -- caller who holds a grant of that key may, only to readers of the space
   -- with a current public key, and only of the current key
   -- ('Wiki.Api.Error.Conflict' for an older one). A grant there already is
   -- left as it is.
+  , rotation :: mode :- "spaces" :> Capture "space" SpaceId :> "rotation" :> Get '[JSON] RotationInfo
+  -- ^ What a rotation of the space's key needs: the readers with a public
+  -- key, and every key of every page with its latest version's title. Only
+  -- for a caller who may administer the space.
+  , rotate :: mode :- "spaces" :> Capture "space" SpaceId :> "rotation" :> ReqBody '[JSON] Rotation :> PostNoContent
+  -- ^ Give the space a new key: sealed to every reader, every page key
+  -- wrapped again with it, and a new key for every page. Only from a
+  -- caller who may administer the space and holds its current key; a
+  -- rotation that leaves out a reader or a page key, or names one there
+  -- is not, is refused, and so is one of a space too large for one
+  -- request ('Wiki.Api.Encrypted.maxRotatedKeys').
   , pages :: mode :- "spaces" :> Capture "space" SpaceId :> "pages" :> Get '[JSON] [SealedSummary]
   -- ^ The space's pages with their encrypted titles, in the order they
   -- were made.
@@ -319,6 +340,23 @@ data EncryptedApi mode = EncryptedApi
   -- ^ A page of the page's history, latest first, as for a plain page.
   , version :: mode :- "pages" :> Capture "page" PageId :> "versions" :> Capture "version" VersionTime :> Get '[JSON] SealedVersion
   -- ^ One version, by its time.
+  , threads :: mode :- "pages" :> Capture "page" PageId :> "threads" :> Get '[JSON] SealedThreads
+  -- ^ The page's comment threads, their anchors and comments encrypted.
+  , openThread :: mode :- "pages" :> Capture "page" PageId :> "threads" :> ReqBody '[JSON] NewSealedThread :> PostCreated '[JSON] SealedThread
+  -- ^ A new thread, with its first comment, encrypted with the page's
+  -- current key. Its id and its comment's are chosen by the browser (UUIDs),
+  -- since their additional data names them.
+  , reply :: mode :- "pages" :> Capture "page" PageId :> "threads" :> Capture "thread" CommentThreadId :> "comments" :> ReqBody '[JSON] NewSealedComment :> PostCreated '[JSON] SealedCommentInfo
+  -- ^ A reply in a thread, encrypted with the page's current key.
+  , editComment :: mode :- "pages" :> Capture "page" PageId :> "threads" :> Capture "thread" CommentThreadId :> "comments" :> Capture "comment" CommentId :> ReqBody '[JSON] SealedCommentEdit :> Put '[JSON] SealedCommentInfo
+  -- ^ A comment written again, encrypted with the page's current key.
+  -- Deleting a comment or a thread and resolving a thread carry no text,
+  -- and go by the plain routes ('CommentsApi').
+  , upload :: mode :- "pages" :> Capture "page" PageId :> "attachments" :> MultipartForm form (SealedAttachmentUpload form) :> PostCreated '[JSON] SealedAttachment
+  -- ^ An attachment, its bytes encrypted in the browser, its name and media
+  -- type encrypted with them. Its bytes are served, encrypted, by the
+  -- plain route of an attachment's bytes, and it is deleted by the plain
+  -- route ('AttachmentsApi').
   }
   deriving stock (Generic)
 

@@ -33,7 +33,7 @@ import Halogen.HTML qualified as HH
 import Halogen.Subscription qualified as HS
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), UrlOwner, WikiError, noUrlOwner)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser (LiveFeed, followLine, listenLive, stopLive)
 import Wiki.App.Islands (MonadIslands)
@@ -78,6 +78,11 @@ data State = State
   -- ^ The page's attachments, and their addresses: what its links to them
   -- are resolved with. Fetched again each time the editor uploads a file.
   , addresses :: Body.Addresses
+  , owners :: Body.Owners
+  -- ^ Who holds those addresses ("Wiki.App.View.Body"'s 'Body.Owners'):
+  -- one owner for each page the window shows, registered before anything
+  -- is asked under it, and let go when the window shows another page or
+  -- closes.
   , page :: Int
   -- ^ How many pages this window has shown: an answer to a read made for
   -- an earlier one is dropped.
@@ -108,12 +113,12 @@ instance FromJSON Heard where
 -- the attachments its links resolve to, with their addresses.
 data Fetched = Fetched Shown [Attachment] Body.Addresses
 
-fetchSaved :: (MonadWiki m) => Input -> m Fetched
-fetchSaved input =
+fetchSaved :: (MonadWiki m) => UrlOwner -> Input -> m Fetched
+fetchSaved owner input =
   getPage input.space.id input.path >>= \case
     Left e -> pure (Fetched (Failed e) [] Body.noAddresses)
     Right page -> do
-      addresses <- Body.attachmentAddresses page.attachments
+      addresses <- Body.attachmentAddresses owner page.attachments
       pure (Fetched (Shows Saved page.title page.body) page.attachments addresses)
 
 data Action = Initialize | Finalize | Receive Input | Listened Text
@@ -132,10 +137,10 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           article <- H.newRefLabel "live-preview"
-          found <- atOnce (fetchSaved input)
+          found <- atOnce (fetchSaved noUrlOwner input)
           pure $ case found of
-            Just (Fetched shown attachments addresses) -> State {input, shown, feed = Nothing, article, attachments, addresses, page = 0, refreshes = 0, fetched = True}
-            Nothing -> State {input, shown = Loading, feed = Nothing, article, attachments = [], addresses = Body.noAddresses, page = 0, refreshes = 0, fetched = False}
+            Just (Fetched shown attachments addresses) -> State {input, shown, feed = Nothing, article, attachments, addresses, owners = Body.ownersOf noUrlOwner, page = 0, refreshes = 0, fetched = True}
+            Nothing -> State {input, shown = Loading, feed = Nothing, article, attachments = [], addresses = Body.noAddresses, owners = Body.ownersOf noUrlOwner, page = 0, refreshes = 0, fetched = False}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.receive = Just . Receive, H.initialize = Just Initialize, H.finalize = Just Finalize}
       }
@@ -177,7 +182,8 @@ component =
         fetched <- gets (\st -> st.fetched)
         unless fetched $ do
           shownPage <- gets (\st -> st.page)
-          Fetched saved attachments addresses <- lift (fetchSaved input)
+          owner <- Body.ensureOwned (\st -> st.owners) (\owners st -> st {owners})
+          Fetched saved attachments addresses <- lift (fetchSaved owner input)
           modifyFor shownPage $ \st ->
             st
               { attachments
@@ -191,7 +197,9 @@ component =
                   _ -> saved
               }
         H.raise Loaded
-      Finalize -> stopListening
+      Finalize -> do
+        Body.releaseOwned (\st -> st.owners) (\owners st -> st {owners})
+        stopListening
       Receive input -> do
         old <- gets (\st -> st.input)
         modify (\st -> st {input})
@@ -199,6 +207,8 @@ component =
         -- and its own editor to listen for.
         when (liveKey old.space.id old.path /= liveKey input.space.id input.path) $ do
           stopListening
+          -- The new page's fetch registers its own owner.
+          Body.releaseOwned (\st -> st.owners) (\owners st -> st {owners})
           modify (\st -> st {shown = Loading, attachments = [], addresses = Body.noAddresses, page = st.page + 1, fetched = False})
           handleAction Initialize
       Listened raw -> case eitherDecodeStrict @Heard (encodeUtf8 raw) of
@@ -214,8 +224,9 @@ component =
               -- is told to fetch from now on.
               lift endPreload
               modify (\st -> st {refreshes = st.refreshes + 1})
+              owner <- Body.ensureOwned (\st -> st.owners) (\owners st -> st {owners})
               State {input, page = shownPage, refreshes = refresh} <- get
-              lift (fetchSaved input) >>= \case
+              lift (fetchSaved owner input) >>= \case
                 Fetched (Shows {}) attachments addresses ->
                   modifyFor shownPage (\st -> if st.refreshes == refresh then st {attachments, addresses} else st)
                 -- Not fetched: the attachments as they were.
@@ -257,6 +268,7 @@ component =
         , Body.path = st.input.path
         , Body.attachments = st.attachments
         , Body.urls = st.addresses.urls
+        , Body.downloads = st.addresses.downloads
         , Body.frames = st.addresses.frames
         , Body.people = mempty
         }

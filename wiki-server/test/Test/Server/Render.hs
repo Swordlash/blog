@@ -38,7 +38,7 @@ import Wiki.App.Backend.Http.Client (sessionInfo)
 import Wiki.App.Backend.Http.Preload
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.Core.Backlink (Backlink (..))
-import Wiki.Core.Encrypted (Encapsulated (..), PageKey (..), SealedContent (..), VersionTag (..))
+import Wiki.Core.Encrypted (Encapsulated (..), PageKey (..), SealedContent (..), VersionTag (..), firstChain)
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Page qualified as P
@@ -526,10 +526,10 @@ encrypted backing = describe "an encrypted space" $ do
     (.status) <$> as' methodPut "api/v1/assistant/vault" (encode VaultChange {vault, publicKey = Just NewPublicKey {keyId, publicKey = public}}) `shouldReturn` 200
     made :: S.Space <- as' methodPost "api/v1/spaces" (encode Api.NewSpace {parent = Nothing, name = "Vault room"}) >>= jsonAs 201
     let spaceKey = KeyId (bytesOf 16 6)
-    (.status) <$> as' methodPost ("api/v1/encrypted/spaces/" <> made.id.text) (encode EncryptSpace {keyId = spaceKey, grant = NewGrant {recipient = UserId "user-admin", recipientKeyId = keyId, enc = Encapsulated (bytesOf 32 7), sealed = Ciphertext (bytesOf 48 8)}}) `shouldReturn` 200
+    (.status) <$> as' methodPost ("api/v1/encrypted/spaces/" <> made.id.text) (encode EncryptSpace {keyId = spaceKey, grant = NewGrant {recipient = UserId "user-admin", recipientKeyId = keyId, enc = Encapsulated (bytesOf 32 7), sealed = Ciphertext (bytesOf 48 8)}, homePage = NewSealedPage {id = PageId "4c1a6d2f-3e5b-4f7c-9dae-1b2c3d4e5f60", parent = Nothing, pageKey = PageKey {keyId = KeyId (bytesOf 16 20), spaceKeyId = spaceKey, wrapped = WrappedKey (Nonce (bytesOf 12 21)) (Ciphertext (bytesOf 48 22))}, content = SealedContent {tag = VersionTag (bytesOf 16 23), keyId = KeyId (bytesOf 16 20), chain = Just firstChain, title = Sealed (Nonce (bytesOf 12 24)) (Ciphertext (bytesOf 40 25)), body = Sealed (Nonce (bytesOf 12 26)) (Ciphertext (bytesOf 60 27))}}}) `shouldReturn` 200
     let title = Ciphertext (bytesOf 40 9)
         body = Ciphertext (bytesOf 300 10)
-        content = SealedContent {tag = VersionTag (bytesOf 16 11), keyId = KeyId (bytesOf 16 12), title = Sealed (Nonce (bytesOf 12 13)) title, body = Sealed (Nonce (bytesOf 12 14)) body}
+        content = SealedContent {tag = VersionTag (bytesOf 16 11), keyId = KeyId (bytesOf 16 12), chain = Just firstChain, title = Sealed (Nonce (bytesOf 12 13)) title, body = Sealed (Nonce (bytesOf 12 14)) body}
         pageKey = PageKey {keyId = KeyId (bytesOf 16 12), spaceKeyId = spaceKey, wrapped = WrappedKey (Nonce (bytesOf 12 15)) (Ciphertext (bytesOf 48 16))}
     sealedPage :: SealedPage <- as' methodPost ("api/v1/encrypted/spaces/" <> made.id.text <> "/pages") (encode NewSealedPage {id = PageId "3b0f5c1e-2d4a-4e6b-8c9d-0a1b2c3d4e5f", parent = Nothing, pageKey, content}) >>= jsonAs 201
     (_, html) <- pageAs r [session] r.public ("/s/" <> slugText made.slug <> "/p/" <> slugText sealedPage.slug <> "/")

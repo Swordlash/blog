@@ -168,7 +168,7 @@ spec = describe "Anchor" $ do
       doc.text `shouldBe` "Before itafter it"
       textFragment doc (quoting "it" doc.text) `shouldBe` ":~:text=Before-,it"
     it "reads nothing of an interactive SVG's frame or its empty link, and takes the frame as a break" $ do
-      let svg = AttachmentRef {name = "flame.svg", url = "/f/flame.svg", mediaType = Just "image/svg+xml", frameUrl = Just "/f/flame.svg?interactive"}
+      let svg = AttachmentRef {name = "flame.svg", url = "/f/flame.svg", downloadUrl = "/f/flame.svg", mediaType = Just "image/svg+xml", frameUrl = Just "/f/flame.svg?interactive"}
           framed =
             defaultOptions
               { resolveLink = const (Attachment svg)

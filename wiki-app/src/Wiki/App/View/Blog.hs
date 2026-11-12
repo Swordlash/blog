@@ -54,6 +54,7 @@ import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
 import Wiki.App.Backend.Comments (MonadComments)
+import Wiki.App.Backend.Encrypted (MonadEncryption)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Islands (MonadIslands)
@@ -109,7 +110,7 @@ data Action
   | -- | What the home page's view tells: passed on to the shell.
     FromHome ViewOutput
 
-component :: forall m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component ViewQuery Input ViewOutput m
+component :: forall m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadEncryption m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component ViewQuery Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec

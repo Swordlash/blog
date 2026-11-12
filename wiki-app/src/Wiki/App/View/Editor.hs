@@ -269,7 +269,7 @@ import Wiki.Api.ServerSettings (HomePage (showAnonymous, showRecent, showSpaces)
 import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Assistant.Keys (Keys (..), changeKeys, loadFollowedKeys)
 import Wiki.App.Assistant.Sync (MonadVault)
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), UrlOwner, WikiError (..), maxAttachmentSize, noUrlOwner)
 import Wiki.App.Backend.Admin (MonadAdmin (setHomePage))
 import Wiki.App.Backend.Notifications (MonadNotifications (mentionCandidates))
 import Wiki.App.Browser (replacingEntry)
@@ -494,6 +494,11 @@ data Way
 
 data State = State
   { input :: Input
+  , owners :: Body.Owners
+  -- ^ Who holds the addresses of the page's attachments
+  -- ("Wiki.App.View.Body"'s 'Body.Owners'): one owner for the editor's
+  -- life, registered before anything is asked under it, and let go when
+  -- it closes.
   , loaded :: Loaded
   , pending :: Maybe H.ForkId
   -- ^ The running wait before the preview follows the work, if any.
@@ -738,10 +743,11 @@ component =
           -- can ('atOnce'), so that the first render is the editor a
           -- prerendered page shows (see "Wiki.App.Shell"); otherwise
           -- loaded in 'Initialize'.
-          Fetched loaded found hasDraft <- fromMaybe (Fetched Loading Nothing False) <$> atOnce (fetchWork input)
+          Fetched loaded found hasDraft <- fromMaybe (Fetched Loading Nothing False) <$> atOnce (fetchWork noUrlOwner input)
           pure
             State
               { input
+              , owners = Body.ownersOf noUrlOwner
               , loaded
               , pending = Nothing
               , autosave = Nothing
@@ -857,12 +863,10 @@ component =
               <button type="submit" class="primary editor-save" disabled={{ st.saving }}>{{ if st.saving then "Saving…" else "Save" :: Text }}</button>
               <button type="button" class="editor-save-close" disabled={{ st.saving }} onClick={{ const SaveAndClose }}>Save and close</button>
               {{ cancelButton st }}
-              {% if attachable st.input %}
-                <label class="button editor-attach">
-                  Attach files
-                  <input type="file" multiple onChange={{ Picked }} {{ HP.ref st.fileInput }}>
-                </label>
-              {% end %}
+              <label class="button editor-attach">
+                Attach files
+                <input type="file" multiple onChange={{ Picked }} {{ HP.ref st.fileInput }}>
+              </label>
               {% if st.pendingChanges > 0 %}
                 <span class="editor-pending-note" role="status">{{ pendingNote st.pendingChanges }}</span>
               {% end %}
@@ -871,7 +875,7 @@ component =
               {% end %}
             </div>
           </div>
-          {{ toolbar st.menuHolder Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, files = attachable st.input, emojiSearch = st.emojiQuery} }}
+          {{ toolbar st.menuHolder Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, emojiSearch = st.emojiQuery} }}
           {{ cornerNotices st }}
           </div>
           <div class="editor-notices">
@@ -1288,7 +1292,7 @@ component =
         <div class="editor-toolbar" role="toolbar" aria-label="Formatting">
           <div class="toolbar-group">{{ map toolButton textTools }}{{ colourMenu holder bar }}{{ emojiMenu holder bar }}</div>
           <div class="toolbar-group">{{ map toolButton listTools }}</div>
-          <div class="toolbar-group">{{ map toolButton codeTools }}{{ linkPageButton }}{% if bar.files %}{{ imageButton }}{% end %}{{ toolButton tableTool }}</div>
+          <div class="toolbar-group">{{ map toolButton codeTools }}{{ linkPageButton }}{{ imageButton }}{{ toolButton tableTool }}</div>
           <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu holder bar }}{{ macrosButton bar }}{{ htmlMenu holder bar }}</div>
           <div class="toolbar-end">
             <button type="button" class="editor-side-by-side" aria-pressed={{ if bar.twoPanes then "true" else "false" :: Text }} title="The preview beside the text, on a wide screen" onClick={{ const (SideBySide (not bar.twoPanes)) }}>{{ icon sideBySideIcon }}<span>Side by side</span></button>
@@ -1548,7 +1552,7 @@ component =
             <ul>
               {% for a in work.attachments %}
                 <li>
-                  <a href={{ Map.findWithDefault "" a.id work.addresses.urls }} download={{ a.name.text }}>{{ a.name.text }}</a>
+                  <a href={{ Body.linkUrlOf work.addresses a.id }} download={{ a.name.text }}>{{ a.name.text }}</a>
                   <span class="attachment-meta">{{ a.mediaType.text }}, {{ fileSize a.size }}</span>
                   <button type="button" class="attachment-insert" onClick={{ const (Insert a) }}>Insert</button>
                 </li>
@@ -1600,6 +1604,7 @@ component =
       -- The waits are killed with the component. The browser's warning and
       -- CodeMirror are not, so they are removed here.
       Finalize -> do
+        Body.releaseOwned (\st -> st.owners) (\owners st -> st {owners})
         H.liftEffect (guardUnload False)
         gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . detachEditor)
         -- This tab no longer edits the page.
@@ -1646,7 +1651,7 @@ component =
       Picked ev -> H.liftEffect (chosenFiles ev >>= pickedFiles) >>= upload
       -- The listener has allowed the files to be dropped here, by
       -- preventing the drag's default.
-      DragOver -> unlessM (gets (\st -> st.dropping || not (attachable st.input))) $ modify (\st -> st {dropping = True})
+      DragOver -> unlessM (gets (\st -> st.dropping)) $ modify (\st -> st {dropping = True})
       DragLeave -> modify (\st -> st {dropping = False})
       -- The listener has stopped the browser from opening the file in
       -- place of the page, and taken its files.
@@ -2105,7 +2110,8 @@ component =
     loadWork :: H.HalogenM State Action Slots ViewOutput m ()
     loadWork = do
       input <- gets (\st -> st.input)
-      Fetched loaded found hasDraft <- fetchWork input
+      owner <- Body.ensureOwned (\st -> st.owners) (\owners st -> st {owners})
+      Fetched loaded found hasDraft <- fetchWork owner input
       modify (\st -> st {loaded, found, hasDraft, loads = st.loads + 1, conflict = Nothing, changedSince = Nothing})
       syncGuard
       takeOver
@@ -2116,7 +2122,8 @@ component =
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
-      loaded <- either Failed (\(page, addresses) -> Ready (workOf page addresses)) <$> fetchPage input
+      owner <- Body.ensureOwned (\st -> st.owners) (\owners st -> st {owners})
+      loaded <- either Failed (\(page, addresses) -> Ready (workOf page addresses)) <$> fetchPage owner input
       modify (\st -> st {loaded, loads = st.loads + 1, conflict = Nothing, changedSince = Nothing})
       syncGuard
       takeOver
@@ -2342,7 +2349,8 @@ component =
     conflicted :: Text -> After -> H.HalogenM State Action Slots ViewOutput m ()
     conflicted why after = do
       input <- gets (\st -> st.input)
-      fetchPage input >>= \case
+      owner <- Body.ensureOwned (\st -> st.owners) (\owners st -> st {owners})
+      fetchPage owner input >>= \case
         Left _ -> modify (\st -> st {problem = Just (Conflict why)})
         Right (theirs, theirAddresses) -> do
           by <- either (const Nothing) (\v -> v.author) <$> getVersion theirs.id theirs.updatedAt
@@ -2367,12 +2375,9 @@ component =
       modify (\st -> st {notice = Just waiting})
 
     upload :: [PickedFile] -> H.HalogenM State Action Slots ViewOutput m ()
-    upload files =
-      gets (\st -> attachable st.input) >>= \case
-        True -> withPage (\pid -> for_ files (uploadTo pid))
-        -- A file dropped or pasted in an encrypted space: refused here,
-        -- before its bytes are read, since the server would keep them.
-        False -> unless (null files) $ modify (\st -> st {problem = Just (Invalid "Files cannot be attached in an encrypted space yet: the server would keep them unencrypted.")})
+    -- In an encrypted space the backend encrypts the file before it is
+    -- sent ("Wiki.App.Backend.Http").
+    upload files = withPage (\pid -> for_ files (uploadTo pid))
 
     uploadTo :: PageId -> PickedFile -> H.HalogenM State Action Slots ViewOutput m ()
     uploadTo pid file
@@ -2390,7 +2395,9 @@ component =
           case result of
             Left e -> modify (\st -> st {problem = Just e})
             Right a -> do
-              url <- attachmentUrl a
+              owner <- Body.ensureOwned (\st -> st.owners) (\owners st -> st {owners})
+              url <- attachmentUrl owner a
+              download <- attachmentDownloadUrl owner a
               frame <- attachmentFrameUrl a
               -- An upload under a name the page already has replaces that
               -- attachment.
@@ -2400,6 +2407,7 @@ component =
                   , addresses =
                       Body.Addresses
                         { urls = Map.insert a.id url w.addresses.urls
+                        , downloads = maybe (Map.delete a.id) (Map.insert a.id) download w.addresses.downloads
                         , frames = maybe identity (Map.insert a.id) frame w.addresses.frames
                         }
                   }
@@ -2436,9 +2444,9 @@ data Fetched = Fetched Loaded (Maybe Found) Bool
 -- | Fetch the page the input names, as it is now, loading the author's
 -- draft of it if the draft is of this version and offering it if it is of
 -- an older one; or the reason it cannot be edited.
-fetchWork :: (MonadWiki n) => Input -> n Fetched
-fetchWork input =
-  fetchPage input >>= \case
+fetchWork :: (MonadWiki n) => UrlOwner -> Input -> n Fetched
+fetchWork owner input =
+  fetchPage owner input >>= \case
     Left e -> pure (Fetched (Failed e) Nothing False)
     Right (page, addresses) -> do
       let work = workOf page addresses
@@ -2454,12 +2462,12 @@ fetchWork input =
         _ -> pure (Fetched (Ready work) Nothing False)
 
 -- | The page the input names, with the addresses of its attachments.
-fetchPage :: (MonadWiki n) => Input -> n (Either WikiError (Page, Body.Addresses))
-fetchPage input =
+fetchPage :: (MonadWiki n) => UrlOwner -> Input -> n (Either WikiError (Page, Body.Addresses))
+fetchPage owner input =
   getPage input.space.id input.path >>= \case
     Left e -> pure (Left e)
     Right page -> do
-      addresses <- Body.attachmentAddresses page.attachments
+      addresses <- Body.attachmentAddresses owner page.attachments
       pure (Right (page, addresses))
 
 -- | The page as it is saved, as work to edit.
@@ -2562,6 +2570,7 @@ placeOf input work =
     , Body.path = input.path
     , Body.attachments = work.attachments
     , Body.urls = work.addresses.urls
+    , Body.downloads = work.addresses.downloads
     , Body.frames = work.addresses.frames
     , -- The preview looks up the people the work mentions itself.
       Body.people = mempty
@@ -2575,13 +2584,6 @@ data HomeChoice = HomeChoice {withSpaces :: Bool, withRecent :: Bool, forVisitor
 
 homeChoiceOf :: HomePage -> HomeChoice
 homeChoiceOf h = HomeChoice {withSpaces = h.showSpaces, withRecent = h.showRecent, forVisitors = h.showAnonymous}
-
--- | Whether files can be attached to the page: not in an encrypted space,
--- whose attachments the server would keep unencrypted (they are not
--- encrypted yet). The editor then offers no way to attach one, and refuses
--- a file dropped or pasted on it.
-attachable :: Input -> Bool
-attachable input = isNothing input.space.encryption
 
 -- | Whether the editor shows the home page's options: on the home page's
 -- document, to an administrator, who alone may change them.
@@ -2610,8 +2612,6 @@ data Bar = Bar
   -- administrator may use ('mayDefineKinds').
   , macrosShown :: Bool
   -- ^ Whether the math macros' panel is shown.
-  , files :: Bool
-  -- ^ Whether files can be attached to the page ('attachable').
   , emojiSearch :: Text
   -- ^ What is typed in the "Emoji" menu's field.
   }

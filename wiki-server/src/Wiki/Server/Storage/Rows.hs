@@ -981,7 +981,19 @@ referencedBlobs = do
   attached <- map fst <$> blobSizes
   icons <- loadIcons
   avatars <- loadAvatarBlobs
-  pure (Set.fromList (attached <> [b | t <- icons, Just (IconImage b _) <- [decodeStrict' (encodeUtf8 t)]] <> avatars))
+  staged <- loadStagedBlobs
+  pure (Set.fromList (attached <> [b | t <- icons, Just (IconImage b _) <- [decodeStrict' (encodeUtf8 t)]] <> avatars <> staged))
+
+-- | The blobs of encrypted attachments staged while their space is being
+-- encrypted, not yet in their rows' place (@sealed_attachments@'s
+-- @staged_blob@). A database of a schema before step 18 (a backup made by
+-- an older server) has none.
+loadStagedBlobs :: (Backend be) => Db be [BlobId]
+loadStagedBlobs = do
+  tables <- tableNames
+  if "sealed_attachments" `elem` tables
+    then map BlobId . catMaybes <$> runSelectReturningList (select ((\a -> a.staged_blob) <$> filter_ (\a -> Beam.isJust_ a.staged_blob) (all_ wikiDb.sealed_attachments)))
+    else pure []
 
 -- | The blobs of the users' avatars. A database of a schema before the
 -- avatars (a backup made by an older server, which 'referencedBlobs' reads

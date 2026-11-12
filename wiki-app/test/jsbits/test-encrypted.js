@@ -5,11 +5,12 @@
 // under encrypted/
 // (Wiki.Api.Encrypted), with the server's rules for grants (only a holder
 // of the key grants it, only to a reader with a current public key, and
-// only the current key) and for saves (against the version read). It
-// stores what the browser sends and never reads it, as the real server.
+// only the current key) and for saves (against the version read, as the
+// next of the page's chain of versions). It stores what the browser sends
+// and never reads it, as the real server.
 // The user asking is the one the test names (wiki_test_encrypted_as).
 
-const wikiTestEncrypted = { as: null, spaces: new Map(), directory: new Map(), pages: new Map(), next: 0, created: [] };
+const wikiTestEncrypted = { as: null, spaces: new Map(), directory: new Map(), pages: new Map(), next: 0, created: [], historyWithoutLatest: false };
 
 function wikiTestEncJson(status, body, headers) {
   return { status, body: JSON.stringify(body), headers: headers ?? {} };
@@ -30,6 +31,15 @@ function wikiTestEncGrantOf(s, user) {
   return s.grants.find((g) => g.keyId === s.space.encryption && g.recipient === user && mine && g.recipientKeyId === mine.keyId) ?? null;
 }
 
+// Whether a rotation of the space's key is due: a grant of its current key
+// to someone who is no longer a reader, or to a public key that is no
+// longer theirs (Wiki.Server.Storage.Renewal).
+function wikiTestEncDue(s) {
+  return s.grants.some((g) => g.keyId === s.space.encryption && (!s.readers.includes(g.recipient) || wikiTestEncrypted.directory.get(g.recipient)?.keyId !== g.recipientKeyId));
+}
+
+const wikiTestEncRenewal = { error: "Conflict", text: "This space's key must be renewed before anything more is written in it: someone who held the key can no longer read the space. An administrator of the space who holds the key renews it by opening the space, and then this can be done again." };
+
 function wikiTestEncSealed(p) {
   const latest = p.versions[p.versions.length - 1];
   return {
@@ -44,7 +54,67 @@ function wikiTestEncSealed(p) {
     content: latest.content,
     createdBy: null,
     updatedBy: null,
+    pageKeys: [p.pageKey, ...(p.olderKeys ?? [])],
+    attachments: (p.attachments ?? []).map((a) => ({ id: a.id, size: a.bytes.length, meta: a.meta })),
   };
+}
+
+// The parts of a multipart form (Wiki.Api.Upload), by name: each part's
+// bytes as a string of one character per byte.
+function wikiTestEncParts(request) {
+  const type = Object.entries(request.headers).find(([k]) => k.toLowerCase() === "content-type")?.[1] ?? "";
+  const boundary = type.match(/boundary=([^;]+)/)?.[1];
+  const body = atob(request.bytes);
+  const parts = {};
+  for (const chunk of body.split(`--${boundary}`).slice(1, -1)) {
+    const at = chunk.indexOf("\r\n\r\n");
+    const name = chunk.slice(0, at).match(/name="([^"]*)"/)?.[1];
+    parts[name] = chunk.slice(at + 4, chunk.length - 2);
+  }
+  return parts;
+}
+
+// Whether what the browser sent is what the server takes: ids that are
+// UUIDs, a comment's tag of 16 bytes, nonces of 12 (Wiki.Server.Storage's
+// checks of a comment, an anchor or an attachment).
+function wikiTestEncTakes({ ids = [], tags = [], nonces = [] }) {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return ids.every((i) => uuid.test(i)) && tags.every((t) => /^[A-Za-z0-9_-]{22}$/.test(t)) && nonces.every((n) => /^[A-Za-z0-9_-]{16}$/.test(n));
+}
+
+const wikiTestEncNotTaken = { error: "Invalid", text: "This is not what the server takes: an id, a tag or a nonce is not of its form." };
+
+// A space's home page as the browser sends it (Wiki.Api.Encrypted's
+// NewSealedPage), checked as the server checks it: its id a UUID, under the
+// space's key, the first of its chain, at the top. The page, made, or why
+// not.
+function wikiTestEncHome(s, sent, keyId, me) {
+  if (!wikiTestEncTakes({ ids: [sent.id] })) return { refused: wikiTestEncJson(400, wikiTestEncNotTaken) };
+  if (sent.parent !== null) return { refused: wikiTestEncJson(400, { error: "Invalid", text: "A space's home page is at the top of its pages." }) };
+  if (sent.pageKey.spaceKeyId !== keyId) return { refused: wikiTestEncJson(409, { error: "Conflict", text: "The space's key has changed since: open the space again." }) };
+  if (!wikiTestEncFollows(sent.content.chain, null)) return { refused: wikiTestEncJson(409, { error: "Conflict", text: "This version does not follow on the page's latest one." }) };
+  const p = { id: sent.id, space: s.space.id, parent: null, slug: `h${wikiTestEncrypted.next}x${Math.random().toString(36).slice(2, 9)}`, position: 0, pageKey: sent.pageKey, versions: [{ updatedAt: wikiTestEncNow(), content: sent.content, author: me }] };
+  return { page: p };
+}
+
+// A comment as the encrypted routes answer it (Wiki.Api.Encrypted).
+function wikiTestEncComment(thread, id, content, author, createdAt) {
+  return { id, thread, author: { id: author, name: author, avatar: null }, createdAt, editedAt: null, content };
+}
+
+// A version's heading, as the lists of pages and of versions carry it.
+function wikiTestEncHeading(content) {
+  return { tag: content.tag, keyId: content.keyId, chain: content.chain, title: content.title };
+}
+
+// Whether a version's chain is the one the server takes on top of the
+// latest version (null for a new page's first): the next number, naming the
+// latest's tag (Wiki.Core.Encrypted's chainAfter).
+function wikiTestEncFollows(chain, latest) {
+  if (!chain) return false;
+  if (latest === null) return chain.number === 1 && (chain.previous ?? null) === null;
+  const number = latest.chain ? latest.chain.number + 1 : 1;
+  return chain.number === number && chain.previous === latest.tag;
 }
 
 function wikiTestEncServer(request) {
@@ -66,10 +136,31 @@ function wikiTestEncServer(request) {
       readable.map((p) => ({ page: p.id, space: p.space, title: "", location: { space: [wikiTestEncrypted.spaces.get(p.space).space.slug], page: [p.slug] } })),
     );
   }
-  const spaceAt = path.match(/^spaces\/at\/([^/]+)$/);
+  const spaceAt = path.match(/^spaces\/at\/(.+)$/);
   if (spaceAt && request.method === "GET") {
-    const s = [...wikiTestEncrypted.spaces.values()].find((x) => x.space.slug === decodeURIComponent(spaceAt[1]));
+    const slug = decodeURIComponent(spaceAt[1].split("/").at(-1));
+    const s = [...wikiTestEncrypted.spaces.values()].find((x) => x.space.slug === slug);
     return s && s.readers.includes(me) ? wikiTestEncJson(200, s.space) : null;
+  }
+  // The space's permissions (Wiki.App.View.Permissions): each reader
+  // granted to view it, the administrator to administer it; a grant
+  // revoked there takes the reader out of the space's readers.
+  const grantsAt = path.match(/^spaces\/([^/]+)\/grants$/);
+  if (grantsAt) {
+    const s = wikiTestEncrypted.spaces.get(decodeURIComponent(grantsAt[1]));
+    if (s && request.method === "GET") {
+      const user = (u) => ({ id: u, login: u.replace(/^user-/, ""), displayName: u });
+      return wikiTestEncJson(200, {
+        grants: s.readers.map((u) => ({ space: s.space.id, subject: { tag: "SubjectUser", contents: u }, permission: s.admins.includes(u) ? "AdministerSpace" : "View" })),
+        users: s.readers.map(user),
+        groups: [],
+      });
+    }
+    if (s && request.method === "PUT") {
+      const sent = JSON.parse(request.body);
+      if (!sent.granted) s.readers = s.readers.filter((u) => u !== sent.subject.contents);
+      return { status: 204, body: "" };
+    }
   }
   let m = path.match(/^account\/public-keys\/([^/]+)$/);
   if (m && request.method === "GET") {
@@ -84,20 +175,72 @@ function wikiTestEncServer(request) {
     const s = wikiTestEncrypted.spaces.get(id) ?? wikiTestEncrypted.spaces.get(wikiTestEncrypted.pages.get(id)?.space);
     if (s && s.space.encryption && s.readers.includes(me)) return wikiTestEncJson(409, { error: "Conflict", text: "This page is in an encrypted space." });
   }
+  // An attachment deleted, by the plain route, which carries no text.
+  m = path.match(/^attachments\/([^/]+)$/);
+  if (m && request.method === "DELETE") {
+    for (const p of wikiTestEncrypted.pages.values()) {
+      const before = (p.attachments ?? []).length;
+      p.attachments = (p.attachments ?? []).filter((x) => x.id !== decodeURIComponent(m[1]));
+      if (p.attachments.length < before) return { status: 204, body: "" };
+    }
+  }
+  // An attachment's bytes, as the server keeps them: encrypted.
+  m = path.match(/^attachments\/([^/]+)\/([^/]+)$/);
+  if (m && request.method === "GET") {
+    for (const p of wikiTestEncrypted.pages.values()) {
+      const a = (p.attachments ?? []).find((x) => x.id === decodeURIComponent(m[1]));
+      if (a) return { status: 200, body: a.bytes, headers: { "Content-Type": "application/octet-stream" } };
+    }
+  }
   m = path.match(/^encrypted\/spaces\/([^/]+)(\/.*)?$/);
   if (m) {
     const s = wikiTestEncrypted.spaces.get(decodeURIComponent(m[1]));
     const rest = m[2] ?? "";
-    if (!s || !s.readers.includes(me)) return wikiTestEncJson(404, { error: "NotFound" });
+    if (!s || !(s.readers.includes(me) || s.leaked.includes(me))) return wikiTestEncJson(404, { error: "NotFound" });
     if (rest === "" && request.method === "POST") {
       if (s.space.encryption) return wikiTestEncJson(409, { error: "Conflict", text: "This space is encrypted already." });
       const sent = JSON.parse(request.body);
+      const home = wikiTestEncHome(s, sent.homePage, sent.keyId, me);
+      if (home.refused) return home.refused;
       s.space.encryption = sent.keyId;
       s.space.sealed = true;
       s.grants.push({ keyId: sent.keyId, recipient: sent.grant.recipient, recipientKeyId: sent.grant.recipientKeyId, enc: sent.grant.enc, sealed: sent.grant.sealed });
+      wikiTestEncrypted.pages.set(home.page.id, home.page);
+      s.space.homePage = home.page.id;
       return wikiTestEncJson(200, s.space);
     }
     if (!s.space.encryption) return wikiTestEncJson(409, { error: "Conflict", text: "This space is not encrypted." });
+    // A subspace, made encrypted: open to the parent's readers, who wait
+    // for its key.
+    if (rest === "/subspaces" && request.method === "POST") {
+      const sent = JSON.parse(request.body);
+      if (!wikiTestEncTakes({ ids: [sent.id] })) return wikiTestEncJson(400, wikiTestEncNotTaken);
+      if (wikiTestEncrypted.spaces.has(sent.id)) return wikiTestEncJson(409, { error: "Conflict", text: "A space with this id exists already." });
+      if (sent.grant.recipient !== me || wikiTestEncrypted.directory.get(me)?.keyId !== sent.grant.recipientKeyId) return wikiTestEncJson(400, { error: "Invalid", text: "The space's key must be sealed to your own current public key." });
+      const space = { ...s.space, id: sent.id, name: sent.name, slug: sent.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"), parent: s.space.id, sealed: false, encryption: sent.keyId, homePage: null };
+      const sub = { space, readers: [...s.readers], admins: [...s.admins], leaked: [], grants: [{ keyId: sent.keyId, ...sent.grant }] };
+      const home = wikiTestEncHome(sub, sent.homePage, sent.keyId, me);
+      if (home.refused) return home.refused;
+      wikiTestEncrypted.pages.set(home.page.id, home.page);
+      space.homePage = home.page.id;
+      wikiTestEncrypted.spaces.set(space.id, sub);
+      wikiTestEncrypted.subspaces.push(request.body);
+      return wikiTestEncJson(201, space);
+    }
+    // The home page of a space made without one: its top-level pages go
+    // under it.
+    if (rest === "/home" && request.method === "POST") {
+      if (!s.admins.includes(me)) return wikiTestEncJson(403, { error: "Forbidden" });
+      if (s.space.homePage) return wikiTestEncJson(409, { error: "Conflict", text: "This space has a home page already." });
+      if (wikiTestEncDue(s)) return wikiTestEncJson(409, wikiTestEncRenewal);
+      const home = wikiTestEncHome(s, JSON.parse(request.body), s.space.encryption, me);
+      if (home.refused) return home.refused;
+      for (const p of wikiTestEncrypted.pages.values()) if (p.space === s.space.id && !p.parent) p.parent = home.page.id;
+      wikiTestEncrypted.pages.set(home.page.id, home.page);
+      s.space.homePage = home.page.id;
+      wikiTestEncrypted.homes.push(request.body);
+      return wikiTestEncJson(201, wikiTestEncSealed(home.page));
+    }
     if (rest === "" && request.method === "GET") {
       const mine = wikiTestEncGrantOf(s, me);
       const others = s.readers.filter((u) => !wikiTestEncGrantOf(s, u));
@@ -106,11 +249,39 @@ function wikiTestEncServer(request) {
         grant: mine,
         pending: mine ? others.filter((u) => wikiTestEncrypted.directory.has(u)).map((u) => ({ user: u, ...wikiTestEncrypted.directory.get(u) })) : [],
         waiting: mine ? others.filter((u) => !wikiTestEncrypted.directory.has(u)) : [],
+        rotationDue: wikiTestEncDue(s),
       });
+    }
+    const allPages = [...wikiTestEncrypted.pages.values()].filter((p) => p.space === s.space.id);
+    if (rest === "/rotation" && request.method === "GET") {
+      if (!s.admins.includes(me)) return wikiTestEncJson(403, { error: "Forbidden" });
+      return wikiTestEncJson(200, {
+        keyId: s.space.encryption,
+        readers: s.readers.filter((u) => wikiTestEncrypted.directory.has(u)).map((u) => ({ user: u, ...wikiTestEncrypted.directory.get(u) })),
+        pages: allPages.map((p) => ({ page: p.id, keys: [p.pageKey, ...(p.olderKeys ?? [])], latest: wikiTestEncrypted.tamperLatest ? wikiTestEncHeading(allPages.find((q) => q !== p)?.versions.at(-1).content ?? p.versions[0].content) : wikiTestEncHeading(p.versions.at(-1).content) })),
+      });
+    }
+    if (rest === "/rotation" && request.method === "POST") {
+      if (!s.admins.includes(me) || !wikiTestEncGrantOf(s, me)) return wikiTestEncJson(403, { error: "Forbidden" });
+      const sent = JSON.parse(request.body);
+      if (sent.from !== s.space.encryption) return wikiTestEncJson(409, { error: "Conflict", text: "The space's key has changed since: open the space again." });
+      const readers = s.readers.filter((u) => wikiTestEncrypted.directory.has(u)).sort();
+      if (JSON.stringify(sent.grants.map((g) => g.recipient).sort()) !== JSON.stringify(readers)) return wikiTestEncJson(409, { error: "Conflict", text: "The space's readers have changed since." });
+      if (sent.pages.length !== allPages.length) return wikiTestEncJson(409, { error: "Conflict", text: "The space's pages have changed since." });
+      wikiTestEncrypted.rotations.push(request.body);
+      s.space.encryption = sent.keyId;
+      s.grants = sent.grants.map((g) => ({ keyId: sent.keyId, ...g }));
+      for (const r of sent.pages) {
+        const p = wikiTestEncrypted.pages.get(r.page);
+        p.pageKey = r.current;
+        p.olderKeys = r.rewrapped;
+      }
+      return { status: 204, body: "" };
     }
     if (rest === "/grants" && request.method === "POST") {
       const sent = JSON.parse(request.body);
       if (!wikiTestEncGrantOf(s, me)) return wikiTestEncJson(403, { error: "Forbidden" });
+      if (wikiTestEncDue(s)) return wikiTestEncJson(409, wikiTestEncRenewal);
       if (sent.grants.length > 500) return wikiTestEncJson(400, { error: "Invalid", text: "At most 500 grants are made at once." });
       if (sent.keyId !== s.space.encryption) return wikiTestEncJson(409, { error: "Conflict", text: "The space's key has changed since: open the space again." });
       for (const g of sent.grants) {
@@ -126,15 +297,17 @@ function wikiTestEncServer(request) {
         200,
         pages.map((p) => {
           const sealed = wikiTestEncSealed(p);
-          return { ...sealed, heading: { tag: sealed.content.tag, keyId: sealed.content.keyId, title: sealed.content.title }, content: undefined };
+          return { ...sealed, heading: wikiTestEncHeading(sealed.content), content: undefined };
         }),
       );
     }
     if (rest === "/contents" && request.method === "GET") return wikiTestEncJson(200, pages.map(wikiTestEncSealed));
-    const at = rest.match(/^\/pages\/at\/(.+)$/);
+    const at = rest.match(/^\/pages\/at\/?(.*)$/);
     if (at && request.method === "GET") {
-      const slug = decodeURIComponent(at[1]);
-      const p = pages.find((x) => x.slug === slug);
+      // The space's address is its home page's; a page's path ends in its
+      // own slug.
+      const slug = decodeURIComponent(at[1].split("/").filter((x) => x).at(-1) ?? "");
+      const p = slug === "" ? pages.find((x) => x.id === s.space.homePage) : pages.find((x) => x.slug === slug);
       if (!p) return wikiTestEncJson(404, { error: "NotFound" });
       const sealed = wikiTestEncSealed(p);
       return wikiTestEncJson(200, sealed, { ETag: wikiTestEncTag(sealed.updatedAt) });
@@ -142,8 +315,10 @@ function wikiTestEncServer(request) {
     if (rest === "/pages" && request.method === "POST") {
       const sent = JSON.parse(request.body);
       if (sent.pageKey.spaceKeyId !== s.space.encryption) return wikiTestEncJson(409, { error: "Conflict", text: "The space's key has changed since: open the space again." });
+      if (!wikiTestEncFollows(sent.content.chain, null)) return wikiTestEncJson(409, { error: "Conflict", text: "This version does not follow on the page's latest one." });
+      if (wikiTestEncDue(s)) return wikiTestEncJson(409, wikiTestEncRenewal);
       const time = wikiTestEncNow();
-      const p = { id: sent.id, space: s.space.id, parent: sent.parent, slug: `p${wikiTestEncrypted.next}x${Math.random().toString(36).slice(2, 9)}`, position: pages.length, pageKey: sent.pageKey, versions: [{ updatedAt: time, content: sent.content, author: me }] };
+      const p = { id: sent.id, space: s.space.id, parent: sent.parent ?? s.space.homePage ?? null, slug: `p${wikiTestEncrypted.next}x${Math.random().toString(36).slice(2, 9)}`, position: pages.length, pageKey: sent.pageKey, versions: [{ updatedAt: time, content: sent.content, author: me }] };
       wikiTestEncrypted.pages.set(p.id, p);
       wikiTestEncrypted.created.push(request.body);
       const sealed = wikiTestEncSealed(p);
@@ -155,21 +330,76 @@ function wikiTestEncServer(request) {
   if (m) {
     const p = wikiTestEncrypted.pages.get(decodeURIComponent(m[1]));
     const s = p && wikiTestEncrypted.spaces.get(p.space);
-    if (!p || !s.readers.includes(me)) return wikiTestEncJson(404, { error: "NotFound" });
+    if (!p || !(s.readers.includes(me) || s.leaked.includes(me))) return wikiTestEncJson(404, { error: "NotFound" });
     const rest = m[2] ?? "";
     if (rest === "" && request.method === "PUT") {
       const latest = p.versions[p.versions.length - 1];
       if (header("if-match") !== wikiTestEncTag(latest.updatedAt)) return wikiTestEncJson(409, { error: "Conflict", text: "The page has been saved by someone else since this edit began." });
-      p.versions.push({ updatedAt: wikiTestEncNow(), content: JSON.parse(request.body).content, author: me });
+      const content = JSON.parse(request.body).content;
+      if (!wikiTestEncFollows(content.chain, latest.content)) return wikiTestEncJson(409, { error: "Conflict", text: "This version does not follow on the page's latest one." });
+      if (wikiTestEncDue(s)) return wikiTestEncJson(409, wikiTestEncRenewal);
+      if (content.keyId !== p.pageKey.keyId) return wikiTestEncJson(409, { error: "Conflict", text: "This page's key has changed since it was opened." });
+      p.versions.push({ updatedAt: wikiTestEncNow(), content, author: me });
       const sealed = wikiTestEncSealed(p);
       return wikiTestEncJson(200, sealed, { ETag: wikiTestEncTag(sealed.updatedAt) });
     }
+    // A page of the history, the latest first: at most limit versions (50
+    // if not given), of those before the version before (all if not given),
+    // as the server's. The latest is left out while the test says so.
     if (rest === "/versions" && request.method === "GET") {
+      const query = new URLSearchParams(url.split("?")[1] ?? "");
+      const limit = Number(query.get("limit") ?? 50);
+      const before = query.get("before");
       const n = p.versions.length;
-      return wikiTestEncJson(
-        200,
-        [...p.versions].reverse().map((v, i) => ({ page: p.id, updatedAt: v.updatedAt, heading: { tag: v.content.tag, keyId: v.content.keyId, title: v.content.title }, author: null, number: n - i })),
-      );
+      const all = [...p.versions].reverse().map((v, i) => ({ page: p.id, updatedAt: v.updatedAt, heading: wikiTestEncHeading(v.content), author: null, number: n - i }));
+      const listed = all.filter((v, i) => !(i === 0 && wikiTestEncrypted.historyWithoutLatest) && (before === null || Date.parse(v.updatedAt) < Date.parse(before)));
+      return wikiTestEncJson(200, listed.slice(0, limit));
+    }
+    // Threads and comments, kept as the browser sends them: the server
+    // never reads them.
+    p.threads ??= [];
+    p.attachments ??= [];
+    if (rest === "/threads" && request.method === "GET") return wikiTestEncJson(200, { pageKeys: [p.pageKey, ...(p.olderKeys ?? [])], threads: p.threads });
+    if (rest === "/threads" && request.method === "POST") {
+      if (wikiTestEncDue(s)) return wikiTestEncJson(409, wikiTestEncRenewal);
+      const asked = JSON.parse(request.body);
+      if (!wikiTestEncTakes({ ids: [asked.id, asked.comment.id], tags: [asked.comment.content.tag], nonces: [asked.comment.content.body.nonce, ...(asked.anchor ? [asked.anchor.anchor.nonce] : [])] })) return wikiTestEncJson(400, wikiTestEncNotTaken);
+      const createdAt = wikiTestEncNow();
+      const thread = { id: asked.id, page: p.id, anchored: asked.anchor !== null, anchor: asked.anchor, resolved: false, createdAt, comments: [wikiTestEncComment(asked.id, asked.comment.id, asked.comment.content, me, createdAt)] };
+      p.threads.push(thread);
+      return wikiTestEncJson(201, thread);
+    }
+    const replying = rest.match(/^\/threads\/([^/]+)\/comments(?:\/([^/]+))?$/);
+    if (replying) {
+      const thread = p.threads.find((t) => t.id === decodeURIComponent(replying[1]));
+      if (!thread) return wikiTestEncJson(404, { error: "NotFound" });
+      if (wikiTestEncDue(s)) return wikiTestEncJson(409, wikiTestEncRenewal);
+      const asked = JSON.parse(request.body);
+      if (!wikiTestEncTakes({ ids: asked.id ? [asked.id] : [], tags: [asked.content.tag], nonces: [asked.content.body.nonce] })) return wikiTestEncJson(400, wikiTestEncNotTaken);
+      if (replying[2] === undefined && request.method === "POST") {
+        const comment = wikiTestEncComment(thread.id, asked.id, asked.content, me, wikiTestEncNow());
+        thread.comments.push(comment);
+        return wikiTestEncJson(201, comment);
+      }
+      const comment = thread.comments.find((c) => c.id === decodeURIComponent(replying[2]));
+      if (comment && request.method === "PUT") {
+        Object.assign(comment, { content: asked.content, editedAt: wikiTestEncNow() });
+        return wikiTestEncJson(200, comment);
+      }
+      return wikiTestEncJson(404, { error: "NotFound" });
+    }
+    // An attachment: its name and media type, and its bytes, encrypted;
+    // kept under the id the browser chose, replacing the one it names.
+    if (rest === "/attachments" && request.method === "POST") {
+      if (wikiTestEncDue(s)) return wikiTestEncJson(409, wikiTestEncRenewal);
+      const parts = wikiTestEncParts(request);
+      const sealed = JSON.parse(parts.sealed);
+      if (!wikiTestEncTakes({ ids: [sealed.id], nonces: [sealed.meta.meta.nonce, sealed.meta.bytesNonce] })) return wikiTestEncJson(400, wikiTestEncNotTaken);
+      const bytes = Uint8Array.from(parts.file, (c) => c.charCodeAt(0));
+      if (sealed.replaces && !p.attachments.some((a) => a.id === sealed.replaces)) return wikiTestEncJson(400, { error: "Invalid", text: "The attachment replaced is not one of the page's." });
+      p.attachments = p.attachments.filter((a) => a.id !== sealed.replaces);
+      p.attachments.push({ id: sealed.id, meta: sealed.meta, bytes });
+      return wikiTestEncJson(201, { id: sealed.id, size: bytes.length, meta: sealed.meta });
     }
     const v = rest.match(/^\/versions\/(.+)$/);
     if (v && request.method === "GET") {
@@ -186,8 +416,28 @@ function wikiTestEncServer(request) {
 // as JSON) and its readers (user ids).
 function wiki_test_encrypted_start(space, readers) {
   const s = JSON.parse(space);
-  Object.assign(wikiTestEncrypted, { as: null, spaces: new Map([[s.id, { space: s, readers: JSON.parse(readers), grants: [] }]]), directory: new Map(), pages: new Map(), next: 0, created: [] });
+  Object.assign(wikiTestEncrypted, { as: null, spaces: new Map([[s.id, { space: s, readers: JSON.parse(readers), admins: ["user-admin"], leaked: [], grants: [] }]]), directory: new Map(), pages: new Map(), next: 0, created: [], historyWithoutLatest: false, rotations: [], tamperLatest: false, subspaces: [], homes: [] });
   globalThis.wikiTestHandlers = [wikiTestEncServer, ...(globalThis.wikiTestHandlers ?? []).filter((h) => h !== wikiTestEncServer)];
+}
+
+// A reader of one space alone (a subspace), not of the spaces around it.
+function wiki_test_encrypted_add_reader(space, user) {
+  wikiTestEncrypted.spaces.get(space).readers.push(user);
+}
+
+// Make an encrypted space one made before encrypted spaces had home pages:
+// its home page gone, the pages under it at the top.
+function wiki_test_encrypted_strip_home(space) {
+  const s = wikiTestEncrypted.spaces.get(space);
+  const home = s.space.homePage;
+  wikiTestEncrypted.pages.delete(home);
+  for (const p of wikiTestEncrypted.pages.values()) if (p.parent === home) p.parent = null;
+  s.space.homePage = null;
+}
+
+// How many subspaces and home pages the browser asked the server to make.
+function wiki_test_encrypted_made() {
+  return JSON.stringify([wikiTestEncrypted.subspaces.length, wikiTestEncrypted.homes.length]);
 }
 
 // Who asks the server from now on.
@@ -297,8 +547,54 @@ async function wiki_test_encrypted_unlock_device(user) {
 
 // Everything the server stored of the space's pages and grants, as one
 // text: what a test searches for a plain title or text.
+// What the server stored, as JSON: an attachment's bytes as a string of
+// one character per byte, so that a word of them in plain text shows.
 function wiki_test_encrypted_stored() {
-  return JSON.stringify({ pages: [...wikiTestEncrypted.pages.values()], spaces: [...wikiTestEncrypted.spaces.values()], created: wikiTestEncrypted.created });
+  const pages = [...wikiTestEncrypted.pages.values()].map((p) => ({ ...p, attachments: (p.attachments ?? []).map((a) => ({ ...a, bytes: String.fromCharCode(...a.bytes) })) }));
+  return JSON.stringify({ pages, spaces: [...wikiTestEncrypted.spaces.values()], created: wikiTestEncrypted.created });
+}
+
+// The bytes the server stored for each attachment, in base64, as JSON.
+function wiki_test_encrypted_attachment_bytes() {
+  return JSON.stringify([...wikiTestEncrypted.pages.values()].flatMap((p) => (p.attachments ?? []).map((a) => a.bytes.toBase64())));
+}
+
+// Keep, from now on, every object URL the page makes, with its type, and
+// whether it was let go.
+const wikiTestEncBlobs = new Map();
+function wiki_test_encrypted_watch_blobs() {
+  wikiTestEncBlobs.clear();
+  if (URL.wikiTestWatched) return;
+  URL.wikiTestWatched = true;
+  const create = URL.createObjectURL.bind(URL);
+  const revoke = URL.revokeObjectURL.bind(URL);
+  URL.createObjectURL = (blob) => {
+    const url = create(blob);
+    wikiTestEncBlobs.set(url, [blob?.type ?? "", false]);
+    return url;
+  };
+  URL.revokeObjectURL = (url) => {
+    const known = wikiTestEncBlobs.get(url);
+    if (known) known[1] = true;
+    revoke(url);
+  };
+}
+
+// The object URLs kept, as JSON: {url: [type, let go]}.
+function wiki_test_encrypted_blobs() {
+  return JSON.stringify(Object.fromEntries(wikiTestEncBlobs));
+}
+
+// The width of the image at a URL the page made (an object URL), as an
+// <img> loads it, or -1 if it does not load. The page's policy lets images
+// come from object URLs, and not fetches.
+async function wiki_test_encrypted_image_width(url) {
+  return await new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve(image.naturalWidth);
+    image.onerror = () => resolve(-1);
+    image.src = url;
+  });
 }
 
 // Take WebCrypto away, as a page over plain HTTP has none, or give it back.
@@ -314,4 +610,54 @@ function wiki_test_encrypted_plain_http(plain) {
     if (!("crypto" in globalThis)) Object.defineProperty(globalThis, "crypto", wikiTestEncCrypto);
     wikiTestEncCrypto = null;
   }
+}
+
+// The server rolls a page back: its latest version is no longer there, so
+// that the one before it is served as the latest.
+function wiki_test_encrypted_roll_back(page) {
+  wikiTestEncrypted.pages.get(page).versions.pop();
+}
+
+// The server leaves a version out of a page's history, by its index from
+// the first version (0).
+function wiki_test_encrypted_drop_version(page, index) {
+  wikiTestEncrypted.pages.get(page).versions.splice(index, 1);
+}
+
+// What this browser remembers of a page for a user (jsbits/encrypted.js's
+// "wiki-chain:" in local storage), set to the version at an index from the
+// first (0), as if it had read that one last; nothing for an index below 0.
+function wiki_test_encrypted_seen_at(user, page, index) {
+  const key = "wiki-chain:" + user;
+  const all = JSON.parse(localStorage.getItem(key) ?? "{}");
+  if (index < 0) delete all[page];
+  else {
+    const content = wikiTestEncrypted.pages.get(page).versions[index].content;
+    all[page] = { number: content.chain.number, tag: content.tag };
+  }
+  localStorage.setItem(key, JSON.stringify(all));
+}
+
+// The server's history leaves out a page's latest version, or no longer.
+function wiki_test_encrypted_history_without_latest(leave) {
+  wikiTestEncrypted.historyWithoutLatest = leave;
+}
+
+// A reader is removed from the space; the server goes on answering them
+// the space's ciphertext, as a server that leaks it would.
+function wiki_test_encrypted_remove_reader(user) {
+  const s = [...wikiTestEncrypted.spaces.values()][0];
+  s.readers = s.readers.filter((u) => u !== user);
+  s.leaked.push(user);
+}
+
+// The rotations the server took, as JSON.
+function wiki_test_encrypted_rotations() {
+  return JSON.stringify(wikiTestEncrypted.rotations.map((r) => JSON.parse(r)));
+}
+
+// The server lists, as a page's latest title for a rotation, another
+// page's: a wrap checked against it does not open.
+function wiki_test_encrypted_tamper_latest(tamper) {
+  wikiTestEncrypted.tamperLatest = tamper;
 }

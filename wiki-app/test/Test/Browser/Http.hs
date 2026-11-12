@@ -30,6 +30,7 @@ module Test.Browser.Http
   , browserGoes
   , startServer
   , startServerWith
+  , startServerOver
   , tellServer
   , holdAt
   , release

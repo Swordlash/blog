@@ -109,7 +109,7 @@ import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..
 import Wiki.Api.ServerSettings (Discovered (..), HomePage (showAnonymous), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultHomePage, named, providerProblems, providerWith, redirectUri, secretState, serviceOrigin)
 import Wiki.Api.Stars (Starring (..))
 import Wiki.Api.Types
-import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
+import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..), SealedAttachmentUpload (..))
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.Api.WhatsNew (WhatsNew, newestEntry)
@@ -121,7 +121,7 @@ import Wiki.App.Backend.Notifications qualified as Notifications
 import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Assistant.Vault (CredentialId (..))
-import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), shownInBrowser)
 import Wiki.Core.Export (Archive)
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Frame (framesInteractively)
@@ -295,7 +295,9 @@ apiApplication env caller = jsonErrors . privately $ \request ->
   where
     serveWith limit = serveWithContext api (errorFormatters :. uploadOptions env.dataDir limit :. EmptyContext) (handlers env caller)
     imports = serveWith (fromIntegral env.maxImportSize)
-    others = serveWith (fromIntegral maxAttachmentSize)
+    -- An attachment of an encrypted page is its bytes and AES-GCM's 16-byte
+    -- tag: the storage checks each kind's own limit.
+    others = serveWith (fromIntegral maxAttachmentSize + 16)
 
 -- | The multipart options for forms whose file is at most this many bytes,
 -- for a server with this data directory: one file per form, and text parts
@@ -822,7 +824,11 @@ handlers env caller =
         EncryptedApi
           { space = wiki . spaceEncryption
           , encrypt = \s body -> wiki (encryptSpace s body)
+          , subspace = \s body -> wiki (createEncryptedSubspace s body)
+          , home = \s body -> wiki (createSealedHome s body)
           , grant = \s body -> wiki (grantSpaceKey s body) $> NoContent
+          , rotation = wiki . rotationInfo
+          , rotate = \s body -> wiki (rotateSpaceKey s body) $> NoContent
           , pages = wiki . sealedPages
           , contents = wiki . sealedContents
           , pageAt = \s path -> versionedSealed <$> wiki (sealedPageAt s path)
@@ -830,6 +836,11 @@ handlers env caller =
           , save = \p version edit -> versionedSealed <$> wiki (saveSealedPage p version.time edit)
           , versions = \p before limit -> wiki (sealedVersions p (VersionsQuery ((\v -> v.time) <$> before) (fromMaybe versionsPageSize limit)))
           , version = \p at -> wiki (sealedVersionAt p at.time)
+          , threads = wiki . sealedThreads
+          , openThread = \p new -> wiki (openSealedThread p new)
+          , reply = \p t new -> wiki (sealedReply p t new)
+          , editComment = \p t c edit -> wiki (sealedEditComment p t c edit)
+          , upload = \p u -> wiki (uploadSealedAttachmentFile p u.sealed u.payload)
           }
     , attachments =
         AttachmentsApi
@@ -1636,9 +1647,7 @@ safeMediaType (MimeType t)
 disposition :: Attachment -> ByteString
 disposition a = dispositionAs (if shown then "inline" else "attachment") a
   where
-    t = T.toLower (safeMediaType a.mediaType)
-    shown =
-      any (`T.isPrefixOf` t) ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "video/", "audio/", "text/plain"]
+    shown = shownInBrowser (MimeType (safeMediaType a.mediaType))
 
 -- | An attachment shown in the browser, under its file's name: an SVG's
 -- interactive form, which its frame shows.

@@ -145,8 +145,9 @@ import Protolude hiding (State)
 import Web.Event.Event (EventType (..))
 import Wiki.Api.Events (PageEvent (..), Readers (..), applyEvent, noReaders)
 import Wiki.Api.Export (ExportFormat, pageFormats)
-import Wiki.App.Backend (ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (exports, user), WikiError (..))
+import Wiki.App.Backend (ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (exports, user), UrlOwner, WikiError (..), noUrlOwner)
 import Wiki.App.Backend.Comments (MonadComments (..))
+import Wiki.App.Backend.Encrypted (MonadEncryption (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Browser (ArticleLink (..), Selected (..), absoluteUrl, clickedThread, copyText, followArticleLink, markFragment, readSelection, reveal, revealFragment)
@@ -167,9 +168,9 @@ import Wiki.Core.Anchor (Anchor, BlockText (..), Located (..), Marking (Marking)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Blog (Neighbours (..), neighbours)
 import Wiki.Core.Comment (Comment (..), Thread (..), isInline, mayComment)
+import Wiki.Core.Encrypted (ChainProblem, chainProblemText)
 import Wiki.Core.Id
-  ( AttachmentId
-  , CommentThreadId (..)
+  ( CommentThreadId (..)
   , PageId
   , UserId
   )
@@ -285,6 +286,14 @@ data State = State
   -- ^ The task whose box the reader set last, by its index: its box has
   -- the focus again after a render that moved it, drew it anew, or took
   -- the focus away with the bar's buttons (Discard, a save).
+  , chainProblem :: Maybe ChainProblem
+  -- ^ What this tab found wrong with the versions the server sent of a
+  -- page of an encrypted space ("Wiki.Core.Encrypted"'s chain of
+  -- versions): shown in a banner over the page, which is then not edited
+  -- from this tab.
+  , owners :: Body.Owners
+  -- ^ Who holds the addresses of the page's attachments: the fetch shown,
+  -- and those not answered yet ("Wiki.App.View.Body"'s 'Body.Owners').
   }
 
 -- | An address put on the clipboard: by a click on a heading's or a box's
@@ -331,7 +340,7 @@ data Action
   | ReloadLosingTicks
   | DismissTickNote
 
-component :: forall m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component ViewQuery Input ViewOutput m
+component :: forall m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadStars m, MonadEncryption m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component ViewQuery Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -339,7 +348,7 @@ component =
         -- render is the page the prerender shows (see "Wiki.App.Shell"),
         -- over a backend that can ('atOnce'); otherwise in 'Initialize'.
         initialState = \input -> do
-          loaded <- fromMaybe Loading <$> atOnce (fetch input)
+          loaded <- fromMaybe Loading <$> atOnce (fetch noUrlOwner input)
           threads <- case loaded of
             Ready page _ _ _ | commentsHere input -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
             _ -> pure ThreadsLoading
@@ -375,6 +384,8 @@ component =
               , fetches = 0
               , lastBox = Nothing
               , writing = False
+              , chainProblem = Nothing
+              , owners = Body.ownersOf noUrlOwner
               }
       , render
       , eval =
@@ -411,8 +422,9 @@ component =
             -- It has its own class too: the bar stays under the header
             -- while the page scrolls (web/style.css), so that a long page
             -- can be edited without scrolling back up to it.
-            [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = input.context, target = WatchPage page.id} | notified input.context] }}{{ [HH.slot_ "star" () StarView.component StarView.Input {context = input.context, page = page.id} | notified input.context] }}{{ liveNote st }}{{ widthSwitch input.context.pageWidth }}</div>|]
+            [hh|<div class="actions page-actions">{{ actions input (isJust st.chainProblem) page deck (commentsToggle st) }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = input.context, target = WatchPage page.id} | notified input.context] }}{{ [HH.slot_ "star" () StarView.component StarView.Input {context = input.context, page = page.id} | notified input.context] }}{{ liveNote st }}{{ widthSwitch input.context.pageWidth }}</div>|]
               : toList (form input page mode)
+                <> [[hh|<p class="error encrypted-rollback" role="alert">{{ chainProblemText p }}</p>|] | Just p <- [st.chainProblem]]
                 <> toList (errorView <$> problem)
                 <> toList (versionNote input page)
                 <> toList (templateNote page)
@@ -420,7 +432,7 @@ component =
                 <> toList (postInfo input page)
                 <> [textAndPanel st place rendered text page contents]
                 <> [ticksBar st]
-                <> attachments page addresses.urls
+                <> attachments page addresses
                 <> [commentsOf st place text page CommentsView.Below | commentsHere input]
           place = placeOf input page addresses st.people.found
           -- Rendered once: the article shows it with its quotes
@@ -443,11 +455,13 @@ component =
     exportMenu :: [ExportFormat] -> ExportTarget -> [H.ComponentHTML Action Slots m]
     exportMenu formats target = [HH.slot_ "export" () ExportView.component ExportView.Input {formats, target} | not (null formats)]
 
-    actions :: Input -> Page -> Bool -> H.ComponentHTML Action Slots m -> [H.ComponentHTML Action Slots m]
-    actions input page deck comments
+    actions :: Input -> Bool -> Page -> Bool -> H.ComponentHTML Action Slots m -> [H.ComponentHTML Action Slots m]
+    actions input readOnly page deck comments
       -- A version is only read: its history, and its permanent link.
       | isJust input.version = history : copyPermanent
-      | mayEdit input.context page.space =
+      -- So is a page whose versions the server sent wrong: the reader
+      -- reloads it before editing.
+      | mayEdit input.context page.space && not readOnly =
           [ Router.link input.context.router Followed (documentRoute input.context page.space (EditPage spacePath input.path)) [HP.class_ (if home then "button edit-home" else "button")] [HH.text (if home then "Edit home page" else "Edit")]
           | changes
           ]
@@ -751,8 +765,8 @@ component =
           ThreadsReady ts -> "Comments (" <> show (length [t | t <- ts, isInline t, not t.resolved]) <> ")" :: Text
           _ -> "Comments"
 
-    attachments :: Page -> Map AttachmentId Text -> [H.ComponentHTML Action Slots m]
-    attachments page urls =
+    attachments :: Page -> Body.Addresses -> [H.ComponentHTML Action Slots m]
+    attachments page addresses =
       [hhs|
         {% if not (null page.attachments) %}
           <section class="attachments">
@@ -760,7 +774,7 @@ component =
             <ul>
               {% for a in page.attachments %}
                 <li>
-                  <a href={{ Map.findWithDefault "" a.id urls }} download={{ a.name.text }}>{{ a.name.text }}</a>
+                  <a href={{ Body.linkUrlOf addresses a.id }} download={{ a.name.text }}>{{ a.name.text }}</a>
                   <span class="attachment-meta">{{ a.mediaType.text }}, {{ fileSize a.size }}</span>
                 </li>
               {% end %}
@@ -780,6 +794,7 @@ component =
           Loading -> load >> H.liftEffect revealFragment
           loaded -> do
             for_ (pageOf loaded) (H.raise . Showing)
+            checkChain
             H.raise Loaded
             -- Scroll to the heading the address names, if any, once the
             -- page is shown: the browser does this for a page it loaded, but
@@ -793,7 +808,10 @@ component =
       -- The browser's question before closing the tab is the view's only
       -- while it has ticks: the editor sets it too, and may be the next
       -- view.
+      -- The view closes: every owner of addresses it registered is let go,
+      -- and none is registered in their place.
       Finalize -> do
+        Body.releaseOwned ownersOf' setOwners
         disconnectFeed
         whenM (gets unsaved) (H.liftEffect (guardUnload False))
       Retry -> do
@@ -812,6 +830,7 @@ component =
         barred <- gets (\st -> not elsewhere && unsaved st && not (mayEditShown st))
         when barred $ stage (Ticking.Clear MayNoLongerEdit)
         when elsewhere $ do
+          Body.releaseOwned ownersOf' setOwners
           unwatchAll
           -- Another page or version: the shell asked before leaving the
           -- ticks ('HasUnsaved'), and the reader chose Leave.
@@ -927,6 +946,7 @@ component =
         CommentsView.Reload -> loadThreads
       Heard heard -> do
         here <- gets (\st -> st.watching)
+        encrypted <- gets (\st -> isJust st.input.space.encryption)
         case heard of
           Live.Heard page (Editing editors) | Just page == here -> modify (\st -> st {editors})
           Live.Heard page (Reading readers) | Just page == here -> modify (\st -> st {readers}) >> resolveAvatars
@@ -938,11 +958,17 @@ component =
               gets busy >>= \case
                 True -> modify (\st -> st {changed = True})
                 False -> H.raise (Changed Nothing)
+          -- A thread of an encrypted page changed: the event carries no
+          -- text, so the threads are read again and decrypted.
+          Live.Heard page ThreadsChanged | Just page == here -> loadThreads
           Live.Heard page event | Just page == here -> modify (\st -> st {threads = applied event st.threads}) >> resolvePeople
           -- The server's answer to the subscription: the threads as they
           -- are now, replacing what was shown, including whatever changed
           -- since the page was read (or the channel was lost). A focused
           -- thread that no longer exists is unfocused.
+          -- A page of an encrypted space: the server's answer has none of
+          -- its threads, which are read and decrypted.
+          Live.Replaced page _ | Just page == here, encrypted -> loadThreads
           Live.Replaced page threads | Just page == here -> do
             modify $ \st ->
               st
@@ -1059,11 +1085,11 @@ component =
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       latest <- startFetch
-      loaded <- gets (\st -> st.input) >>= fetch
+      (owner, loaded) <- fetchOwned
       -- Only the answer to the latest fetch of this visit: another
       -- navigation, or another reload, may have overtaken this one.
-      onFetch latest $ do
-        void (takeFetched loaded)
+      answering latest owner $ do
+        void (takeFetched owner loaded)
         H.raise Loaded
 
     -- Fetch the page's comments (again).
@@ -1176,18 +1202,31 @@ component =
     -- An older version of the page shown is dropped here, with nothing
     -- done ('takesPage'): a fetch asked for before a save may answer after
     -- it. Whether the page was taken is the result.
-    takeFetched :: Loaded -> H.HalogenM State Action Slots ViewOutput m Bool
-    takeFetched loaded = do
+    takeFetched :: UrlOwner -> Loaded -> H.HalogenM State Action Slots ViewOutput m Bool
+    takeFetched owner loaded = do
       shown <- gets (\st -> pageOf st.loaded)
       case loaded of
-        Ready new _ _ _ | not (takesPage shown new) -> pure False
+        Ready new _ _ _ | not (takesPage shown new) -> Body.settleOwned ownersOf' setOwners owner False $> False
         _ -> do
+          -- The addresses shown are this fetch's from now on.
+          Body.settleOwned ownersOf' setOwners owner True
           adopt loaded
+          checkChain
           resolvePeople
           gets (\st -> pageOf st.loaded) >>= traverse_ (H.raise . Showing)
           watch
           loadThreads
           pure True
+
+    -- What the backend found wrong with the versions of the page shown, in
+    -- an encrypted space ("Wiki.App.Backend.Encrypted"'s 'chainProblem').
+    checkChain :: H.HalogenM State Action Slots ViewOutput m ()
+    checkChain = do
+      st <- get
+      found <- case pageOf st.loaded of
+        Just page | isJust st.input.space.encryption -> lift (chainProblem page.id)
+        _ -> pure Nothing
+      modify (\now -> now {chainProblem = found})
 
     -- The page as it is now, fetched while there are unsaved ticks (after
     -- a save's conflict, or when the reader asks to see the new version),
@@ -1195,9 +1234,9 @@ component =
     catchUp :: H.HalogenM State Action Slots ViewOutput m ()
     catchUp = do
       latest <- startFetch
-      now <- gets (\st -> st.input) >>= fetch
-      onFetch latest $
-        whenM (takeFetched now) (modify (\s -> s {changed = False}))
+      (owner, now) <- fetchOwned
+      answering latest owner $
+        whenM (takeFetched owner now) (modify (\s -> s {changed = False}))
 
     -- The staging after an event ("Wiki.App.View.Ticking"'s 'Ticking.step'),
     -- and the browser's question before closing the tab, which it asks
@@ -1223,16 +1262,33 @@ component =
         holder <- H.getRef st.text
         for_ holder $ \h -> H.liftEffect (liftIO (h.querySelector ("input[data-task=\"" <> show i <> "\"]") >>= traverse_ focusInView))
 
+    -- Fetch the page, its attachments' addresses under an owner of their
+    -- own ('UrlOwner'), pending until the answer comes.
+    fetchOwned :: H.HalogenM State Action Slots ViewOutput m (UrlOwner, Loaded)
+    fetchOwned = do
+      owner <- Body.beginOwned ownersOf' setOwners
+      loaded <- gets (\st -> st.input) >>= fetch owner
+      pure (owner, loaded)
+
+    -- Run what an answer to this fetch does, if it is still the latest
+    -- fetch of the visit; the addresses of an answer overtaken are let go.
+    answering :: (Int, Int) -> UrlOwner -> H.HalogenM State Action Slots ViewOutput m () -> H.HalogenM State Action Slots ViewOutput m ()
+    answering which owner act =
+      gets (\st -> (st.visit, st.fetches) == which) >>= \case
+        True -> act
+        False -> Body.settleOwned ownersOf' setOwners owner False
+
+    ownersOf' :: State -> Body.Owners
+    ownersOf' st = st.owners
+
+    setOwners :: Body.Owners -> State -> State
+    setOwners owners st = st {owners}
+
     -- A fetch of the page begins: its number, with the visit's.
     startFetch :: H.HalogenM State Action Slots ViewOutput m (Int, Int)
     startFetch = do
       modify (\st -> st {fetches = st.fetches + 1})
       gets (\st -> (st.visit, st.fetches))
-
-    -- Run what an answer to this fetch does, if it is still the latest
-    -- fetch of the visit.
-    onFetch :: (Int, Int) -> H.HalogenM State Action Slots ViewOutput m () -> H.HalogenM State Action Slots ViewOutput m ()
-    onFetch which act = gets (\st -> (st.visit, st.fetches) == which) >>= (`when` act)
 
     -- Run what an answer to a request made on this visit does, if the view
     -- is still on it.
@@ -1280,12 +1336,12 @@ component =
 
 -- | Fetch the page the input names, with the URL of each of its
 -- attachments, or the reason it cannot be shown.
-fetch :: (MonadWiki n) => Input -> n Loaded
-fetch input =
+fetch :: (MonadWiki n) => UrlOwner -> Input -> n Loaded
+fetch owner input =
   getPage input.space.id input.path >>= fmap join . traverse asked >>= \case
     Left e -> pure (Failed e)
     Right page -> do
-      addresses <- Body.attachmentAddresses page.attachments
+      addresses <- Body.attachmentAddresses owner page.attachments
       let parsed = Md.parseMarkdown page.body
       pure (Ready page addresses (either (const False) isDeck parsed) (either (const Nothing) Md.contentsPanel parsed))
   where
@@ -1473,7 +1529,7 @@ takesPage shown given = case shown of
 -- from: where the page is.
 placeOf :: Input -> Page -> Body.Addresses -> Map Text Author -> Body.Place
 placeOf input page addresses people =
-  Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls = addresses.urls, frames = addresses.frames, people}
+  Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls = addresses.urls, downloads = addresses.downloads, frames = addresses.frames, people}
 
 -- | The Markdown the view shows: the page's, and its comments'.
 bodiesOf :: Loaded -> Threads -> [Text]
@@ -1568,12 +1624,12 @@ unsaved st = not (Map.null st.staging.ticks)
 ticksFirst :: WikiError
 ticksFirst = Invalid "Save or discard the ticked tasks first."
 
--- | Whether the page has comments: not on the wiki's home page, and not in
--- an encrypted space, whose comments are not encrypted yet. A comment on
--- a selection quotes the page's text, which the server must not read
--- there.
+-- | Whether the page has comments: not on the wiki's home page, and not on
+-- an old version. In an encrypted space the backend encrypts a comment,
+-- and the text a comment on a selection quotes, before either is sent
+-- ("Wiki.App.Backend.Http").
 commentsHere :: Input -> Bool
-commentsHere input = not (homeSpace input.context input.space.id) && isNothing input.space.encryption && isNothing input.version
+commentsHere input = not (homeSpace input.context input.space.id) && isNothing input.version
 
 mayCommentHere :: State -> Bool
 mayCommentHere st = commentsHere st.input && mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space.id)

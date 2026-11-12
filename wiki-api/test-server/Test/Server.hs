@@ -373,7 +373,11 @@ stubs =
         EncryptedApi
           { space = \_ -> refuse NotFound
           , encrypt = \_ _ -> refuse NotFound
+          , subspace = \_ _ -> refuse NotFound
+          , home = \_ _ -> refuse NotFound
           , grant = \_ _ -> refuse NotFound
+          , rotation = \_ -> refuse NotFound
+          , rotate = \_ _ -> refuse NotFound
           , pages = \_ -> refuse NotFound
           , contents = \_ -> refuse NotFound
           , pageAt = \_ _ -> refuse NotFound
@@ -381,6 +385,11 @@ stubs =
           , save = \_ _ _ -> refuse NotFound
           , versions = \_ _ _ -> refuse NotFound
           , version = \_ _ -> refuse NotFound
+          , threads = \_ -> refuse NotFound
+          , openThread = \_ _ -> refuse NotFound
+          , reply = \_ _ _ -> refuse NotFound
+          , editComment = \_ _ _ _ -> refuse NotFound
+          , upload = \_ _ -> refuse NotFound
           }
     }
 

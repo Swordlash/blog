@@ -25,9 +25,9 @@ framing :: Options Text (H.ComponentSlot Empty MemDOM Void) Void
 framing =
   wiki
     { resolveLink = \dest -> case classifyDestination dest of
-        ToAttachment "flame.svg" -> Attachment (AttachmentRef "flame.svg" "/files/flame.svg" (Just "image/svg+xml") (Just "/files/flame.svg?interactive"))
-        ToAttachment "still.svg" -> Attachment (AttachmentRef "still.svg" "blob:https://wiki.example/2" (Just "image/svg+xml") Nothing)
-        ToAttachment "flame.png" -> Attachment (AttachmentRef "flame.png" "/files/flame.png" (Just "image/png") Nothing)
+        ToAttachment "flame.svg" -> Attachment (AttachmentRef "flame.svg" "/files/flame.svg" "/files/flame.svg" (Just "image/svg+xml") (Just "/files/flame.svg?interactive"))
+        ToAttachment "still.svg" -> Attachment (AttachmentRef "still.svg" "blob:https://wiki.example/2" "blob:https://wiki.example/2" (Just "image/svg+xml") Nothing)
+        ToAttachment "flame.png" -> Attachment (AttachmentRef "flame.png" "/files/flame.png" "/files/flame.png" (Just "image/png") Nothing)
         _ -> wiki.resolveLink dest
     , svgFrame = Just $ \_ frame ->
         HH.iframe [HP.attr (HH.AttrName "sandbox") scriptSandbox, HP.attr (HH.AttrName "data-src") frame.url, HP.title frame.title, HP.attr (HH.AttrName "height") (show frame.height)]

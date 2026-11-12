@@ -458,11 +458,13 @@ checkProfile space p = do
 -- Home pages
 
 -- | Whether a space has a home page: every space but the container of
--- personal spaces ('personalContainer') and an encrypted space
--- ('encryption'). Every way a space is made gives one of the others its
--- home page ('defaultHomePage').
+-- personal spaces ('personalContainer') and an encrypted space made before
+-- encrypted spaces had home pages (WP5.74b2), which gets its own, sealed,
+-- when one of its administrators next opens it. Every way a space is made
+-- gives one of the others its home page: 'defaultHomePage' for a plain
+-- space, and a sealed page the browser writes for an encrypted one.
 hasHome :: Space -> Bool
-hasHome s = not s.personalContainer && isNothing s.encryption
+hasHome s = not s.personalContainer && (isNothing s.encryption || isJust s.homePage)
 
 -- | 'rootPage' is the page a space's pages hang from: its home page, the
 -- only one of its pages with no parent (WP5.78 of docs/PLAN.md). Every
@@ -470,8 +472,9 @@ hasHome s = not s.personalContainer && isNothing s.encryption
 -- space's own address is the home page's, and a page's path starts under
 -- it ('Wiki.Core.Path.pathUnder'). 'Nothing' for the two kinds of space
 -- with no home page ('hasHome'): the container of personal spaces, which
--- has no pages, and an encrypted space, whose pages may be several at the
--- top level, each with its segment.
+-- has no pages, and an encrypted space made before encrypted spaces had
+-- home pages, whose pages may be several at the top level, each with its
+-- segment, until it gets its home page.
 rootPage :: Space -> Maybe PageId
 rootPage s = guard (hasHome s) *> s.homePage
 

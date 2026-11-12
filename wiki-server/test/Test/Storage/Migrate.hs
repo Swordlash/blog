@@ -10,7 +10,7 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Database.Beam (all_, insert, insertValues, runInsert, runSelectReturningList, select)
 import Protolude
-import Test.Database (Backing (..), withConnectionTo)
+import Test.Database (Backing (..), forgetStep, withConnectionTo)
 import Test.Hspec
 import Test.Storage.Fixture (demoArchive, ok, withEmptyPlaceIn)
 import Wiki.Api.Vault (StoredVault (..))
@@ -47,6 +47,9 @@ wikiTables =
   , "public_keys"
   , "recovery_codes"
   , "reset_tokens"
+  , "sealed_attachments"
+  , "sealed_comments"
+  , "sealed_threads"
   , "sealed_versions"
   , "sessions"
   , "settings"
@@ -118,6 +121,31 @@ spec backing = describe "the schema's versions" $ do
       migrate c `shouldReturn` []
       tablesOf c `shouldReturn` tables
       versionsOf c `shouldReturn` versions
+
+  -- Steps are applied in order, once (decision 64): a database whose
+  -- recorded steps have a hole is refused, with the steps named, and
+  -- nothing in it changes.
+  it "refuse a database that does not record a step before its version, naming it" $
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
+      _ <- migrate c
+      runScript c "DELETE FROM wiki_schema WHERE version = 14;"
+      migrate c `shouldThrow` (== StepsMissing [14])
+      schemaVersion c `shouldReturn` knownVersion (schemaSuffix c)
+      tablesOf c `shouldReturn` wikiTables
+      displayException (StepsMissing [14]) `shouldSatisfy` ("step 14 of the schema" `List.isInfixOf`)
+      runScript c "DELETE FROM wiki_schema WHERE version = 3;"
+      migrate c `shouldThrow` (== StepsMissing [3, 14])
+
+  -- What a test that plays a database from before a step uses
+  -- ('Test.Database.forgetStep'): that step applied again, alone.
+  it "apply one step again for a test, and only that one" $
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
+      let known = knownVersion (schemaSuffix c)
+      _ <- migrate c
+      forgetStep 14 ["DROP TABLE page_links;"] c
+      versionsOf c `shouldReturn` [1 .. known]
+      tablesOf c `shouldReturn` wikiTables
+      migrate c `shouldReturn` []
 
   it "run when the storage is opened, and find the database migrated the next time" $
     withEmptyPlaceIn backing $ \at -> do

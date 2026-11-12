@@ -471,6 +471,7 @@ runMigrate options =
       Left e
         | Just old <- fromException @OldSchema e -> MigrateOfEarlierServer (toS (displayException old))
         | Just new <- fromException @Migrate.SchemaTooNew e -> MigrateFailed (toS (displayException new))
+        | Just missing <- fromException @Migrate.StepsMissing e -> MigrateFailed (toS (displayException missing))
         | otherwise -> MigrateFailed ("The migration failed, and the database is as it was: " <> toS (displayException e))
 
 -- | What @wiki-server check@ found, and how the program ends: 0 when
@@ -504,7 +505,9 @@ runCheck options =
       Right (Right (Left (UnreadableRecords why))) -> CheckUnreadable ["Every row read, but the wiki's records built from them did not: " <> why]
       Right (Right (Left (BrokenRecords broken))) -> CheckUnreadable (broken <> ["Every record read, but some break a rule of the wiki's (above)."])
       Right (Left why) -> CheckFailed why
-      Left e -> CheckFailed ("The database could not be read: " <> toS (displayException e))
+      Left e
+        | Just missing <- fromException @Migrate.StepsMissing e -> CheckNotMigrated (toS (displayException missing))
+        | otherwise -> CheckFailed ("The database could not be read: " <> toS (displayException e))
     line t = case t.rows of
       Right n -> t.table <> ": " <> show n <> " rows"
       Left why -> t.table <> ": does not read: " <> why

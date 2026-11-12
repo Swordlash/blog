@@ -29,7 +29,8 @@ import Halogen.Query.HalogenM (HalogenM)
 import Protolude
 import Wiki.Api.Encrypted (SpaceEncryption)
 import Wiki.App.Backend (WikiError (..))
-import Wiki.Core.Id (SpaceId)
+import Wiki.Core.Encrypted (ChainProblem)
+import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Space (Space)
 
 -- | 'KeyState': whether this browser can read and write an encrypted
@@ -90,6 +91,16 @@ class (Monad m) => MonadEncryption m where
   spaceEncryption :: SpaceId -> m (Either WikiError SpaceEncryption)
   default spaceEncryption :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> m (Either WikiError SpaceEncryption)
   spaceEncryption = lift . spaceEncryption
+
+  -- | What this browser found wrong with the versions of a page of an
+  -- encrypted space the server sent ("Wiki.Core.Encrypted"'s chain of
+  -- versions), since the page was opened in this tab: an older version
+  -- than one read before, another one under the same number, or a version
+  -- missing from its history. A page with a problem is shown with it, and
+  -- not saved from this tab.
+  chainProblem :: PageId -> m (Maybe ChainProblem)
+  default chainProblem :: (MonadTrans t, m ~ t n, MonadEncryption n) => PageId -> m (Maybe ChainProblem)
+  chainProblem = lift . chainProblem
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadEncryption m) => MonadEncryption (HalogenM st act slots output m)

@@ -25,7 +25,7 @@ import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Assistant (MonadAssistant)
-import Wiki.App.Backend (MonadWiki (..))
+import Wiki.App.Backend (MonadWiki (..), UrlOwner (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Mem (Found (..), Opened (..), memArchive, openMemWiki, runMemWiki, runMemWikiWith, switchUser)
 import Wiki.App.Backend.Mem.Persist (attachmentsStore, draftsStore, memDatabase, versionsStore)
@@ -179,7 +179,7 @@ spec m = do
     filter (\c -> isRead attachmentsStore c || isRead versionsStore c) loading `shouldBe` []
     unsafeIOToPageM (writeIORef calls [])
     let shown = fromMaybe (panic "nothing uploaded") (head uploaded)
-    url <- unsafeIOToPageM (runMemWikiWith opened.store opened.wiki (attachmentUrl shown))
+    url <- unsafeIOToPageM (runMemWikiWith opened.store opened.wiki (attachmentUrl (UrlOwner 0) shown))
     url `shouldSatisfy` ("blob:" `T.isPrefixOf`)
     length . filter (isRead attachmentsStore) <$> unsafeIOToPageM (readIORef calls) `shouldReturn` 1
     -- The editor saves a draft a few seconds after the typing stops.

@@ -48,6 +48,7 @@ module Wiki.Core.Permission
   , hasSpacePermission
   , spacePermissions
   , sealedChain
+  , encryptionProblem
   , canCreateSpaces
   , canView
   , canEdit
@@ -259,6 +260,30 @@ sealedChain :: [Space] -> [Space]
 sealedChain chain = case break (\s -> s.sealed) (reverse chain) of
   (below, sealedSpace : _) -> sealedSpace : reverse below
   (_, []) -> chain
+
+-- | 'encryptionProblem' is what breaks the rule of encrypted spaces (WP5.74b3
+-- of docs/PLAN.md) in the last space of a chain, if anything does. The
+-- rule: every space below an encrypted space is encrypted, with a key of
+-- its own; and an encrypted space shares its readers only with encrypted
+-- spaces, none of them public: every space of its 'sealedChain', whose
+-- grants make its readers, is encrypted and private. So no reader of an
+-- encrypted space reads it by a grant on a plain space, whose pages the
+-- server reads, and nobody reads it unsigned. A storage checks it on every
+-- space whose chain a write changed: the space written and the spaces
+-- below it.
+encryptionProblem :: [Space] -> Maybe Text
+encryptionProblem chain = case reverse chain of
+  [] -> Nothing
+  s : above
+    | isNothing s.encryption && any (\a -> isJust a.encryption) above ->
+        Just ("A space inside an encrypted space is encrypted too, with a key of its own: " <> s.name <> " is not. Make it from the encrypted space, which encrypts it.")
+    | isJust s.encryption && any (\x -> isNothing x.encryption) shared ->
+        Just ("An encrypted space shares its readers only with encrypted spaces: " <> s.name <> " would be read by the readers of a plain space above it. Make it private from its parent first.")
+    | isJust s.encryption && any (\x -> x.public) shared ->
+        Just ("An encrypted space cannot be public, nor be read by the readers of a public space: " <> s.name <> " would be.")
+    | otherwise -> Nothing
+  where
+    shared = sealedChain chain
 
 -- | Whether someone may do this in the last space of the chain.
 hasSpacePermission :: Maybe Principal -> Grants -> [Space] -> SpacePermission -> Bool

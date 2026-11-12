@@ -17,7 +17,7 @@ import Network.HTTP.Types (hContentType, statusCode)
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, info)
 import Protolude
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Database (Backing (..), choiceOf, placeOptionsOf, withConnectionTo, withEmptyPlace)
+import Test.Database (Backing (..), choiceOf, forgetStep, placeOptionsOf, withConnectionTo, withEmptyPlace)
 import Test.Hspec
 import Test.Server.Fixture (Reply (status), Running (..), cookie, givePassword, send, signInAs, withDemoMoved, withDemoPlace, withDemoRunning)
 import Test.Server.Program (cLocale, placeArgsOf, wikiServerProgram)
@@ -30,7 +30,7 @@ import Wiki.Server.Console (listing, runUsers, usersParser)
 import Wiki.Server.CopyDatabase (CopyOptions (..), CopyOutcome (..), runCopy)
 import Wiki.Server.Options (DatabaseChoice (..))
 import Wiki.Server.Password (hashWith, parameters)
-import Wiki.Server.Rehearsal (Check (..), PageAt (..), PageRead (..), PagesRead (..), RehearsalOutcome (..), Seeding (..), Server (..), SpaceRead (..), checks, compareHomes, comparePages, compareWaysIn, consoleEnvironment, isolateCopy, listenAnywhere, listenedAt, pathAsBuilt, readPages, readSpaces, readUsersList, runConsoleIn, withServer)
+import Wiki.Server.Rehearsal (Check (..), PageAt (..), PageRead (..), PagesRead (..), RehearsalOutcome (..), Seeding (..), Server (..), SpaceRead (..), checks, compareHomes, comparePages, compareWaysIn, consoleEnvironment, copyHasStep, isolateCopy, listenAnywhere, listenedAt, pathAsBuilt, readPages, readSpaces, readUsersList, runConsoleIn, withServer)
 import Wiki.Server.Storage (Place (..), migrateDatabase, withStorageAside)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (settingsLike, storeSetting)
@@ -244,11 +244,13 @@ copySpec backing = describe "the upgrade's rehearsal, its copy of the wiki" $ do
     withPersonal <- readPages manager server
     withPersonal `shouldSatisfy` isRight
   it "leaves out an encrypted space, whose pages answer 409, and reads the rest" $ withDemoPlace backing $ \at serve -> do
-    -- An encrypted space as the server knows one: its key's id set. Its
-    -- pages are then not listed as plain text.
+    -- An encrypted space as the server knew one before encrypted spaces had
+    -- home pages: its key's id set, and no home page. Its pages are then
+    -- not listed as plain text, and it is one of the spaces that may have
+    -- no home page.
     withConnectionTo at $ \c -> do
       begin True c
-      runScript c "UPDATE spaces SET key_id = 'k1' WHERE slug = 'team';"
+      runScript c "UPDATE spaces SET key_id = 'k1', home_page = NULL WHERE slug = 'team';"
       commitTransaction c
     manager <- newManager defaultManagerSettings
     serve $ \r -> do
@@ -328,25 +330,22 @@ checksSpec backing = describe "the upgrade's rehearsal, its checks" $ do
     let server = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public, console = \_ _ -> pure (Right "LOGIN  NAME\nadmin  Admin\n")}
     case [c | c@Check {name = "ways in"} <- checks] of
       [Check {holding, seed, before = beforeIt}] -> holding $ \held -> do
-        seeded <- seed held Seeding {copy = r.place, console = consoleOn r.place} >>= either (panic . ("the seed failed: " <>)) pure
+        seeded <- seed held Seeding {copy = r.place, console = consoleOn r.place, stepRan = copyHasStep r.place} >>= either (panic . ("the seed failed: " <>)) pure
         -- A 'Left' of a check's before is an old program the rehearsal
         -- cannot drive ('OldNotDriven'), not a failed check.
         beforeIt held seeded manager server >>= either (`shouldSatisfy` T.isInfixOf "did not print its table") (const (expectationFailure "the before read the output as the table"))
       _ -> expectationFailure "there is no check named ways in"
   it "passes the logins check when the upgrade renames the login it wrote, which signs in under the new one" $ withDemoPlace backing $ \at serve -> do
     -- This program plays an old one without step 15 of the schema: the
-    -- database forgets that the step and those after it ran, before the
-    -- seed and after each of the old console's commands, which migrate
-    -- it. The server of the before then migrates it, as the new program
-    -- would. This holds while the steps from 15 on make no table: step 15
-    -- makes none.
-    let forget = withConnectionTo at $ \c -> do
+    -- rehearsal is told the copy has not had the step ('stepRan'), so
+    -- the seed writes a login that breaks the rule, and between the before
+    -- and the after the step runs on the copy again, as the new program's
+    -- migration would run it.
+    let stepAgain = withConnectionTo at $ \c -> do
           begin True c
-          runScript c "DELETE FROM wiki_schema WHERE version >= 15;"
+          forgetStep 15 [] c
           commitTransaction c
-        oldConsole place args input = consoleOn place args input <* forget
-    forget
-    rehearseWith oldConsole "logins" at serve pass serve `shouldReturn` Right ()
+    rehearseOver (\_ -> pure False) consoleOn "logins" at serve stepAgain serve `shouldReturn` Right ()
     -- The check had something to rehearse: its account was renamed.
     accounts <- withStorageAside at listAccounts
     [a.user.login.text | (a, _) <- accounts, a.user.displayName == "Rehearsal login"] `shouldSatisfy` \case
@@ -394,7 +393,12 @@ rehearseAcross = rehearseWith consoleOn
 -- | 'rehearseAcross' with this console on a place, in place of the test's
 -- own ('consoleOn'): a program run as a child, as the rehearsal runs one.
 rehearseWith :: (Place -> [Text] -> Text -> IO (Either Text Text)) -> Text -> Place -> (forall a. (Running -> IO a) -> IO a) -> IO () -> (forall a. (Running -> IO a) -> IO a) -> IO (Either Text ())
-rehearseWith consoleAt wanted at serve between serveAfter = do
+rehearseWith consoleAt wanted at = rehearseOver (copyHasStep at) consoleAt wanted at
+
+-- | 'rehearseWith', with what the rehearsal is told of the steps the old
+-- program applied to the copy ('Seeding''s @stepRan@).
+rehearseOver :: (Int -> IO Bool) -> (Place -> [Text] -> Text -> IO (Either Text Text)) -> Text -> Place -> (forall a. (Running -> IO a) -> IO a) -> IO () -> (forall a. (Running -> IO a) -> IO a) -> IO (Either Text ())
+rehearseOver stepRan consoleAt wanted at serve between serveAfter = do
   manager <- newManager defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro 120_000_000}
   -- Each server's console runs on the database it serves: for a move, the
   -- after's is the moved database.
@@ -403,7 +407,7 @@ rehearseWith consoleAt wanted at serve between serveAfter = do
       orFail what = either (\why -> panic (what <> " of the " <> wanted <> " check failed: " <> why)) pure
   case [c | c@Check {name} <- checks, name == wanted] of
     [Check {holding, seed, before = beforeIt, after = afterIt}] -> holding $ \held -> do
-      seeded <- seed held Seeding {copy = at, console = consoleAt at} >>= orFail "the seed"
+      seeded <- seed held Seeding {copy = at, console = consoleAt at, stepRan} >>= orFail "the seed"
       fixture <- serve (\r -> beforeIt held seeded manager (serverOf r)) >>= orFail "the before"
       between
       serveAfter (\r -> afterIt held fixture manager (serverOf r))

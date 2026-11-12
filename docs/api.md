@@ -219,8 +219,11 @@ holds the personal spaces and that nobody may view itself. A personal
 space's `name` is "Space of " and its owner's display name, and cannot be
 changed (400), nor can the space be moved (400). Its `homePage` is the id of the page it opens at, one of its
 own: a space made through the API comes with one, a page titled "Home"
-whose first version is its creator's, and keeps it. Only two kinds of space
-have `null`: the container of personal spaces and an encrypted space. The
+whose first version is its creator's, and keeps it; an encrypted space's is
+encrypted, made by the browser that encrypts the space or makes the
+subspace. Only two kinds of space have `null`: the container of personal
+spaces, and an encrypted space made before encrypted spaces had home pages
+(WP5.74b2), until an administrator's browser gives it one. The
 home page cannot be deleted (400) or moved, within its space too (400);
 nor can a page with the home page under it be deleted, or moved to another
 space (400). Moving it up or down among its siblings is allowed. Saving it
@@ -288,9 +291,9 @@ notification's or a star's `location.page`), starts under the home page:
 the home page's own path is empty, and a page under it has its slug alone.
 A path that names nothing and starts with the home page's slug, a page's
 path before the home page lost its segment, is read again without that
-slug. An encrypted space and the container of personal spaces have no
-home page: their pages may be several at the top, each with its slug in
-its path. The server refuses a write that would leave a second page with no
+slug. The container of personal spaces, and an encrypted space made
+before encrypted spaces had home pages, have no home page: their pages may
+be several at the top, each with its slug in its path. The server refuses a write that would leave a second page with no
 parent in a space with a home page.
 
 A `Page` is a `PageSummary` with its `body`, its `attachments`, and who
@@ -1072,28 +1075,51 @@ wrong code.
 
 ### Encrypted spaces
 
-The pages of an encrypted space (WP5.74b2, `Wiki.Core.Encrypted`) are read
-and written as ciphertext, under `encrypted/`; every title and text below is
-`{"nonce", "ciphertext"}` in base64url, made in a member's browser. The
-plain routes of pages (`spaces/<space>/pages…`, `pages/<page>…`, drafts,
-history, comments, attachments, exports, post details) answer 409 for an
+The pages of an encrypted space (WP5.74b2 and b3, `Wiki.Core.Encrypted`)
+are read and written as ciphertext, under `encrypted/`; every title, text,
+comment, quote and attachment name below is `{"nonce", "ciphertext"}` in
+base64url, made in a member's browser. The plain routes of pages
+(`spaces/<space>/pages…`, `pages/<page>…`, drafts, history, exports, post
+details, comments and attachments that carry text) answer 409 for an
 encrypted space or a page in one, after their permission checks. A page's
 `move` is the exception within one encrypted space: its key and versions
 name the space and the page, not the parent, so a page moves there as in
-any space; a move to or from another space answers 409.
+any space; a move to or from another space answers 409. Resolving a
+thread, deleting a comment, a thread or an attachment carry no text, and
+take the plain routes.
+
+The rule of encrypted spaces holds after every write (409 with its reason
+otherwise): every space below an encrypted space is encrypted, with a key
+of its own; and an encrypted space shares its readers only with encrypted
+spaces, none of them public (every space from the nearest one private from
+its parent down to it). Creating, moving, sealing, unsealing, publishing and
+encrypting a space are checked against it.
+
+Writes in a space whose key must be renewed (a grant of its current key to
+someone who is no longer a reader, or to a public key that is no longer
+theirs) answer 409 until a rotation.
 
 | Method | Path | Body | Response | Errors |
 | ------ | ---- | ---- | -------- | ------ |
-| GET | `api/v1/encrypted/spaces/<space>` | | `SpaceEncryption` `{"keyId", "grant": KeyGrant or null, "pending": [{"user", "keyId", "publicKey"}], "waiting": [user id]}`; `pending` and `waiting` only for a caller holding a grant | 404, 409 (not encrypted) |
-| POST | `api/v1/encrypted/spaces/<space>` | `EncryptSpace` `{"keyId", "grant": {"recipient", "recipientKeyId", "enc", "sealed"}}`, the new key sealed to the caller's current public key | `Space`, with `encryption` | 404, 403, 400 (a part of the wrong length, another key), 409 (public, not private, has subspaces or written pages, a personal space or a blog, encrypted already) |
-| POST | `api/v1/encrypted/spaces/<space>/grants` | `NewGrants` `{"keyId", "grants": [NewGrant]}`, at most 500 (a browser sends more in parts); a grant named twice is made once | 204 | 404, 403 (no grant of the key), 400 (not a reader, a wrong length), 409 (an older key, a public key not current) |
-| GET | `api/v1/encrypted/spaces/<space>/pages` | | `[SealedSummary]`: a `PageSummary` without `title` and `template`, with `pageKey` `{"keyId", "spaceKeyId", "wrapped": {"nonce", "key"}}` and `heading` `{"tag", "keyId", "title"}` | 404, 409 |
+| GET | `api/v1/encrypted/spaces/<space>` | | `SpaceEncryption` `{"keyId", "grant": KeyGrant or null, "pending": [{"user", "keyId", "publicKey"}], "waiting": [user id], "rotationDue"}`; `pending` and `waiting` only for a caller holding a grant | 404, 409 (not encrypted) |
+| POST | `api/v1/encrypted/spaces/<space>` | `EncryptSpace` `{"keyId", "grant": {"recipient", "recipientKeyId", "enc", "sealed"}, "homePage": NewSealedPage}`, the new key sealed to the caller's current public key, and the space's home page encrypted with a page key under it, in place of the untouched plain one | `Space`, with `encryption` and the new `homePage` | 404, 403, 400 (a part of the wrong length, another key), 409 (has subspaces or written pages, a personal space or a blog, encrypted already, the rule) |
+| POST | `api/v1/encrypted/spaces/<space>/subspaces` | `NewEncryptedSubspace` `{"id": a fresh UUID, "name", "keyId", "grant", "homePage": NewSealedPage}` | 201 `Space`, encrypted, open to its parent's readers | 404, 403, 400, 409 (the parent not encrypted, the id taken) |
+| POST | `api/v1/encrypted/spaces/<space>/home` | `NewSealedPage`, at the top | 201 `SealedPage`: the space's home page, every other page at the top moved under it with its slug and place, so that every address stays | 404, 403 (not an administrator), 400, 409 (a home page already, a renewal due) |
+| POST | `api/v1/encrypted/spaces/<space>/grants` | `NewGrants` `{"keyId", "grants": [NewGrant]}`, at most 500 (a browser sends more in parts); a grant named twice is made once | 204 | 404, 403 (no grant of the key), 400 (not a reader, a wrong length), 409 (an older key, a public key not current, a renewal due) |
+| GET | `api/v1/encrypted/spaces/<space>/rotation` | | `RotationInfo` `{"keyId", "readers": [PendingMember], "pages": [{"page", "keys": [PageKey], "latest": heading}]}`: what a new key must cover | 404, 403 (not an administrator) |
+| POST | `api/v1/encrypted/spaces/<space>/rotation` | `Rotation` `{"from", "keyId", "grants": [NewGrant], "pages": [{"page", "current": PageKey, "rewrapped": [PageKey]}]}`: a new key, sealed to every reader, every page key wrapped again with it, and a new current key for each page; at most 20,000 page keys and 5,000 readers | 204 | 404, 403 (not an administrator holding the key), 400, 409 (the key, the readers or the pages changed since) |
+| GET | `api/v1/encrypted/spaces/<space>/pages` | | `[SealedSummary]`: a `PageSummary` without `title` and `template`, with `pageKey` `{"keyId", "spaceKeyId", "wrapped": {"nonce", "key"}}`, every key of the page's `pageKeys`, and `heading` `{"tag", "keyId", "chain", "title"}` | 404, 409 |
 | GET | `api/v1/encrypted/spaces/<space>/contents` | | `[SealedPage]`, each page with its latest version: what the browser's search reads | 404, 409 |
-| GET | `api/v1/encrypted/spaces/<space>/pages/at/<slug>…` | | `SealedPage` `{…, "pageKey", "content": {"tag", "keyId", "title", "body"}, "createdBy", "updatedBy"}`, with `ETag` | 404, 409 |
-| POST | `api/v1/encrypted/spaces/<space>/pages` | `NewSealedPage` `{"id": a fresh UUID, "parent", "pageKey", "content"}` | 201 `SealedPage` with a random slug, with `ETag` | 404, 403, 400, 409 |
-| PUT | `api/v1/encrypted/pages/<page>` | `SealedEdit` `{"content"}`, with `If-Match` | `SealedPage`, with its new `ETag` | 404, 403, 400, 409 |
+| GET | `api/v1/encrypted/spaces/<space>/pages/at/<slug>…` | | `SealedPage` `{…, "pageKey", "pageKeys", "content": {"tag", "keyId", "chain", "title", "body"}, "attachments": [SealedAttachment], "createdBy", "updatedBy"}`, with `ETag`; the path from under the home page | 404, 409 |
+| POST | `api/v1/encrypted/spaces/<space>/pages` | `NewSealedPage` `{"id": a fresh UUID, "parent", "pageKey", "content"}`, the first of its chain; at the top is under the home page | 201 `SealedPage` with a random slug, with `ETag` | 404, 403, 400, 409 |
+| PUT | `api/v1/encrypted/pages/<page>` | `SealedEdit` `{"content"}`, with `If-Match`, the next of the page's chain of versions | `SealedPage`, with its new `ETag` | 404, 403, 400, 409 |
 | GET | `api/v1/encrypted/pages/<page>/versions` | `?before=…&limit=…` as for a plain history | `[SealedVersionInfo]` `{"page", "updatedAt", "heading", "author", "number"}` | 404, 409 |
 | GET | `api/v1/encrypted/pages/<page>/versions/<time>` | | `SealedVersion` `{"page", "updatedAt", "content", "author"}` | 404, 409 |
+| GET | `api/v1/encrypted/pages/<page>/threads` | | `SealedThreads` `{"pageKeys", "threads": [{"id", "page", "anchored", "anchor": {"keyId", "anchor"} or null, "resolved", "createdAt", "comments": [{"id", "thread", "author", "createdAt", "editedAt", "content": {"keyId", "tag", "body"}}]}]}` | 404, 409 |
+| POST | `api/v1/encrypted/pages/<page>/threads` | `NewSealedThread` `{"id", "anchor", "comment": {"id", "content"}}`, ids fresh UUIDs, under the page's current key | 201 `SealedThread` | 404, 403, 400, 409 |
+| POST | `api/v1/encrypted/pages/<page>/threads/<thread>/comments` | `NewSealedComment` `{"id", "content"}` | 201 `SealedCommentInfo` | 404, 403, 400, 409 |
+| PUT | `api/v1/encrypted/pages/<page>/threads/<thread>/comments/<comment>` | `SealedCommentEdit` `{"content"}` | `SealedCommentInfo` | 404, 403, 400, 409 |
+| POST | `api/v1/encrypted/pages/<page>/attachments` | multipart: `sealed` `{"id", "meta": {"keyId", "meta", "bytesNonce"}, "replaces"}` and `file`, the bytes encrypted, at most the largest attachment and 16 bytes | 201 `SealedAttachment` `{"id", "size", "meta"}` | 404, 403, 400, 409 |
 
 A grant (`KeyGrant` `{"keyId", "recipient", "recipientKeyId", "enc",
 "sealed"}`) is the space's key sealed with HPKE (base mode, X25519,
@@ -1102,6 +1128,11 @@ with the info `wiki-grant/1 space <space> <keyId>`. A grant to a public key
 that is no longer the recipient's current one (after a password reset)
 opens for nobody, and its recipient is pending again. The members are the
 readers through the space's own grants, not the wiki's administrators.
+Each ciphertext names the page key it was encrypted with (`keyId`), and a
+rotation keeps every older page key, wrapped again, so what was written
+before a rotation is read with the key it names. The live channel tells a
+page's subscribers only that an encrypted page's threads changed
+(`threads-changed`), and answers a subscription to one with no threads.
 
 ### Administration
 

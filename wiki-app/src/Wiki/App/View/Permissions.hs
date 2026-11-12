@@ -149,13 +149,13 @@ component =
           {% if isJust space.encryption %}
             <div class="permissions-encrypted">
               <p class="permissions-intro encrypted-note">Encrypted: the titles and texts of this space's pages, and their histories, are encrypted in its members' browsers, and the server cannot read them. Its name stays readable, to whoever sees it in the list of spaces. Each reader granted here gets the space's key from a member's browser, the next time a member opens the space.</p>
-              <p class="permissions-intro encrypted-removal">Removing someone here does not change the space's key yet: whoever was removed and kept the key can still read the pages written before, and after, with a copy of what the server stores.</p>
+              <p class="permissions-intro encrypted-removal">Removing someone here gives the space a new key: your browser makes it at once if you hold the key, or another administrator's does when they next open the space, and until then nothing more can be written in it. Whoever was removed and kept the old key can still read what was written before, with a copy of what the server stores, but nothing written after.</p>
             </div>
           {% end %}
           {% if encryptable %}
             <div class="permissions-encrypt">
               {% if st.confirming %}
-                <p class="permissions-intro encrypt-explained">Encrypting this space encrypts the titles and texts of its pages, and their histories, in its members' browsers: the server cannot read them, search them, export them, show them in feeds or previews, or keep their comments and attachments yet. The space's name stays readable. Its members need the wiki's HTTPS address and their keys (your account's security) to read it. It cannot be undone.</p>
+                <p class="permissions-intro encrypt-explained">Encrypting this space encrypts the titles and texts of its pages, and their histories, in its members' browsers: the server cannot read them, search them, export them, or show them in feeds or previews. Their comments and attachments are encrypted too. The space's name stays readable. Its members need the wiki's HTTPS address and their keys (your account's security) to read it. It cannot be undone.</p>
                 <button type="button" class="primary encrypt-confirm" disabled={{ st.busy }} onClick={{ const Encrypt }}>Encrypt</button>
                 <button type="button" class="encrypt-cancel" disabled={{ st.busy }} onClick={{ const (AskEncrypt False) }}>Cancel</button>
               {% else %}

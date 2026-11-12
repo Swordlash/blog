@@ -49,6 +49,7 @@ module Test.Database
   , choiceOf
   , placeOptionsOf
   , withConnectionTo
+  , forgetStep
   )
 where
 
@@ -62,6 +63,7 @@ import Wiki.Server.Options (DatabaseChoice (..), PlaceOptions (..))
 import Wiki.Server.Storage (Database (..), PgDatabase (..), Place (..), inDataDir)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Layout (PgPrograms (..))
+import Wiki.Server.Storage.Migrate (reapplyStep)
 import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, openSqlite)
 #ifdef WIKI_POSTGRES
 import Crypto.Random (getRandomBytes)
@@ -429,6 +431,19 @@ choiceOf = \case
 -- | The console's options for a place.
 placeOptionsOf :: Place -> PlaceOptions
 placeOptionsOf at = PlaceOptions {dataDir = at.dataDir, database = choiceOf at.database, programs = at.programs}
+
+-- | Play a database from before one step of its schema, with every other
+-- step: the statements given undo what the step made (none for a step
+-- that made nothing), its row in @wiki_schema@ goes, and the step is
+-- applied again at once ('Wiki.Server.Storage.Migrate.reapplyStep', for
+-- tests only). A migration never fills a hole in a database's steps: it
+-- refuses such a database. What the step does when the program meets it,
+-- on a database the program then opens, is what the test sees.
+forgetStep :: (Backend be) => Int -> [Text] -> Connection be -> IO ()
+forgetStep n undo c = do
+  traverse_ (runScript c) undo
+  runScript c ("DELETE FROM wiki_schema WHERE version = " <> show n <> ";")
+  reapplyStep n c
 
 -- | A connection of its own to a place's database, outside any storage:
 -- for a test that looks at the database as the storage leaves it, or

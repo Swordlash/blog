@@ -66,6 +66,7 @@ module Wiki.Server.Rehearsal
     -- * Checks
   , Check (..)
   , Seeding (..)
+  , copyHasStep
   , Server (..)
   , withServer
   , listenAnywhere
@@ -234,7 +235,7 @@ rehearse o = either identity identity <$> runExceptT steps
       holdAll checks $ \held -> do
         -- What each check makes in the copy before the old program serves
         -- it, through the old program's console or in the copy's settings.
-        let seeding = Seeding {copy = scratchPlace, console = runConsole o.old (placeArgs scratchChoice)}
+        let seeding = Seeding {copy = scratchPlace, console = runConsole o.old (placeArgs scratchChoice), stepRan = copyHasStep scratchPlace}
         seeded <- for held $ \(Held name seed before after) ->
           liftIO (try (seed seeding)) >>= \case
             Left (e :: SomeException) -> broken ("The check of " <> name <> " could not prepare the copy: " <> show e)
@@ -469,7 +470,17 @@ data Seeding = Seeding
   -- @--data@ and database options, with this text on its standard input.
   -- Its output, or what it said when it failed. A command a check runs
   -- here is stable from then on, and says so in its documentation.
+  , stepRan :: Int -> IO Bool
+  -- ^ Whether the old program has applied this step of the schema to the
+  -- copy: whether the copy's version is that step's or later
+  -- ('copyHasStep'). A check whose seed depends on one step asks this; a
+  -- test plays an old program without a step by answering no.
   }
+
+-- | Whether the copy's schema is at a step or later: what 'stepRan' asks
+-- of a copy the old program made.
+copyHasStep :: Place -> Int -> IO Bool
+copyHasStep copy n = withDatabase copy (fmap (>= n) . schemaVersion)
 
 -- | A check while its 'holding' runs: its other parts, given what it
 -- holds.
@@ -764,8 +775,10 @@ listProblems problems
 
 -- | 'SpaceRead' is a space as the home pages check reads it: its id, its
 -- name, its home page if it has one, and whether it is one of the two
--- kinds that have none (the container of personal spaces, an encrypted
--- space).
+-- kinds that may have none (the container of personal spaces, and an
+-- encrypted space made before encrypted spaces had home pages, which
+-- gets one when an administrator opens it: an encrypted space with a home
+-- page keeps it).
 data SpaceRead = SpaceRead
   { space :: Text
   , name :: Text
@@ -777,7 +790,7 @@ data SpaceRead = SpaceRead
 -- | The home pages check, step 12 of the schema's
 -- ("Wiki.Server.Storage.Migrate.Code.Step0012", WP5.78 of docs/PLAN.md):
 -- after the migration, every space has a home page but the two kinds that
--- have none, and a space that had one keeps it. The pages check makes sure
+-- may have none, and a space that had one keeps it. The pages check makes sure
 -- the page a space is given is the only page the migration adds.
 homesCheck :: Check
 homesCheck = simpleCheck "home pages" readSpaces (\was manager server -> readSpaces manager server <&> (>>= compareHomes was))
@@ -793,7 +806,7 @@ readSpaces manager server = runExceptT $ do
     Array xs -> pure (toList xs)
     _ -> throwError "the spaces are not a list"
   pure
-    [ SpaceRead {space = i, name = fromMaybe i (field "name" s), homePage = field "homePage" s, withoutHome = isTrue "personalContainer" s || present "encryption" s}
+    [ SpaceRead {space = i, name = fromMaybe i (field "name" s), homePage = field "homePage" s, withoutHome = isTrue "personalContainer" s || (present "encryption" s && not (present "homePage" s))}
     | s <- spaces
     , Just i <- [field "id" s]
     ]
@@ -1256,8 +1269,10 @@ loginsCheck =
 -- password.
 seedLogins :: Seeding -> IO (Either Text (Maybe (Text, Text)))
 seedLogins seeding = runExceptT $ do
-  version <- liftIO (withDatabase seeding.copy schemaVersion)
-  if version >= step0015.version
+  -- Whether the program rehearsed from has step 15 already: then it has
+  -- renamed every login it would.
+  done <- liftIO (seeding.stepRan step0015.version)
+  if done
     then pure Nothing
     else do
       tag <- liftIO (decodeUtf8 . convertToBase @ByteString Base16 <$> (getRandomBytes 8 :: IO ByteString))

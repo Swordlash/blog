@@ -117,9 +117,9 @@ spec = do
         space <- either (panic . show) identity <$> getSpace docs
         page <- either (panic . show) identity <$> getPage space.id tour
         either (panic . show) identity <$> uploadAttachment page.id "hi.txt" "text/plain" "hello"
-      url <- run (attachmentUrl a)
+      url <- run (attachmentUrl (UrlOwner 0) a)
       url `shouldBe` "data:text/plain;base64," <> decodeUtf8 (Base64.encode "hello")
-      run (attachmentUrl a) `shouldReturn` url
+      run (attachmentUrl (UrlOwner 0) a) `shouldReturn` url
       st <- readIORef ref
       case a.source of
         SourceBlob b -> Map.lookup b st.objectUrls `shouldBe` Just url
@@ -150,7 +150,7 @@ spec = do
       case earth of
         Just a@Attachment {source = SourceUrl url} -> do
           url.text `shouldSatisfy` T.isPrefixOf "https://upload.wikimedia.org/"
-          runMemWiki ref (attachmentUrl a) `shouldReturn` url.text
+          runMemWiki ref (attachmentUrl (UrlOwner 0) a) `shouldReturn` url.text
         other -> expectationFailure ("expected earth.jpg by URL, got " <> show other)
 
     it "keeps each page's text prepared for the search in step with the page, and nowhere else" $ do

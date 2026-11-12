@@ -427,6 +427,12 @@ instance Copyable PageKeys
 
 instance Copyable SealedVersions
 
+instance Copyable SealedThreads
+
+instance Copyable SealedComments
+
+instance Copyable SealedAttachments
+
 instance Copyable Spaces
 
 instance Copyable Pages
@@ -527,6 +533,9 @@ copiedTables =
   , plain wikiDb.key_grants
   , plain wikiDb.page_keys
   , plain wikiDb.sealed_versions
+  , plain wikiDb.sealed_threads
+  , plain wikiDb.sealed_comments
+  , plain wikiDb.sealed_attachments
   , plain wikiDb.settings
   , plain wikiDb.sign_in_providers
   , plain wikiDb.audit_log

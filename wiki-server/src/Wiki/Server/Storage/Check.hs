@@ -53,6 +53,9 @@ readEveryTable c =
     , counted "key_grants" wikiDb.key_grants
     , counted "page_keys" wikiDb.page_keys
     , counted "sealed_versions" wikiDb.sealed_versions
+    , counted "sealed_threads" wikiDb.sealed_threads
+    , counted "sealed_comments" wikiDb.sealed_comments
+    , counted "sealed_attachments" wikiDb.sealed_attachments
     , counted "spaces" wikiDb.spaces
     , counted "pages" wikiDb.pages
     , counted "page_versions" wikiDb.page_versions

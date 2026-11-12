@@ -1264,7 +1264,7 @@ attachments = describe "uploadAttachment, deleteAttachment and attachmentUrl" $ 
     found <- pageAt run Anonymous "blog" "hello-world"
     findAttachment "notes.bin" found.attachments `shouldBe` Just a
     found.updatedAt `shouldBe` hello.updatedAt
-    url <- run Anonymous (attachmentUrl a)
+    url <- run Anonymous (attachmentUrl (UrlOwner 0) a)
     url `shouldSatisfy` (not . T.null)
 
   it "replace an attachment of the same name" $ \(Fixture run) -> do
@@ -1279,7 +1279,7 @@ attachments = describe "uploadAttachment, deleteAttachment and attachmentUrl" $ 
     wiki <- pageAt run reader "team/projects" "the-wiki"
     tree <- maybe (assertFailure "the wiki page has no tree.png") pure (findAttachment "tree.png" wiki.attachments)
     tree.mediaType.text `shouldBe` "image/png"
-    url <- run reader (attachmentUrl tree)
+    url <- run reader (attachmentUrl (UrlOwner 0) tree)
     url `shouldSatisfy` (not . T.null)
 
   it "delete an attachment" $ \(Fixture run) -> do

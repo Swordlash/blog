@@ -57,14 +57,17 @@ module Wiki.Server.Storage.Migrate
   , SchemaTooNew (..)
   , OldSchema (..)
   , StepsMisnumbered (..)
+  , StepsMissing (..)
+  , reapplyStep
   )
 where
 
 import Data.FileEmbed (embedDir, makeRelativeToProject)
 import Data.List ((\\))
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
-import Database.Beam (aggregate_, all_, insert, insertValues, max_, runInsert, runSelectReturningOne, select)
+import Database.Beam (aggregate_, all_, insert, insertValues, max_, runInsert, runSelectReturningList, runSelectReturningOne, select)
 import Protolude
 import System.FilePath (dropExtension, takeBaseName, takeExtension)
 import Wiki.Server.Storage.Backend (Backend (..), withTransaction)
@@ -207,14 +210,47 @@ pendingSteps given c = do
   when (current > known) $
     throwIO SchemaTooNew {found = current, known}
   let pending = filter (\s -> stepNumber s > current) steps
-  said <- for pending $ \s -> do
-    told <- case s of
-      InSql m -> [] <$ runScript c m.statements
-      InCode CodeStep {run} -> run c
-    now <- getCurrentTime
-    runDb c (runInsert (insert schemaDb.wiki_schema (insertValues [SchemaRow {version = fromIntegral (stepNumber s), applied_at = now}])))
-    pure told
+  said <- for pending (applyStep c)
   pure (map stepNumber pending, concat said)
+
+-- | Apply one step and record it, in the running transaction: the lines it
+-- has to tell.
+applyStep :: (Backend be) => Connection be -> Step -> IO [Text]
+applyStep c s = do
+  told <- case s of
+    InSql m -> [] <$ runScript c m.statements
+    InCode CodeStep {run} -> run c
+  now <- getCurrentTime
+  runDb c (runInsert (insert schemaDb.wiki_schema (insertValues [SchemaRow {version = fromIntegral (stepNumber s), applied_at = now}])))
+  pure told
+
+-- | For tests only: apply one step of the schema again, and record it, on
+-- a database that has every other step, in the running transaction. A
+-- test that plays a database from before a step undoes what the step made,
+-- deletes its row, and has it applied again with this. No program runs it:
+-- a migration applies the steps after a database's version, in order, and
+-- refuses a database whose steps have a hole ('StepsMissing').
+reapplyStep :: (Backend be) => Int -> Connection be -> IO ()
+reapplyStep n c = case find (\s -> stepNumber s == n) (stepsFor (schemaSuffix c)) of
+  Just s -> void (applyStep c s)
+  Nothing -> throwIO (StepsMisnumbered ("There is no step " <> show n <> " of the schema."))
+
+-- | The error for a database whose recorded steps of the schema are not 1,
+-- 2, 3 and so on up to its version: the steps missing. Steps are applied in
+-- order, once (decision 64 of docs/PLAN.md), and a step is written for the
+-- schema the steps before it leave: one applied later, over the steps
+-- after it, may do anything. So such a database is refused, and nothing in
+-- it is changed: a restore of a database half-written, a step's row
+-- deleted by hand, or a build of another branch whose step of that number
+-- was another step, all show so.
+newtype StepsMissing = StepsMissing [Int]
+  deriving stock (Eq, Show)
+
+instance Exception StepsMissing where
+  displayException (StepsMissing missing) =
+    "The database does not record "
+      <> (case missing of [k] -> "step " <> show k; _ -> "steps " <> T.unpack (T.intercalate ", " (map show missing)))
+      <> " of the schema, though it records later ones: the steps were not applied in order, so this program does not migrate or open it, and nothing in it was changed. Restore a backup taken before it was changed."
 
 -- | The error for steps of the schema whose numbers are not 1, 2, 3 and so
 -- on, each once: a step in code given a number a schema file has, or a
@@ -277,9 +313,18 @@ versionOf :: (Backend be) => Connection be -> IO Int
 versionOf c = do
   tables <- runDb c tableNames
   if
-    | "wiki_schema" `elem` tables -> runDb c lastVersion
+    | "wiki_schema" `elem` tables -> do
+        recorded <- runDb c recordedVersions
+        let at = fromMaybe 0 (Set.lookupMax recorded)
+            missing = [k | k <- [1 .. at], k `Set.notMember` recorded]
+        unless (null missing) (throwIO (StepsMissing missing))
+        pure at
     | null tables -> pure 0
     | otherwise -> throwIO (OldSchema tables)
+
+-- | The numbers of the steps a database records as applied.
+recordedVersions :: (Backend be) => Db be (Set Int)
+recordedVersions = Set.fromList . map (\v -> fromIntegral v.version) <$> runSelectReturningList (select (all_ schemaDb.wiki_schema))
 
 lastVersion :: (Backend be) => Db be Int
 lastVersion = maybe 0 fromIntegral . join <$> runSelectReturningOne (select (aggregate_ (\v -> max_ v.version) (all_ schemaDb.wiki_schema)))
