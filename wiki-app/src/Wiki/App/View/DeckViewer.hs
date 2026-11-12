@@ -115,9 +115,9 @@ data State = State
   , owners :: Body.Owners
   -- ^ The owners of the embedded page's attachments' addresses
   -- ("Wiki.App.Backend"'s 'UrlOwner'): none in the initial state
-  -- ('noUrlOwner'), its own once an embed's viewer starts
-  -- ('Body.startOwned'), let go when it goes back to the link and when it
-  -- closes. The page view's own presentation holds none: its addresses
+  -- ('noUrlOwner'), one for each read of the embedded page
+  -- ('Body.beginOwned'), let go when it goes back to the link and when it
+  -- closes ('Body.releaseOwned'): nothing is registered when it starts. The page view's own presentation holds none: its addresses
   -- are the page view's.
   }
 
@@ -195,8 +195,6 @@ component =
       -- link and asks the backend for nothing, so the page carries no
       -- embedded page and adoption repairs nothing.
       Initialize -> do
-        linked <- gets (\st -> case st.input.target of Linked {} -> True; Shown {} -> False)
-        when linked (Body.startOwned ownersOf' setOwners)
         watchNear
       Finalize -> do
         stopNear
@@ -223,7 +221,7 @@ component =
             | sameReading old new -> modify (\st -> st {input = new})
             | otherwise -> do
                 stopNear
-                Body.resetOwned ownersOf' setOwners
+                Body.releaseOwned ownersOf' setOwners
                 modify (\st -> st {input = new, loaded = Link, current = 1, step = 1, generation = st.generation + 1})
                 -- The link is watched once it is rendered, in an action of
                 -- its own, after this one: the element the ref holds until

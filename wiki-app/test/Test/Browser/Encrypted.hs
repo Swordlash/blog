@@ -472,7 +472,7 @@ spec m = do
         docs = either (const (panic "not a slug")) identity . mkSlug
         -- Each view, and what shows it is open: on the encrypted page, its
         -- attachment decrypted, so that it holds an owner with addresses.
-        plain = [(R.Page [docs "docs"] [docs "tour"], ".page-view .page-body"), (R.EditPage [docs "docs"] [docs "tour"], ".editor"), (R.PageSlides [docs "docs"] [docs "tour"] 1 1, ".slides-view .slide"), (R.LivePreview [docs "docs"] [docs "tour"], ".live-preview-body")]
+        plain = [(R.Page [docs "docs"] [docs "tour"], ".page-view .page-body"), (R.EditPage [docs "docs"] [docs "tour"], ".editor"), (R.PageSlides [docs "docs"] [docs "tour"] 1 1, ".slides-not-presentation"), (R.LivePreview [docs "docs"] [docs "tour"], ".live-preview-body")]
         sealed = [(R.Page [secretSlug] [made.slug], ".page-view img[src^='blob:']"), (R.EditPage [secretSlug] [made.slug], ".editor-attachments a[href^='blob:']"), (R.PageSlides [secretSlug] [made.slug] 1 1, ".slides-view img[src^='blob:']"), (R.LivePreview [secretSlug] [made.slug], ".live-preview-body img[src^='blob:']")]
     before <- held
     -- Unmounting runs a view's finalizer on the component tree's loop, after
