@@ -115,7 +115,7 @@ import Wiki.Api.Activity (ActivityQuery (..), firstPage)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..), UserQuery (..))
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
-import Wiki.Api.Encrypted (EncryptSpace (..), NewGrant (..), NewGrants (..), NewSealedComment (..), NewSealedPage (..), NewSealedThread (..), RotatedPage (..), Rotation (..), RotationInfo (..), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedThread (..), SealedThreads (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..))
+import Wiki.Api.Encrypted (EncryptSpace (..), NewEncryptedSubspace (..), NewGrant (..), NewGrants (..), NewSealedComment (..), NewSealedPage (..), NewSealedThread (..), RotatedPage (..), Rotation (..), RotationInfo (..), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedThread (..), SealedThreads (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..))
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Export (dispositionFileName, formatExtension, formatMediaType)
@@ -156,7 +156,7 @@ import Wiki.Core.Anchor (Anchor)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), mimeEssence, parseFileName, shownInBrowser, uploadedMimeType)
 import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody)
 import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), Kept (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), Seen (..), VersionTag (..), anchorData, attachmentBytesData, attachmentMetaData, chainAfter, chainProblemText, commentData, firstChain, gapIn, headingOf, judgeHead, linkedFrom)
-import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId)
+import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..))
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
@@ -165,7 +165,7 @@ import Wiki.Core.Permission (canAdministerSpace)
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), searchPlain)
 import Wiki.Core.Search qualified as Search
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Space (..), homeBody, homeTitle)
 import Wiki.Core.User (Password (..), Standing (..), User (..), checkNewPassword)
 import Wiki.Core.Vault (KeyId, Nonce)
 import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..), maxVersionsPageSize, versionsPageSize)
@@ -528,8 +528,23 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
       cachedAlways (fmap sessionInfo . (\c -> c.session)) endpoints.session (withSession . fromSessionInfo)
   getHomeDocument = pageContent (\c -> c.homeDocument) endpoints.homeDocument (\a c -> c {Cache.homeDocument = Just a})
   listSpaces = orThrow (cachedAlways (\c -> c.spaces) endpoints.spaces.list withSpaces)
-  getSpace path = cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path)
-  createSpace parent name = write (endpoints.spaces.create NewSpace {parent, name})
+
+  -- An encrypted space made before encrypted spaces had home pages gets
+  -- its home page here, when one of its administrators opens it, before
+  -- its pages are listed ('ensureHome').
+  getSpace path =
+    cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path) >>= \case
+      Right s | Just k <- s.encryption, isNothing s.homePage -> ensureHome path s k
+      other -> pure other
+
+  -- A subspace of an encrypted space is made encrypted, with a key of its
+  -- own and its home page made here ('sealedSubspace'); never by the plain
+  -- route, which refuses it.
+  createSpace parent name = do
+    listed <- maybe (pure Nothing) (const (rightToMaybe <$> spacesNow)) parent
+    case parent >>= \p -> (p,) <$> (listed >>= encryptionIn p) of
+      Just (p, _) -> sealedSubspace p name
+      Nothing -> write (endpoints.spaces.create NewSpace {parent, name})
   renameSpace sid name = write (endpoints.spaces.rename sid SpaceName {name})
   setSpacePublic sid public = write (endpoints.spaces.setPublic sid SpacePublic {public})
   setSpaceSealed sid sealed = write (endpoints.spaces.setSealed sid SpaceSealed {sealed})
@@ -1680,6 +1695,110 @@ openKey refresh sid current =
 renewIfDue :: (MonadIO m) => SpaceId -> SpaceEncryption -> HttpWiki m ()
 renewIfDue sid e = when e.rotationDue (whenM (mayAdministerHere sid) (void (renewKey sid e)))
 
+-- | A new key for a space, sealed to the signed-in user's own public key,
+-- with the grant that carries it. The public key comes from the server,
+-- which could give a key of its own choosing and then open the space's
+-- key. So the new grant is opened here with the private key this device
+-- holds for the user before anything is sent: it opens only if the public
+-- key is the user's. The caller sends it, and keeps or forgets the key.
+newCheckedKey :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError (NewSpaceKey, NewGrant))
+newCheckedKey sid =
+  liftIO encryptionHere >>= \case
+    False -> pure (Left (Invalid noEncryption))
+    True ->
+      ((\s -> s.user) <$> session) >>= \case
+        Nothing -> pure (Left (Invalid (keyStateText SignInFirst)))
+        Just u ->
+          send (endpoints.account.publicKey u.id) >>= \case
+            Left NotFound -> pure (Left (Invalid "You have no keys yet: open your account's security to make them, then encrypt the space."))
+            Left e -> pure (Left e)
+            Right mine ->
+              liftIO (newSpaceKey sid mine.publicKey) >>= \case
+                Left why -> pure (Left (Invalid why))
+                Right made -> do
+                  let grant = KeyGrant {keyId = made.keyId, recipient = u.id, recipientKeyId = mine.keyId, enc = made.enc, sealed = made.sealed}
+                  checked <-
+                    withDeviceKey u (\idKey -> liftIO (openSpaceKey idKey sid grant)) >>= \case
+                      Nothing -> pure (Left (Invalid "This device does not hold your keys yet: unlock them in your account's security, then encrypt the space."))
+                      Just (Left _) -> pure (Left (Invalid "The server gave a public key for you that is not the one this device holds: nothing was encrypted. Open your account's security to check your keys."))
+                      Just (Right opened) -> liftIO (forgetSpaceKey opened) $> Right ()
+                  case checked of
+                    Left e -> liftIO (forgetSpaceKey made.key) $> Left e
+                    Right () -> pure (Right (made, NewGrant {recipient = u.id, recipientKeyId = mine.keyId, enc = made.enc, sealed = made.sealed}))
+
+-- | A space's home page, written and encrypted here with a new page key
+-- under the space's key: the starter page a plain space is made with
+-- ("Wiki.Core.Space"'s 'homeTitle' and 'homeBody'), at the top of its
+-- pages, the first of its chain of versions.
+sealedHomeOf :: (MonadIO m) => SpaceKey -> SpaceId -> Text -> KeyId -> HttpWiki m (Either WikiError NewSealedPage)
+sealedHomeOf key sid name k = liftIO . runExceptT $ do
+  pid <- ExceptT (first Invalid <$> newPageId)
+  (pk, pageKey) <- ExceptT (first Invalid <$> newPageKey key k sid pid)
+  content <- ExceptT (first Invalid <$> sealContent pk sid pid pageKey.keyId firstChain homeTitle (homeBody name))
+  lift (forgetPageKey pk)
+  pure NewSealedPage {id = pid, parent = Nothing, pageKey, content}
+
+-- | A space's name, as the list of spaces has it; empty if not listed.
+spaceNameOf :: (MonadIO m) => SpaceId -> HttpWiki m Text
+spaceNameOf sid = spacesNow <&> either (const "") (maybe "" (\s -> s.name) . find (\s -> s.id == sid))
+
+-- | A subspace of an encrypted space, made encrypted: an id chosen here,
+-- which its key and home page are bound to; a new key, sealed to the user
+-- ('newCheckedKey'); its home page ('sealedHomeOf'). The tab keeps the
+-- key. The parent's readers wait for it until a member's browser opens
+-- the subspace and shares it.
+sealedSubspace :: (MonadIO m) => SpaceId -> Text -> HttpWiki m (Either WikiError Space)
+sealedSubspace parent name =
+  liftIO newPageId >>= \case
+    Left why -> pure (Left (Invalid why))
+    Right made -> do
+      let sid = SpaceId made.text
+      newCheckedKey sid >>= \case
+        Left e -> pure (Left e)
+        Right (new, grant) ->
+          sealedHomeOf new.key sid name new.keyId >>= \case
+            Left e -> liftIO (forgetSpaceKey new.key) $> Left e
+            Right homePage -> do
+              result <- write (endpoints.encrypted.subspace parent NewEncryptedSubspace {id = sid, name, keyId = new.keyId, grant, homePage})
+              case result of
+                Right _ -> modifyHeld (\h -> h {heldKeys = Map.insert sid (new.keyId, new.key) h.heldKeys})
+                Left _ -> liftIO (forgetSpaceKey new.key)
+              pure result
+
+-- | Give an encrypted space made before encrypted spaces had home pages
+-- its home page, when the signed-in user may administer it and holds its
+-- key: written and encrypted here, after any renewal of the key that is
+-- due, and sent once ('Wiki.Api.EncryptedApi''s @home@). The space is
+-- then read again, with its home page, which every page now hangs from.
+-- Another tab's home page made first counts as made. Anything else leaves
+-- the space as it was: its pages stay readable at the same addresses.
+ensureHome :: (MonadIO m) => [Slug] -> Space -> KeyId -> HttpWiki m (Either WikiError Space)
+ensureHome path s current = do
+  cacheOnly <- HttpWiki (asks (\env -> env.cacheOnly || env.immediate))
+  may <- if cacheOnly then pure False else mayAdministerHere s.id
+  if not may
+    then pure (Right s)
+    else do
+      made <-
+        send (endpoints.encrypted.space s.id) >>= \case
+          Left e -> pure (Left e)
+          Right e -> do
+            renewIfDue s.id e
+            k <- either (const current) (\x -> x.keyId) <$> send (endpoints.encrypted.space s.id)
+            withSpaceKey NoRefresh s.id k $ \key ->
+              sealedHomeOf key s.id s.name k >>= \case
+                Left err -> pure (Left err)
+                Right home ->
+                  write (endpoints.encrypted.home s.id home) <&> \case
+                    Left (Conflict _) -> Right ()
+                    Left err -> Left err
+                    Right _ -> Right ()
+      case made of
+        Left _ -> pure (Right s)
+        Right () -> do
+          modifyCache (\c -> c {Cache.spaceAt = Map.delete path c.spaceAt, Cache.spaces = Nothing})
+          cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path)
+
 -- | Whether the signed-in user may administer the space, by the session's
 -- grants and the list of spaces: the only ones who may renew its key.
 mayAdministerHere :: (MonadIO m) => SpaceId -> HttpWiki m Bool
@@ -2388,33 +2507,18 @@ instance (MonadIO m) => MonadEncryption (HttpWiki m) where
   -- own choosing and then open the space's key. So the new grant is opened
   -- here with the private key this device holds for the user before
   -- anything is sent: it opens only if the public key is the user's.
-  encryptSpace sid =
-    liftIO encryptionHere >>= \case
-      False -> pure (Left (Invalid noEncryption))
-      True ->
-        ((\s -> s.user) <$> session) >>= \case
-          Nothing -> pure (Left (Invalid (keyStateText SignInFirst)))
-          Just u ->
-            send (endpoints.account.publicKey u.id) >>= \case
-              Left NotFound -> pure (Left (Invalid "You have no keys yet: open your account's security to make them, then encrypt the space."))
-              Left e -> pure (Left e)
-              Right mine ->
-                liftIO (newSpaceKey sid mine.publicKey) >>= \case
-                  Left why -> pure (Left (Invalid why))
-                  Right made -> do
-                    let grant = KeyGrant {keyId = made.keyId, recipient = u.id, recipientKeyId = mine.keyId, enc = made.enc, sealed = made.sealed}
-                    checked <-
-                      withDeviceKey u (\idKey -> liftIO (openSpaceKey idKey sid grant)) >>= \case
-                        Nothing -> pure (Left (Invalid "This device does not hold your keys yet: unlock them in your account's security, then encrypt the space."))
-                        Just (Left _) -> pure (Left (Invalid "The server gave a public key for you that is not the one this device holds: the space was not encrypted. Open your account's security to check your keys."))
-                        Just (Right opened) -> liftIO (forgetSpaceKey opened) $> Right ()
-                    case checked of
-                      Left e -> liftIO (forgetSpaceKey made.key) $> Left e
-                      Right () -> do
-                        result <- write (endpoints.encrypted.encrypt sid EncryptSpace {keyId = made.keyId, grant = NewGrant {recipient = u.id, recipientKeyId = mine.keyId, enc = made.enc, sealed = made.sealed}})
-                        case result of
-                          Right _ -> modifyHeld (\h -> h {heldKeys = Map.insert sid (made.keyId, made.key) h.heldKeys})
-                          Left _ -> liftIO (forgetSpaceKey made.key)
-                        pure result
+  encryptSpace sid = do
+    name <- spaceNameOf sid
+    newCheckedKey sid >>= \case
+      Left e -> pure (Left e)
+      Right (made, grant) ->
+        sealedHomeOf made.key sid name made.keyId >>= \case
+          Left e -> liftIO (forgetSpaceKey made.key) $> Left e
+          Right homePage -> do
+            result <- write (endpoints.encrypted.encrypt sid EncryptSpace {keyId = made.keyId, grant, homePage})
+            case result of
+              Right _ -> modifyHeld (\h -> h {heldKeys = Map.insert sid (made.keyId, made.key) h.heldKeys})
+              Left _ -> liftIO (forgetSpaceKey made.key)
+            pure result
   spaceEncryption sid = send (endpoints.encrypted.space sid)
   chainProblem pid = Map.lookup pid . (\h -> h.heldProblems) <$> readHeld

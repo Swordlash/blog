@@ -99,7 +99,7 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, TexEngine, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
-import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedThreads, SealedVersion, SealedVersionInfo, SpaceEncryption, sealedVersion)
+import Wiki.Api.Encrypted (EncryptSpace, NewEncryptedSubspace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedThreads, SealedVersion, SealedVersionInfo, SpaceEncryption, sealedVersion)
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -292,8 +292,18 @@ data EncryptedApi form mode = EncryptedApi
   -- not private, has subspaces or pages other than its untouched home page,
   -- or is encrypted already is 'Wiki.Api.Error.Conflict'; a caller without a
   -- current public key, or a grant of the wrong length, is
-  -- 'Wiki.Api.Error.Invalid'. The untouched home page is deleted, since its
-  -- text is plain.
+  -- 'Wiki.Api.Error.Invalid'. The untouched home page is replaced by the
+  -- one the request gives, encrypted, since its text is plain.
+  , subspace :: mode :- "spaces" :> Capture "space" SpaceId :> "subspaces" :> ReqBody '[JSON] NewEncryptedSubspace :> PostCreated '[JSON] Space
+  -- ^ A subspace of an encrypted space, made encrypted, with its key granted
+  -- to the caller and its home page. A plain subspace of an encrypted space
+  -- is refused by the plain route.
+  , home :: mode :- "spaces" :> Capture "space" SpaceId :> "home" :> ReqBody '[JSON] NewSealedPage :> PostCreated '[JSON] SealedPage
+  -- ^ The home page of an encrypted space made before encrypted spaces had
+  -- home pages: written and encrypted by the browser of an administrator of
+  -- the space, at the top of its pages; every other page at the top goes
+  -- under it, so that every page keeps its address. A space with a home
+  -- page already is 'Wiki.Api.Error.Conflict'.
   , grant :: mode :- "spaces" :> Capture "space" SpaceId :> "grants" :> ReqBody '[JSON] NewGrants :> PostNoContent
   -- ^ Grant the space's current key to readers waiting for it: only a
   -- caller who holds a grant of that key may, only to readers of the space

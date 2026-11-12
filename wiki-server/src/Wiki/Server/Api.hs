@@ -824,6 +824,8 @@ handlers env caller =
         EncryptedApi
           { space = wiki . spaceEncryption
           , encrypt = \s body -> wiki (encryptSpace s body)
+          , subspace = \s body -> wiki (createEncryptedSubspace s body)
+          , home = \s body -> wiki (createSealedHome s body)
           , grant = \s body -> wiki (grantSpaceKey s body) $> NoContent
           , rotation = wiki . rotationInfo
           , rotate = \s body -> wiki (rotateSpaceKey s body) $> NoContent

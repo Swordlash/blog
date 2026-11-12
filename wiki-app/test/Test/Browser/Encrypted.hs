@@ -110,6 +110,9 @@ $( browserJS
      , ("js_attachment_bytes", "wiki_test_encrypted_attachment_bytes", Safe, [t|IO JSText|])
      , ("js_image_widthPromise", "wiki_test_encrypted_image_width", Safe, [t|JSText -> IO (Promise Int)|])
      , ("js_watch_blobs", "wiki_test_encrypted_watch_blobs", Safe, [t|IO ()|])
+     , ("js_add_reader", "wiki_test_encrypted_add_reader", Safe, [t|JSText -> JSText -> IO ()|])
+     , ("js_strip_home", "wiki_test_encrypted_strip_home", Safe, [t|JSText -> IO ()|])
+     , ("js_made", "wiki_test_encrypted_made", Safe, [t|IO JSText|])
      , ("js_blobs", "wiki_test_encrypted_blobs", Safe, [t|IO JSText|])
      ]
  )
@@ -161,8 +164,9 @@ spec m = do
     (read'.title, read'.body) `shouldBe` ("Secret plans", "The launch is on *Tuesday*.")
     saved <- ok =<< run env (savePage made.id read'.updatedAt "Secret plans" "The launch moved to Wednesday.")
     saved.body `shouldBe` "The launch moved to Wednesday."
+    -- With the space's home page, made with it in this browser.
     listed <- ok =<< run env (listPages secret.id)
-    map (\p -> p.title) listed `shouldBe` ["Secret plans"]
+    map (\p -> p.title) listed `shouldBe` ["Home", "Secret plans"]
     history <- ok =<< run env (listVersions made.id (VersionsQuery Nothing 50))
     map (\v -> (v.number, v.title)) history `shouldBe` [(2, "Secret plans"), (1, "Secret plans")]
     first' <- ok =<< run env (getVersion made.id made.updatedAt)
@@ -199,7 +203,7 @@ spec m = do
     -- shown it: only then is the list fetched and decrypted.
     run env endPreload
     stars <- ok =<< run env starred
-    sortOn fst [(s.page, s.title) | s <- stars] `shouldBe` sortOn fst [(launch.id, "Launch notes"), (other.id, "Other notes")]
+    sortOn fst [(s.page, s.title) | s <- stars, s.title /= "Home"] `shouldBe` sortOn fst [(launch.id, "Launch notes"), (other.id, "Other notes")]
 
   it "finds a word of an encrypted page in the browser, where the server's search finds nothing" $ runPage $ do
     env <- encryptedSpace "user-admin"
@@ -427,6 +431,62 @@ spec m = do
     tellServer event
     eventually (find ui ".page-comments" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Written in another tab."))
     unmount ui
+
+  -- Item 5 of WP5.74b3: a subspace of an encrypted space is made
+  -- encrypted, with a key of its own and its home page, in this browser;
+  -- a reader of the subspace alone reads it, and not its parent, and
+  -- opening it asks nothing of the parent's key.
+  it "makes a subspace of an encrypted space encrypted, which a reader of it alone reads, and not its parent" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    inner <- ok =<< run env (createSpace (Just secret.id) "Inner")
+    (inner.parent, isJust inner.encryption, isJust inner.homePage, inner.encryption /= secret.encryption) `shouldBe` (Just secret.id, True, True, True)
+    sent <- asked
+    [r.url | r <- sent, r.method == "POST", r.url == "api/v1/spaces"] `shouldBe` []
+    unsafeIOToPageM (fromJSText <$> js_made) `shouldReturn` "[1,0]"
+    void (run env listSpaces)
+    made <- okAt "the subspace's page" =<< run env (createPage inner.id Nothing "Inner plans" "Only the inner circle.")
+    -- A reader of the subspace alone: its key shared by the admin's
+    -- browser, its page read; the parent refused.
+    unsafeIOToPageM (js_key_pair (toJSText ("user-editor" :: Text)))
+    unsafeIOToPageM (js_add_reader (toJSText inner.id.text) (toJSText ("user-editor" :: Text)))
+    void (okAt "the admin's listing" =<< run env (listPages inner.id))
+    before <- length <$> asked
+    solo <- as "user-editor"
+    void (run solo listSpaces)
+    page <- okAt "the reader's page" =<< run solo (getPage inner.id [made.slug])
+    (page.title, page.body) `shouldBe` ("Inner plans", "Only the inner circle.")
+    run solo (listPages secret.id) >>= (`shouldSatisfy` isLeft)
+    soloAsked <- drop before <$> asked
+    [r.url | r <- soloAsked, ("api/v1/encrypted/spaces/" <> secret.id.text) `T.isPrefixOf` r.url] `shouldSatisfy` all (\u -> u /= "api/v1/encrypted/spaces/" <> secret.id.text)
+
+  -- A space encrypted before encrypted spaces had home pages gets one from
+  -- its administrator's browser when she opens it; a reader's does not
+  -- make one. Every page keeps its address.
+  it "gives an encrypted space made without a home page one when an administrator opens it, and every page keeps its address" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    top <- ok =<< run env (createPage secret.id Nothing "Top" "At the top.")
+    nested <- ok =<< run env (createPage secret.id (Just top.id) "Nested" "Below it.")
+    unsafeIOToPageM (js_strip_home (toJSText secret.id.text))
+    unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
+    void (ok =<< run env (listPages secret.id))
+    readerTab <- as "user-reader"
+    void (run readerTab listSpaces)
+    void (ok =<< run readerTab (getSpace [secretSlug]))
+    unsafeIOToPageM (fromJSText <$> js_made) `shouldReturn` "[0,0]"
+    admin <- as "user-admin"
+    void (run admin listSpaces)
+    space <- ok =<< run admin (getSpace [secretSlug])
+    isJust space.homePage `shouldBe` True
+    unsafeIOToPageM (fromJSText <$> js_made) `shouldReturn` "[0,1]"
+    (\p -> p.body) <$> (ok =<< run admin (getPage secret.id [top.slug, nested.slug])) `shouldReturn` "Below it."
+    (\p -> p.title) <$> (ok =<< run admin (getPage secret.id [])) `shouldReturn` "Home"
+    -- Opened again: made once.
+    again <- as "user-admin"
+    void (run again listSpaces)
+    void (ok =<< run again (getSpace [secretSlug]))
+    unsafeIOToPageM (fromJSText <$> js_made) `shouldReturn` "[0,1]"
 
   -- The blob store keeps each upload's bytes under their hash: the same
   -- file uploaded twice is encrypted under a new nonce each time, so the
@@ -686,12 +746,12 @@ spec m = do
     unsafeIOToPageM (js_remove_reader (toJSText ("user-reader" :: Text)))
     -- The opening that renews reads the list with the new wraps.
     renewing <- as "user-admin"
-    map (\p -> p.title) <$> (ok =<< run renewing (listPages secret.id)) `shouldReturn` ["Untouched"]
+    map (\p -> p.title) <$> (ok =<< run renewing (listPages secret.id)) `shouldReturn` ["Home", "Untouched"]
     unsafeIOToPageM (fromJSText <$> js_rotations) >>= (`shouldSatisfy` (/= "[]"))
     let readsAll label tab = do
           void (run tab listSpaces)
           titles <- map (\p -> p.title) <$> (ok =<< run tab (listPages secret.id))
-          (label, titles) `shouldBe` (label, ["Untouched"])
+          (label, titles) `shouldBe` (label, ["Home", "Untouched"])
           page <- ok =<< run tab (getPage secret.id [made.slug])
           (label, page.body) `shouldBe` (label, "A zebra crossing, twice.")
           versions <- ok =<< run tab (listVersions made.id (VersionsQuery Nothing 50))
@@ -856,6 +916,9 @@ sessionOf uid = unsafeIOToPageM $ do
   wiki <- newMemWiki ((demoState demoNow) {M.current = Just (UserId uid)})
   me <- runMemWiki wiki session
   pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = [], boxes = [], homePage = defaultHomePage, mathMacros = Nothing, assistantServices = [], whatsNew = Nothing}
+
+okAt :: (Show e) => Text -> Either e a -> PageM s a
+okAt what = either (\e -> panic (what <> ": expected success, got " <> show e)) pure
 
 ok :: (Show e) => Either e a -> PageM s a
 ok = either (\e -> panic ("expected success, got " <> show e)) pure

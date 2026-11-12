@@ -16,6 +16,7 @@ module Wiki.Api.Encrypted
     SpaceEncryption (..)
   , PendingMember (..)
   , EncryptSpace (..)
+  , NewEncryptedSubspace (..)
   , NewGrant (..)
   , NewGrants (..)
 
@@ -97,10 +98,27 @@ data PendingMember = PendingMember
   deriving anyclass (FromJSON, ToJSON)
 
 -- | 'EncryptSpace': turn a space into an encrypted one, with the id of its
--- new key and that key sealed to the caller's own public key.
+-- new key, that key sealed to the caller's own public key, and its home
+-- page, written and encrypted by the caller's browser in place of the
+-- plain one it was made with.
 data EncryptSpace = EncryptSpace
   { keyId :: KeyId
   , grant :: NewGrant
+  , homePage :: NewSealedPage
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'NewEncryptedSubspace': a subspace of an encrypted space, made
+-- encrypted: its id, chosen by the browser, which every key and text of it
+-- is bound to; its name, which is plain, as every space's; its key, sealed
+-- to the caller; and its home page, written and encrypted by the browser.
+data NewEncryptedSubspace = NewEncryptedSubspace
+  { id :: SpaceId
+  , name :: Text
+  , keyId :: KeyId
+  , grant :: NewGrant
+  , homePage :: NewSealedPage
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

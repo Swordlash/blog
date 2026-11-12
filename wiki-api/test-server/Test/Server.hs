@@ -373,6 +373,8 @@ stubs =
         EncryptedApi
           { space = \_ -> refuse NotFound
           , encrypt = \_ _ -> refuse NotFound
+          , subspace = \_ _ -> refuse NotFound
+          , home = \_ _ -> refuse NotFound
           , grant = \_ _ -> refuse NotFound
           , rotation = \_ -> refuse NotFound
           , rotate = \_ _ -> refuse NotFound

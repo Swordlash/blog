@@ -28,7 +28,7 @@ module Test.Storage.Encrypted (spec) where
 
 import Data.Aeson (eitherDecode)
 import Data.ByteString qualified as BS
-import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
@@ -54,8 +54,8 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Backlink (Backlink (..))
 import Wiki.Core.Encrypted (Chain (..), Encapsulated (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), VersionTag (..), chainAfter, firstChain)
 import Wiki.Core.Export qualified as Export
-import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId, UserId (..))
-import Wiki.Core.Notification (Kind (..), Notification (..), WatchTarget (..))
+import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..), UserId (..))
+import Wiki.Core.Notification (Kind (..), Notification (..), PageLocation (..), WatchTarget (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Permission (Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
@@ -71,7 +71,7 @@ import Wiki.Server.Opaque (defaultStretch)
 import Wiki.Server.Reset (ResetMail (..), requestReset, resetPassword, setEmail, verifyEmail)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Rows (SitemapNode (..), StoredRecord (..))
-import Wiki.Server.Storage.Schema (Comments (..), KeyGrants (..), PageKeys (..), PageLinks (..), Pages (..), PublicKeys (..), SealedVersions (..), Threads (..), Vaults (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (Comments (..), KeyGrants (..), PageKeys (..), PageLinks (..), Pages (..), PublicKeys (..), SealedVersions (..), Spaces (..), Threads (..), Vaults (..), WikiDb (..), wikiDb)
 import Wiki.Server.Vault (keyIdOf, storeVault)
 import Wiki.Server.WebAuthn (toBase64Url)
 
@@ -85,43 +85,46 @@ spec backing = describe "encrypted spaces in the storage" $ do
     above <- ok =<< as p.ada (createSpace Nothing "Above")
     open <- ok =<< as p.ada (createSpace (Just above.id) "Open")
     -- Not private: refused.
-    as p.ada (encryptSpace open.id (encryptAs p.ada p.adaKey)) `shouldReturn` Left (Conflict "Only a private space can be encrypted: make it private from its parent first.")
+    as p.ada (encryptSpace open.id (encryptAs p.ada p.adaKey open.id)) >>= (`shouldSatisfy` ruleRefused "shares its readers only with encrypted spaces")
     void (ok =<< as p.ada (setSpaceSealed open.id True))
     -- Public: refused.
     void (ok =<< as p.ada (setSpacePublic open.id True))
-    as p.ada (encryptSpace open.id (encryptAs p.ada p.adaKey)) `shouldReturn` Left (Conflict "A public space cannot be encrypted: anyone may read it.")
+    as p.ada (encryptSpace open.id (encryptAs p.ada p.adaKey open.id)) >>= (`shouldSatisfy` ruleRefused "cannot be public")
     void (ok =<< as p.ada (setSpacePublic open.id False))
     -- Its home page written to: refused, since the server has read it.
     home <- ok =<< as p.ada (homeOf open.id)
     void (ok =<< as p.ada (savePage home.id home.updatedAt "Home" "A secret written in plain text."))
-    as p.ada (encryptSpace open.id (encryptAs p.ada p.adaKey)) >>= (`shouldSatisfy` conflict)
+    as p.ada (encryptSpace open.id (encryptAs p.ada p.adaKey open.id)) >>= (`shouldSatisfy` conflict)
     -- A page someone wrote beside the home page it was created with:
     -- refused, and both pages kept.
     written <- privateSpace st p.ada "Written"
     starter <- ok =<< as p.ada (homeOf written.id)
     plan <- ok =<< as p.ada (createPage written.id Nothing "Plan" "What we will do.")
     as p.ada (deletePage starter.id) >>= (`shouldSatisfy` invalid)
-    as p.ada (encryptSpace written.id (encryptAs p.ada p.adaKey)) >>= (`shouldSatisfy` conflict)
+    as p.ada (encryptSpace written.id (encryptAs p.ada p.adaKey written.id)) >>= (`shouldSatisfy` conflict)
     void (ok =<< as p.ada (getPage written.id [starter.slug]))
     void (ok =<< as p.ada (getPage written.id [plan.slug]))
     -- Sealed to someone else's key, or with a part of the wrong length.
     secret <- privateSpace st p.ada "Secret"
-    as p.ada (encryptSpace secret.id (encryptAs p.ada p.bobKey)) >>= (`shouldSatisfy` invalid)
-    as p.ada (encryptSpace secret.id EncryptSpace {keyId = spaceKey, grant = NewGrant {recipient = p.ada, recipientKeyId = p.adaKey, enc = Encapsulated (bytes 32), sealed = Ciphertext (bytes 47)}}) >>= (`shouldSatisfy` invalid)
+    as p.ada (encryptSpace secret.id (encryptAs p.ada p.bobKey secret.id)) >>= (`shouldSatisfy` invalid)
+    as p.ada (encryptSpace secret.id EncryptSpace {keyId = spaceKey, grant = NewGrant {recipient = p.ada, recipientKeyId = p.adaKey, enc = Encapsulated (bytes 32), sealed = Ciphertext (bytes 47)}, homePage = homeIn secret.id}) >>= (`shouldSatisfy` invalid)
     -- A reader who does not administer it: refused.
     void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) Edit True))
-    as p.bob (encryptSpace secret.id (encryptAs p.bob p.bobKey)) `shouldReturn` Left Forbidden
-    -- Its untouched home page goes, and its first key is the creator's.
-    encrypted <- ok =<< as p.ada (encryptSpace secret.id (encryptAs p.ada p.adaKey))
-    (encrypted.encryption, encrypted.homePage) `shouldBe` (Just spaceKey, Nothing)
+    as p.bob (encryptSpace secret.id (encryptAs p.bob p.bobKey secret.id)) `shouldReturn` Left Forbidden
+    -- Its untouched home page goes, in favour of the one the browser
+    -- encrypted, and its first key is the creator's.
+    starterHome <- ok =<< as p.ada (homeOf secret.id)
+    encrypted <- ok =<< as p.ada (encryptSpace secret.id (encryptAs p.ada p.adaKey secret.id))
+    (encrypted.encryption, encrypted.homePage) `shouldBe` (Just spaceKey, Just (homeIdOf secret.id))
+    reading st (length <$> runSelectReturningList (select (filter_ (\r -> r.id ==. val_ starterHome.id.text) (all_ wikiDb.pages)))) `shouldReturn` 0
+    ((\x -> x.content) <$> (ok =<< as p.ada (sealedPageAt secret.id []))) `shouldReturn` (homeIn secret.id).content
     as p.ada (listSpaces <&> map (\s -> (s.id, s.encryption))) >>= (`shouldContain` [(secret.id, Just spaceKey)])
     e <- ok =<< as p.ada (spaceEncryption secret.id)
     (e.keyId, (\g -> (g.recipient, g.recipientKeyId)) <$> e.grant) `shouldBe` (spaceKey, Just (p.ada, p.adaKey))
     -- Once only, and never back.
-    as p.ada (encryptSpace secret.id (encryptAs p.ada p.adaKey)) `shouldReturn` Left (Conflict "This space is encrypted already.")
-    as p.ada (setSpaceSealed secret.id False) >>= (`shouldSatisfy` refusedAsEncrypted)
-    as p.ada (setSpacePublic secret.id True) >>= (`shouldSatisfy` refusedAsEncrypted)
-    as p.ada (createSpace (Just secret.id) "Inside") >>= (`shouldSatisfy` refusedAsEncrypted)
+    as p.ada (encryptSpace secret.id (encryptAs p.ada p.adaKey secret.id)) `shouldReturn` Left (Conflict "This space is encrypted already.")
+    as p.ada (setSpacePublic secret.id True) >>= (`shouldSatisfy` ruleRefused "cannot be public")
+    as p.ada (createSpace (Just secret.id) "Inside") >>= (`shouldSatisfy` ruleRefused "inside an encrypted space is encrypted too")
     as p.ada (setSpaceProfile secret.id SpaceProfile {description = "", icon = Nothing, blog = True, boxNumbering = encrypted.boxNumbering}) >>= (`shouldSatisfy` refusedAsEncrypted)
 
   it "lists the readers waiting for the key, and lets only a holder of the key grant it to them" $ withEncrypted backing $ \st p secret -> do
@@ -192,9 +195,10 @@ spec backing = describe "encrypted spaces in the storage" $ do
     -- Read back by its path, listed, and its history.
     ((\x -> x.content) <$> (ok =<< as p.ada (sealedPageAt secret.id [made.slug]))) `shouldReturn` secondContent
     listed <- ok =<< as p.ada (sealedPages secret.id)
-    [(s.id, s.heading.title, s.heading.chain) | s <- listed] `shouldBe` [(pid, secondContent.title, secondContent.chain)]
+    -- The space's home page is listed with it.
+    [(s.id, s.heading.title, s.heading.chain) | s <- listed, s.id /= homeIdOf secret.id] `shouldBe` [(pid, secondContent.title, secondContent.chain)]
     contents <- ok =<< as p.ada (sealedContents secret.id)
-    map (\x -> x.content) contents `shouldBe` [secondContent]
+    [x.content | x <- contents, x.id /= homeIdOf secret.id] `shouldBe` [secondContent]
     versions <- ok =<< as p.ada (sealedVersions pid (VersionsQuery Nothing 50))
     [(v.number, v.heading.title, v.heading.chain) | v <- versions] `shouldBe` [(2, secondContent.title, secondContent.chain), (1, (contentOf 'a').title, Just firstChain)]
     first' <- ok =<< as p.ada (sealedVersionAt pid made.updatedAt)
@@ -643,6 +647,137 @@ spec backing = describe "encrypted spaces in the storage" $ do
       as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = bid, meta = metaUnder pageKeyId 'n', replaces = Nothing} file) >>= (`shouldSatisfy` conflict)
       void (ok =<< as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = bid, meta = metaUnder page.pageKey.keyId 'n', replaces = Nothing} file))
 
+  -- Item 5 of WP5.74b3: subspaces of an encrypted space, each with a key
+  -- of its own, and a home page for every encrypted space.
+  describe "subspaces and home pages" $ do
+    it "makes a subspace of an encrypted space encrypted, with a key of its own and its home page, open to its parent's readers" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          sub = subspaceId 1
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+      made <- ok =<< as p.ada (createEncryptedSubspace secret.id (subspaceAs p.ada p.adaKey sub "Inner"))
+      (made.id, made.parent, made.encryption, made.homePage, made.sealed) `shouldBe` (sub, Just secret.id, Just (subKey sub), Just (homeIdOf sub), False)
+      -- Its key is the creator's alone; the parent's reader waits for it.
+      e <- ok =<< as p.ada (spaceEncryption sub)
+      ((\g -> g.recipient) <$> e.grant, map (\m -> m.user) e.pending) `shouldBe` (Just p.ada, [p.bob])
+      ((\x -> x.content) <$> (ok =<< as p.ada (sealedPageAt sub []))) `shouldReturn` (homeIn sub).content
+      -- Refused: a plain subspace there, an id used already or not a UUID,
+      -- a key sealed to someone else, a plain parent.
+      as p.ada (createSpace (Just secret.id) "Plain inside") >>= (`shouldSatisfy` ruleRefused "inside an encrypted space is encrypted too")
+      as p.ada (createEncryptedSubspace secret.id (subspaceAs p.ada p.adaKey sub "Again")) >>= (`shouldSatisfy` conflict)
+      as p.ada (createEncryptedSubspace secret.id (subspaceAs p.ada p.adaKey (SpaceId "inner") "Named")) >>= (`shouldSatisfy` invalid)
+      as p.ada (createEncryptedSubspace secret.id (subspaceAs p.ada p.bobKey (subspaceId 2) "Not hers")) >>= (`shouldSatisfy` invalid)
+      plain <- ok =<< as p.ada (createSpace Nothing "Plain")
+      as p.ada (createEncryptedSubspace plain.id (subspaceAs p.ada p.adaKey (subspaceId 3) "Under plain")) >>= (`shouldSatisfy` conflict)
+      -- A reader who may not make spaces there: refused.
+      as p.bob (createEncryptedSubspace secret.id (subspaceAs p.bob p.bobKey (subspaceId 4) "Bob's")) `shouldReturn` Left Forbidden
+      -- Deleting the parent takes the subspace's grants with it.
+      ok =<< as p.ada (deleteSpace secret.id)
+      reading st (length <$> runSelectReturningList (select (all_ wikiDb.key_grants))) `shouldReturn` 0
+
+    it "keeps every space below an encrypted space encrypted, and every space it shares its readers with encrypted and private" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          inner = subspaceId 1
+      void (ok =<< as p.ada (createEncryptedSubspace secret.id (subspaceAs p.ada p.adaKey inner "Inner")))
+      plain <- ok =<< as p.ada (createSpace Nothing "Plain")
+      -- A plain space moved in: refused.
+      as p.ada (moveSpace plain.id (Just secret.id)) >>= (`shouldSatisfy` ruleRefused "inside an encrypted space is encrypted too")
+      -- The subspace, open to its parent's readers, moved under a plain
+      -- space: refused; private from it, it may go.
+      as p.ada (moveSpace inner (Just plain.id)) >>= (`shouldSatisfy` ruleRefused "shares its readers only with encrypted spaces")
+      void (ok =<< as p.ada (setSpaceSealed inner True))
+      moved <- ok =<< as p.ada (moveSpace inner (Just plain.id))
+      moved.parent `shouldBe` Just plain.id
+      -- There, opened to the plain space's readers, or the plain space
+      -- made public over it while it is open to it: refused.
+      as p.ada (setSpaceSealed inner False) >>= (`shouldSatisfy` ruleRefused "shares its readers only with encrypted spaces")
+      void (ok =<< as p.ada (setSpacePublic plain.id True))
+      as p.ada (setSpacePublic inner True) >>= (`shouldSatisfy` ruleRefused "cannot be public")
+      -- Back under its encrypted parent, it may be opened to it again.
+      void (ok =<< as p.ada (moveSpace inner (Just secret.id)))
+      void (ok =<< as p.ada (setSpaceSealed inner False))
+      -- A page moved across spaces stays refused, encrypted or not.
+      page <- ok =<< as p.ada (createSealedPage inner (newPageUnder inner (PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f") 'a'))
+      as p.ada (movePage page.id secret.id Nothing) >>= (`shouldSatisfy` refusedAsEncrypted)
+
+    -- A reader of an encrypted space reads its subspaces that are open to
+    -- it: removed from it, they read none of them, and each of their keys
+    -- must be renewed; a subspace private from its parent, where the
+    -- reader is granted on their own, keeps them.
+    it "makes a renewal due in every subspace open to its parent when the parent's reader goes, and not in one private from it" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          open = subspaceId 1
+          closed = subspaceId 2
+          due sid = (\x -> x.rotationDue) <$> (ok =<< as p.ada (spaceEncryption sid))
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+      ok =<< as p.ada (grantSpaceKey secret.id (grantsOf [newGrant p.bob p.bobKey]))
+      void (ok =<< as p.ada (createEncryptedSubspace secret.id (subspaceAs p.ada p.adaKey open "Open")))
+      void (ok =<< as p.ada (createEncryptedSubspace secret.id (subspaceAs p.ada p.adaKey closed "Closed")))
+      void (ok =<< as p.ada (setSpaceSealed closed True))
+      void (ok =<< as p.ada (setSpaceGrant closed (SubjectUser p.bob) View True))
+      for_ [open, closed] $ \sid -> ok =<< as p.ada (grantSpaceKey sid (NewGrants (subKey sid) [newGrant p.bob p.bobKey]))
+      traverse due [secret.id, open, closed] `shouldReturn` [False, False, False]
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View False))
+      traverse due [secret.id, open, closed] `shouldReturn` [True, True, False]
+      -- A write in the open subspace waits for the renewal.
+      as p.ada (createSealedPage open (newPageUnder open (PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f") 'a')) >>= (`shouldSatisfy` renewalRefused)
+
+    -- A space with its home page alone has a page a renewal protects: its
+    -- administrators are told.
+    it "tells the administrators of a space whose only page is its home page that its key must be renewed" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+      map (\x -> x.id) <$> (ok =<< as p.ada (sealedPages secret.id)) `shouldReturn` [homeIdOf secret.id]
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View True))
+      ok =<< as p.ada (grantSpaceKey secret.id (grantsOf [newGrant p.bob p.bobKey]))
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) View False))
+      told <- ok =<< as p.ada notifications
+      [n.page | n <- told.items, n.kind == KeyToRenew] `shouldBe` [homeIdOf secret.id]
+
+    -- A space encrypted before encrypted spaces had home pages (made here
+    -- by changing the rows, as no route makes one now) gets one from an
+    -- administrator's browser: every page keeps its address.
+    it "gives an encrypted space made without a home page one, and keeps every page's address" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+      withoutHome st secret.id
+      top <- ok =<< as p.ada (createSealedPage secret.id (newPage (PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f") Nothing 'a'))
+      nested <- ok =<< as p.ada (createSealedPage secret.id (newPage otherId (Just top.id) 'b'))
+      second' <- ok =<< as p.ada (createSealedPage secret.id (newPage (PageId "1e2d3c4b-5a69-4878-9a6b-5c4d3e2f1a0b") Nothing 'c'))
+      paths <- traverse (\x -> (\l -> l.page) <$> (ok =<< as p.ada (pageLocation x))) [top.id, nested.id, second'.id]
+      paths `shouldBe` [[top.slug], [top.slug, nested.slug], [second'.slug]]
+      -- Not an administrator: refused.
+      void (ok =<< as p.ada (setSpaceGrant secret.id (SubjectUser p.bob) Edit True))
+      as p.bob (createSealedHome secret.id (homeIn secret.id)) `shouldReturn` Left Forbidden
+      home <- ok =<< as p.ada (createSealedHome secret.id (homeIn secret.id))
+      home.id `shouldBe` homeIdOf secret.id
+      pathsNow <- traverse (\x -> (\l -> l.page) <$> (ok =<< as p.ada (pageLocation x))) [top.id, nested.id, second'.id]
+      pathsNow `shouldBe` paths
+      ((\x -> x.content) <$> (ok =<< as p.ada (sealedPageAt secret.id [top.slug, nested.slug]))) `shouldReturn` contentOf 'b'
+      ((\x -> x.content) <$> (ok =<< as p.ada (sealedPageAt secret.id []))) `shouldReturn` (homeIn secret.id).content
+      -- Once only: a second tab's is refused.
+      as p.ada (createSealedHome secret.id (homeIn secret.id)) >>= (`shouldSatisfy` conflict)
+      -- One root: nothing else at the top.
+      rows <- reading st (runSelectReturningList (select (filter_ (\r -> r.space_id ==. val_ secret.id.text) (all_ wikiDb.pages))))
+      [r.id | r <- rows, isNothing r.parent] `shouldBe` [(homeIdOf secret.id).text]
+
+    -- The rule, checked after every step of random sequences of creates,
+    -- moves, seals, publics and encryptions, by its own statement here:
+    -- whatever the storage takes, it never leaves a plain space below an
+    -- encrypted one, nor an encrypted space that shares its readers with a
+    -- plain or a public space. And each kind of step is taken sometimes.
+    it "keeps the rule through random sequences of creates, moves, seals and encryptions, and takes each of them sometimes" $ withPeople backing $ \st p -> do
+      taken <- newIORef (Map.empty :: Map Text Int)
+      for_ [1 .. 6 :: Int] $ \seed -> do
+        let picks = randomPicks (seed * 7919) 1000
+        void (privateSpace st p.ada ("Root " <> show seed))
+        foldM_ (\(n, rest) _ -> step st p taken seed n rest) (0 :: Int, picks) [1 .. 40 :: Int]
+      counts <- readIORef taken
+      for_ ["create", "subspace", "move", "seal", "unseal", "public", "private", "encrypt"] $ \k ->
+        (k, Map.findWithDefault 0 k counts > 0) `shouldBe` (k, True)
+
   it "tells a watcher of the space that a page was saved, by its id alone, with no title or excerpt" $ withEncrypted backing $ \st p secret -> do
     let as :: UserId -> StoredWiki IO a -> IO a
         as u = runStoredWiki st (AsUser u)
@@ -663,8 +798,9 @@ spec backing = describe "encrypted spaces in the storage" $ do
     -- and versions are as they were.
     moved <- ok =<< as p.ada (movePage child.id secret.id (Just parent.id))
     (moved.space, moved.parent) `shouldBe` (secret.id, Just parent.id)
+    -- At the top is under the space's home page.
     back <- ok =<< as p.ada (movePage child.id secret.id Nothing)
-    back.parent `shouldBe` Nothing
+    back.parent `shouldBe` Just (homeIdOf secret.id)
     read' <- ok =<< as p.ada (sealedPageAt secret.id [child.slug])
     (read'.pageKey, read'.content) `shouldBe` (pageKeyOf, contentOf 'b')
     -- To a plain space: refused, as from one.
@@ -726,7 +862,8 @@ spec backing = describe "encrypted spaces in the storage" $ do
         as u = runStoredWiki st (AsUser u)
     made <- ok =<< as p.ada (createSealedPage secret.id (newPage (PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f") Nothing 'a'))
     mine <- as p.ada sitemapPages
-    map (\n -> (n.id, n.slug)) (Map.findWithDefault [] secret.id mine) `shouldBe` [(made.id, made.slug)]
+    sort (map (\n -> n.id) (Map.findWithDefault [] secret.id mine)) `shouldBe` sort [made.id, homeIdOf secret.id]
+    (made.id, made.slug) `shouldSatisfy` (`elem` map (\n -> (n.id, n.slug)) (Map.findWithDefault [] secret.id mine))
     Map.member secret.id <$> as p.dan sitemapPages `shouldReturn` False
     Map.member secret.id <$> runStoredWiki st Anonymous sitemapPages `shouldReturn` False
 
@@ -735,6 +872,78 @@ spec backing = describe "encrypted spaces in the storage" $ do
     let body = "{\"id\":\"6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f\",\"parent\":null,\"pageKey\":{\"keyId\":\"a\",\"spaceKeyId\":\"b\",\"wrapped\":{\"nonce\":\"n\",\"key\":\"k\"}},\"content\":{\"tag\":\"t\",\"keyId\":\"a\",\"title\":\"My plain title\",\"body\":\"My plain text\"}}"
     isLeft (eitherDecode body :: Either [Char] NewSealedPage) `shouldBe` True
     isLeft (eitherDecode "{\"content\":{\"title\":\"x\",\"body\":\"y\"}}" :: Either [Char] SealedEdit) `shouldBe` True
+
+-- | The id of a subspace made in these tests, a UUID of a number.
+subspaceId :: Int -> SpaceId
+subspaceId n = SpaceId (T.justifyRight 8 '0' (show n) <> "-5a5a-4b4b-8c8c-0123456789ab")
+
+-- | The key of a subspace made in these tests: its id made of its own.
+subKey :: SpaceId -> KeyId
+subKey sid = KeyId (toBase64Url (BS.take 16 (encodeUtf8 (T.replicate 2 (T.take 8 sid.text)))))
+
+-- | A subspace of an encrypted space, as someone's browser makes it.
+subspaceAs :: UserId -> KeyId -> SpaceId -> Text -> NewEncryptedSubspace
+subspaceAs u k sid name = NewEncryptedSubspace {id = sid, name, keyId = subKey sid, grant = newGrant u k, homePage = homeUnder sid}
+
+-- | 'homeIn', under a subspace's own key.
+homeUnder :: SpaceId -> NewSealedPage
+homeUnder sid = NewSealedPage {id = homeIdOf sid, parent = Nothing, pageKey = PageKey {keyId = homeKey.keyId, spaceKeyId = subKey sid, wrapped = homeKey.wrapped}, content = contentUnder homeKey.keyId 'h'}
+
+-- | 'newPage' in a subspace, under its key.
+newPageUnder :: SpaceId -> PageId -> Char -> NewSealedPage
+newPageUnder sid pid c = NewSealedPage {id = pid, parent = Nothing, pageKey = PageKey {keyId = pageKeyOf.keyId, spaceKeyId = subKey sid, wrapped = pageKeyOf.wrapped}, content = contentOf c}
+
+-- | Make an encrypted space one made before encrypted spaces had home
+-- pages: no home page, its pages at the top.
+withoutHome :: Storage -> SpaceId -> IO ()
+withoutHome st sid = writing st $ do
+  runUpdate (update wikiDb.spaces (\x -> x.home_page <-. val_ (Nothing :: Maybe Text)) (\x -> x.id ==. val_ sid.text))
+  runDelete (delete wikiDb.pages (\x -> x.id ==. val_ (homeIdOf sid).text))
+
+-- | One random step of the rule's property: an operation picked from the
+-- numbers given, on spaces picked from those of this seed's tree, as Ada;
+-- then the rule, as stated here, over every space.
+step :: Storage -> People -> IORef (Map Text Int) -> Int -> Int -> [Int] -> IO (Int, [Int])
+step st p taken seed n picks = do
+  all' <- runStoredWiki st (AsUser p.ada) listSpaces
+  let mine = [x | x <- all', any (\y -> y.name == "Root " <> show seed) (chainIn all' x)]
+      (k, a, b, c, rest) = case picks of
+        (k' : a' : b' : c' : more) -> (k', a', b', c', more)
+        _ -> (0, 0, 0, 0, [])
+      pick xs i = if null xs then Nothing else head (drop (i `mod` length xs) xs)
+      encrypted = filter (\x -> isJust x.encryption) mine
+      fresh = subspaceId (seed * 1000 + n)
+      as' = runStoredWiki st (AsUser p.ada)
+      tally what r = when (isRight r) (modifyIORef' taken (Map.insertWith (+) what 1))
+  case k `mod` 8 of
+    0 -> for_ (pick mine a) $ \x -> as' (createSpace (Just x.id) ("S" <> show n)) >>= tally "create"
+    1 -> for_ (pick encrypted a) $ \x -> as' (createEncryptedSubspace x.id (subspaceAs p.ada p.adaKey fresh ("E" <> show n))) >>= tally "subspace"
+    2 -> for_ ((,) <$> pick mine a <*> pick mine b) $ \(x, y) -> as' (moveSpace x.id (if c `mod` 4 == 0 then Nothing else Just y.id)) >>= tally "move"
+    3 -> for_ (pick mine a) $ \x -> as' (setSpaceSealed x.id True) >>= tally "seal"
+    4 -> for_ (pick mine a) $ \x -> as' (setSpaceSealed x.id False) >>= tally "unseal"
+    5 -> for_ (pick mine a) $ \x -> as' (setSpacePublic x.id True) >>= tally "public"
+    6 -> for_ (pick mine a) $ \x -> as' (setSpacePublic x.id False) >>= tally "private"
+    _ -> for_ (pick (filter (\x -> isNothing x.encryption) mine) a) $ \x -> as' (encryptSpace x.id (encryptAs p.ada p.adaKey x.id)) >>= tally "encrypt"
+  now' <- runStoredWiki st (AsUser p.ada) listSpaces
+  for_ now' $ \x -> do
+    let chain = chainIn now' x
+        above = initSafe chain
+        -- The spaces whose grants make its readers: from the nearest space
+        -- private from its parent (itself included) down to it.
+        shares = reverse (takeUntil (\y -> y.sealed) (reverse chain))
+    when (any (\y -> isJust y.encryption) above) $
+      (x.name, x.encryption) `shouldSatisfy` (isJust . snd)
+    when (isJust x.encryption) $
+      (x.name, [(y.name, isJust y.encryption, y.public) | y <- shares]) `shouldSatisfy` (all (\(_, e, pub) -> e && not pub) . snd)
+  pure (n + 1, rest)
+  where
+    takeUntil f xs = case break f xs of
+      (upper, hit : _) -> upper <> [hit]
+      (upper, []) -> upper
+
+-- | A space's chain among those listed: from the top down to it.
+chainIn :: [Space] -> Space -> [Space]
+chainIn spaces x = maybe [x] (\up -> chainIn spaces up <> [x]) (x.parent >>= \i -> find (\y -> y.id == i) spaces)
 
 -- | A space's only page, its home page, as a new space has it.
 homeOf :: (MonadWiki m) => SpaceId -> m (Either WikiError Page)
@@ -784,7 +993,7 @@ withEncrypted backing action = withPeople backing $ \st p -> encryptedOf st p >>
 encryptedOf :: Storage -> People -> IO Space
 encryptedOf st p = do
   s <- privateSpace st p.ada "Secret"
-  ok =<< runStoredWiki st (AsUser p.ada) (encryptSpace s.id (encryptAs p.ada p.adaKey))
+  ok =<< runStoredWiki st (AsUser p.ada) (encryptSpace s.id (encryptAs p.ada p.adaKey s.id))
 
 -- | A new private space of someone's.
 privateSpace :: Storage -> UserId -> Text -> IO Space
@@ -825,8 +1034,24 @@ newGrant u k = NewGrant {recipient = u, recipientKeyId = k, enc = Encapsulated (
 grantsOf :: [NewGrant] -> NewGrants
 grantsOf = NewGrants spaceKey
 
-encryptAs :: UserId -> KeyId -> EncryptSpace
-encryptAs u k = EncryptSpace {keyId = spaceKey, grant = newGrant u k}
+-- | A space encrypted as someone's browser would: its key sealed to them,
+-- and its home page ('homeIn').
+encryptAs :: UserId -> KeyId -> SpaceId -> EncryptSpace
+encryptAs u k sid = EncryptSpace {keyId = spaceKey, grant = newGrant u k, homePage = homeIn sid}
+
+-- | A space's home page, as a browser makes it with the space's key: its
+-- id made of the space's (a page's id is the wiki's own, so each space's
+-- home page has one of its own), under a page key of its own.
+homeIn :: SpaceId -> NewSealedPage
+homeIn sid = NewSealedPage {id = homeIdOf sid, parent = Nothing, pageKey = homeKey, content = contentUnder homeKey.keyId 'h'}
+
+-- | The id of a space's home page in these tests: the space's id with its
+-- last twelve digits changed, a UUID still.
+homeIdOf :: SpaceId -> PageId
+homeIdOf sid = PageId (T.take 24 sid.text <> "0000000000ab")
+
+homeKey :: PageKey
+homeKey = PageKey {keyId = KeyId (bytes16 'h'), spaceKeyId = spaceKey, wrapped = pageKeyOf.wrapped}
 
 pageKeyOf :: PageKey
 pageKeyOf = PageKey {keyId = KeyId (bytes16 'p'), spaceKeyId = spaceKey, wrapped = WrappedKey (Nonce (bytes 12)) (Ciphertext (bytes 48))}
@@ -947,6 +1172,13 @@ conflict = \case
 invalid :: Either WikiError a -> Bool
 invalid = \case
   Left (Invalid _) -> True
+  _ -> False
+
+-- | Whether a write was refused by the rule of encrypted spaces
+-- ("Wiki.Core.Permission"'s 'encryptionProblem'), for this reason.
+ruleRefused :: Text -> Either WikiError a -> Bool
+ruleRefused why = \case
+  Left (Conflict t) -> why `T.isInfixOf` t
   _ -> False
 
 -- | Whether a plain operation was refused because the space is encrypted.

@@ -205,9 +205,11 @@ spec = describe "Wiki.Core.Space" $ do
     let s = withHome (Just home) (space "docs" "Docs" Nothing)
     it "is the home page of a space that has one" $
       rootPage s `shouldBe` Just home
-    it "is none for the container of personal spaces and an encrypted space" $ do
+    it "is none for the container of personal spaces and an encrypted space with no home page" $ do
       rootPage s {personalContainer = True} `shouldBe` Nothing
-      rootPage s {encryption = Just (KeyId "k1")} `shouldBe` Nothing
+      rootPage (withHome Nothing s) {encryption = Just (KeyId "k1")} `shouldBe` Nothing
+    it "is the home page of an encrypted space that has one" $
+      rootPage s {encryption = Just (KeyId "k1")} `shouldBe` Just home
 
   describe "rootedPages" $ do
     let s = (withHome (Just home) (space "docs" "Docs" Nothing)) {pageOrder = ByHand}
@@ -241,7 +243,7 @@ spec = describe "Wiki.Core.Space" $ do
     it "changes nothing the second time" $
       rootedPages s rooted `shouldBe` rooted
     it "changes nothing in a space with no root, or whose home page is not among the pages" $ do
-      rootedPages s {encryption = Just (KeyId "k1")} given `shouldBe` given
+      rootedPages (withHome Nothing s) {encryption = Just (KeyId "k1")} given `shouldBe` given
       rootedPages (withHome (Just (PageId "elsewhere")) s) given `shouldBe` given
     it "leaves the pages of other spaces alone" $ do
       let elsewhere = (at "z" "z" Nothing 0) {space = SpaceId "other"}

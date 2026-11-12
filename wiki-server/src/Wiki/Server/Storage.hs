@@ -166,6 +166,8 @@ module Wiki.Server.Storage
     -- * Encrypted spaces
   , spaceEncryption
   , encryptSpace
+  , createEncryptedSubspace
+  , createSealedHome
   , grantSpaceKey
   , rotationInfo
   , rotateSpaceKey
@@ -224,7 +226,7 @@ import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invite
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 -- Imported without their fields, which pages' and spaces' share; the
 -- qualified import brings the fields.
-import Wiki.Api.Encrypted (EncryptSpace, NewGrants, NewSealedComment (..), NewSealedPage, NewSealedThread (..), PendingMember (PendingMember), RotatedPage (..), Rotation (..), RotationInfo (RotationInfo), RotationPage (RotationPage), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit, SealedPage (SealedPage), SealedSummary (SealedSummary), SealedThread (..), SealedThreads (..), SealedVersion (SealedVersion), SealedVersionInfo (SealedVersionInfo), SpaceEncryption (SpaceEncryption), maxRotatedGrants, maxRotatedKeys)
+import Wiki.Api.Encrypted (EncryptSpace (..), NewEncryptedSubspace (..), NewGrants, NewSealedComment (..), NewSealedPage, NewSealedThread (..), PendingMember (PendingMember), RotatedPage (..), Rotation (..), RotationInfo (RotationInfo), RotationPage (RotationPage), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit, SealedPage (SealedPage), SealedSummary (SealedSummary), SealedThread (..), SealedThreads (..), SealedVersion (SealedVersion), SealedVersionInfo (SealedVersionInfo), SpaceEncryption (SpaceEncryption), maxRotatedGrants, maxRotatedKeys)
 import Wiki.Api.Encrypted qualified as E
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
@@ -267,7 +269,7 @@ import Wiki.Core.Markdown.Frame (framesInteractively)
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder, savedAs)
-import Wiki.Core.Path (NodeId, TreeNode, ancestry, childrenOf, findChild, resolvePath, resolvePathM, resolveUnderM)
+import Wiki.Core.Path (NodeId, TreeNode, ancestry, childrenOf, findChild, resolvePath, resolveUnderM)
 import Wiki.Core.Permission
   ( GlobalGrant (..)
   , GlobalPermission (..)
@@ -1794,6 +1796,14 @@ spaceEncryption = run Reads . spaceEncryptionTx
 encryptSpace :: (MonadIO m) => SpaceId -> EncryptSpace -> StoredWiki m (Either WikiError Space)
 encryptSpace sid = run Writes . (shown <=< encryptSpaceTx sid)
 
+-- | A subspace of an encrypted space, made encrypted.
+createEncryptedSubspace :: (MonadIO m) => SpaceId -> NewEncryptedSubspace -> StoredWiki m (Either WikiError Space)
+createEncryptedSubspace parent = run Writes . (shown <=< createEncryptedSubspaceTx parent)
+
+-- | The home page of an encrypted space that has none.
+createSealedHome :: (MonadIO m) => SpaceId -> NewSealedPage -> StoredWiki m (Either WikiError SealedPage)
+createSealedHome sid = run Writes . createSealedHomeTx sid
+
 -- | Grant an encrypted space's key to readers waiting for it.
 grantSpaceKey :: (MonadIO m) => SpaceId -> NewGrants -> StoredWiki m (Either WikiError ())
 grantSpaceKey sid = run Writes . grantSpaceKeyTx sid
@@ -2240,7 +2250,6 @@ createSpaceTx parent name = do
   traverse_ requireView parentChain
   traverse_ requireOrdinary parent
   require (mayCreateSpace ctx.principal ctx.grants parentChain)
-  traverse_ (requirePlain "A subspace") parentChain
   n <- nonBlank "A space's name" name
   i <- newId
   time <- now
@@ -2269,6 +2278,9 @@ createSpaceTx parent name = do
           , boxNumbering = InPage
           }
   db (insertSpace space)
+  -- A plain space under an encrypted one is refused: a subspace of an
+  -- encrypted space is made encrypted ('createEncryptedSubspaceTx').
+  requireEncryptionRule space.id
   for_ ctx.creator $ \u ->
     db (insertGrants Grants {global = [], spaces = [SpaceGrant {space = space.id, subject = SubjectUser u, permission = AdministerSpace}], access = Open})
   withHomePage time space
@@ -2403,7 +2415,10 @@ permissionText = \case
 -- | Make a space public, or private again.
 setSpacePublicTx :: SpaceId -> Bool -> Tx Space
 setSpacePublicTx sid public = do
-  s' <- adjustSpace sid (\s -> when (public && isJust s.encryption) (requirePlain "Making the space public" [s]) $> s {public})
+  s' <- adjustSpace sid (\s -> pure s {public})
+  -- Neither an encrypted space nor a space whose readers an encrypted
+  -- space below it shares is made public.
+  requireEncryptionRule sid
   record "space.public" (spaceSubject s') [("public", yesNo public)]
   pure s'
 
@@ -2417,7 +2432,11 @@ setSpaceSealedTx :: SpaceId -> Bool -> Tx Space
 setSpaceSealedTx sid sealed = do
   ctx <- ask
   (_, c) <- findSpace sid
-  s' <- adjustSpace sid (\s -> when (not sealed && isJust s.encryption) (requirePlain "Opening the space to its parent's readers" [s]) $> s {sealed})
+  s' <- adjustSpace sid (\s -> pure s {sealed})
+  -- An encrypted space is opened to its parent's readers only where those
+  -- read encrypted spaces alone; its readers who leave make a renewal of
+  -- its key due, and those who come wait for it ('noticeNow').
+  requireEncryptionRule sid
   let sealedChain = initSafe c <> [s']
   when (sealed && not (canAdministerSpace ctx.principal ctx.grants sealedChain)) $
     for_ ctx.creator $ \u ->
@@ -2474,7 +2493,6 @@ moveSpaceTx sid destination = do
   when (isPersonal s && destination /= s.parent) $
     invalid "A personal space stays among the users' spaces: it cannot be moved."
   traverse_ (requireOrdinary) destination
-  traverse_ (requirePlain "A subspace") destinationChain
   when (maybe False (within sid) destinationChain) $
     invalid "A space cannot be moved into itself or one of its subspaces."
   let others = Map.elems (Map.delete sid ctx.spaces)
@@ -2483,6 +2501,11 @@ moveSpaceTx sid destination = do
         | otherwise = (freshSlug (isJust . findChild others destination) s.slug, nextPosition (childrenOf others destination))
       s' = respace destination slug position s
   db (updateSpace s')
+  -- Moved, the space and those below it share their readers with other
+  -- spaces: the rule of encrypted spaces holds after the move, and the
+  -- administrators of an encrypted space whose readers left are told.
+  requireEncryptionRule sid
+  noticeNow
   pure s'
 
 --------------------------------------------------------------------------------
@@ -3148,23 +3171,18 @@ spaceEncryptionTx sid = do
       , rotationDue = due
       }
 
--- | Turn a space encrypted ('Wiki.Api.EncryptedApi''s @encrypt@).
+-- | Turn a space encrypted ('Wiki.Api.EncryptedApi''s @encrypt@), with
+-- its home page written and encrypted by the caller's browser in place of
+-- the untouched plain one it was made with.
 encryptSpaceTx :: SpaceId -> EncryptSpace -> Tx Space
 encryptSpaceTx sid req = do
   ctx <- ask
   (s, c) <- findSpace sid
   requireAdminister c
   when (isJust s.encryption) $ failWith (Conflict "This space is encrypted already.")
-  -- A subspace must be private from its parent, or its parent's readers
-  -- would read it; a top-level space is made private with it, so that a
-  -- later move under another space keeps it so.
-  unless (s.sealed || isNothing s.parent) $ failWith (Conflict "Only a private space can be encrypted: make it private from its parent first.")
-  when s.public $ failWith (Conflict "A public space cannot be encrypted: anyone may read it.")
   when (isJust s.owner || s.personalContainer || s.blog) $ failWith (Conflict "A personal space or a blog cannot be encrypted.")
   when (any (\x -> x.parent == Just sid) (Map.elems ctx.spaces)) $
     failWith (Conflict "A space with subspaces cannot be encrypted yet: only a space with nothing written in it can.")
-  when (any (\x -> isJust x.encryption) (initSafe c)) $
-    failWith (Conflict "A space inside an encrypted space cannot be encrypted again.")
   nodes <- db (pageNodes sid)
   untouched <- case nodes of
     [] -> pure Nothing
@@ -3193,10 +3211,151 @@ encryptSpaceTx sid req = do
   db $ do
     setSpaceKey sid req.keyId
     insertGrant spaceKind sid.text time KeyGrant {keyId = req.keyId, recipient = me, recipientKeyId = req.grant.recipientKeyId, enc = req.grant.enc, sealed = req.grant.sealed}
-  let s' = s {encryption = Just req.keyId, sealed = True, homePage = if isJust untouched then Nothing else s.homePage}
+  -- A top-level space is made private with it, so that a later move under
+  -- another space keeps it so.
+  let keyed = withHome Nothing s {encryption = Just req.keyId, sealed = s.sealed || isNothing s.parent}
+  db (updateSpace keyed)
+  home <- insertSealedHome keyed req.keyId req.homePage
+  let s' = withHome (Just home) keyed
   db (updateSpace s')
+  -- Only a space that shares its readers with encrypted spaces alone, none
+  -- public, is encrypted: a subspace must be private from a plain parent.
+  requireEncryptionRule sid
   record "space.encrypted" (spaceSubject s') [("key", req.keyId.text)]
   pure s'
+
+-- | A subspace of an encrypted space, made encrypted
+-- ('Wiki.Api.EncryptedApi''s @subspace@): checked as 'createSpaceTx'
+-- checks a subspace, with its own key, granted to the caller, and its home
+-- page, both made in the caller's browser. It is open to its parent's
+-- readers, who wait for its key until a member's browser shares it.
+createEncryptedSubspaceTx :: SpaceId -> NewEncryptedSubspace -> Tx Space
+createEncryptedSubspaceTx parent new = do
+  ctx <- ask
+  (p, parentChain) <- findSpace parent
+  requireView parentChain
+  requireOrdinary parent
+  require (mayCreateSpace ctx.principal ctx.grants (Just parentChain))
+  _ <- requireEncrypted p
+  requireUuid "A space" new.id.text
+  when (Map.member new.id ctx.spaces) $ failWith (Conflict "A space with this id exists already.")
+  n <- nonBlank "A space's name" new.name
+  me <- maybe (failWith Forbidden) pure ctx.author
+  checkGrantParts new.keyId new.grant.enc new.grant.sealed
+  keys <- db (currentPublicKeys [me])
+  unless (new.grant.recipient == me && (fst <$> Map.lookup me keys) == Just new.grant.recipientKeyId) $
+    invalid "The space's key must be sealed to your own current public key: open your keys in your account's security first."
+  time <- now
+  let others = Map.elems ctx.spaces
+      space =
+        Space
+          { id = new.id
+          , name = n
+          , slug = freshSlug (isJust . findChild others (Just parent)) (fromMaybe (fallbackSlug "space") (slugify n))
+          , parent = Just parent
+          , public = False
+          , sealed = False
+          , encryption = Just new.keyId
+          , owner = Nothing
+          , active = True
+          , personalContainer = False
+          , mathMacros = ""
+          , createdAt = time
+          , position = nextPosition (childrenOf others (Just parent))
+          , subspaceOrder = ByName
+          , pageOrder = ByName
+          , homePage = Nothing
+          , icon = Nothing
+          , description = ""
+          , blog = False
+          , boxNumbering = InPage
+          }
+  db $ do
+    insertSpace space
+    insertGrant spaceKind space.id.text time KeyGrant {keyId = new.keyId, recipient = me, recipientKeyId = new.grant.recipientKeyId, enc = new.grant.enc, sealed = new.grant.sealed}
+  for_ ctx.creator $ \u ->
+    db (insertGrants Grants {global = [], spaces = [SpaceGrant {space = space.id, subject = SubjectUser u, permission = AdministerSpace}], access = Open})
+  home <- insertSealedHome space new.keyId new.homePage
+  let s' = withHome (Just home) space
+  db (updateSpace s')
+  requireEncryptionRule s'.id
+  record "space.created" (spaceSubject s') [("encrypted", "yes")]
+  pure s'
+
+-- | The home page of an encrypted space made before encrypted spaces had
+-- home pages ('Wiki.Api.EncryptedApi''s @home@), written and encrypted by
+-- the browser of one of its administrators: put at the top of its pages,
+-- and every other page at the top moved under it, with its slug and its
+-- place, so that every page keeps its address (a home page has no segment
+-- in addresses).
+createSealedHomeTx :: SpaceId -> NewSealedPage -> Tx SealedPage
+createSealedHomeTx sid new = do
+  (s, c) <- findSpace sid
+  requireAdminister c
+  k <- requireEncrypted s
+  when (isJust s.homePage) $ failWith (Conflict "This space has a home page already.")
+  requireNoRenewal sid c k
+  tops <- filter (\x -> isNothing x.parent) <$> db (pageNodes sid)
+  home <- insertSealedHome s k new
+  db (updateSpace (withHome (Just home) s))
+  for_ tops $ \x -> do
+    subtree <- db (subtreeIds x.id)
+    db (movePages x.id sid (Just home) x.slug x.position subtree)
+  requireOneRoot sid
+  findPage home >>= sealedPageOf
+
+-- | A space's home page, written and encrypted in a browser, checked as
+-- 'createSealedPageTx' checks a page: at the top of its pages, under the
+-- space's key, the first of its chain of versions. The space's record is
+-- the caller's to update. The result is the page's id.
+insertSealedHome :: Space -> KeyId -> NewSealedPage -> Tx PageId
+insertSealedHome s k new = do
+  unless (isNothing new.parent) $ invalid "A space's home page is at the top of its pages."
+  requireUuid "A page" new.id.text
+  db (pageNode new.id) >>= traverse_ (\_ -> failWith (Conflict "A page with this id exists already."))
+  checkSealedParts new.pageKey new.content
+  unless (new.pageKey.spaceKeyId == k) $
+    failWith (Conflict "The space's key has changed since: open the space again.")
+  unless (new.content.chain == Just firstChain) $
+    failWith (Conflict outOfChain)
+  random <- T.take 12 . T.filter (/= '-') <$> newId
+  time <- now
+  siblings <- db (childPages s.id Nothing)
+  let page =
+        Page
+          { id = new.id
+          , space = s.id
+          , parent = Nothing
+          , title = ""
+          , slug = freshSlug (isJust . findChild siblings Nothing) (fallbackSlug random)
+          , body = ""
+          , attachments = []
+          , createdAt = time
+          , updatedAt = time
+          , position = 0
+          , template = False
+          , createdBy = Nothing
+          , updatedBy = Nothing
+          }
+  author <- asks (\x -> x.author)
+  db $ do
+    insertPage page
+    insertVersion page author
+    insertPageKey page.id new.pageKey
+    insertSealedVersion page.id page.updatedAt new.content
+  pure page.id
+
+-- | 'Conflict' with its reason when the rule of encrypted spaces
+-- ("Wiki.Core.Permission"'s 'encryptionProblem') does not hold, as the
+-- database is now, in the space given or in one below it: the spaces
+-- whose chains a write to it changes.
+requireEncryptionRule :: SpaceId -> Tx ()
+requireEncryptionRule sid = do
+  spaces <- db loadSpaces
+  let byId i = Map.lookup i spaces
+      chainTo i = fromMaybe [] (ancestry byId i)
+      below = [x | x <- Map.elems spaces, any (\a -> a.id == sid) (chainTo x.id)]
+  for_ (mapMaybe (Permission.encryptionProblem . chainTo . (\x -> x.id)) below) (failWith . Conflict)
 
 -- | Grant a space's current key to readers waiting for it.
 grantSpaceKeyTx :: SpaceId -> NewGrants -> Tx ()
@@ -3388,7 +3547,10 @@ sealedPageAtTx sid path = do
   (s, c) <- findSpace sid
   requireView c
   _ <- requireEncrypted s
-  resolvePathM (\parent slug -> db (childPage sid parent slug)) path >>= \case
+  -- From under the space's home page, as a plain space's paths are; a space
+  -- with none yet from the top of its pages.
+  root <- maybe (pure Nothing) (\r -> db (pageNode r)) (rootPage s)
+  resolveUnderM root (\parent slug -> db (childPage sid parent slug)) path >>= \case
     Right ps | Just p <- lastMay ps -> findPage p.id >>= sealedPageOf
     _ -> failWith NotFound
 
@@ -3396,10 +3558,13 @@ sealedPageAtTx sid path = do
 -- text and a random slug, its key, and its first version, encrypted.
 createSealedPageTx :: SpaceId -> NewSealedPage -> Tx SealedPage
 createSealedPageTx sid new = do
-  (_, c) <- findSpace sid
-  parentPage <- traverse findNode new.parent
+  (s, c) <- findSpace sid
+  -- A page asked for at the top goes under the space's home page, as a
+  -- plain page does ('parentOrRoot'); a space with none yet keeps its
+  -- pages at the top.
+  let parent = parentOrRoot s new.parent
+  parentPage <- traverse findNode parent
   requireEdit c
-  s <- fst <$> findSpace sid
   k <- requireEncrypted s
   when (any (\p -> p.space /= sid) parentPage) $
     invalid "A page's parent has to be in the same space."
@@ -3414,21 +3579,21 @@ createSealedPageTx sid new = do
   unless (new.content.chain == Just firstChain) $
     failWith (Conflict outOfChain)
   requireNoRenewal sid c k
-  nodes <- db (childPages sid new.parent)
+  nodes <- db (childPages sid parent)
   random <- T.take 12 . T.filter (/= '-') <$> newId
   time <- now
   let page =
         Page
           { id = new.id
           , space = sid
-          , parent = new.parent
+          , parent
           , title = ""
-          , slug = freshSlug (isJust . findChild nodes new.parent) (fallbackSlug random)
+          , slug = freshSlug (isJust . findChild nodes parent) (fallbackSlug random)
           , body = ""
           , attachments = []
           , createdAt = time
           , updatedAt = time
-          , position = nextPosition (childrenOf nodes new.parent)
+          , position = nextPosition (childrenOf nodes parent)
           , template = False
           , createdBy = Nothing
           , updatedBy = Nothing

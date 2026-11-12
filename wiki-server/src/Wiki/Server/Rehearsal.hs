@@ -775,8 +775,10 @@ listProblems problems
 
 -- | 'SpaceRead' is a space as the home pages check reads it: its id, its
 -- name, its home page if it has one, and whether it is one of the two
--- kinds that have none (the container of personal spaces, an encrypted
--- space).
+-- kinds that may have none (the container of personal spaces, and an
+-- encrypted space made before encrypted spaces had home pages, which
+-- gets one when an administrator opens it: an encrypted space with a home
+-- page keeps it).
 data SpaceRead = SpaceRead
   { space :: Text
   , name :: Text
@@ -788,7 +790,7 @@ data SpaceRead = SpaceRead
 -- | The home pages check, step 12 of the schema's
 -- ("Wiki.Server.Storage.Migrate.Code.Step0012", WP5.78 of docs/PLAN.md):
 -- after the migration, every space has a home page but the two kinds that
--- have none, and a space that had one keeps it. The pages check makes sure
+-- may have none, and a space that had one keeps it. The pages check makes sure
 -- the page a space is given is the only page the migration adds.
 homesCheck :: Check
 homesCheck = simpleCheck "home pages" readSpaces (\was manager server -> readSpaces manager server <&> (>>= compareHomes was))
@@ -804,7 +806,7 @@ readSpaces manager server = runExceptT $ do
     Array xs -> pure (toList xs)
     _ -> throwError "the spaces are not a list"
   pure
-    [ SpaceRead {space = i, name = fromMaybe i (field "name" s), homePage = field "homePage" s, withoutHome = isTrue "personalContainer" s || present "encryption" s}
+    [ SpaceRead {space = i, name = fromMaybe i (field "name" s), homePage = field "homePage" s, withoutHome = isTrue "personalContainer" s || (present "encryption" s && not (present "homePage" s))}
     | s <- spaces
     , Just i <- [field "id" s]
     ]

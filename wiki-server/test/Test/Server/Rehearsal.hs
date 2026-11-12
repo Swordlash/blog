@@ -244,11 +244,13 @@ copySpec backing = describe "the upgrade's rehearsal, its copy of the wiki" $ do
     withPersonal <- readPages manager server
     withPersonal `shouldSatisfy` isRight
   it "leaves out an encrypted space, whose pages answer 409, and reads the rest" $ withDemoPlace backing $ \at serve -> do
-    -- An encrypted space as the server knows one: its key's id set. Its
-    -- pages are then not listed as plain text.
+    -- An encrypted space as the server knew one before encrypted spaces had
+    -- home pages: its key's id set, and no home page. Its pages are then
+    -- not listed as plain text, and it is one of the spaces that may have
+    -- no home page.
     withConnectionTo at $ \c -> do
       begin True c
-      runScript c "UPDATE spaces SET key_id = 'k1' WHERE slug = 'team';"
+      runScript c "UPDATE spaces SET key_id = 'k1', home_page = NULL WHERE slug = 'team';"
       commitTransaction c
     manager <- newManager defaultManagerSettings
     serve $ \r -> do
