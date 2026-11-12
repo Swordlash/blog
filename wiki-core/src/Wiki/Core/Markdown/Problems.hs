@@ -101,6 +101,8 @@ data ProblemKind
     Marker
   | -- | A box's marker, @> [!KIND]@.
     Box
+  | -- | A presentation's slide whose content does not fit on it.
+    SlideFit
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 -- | The kind's name as the editor shows it beside a problem's message.
@@ -112,6 +114,7 @@ kindName = \case
   Spoiler -> "spoiler"
   Marker -> "block"
   Box -> "box"
+  SlideFit -> "slide"
 
 -- | 'IslandPlace' is where an island that can fail is written in the
 -- source: its first and last line, and its kind. Listings are not among

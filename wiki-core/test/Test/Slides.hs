@@ -357,6 +357,30 @@ spec = describe "Slides" $ do
          in i >= fixedSlides spans && j >= fixedSlides spans && i /= j && max i j < length spans && ordNub texts == texts ==>
               moveSlide i j source /= source
 
+  describe "fitOf" $ do
+    it "fits with half a line to spare, is tight up to a line cut, and overflows beyond" $ do
+      map (`fitOf` 0) [-3, -0.5, -0.49, 0, 1, 1.01] `shouldBe` [Fits, Fits, Tight, Tight, Tight, Overflowing]
+
+    it "is tight for any width beyond the body's, and overflows beyond a line" $ do
+      map (fitOf (-3)) [0, 0.1, 1, 1.5] `shouldBe` [Fits, Tight, Tight, Overflowing]
+
+  describe "fitsNow" $ do
+    let measuredText = "# Deck\n\n## A\n\nOne.\n\n## B\n\nTwo.\n"
+        measures = Just (measuresFor measuredText [Fits, Tight, Overflowing])
+        now text = fitsNow measures text (slideSpans text)
+    it "keeps each slide's fit for the text measured" $
+      now measuredText `shouldBe` [Fits, Tight, Overflowing]
+
+    it "forgets the fit of a slide whose lines changed, and keeps the others'" $
+      now (T.replace "Two." "Two, longer." measuredText) `shouldBe` [Fits, Tight, Unmeasured]
+
+    it "forgets every fit when the look changes, or nothing was measured" $ do
+      now ("[[!style]]{aspect=4:3}\n\n" <> measuredText) `shouldSatisfy` all (== Unmeasured)
+      fitsNow Nothing measuredText (slideSpans measuredText) `shouldBe` [Unmeasured, Unmeasured, Unmeasured]
+
+    it "forgets the fits of the slides after one put before them" $
+      now (T.replace "## A" "## New\n\n## A" measuredText) `shouldBe` [Fits, Unmeasured, Unmeasured, Unmeasured]
+
   describe "options" $ do
     it "are Beamer's look on a wide slide unless the page says otherwise" $
       (deck "## A\n\n## B").options `shouldBe` DeckOptions {theme = Beamer, aspect = Wide}

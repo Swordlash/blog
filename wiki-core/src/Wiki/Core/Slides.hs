@@ -105,6 +105,14 @@ module Wiki.Core.Slides
   , slideAtLine
   , moveSlide
   , slideChunks
+
+    -- * Whether a slide's content fits
+  , Fit (..)
+  , fitOf
+  , fitName
+  , Measures
+  , measuresFor
+  , fitsNow
   )
 where
 
@@ -699,3 +707,82 @@ joined apartSetext = \case
     endsBlank t = case reverse (T.splitOn "\n" t) of
       _ : lastLine : _ : _ -> T.all isSpace lastLine
       _ -> False
+
+----------------------------------------------------------------------
+-- Whether a slide's content fits
+
+-- | 'Fit' is whether a slide's content fits on it, as the editor's
+-- preview measures it on a card 1024 CSS pixels wide at the deck's aspect
+-- (WP5.97 of docs/PLAN.md): the smallest size a deck is promised to be
+-- shown at, where what is sized in pixels (an image's width, a frame's
+-- height) takes the largest share of the slide.
+data Fit
+  = -- | Not measured yet, or measured for a text that has changed since:
+    -- never taken for 'Fits'.
+    Unmeasured
+  | -- | Half a line or more to spare.
+    Fits
+  | -- | Less than half a line to spare, or up to one line cut: it may be
+    -- cut slightly.
+    Tight
+  | -- | More than a line cut.
+    Overflowing
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+-- | The fit of a slide from what the preview measured on its body: how far
+-- the bottom of its content is below the bottom of the body's room, and
+-- how far its content is wider than the body, both in lines of the body's
+-- text (negative when there is room to spare).
+fitOf :: Double -> Double -> Fit
+fitOf below wider
+  | below > 1 || wider > 1 = Overflowing
+  | below > -0.5 || wider > 0 = Tight
+  | otherwise = Fits
+
+-- | A fit's name, as the editor's marks and the preview's classes write
+-- it.
+fitName :: Fit -> Text
+fitName = \case
+  Unmeasured -> "unmeasured"
+  Fits -> "fits"
+  Tight -> "tight"
+  Overflowing -> "overflowing"
+
+-- | 'Measures' is whether each slide of a presentation fits, as the
+-- preview measured it for a text, kept with what each fit depends on in
+-- that text: the slide's own lines, and the lines that set the deck's
+-- look (@[[!style]]@), which set the shape and the type of every slide.
+data Measures = Measures
+  { look :: [Text]
+  , measured :: [([Text], Fit)]
+  }
+  deriving stock (Eq, Show)
+
+-- | The measures of a text: the fits by the slides' places in the deck.
+measuresFor :: Text -> [Fit] -> Measures
+measuresFor text fits =
+  Measures
+    { look = lookLines text
+    , measured = zip (map (slideLines text) (slideSpans text)) (fits <> repeat Unmeasured)
+    }
+
+-- | Whether each slide of a text (its 'slideSpans') fits, as far as the
+-- measures say: a slide's fit holds while its lines and the look are
+-- those it was measured with, at the same place in the deck; a slide
+-- changed since, or not measured, is 'Unmeasured'.
+fitsNow :: Maybe Measures -> Text -> [SlideSpan] -> [Fit]
+fitsNow measures text spans = case measures of
+  Just m | m.look == lookLines text -> [current (atMay m.measured i) sp | (i, sp) <- zip [0 ..] spans]
+  _ -> map (const Unmeasured) spans
+  where
+    current found sp = case found of
+      Just (written, fit) | written == slideLines text sp -> fit
+      _ -> Unmeasured
+
+-- | The lines of a text that set a deck's look.
+lookLines :: Text -> [Text]
+lookLines = filter ("[[!style]]" `T.isPrefixOf`) . map T.stripStart . T.splitOn "\n"
+
+-- | A slide's lines in a text.
+slideLines :: Text -> SlideSpan -> [Text]
+slideLines text sp = take (sp.to - sp.from + 1) (drop (sp.from - 1) (T.splitOn "\n" text))
