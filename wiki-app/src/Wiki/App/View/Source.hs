@@ -170,7 +170,7 @@ component =
       ok <- liftIO (copyText element text)
       modify (\st -> st {copied = if ok then Copied else Selected})
       when ok . void . H.fork $ do
-        liftIO (threadDelay 2500000)
+        H.delay 2.5
         handleAction (Forget n)
 
     load :: H.HalogenM State Action Empty ViewOutput m ()

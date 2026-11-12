@@ -249,7 +249,7 @@ import Data.Map.Strict qualified as Map
 import Data.Row (type (.+), type (.==))
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -936,8 +936,8 @@ draftDelay :: Int
 draftDelay = 2_000_000
 
 -- | How long the "Saved" notice stays: long enough to be read in passing.
-savedNoticeTime :: Int
-savedNoticeTime = 3_000_000
+savedNoticeTime :: NominalDiffTime
+savedNoticeTime = 3
 
 component
   :: forall m
@@ -3007,7 +3007,7 @@ component =
     showSaved = do
       gets (\st -> st.notice) >>= traverse_ H.kill
       waiting <- H.fork $ do
-        liftIO (threadDelay savedNoticeTime)
+        H.delay savedNoticeTime
         modify (\st -> st {notice = Nothing})
       modify (\st -> st {notice = Just waiting})
 
