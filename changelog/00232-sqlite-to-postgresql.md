@@ -1,6 +1,7 @@
 ---
 pr: 232
 title: A wiki in SQLite can be copied into PostgreSQL
+technical: true
 ---
 
 ## New features

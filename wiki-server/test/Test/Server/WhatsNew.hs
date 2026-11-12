@@ -1,5 +1,5 @@
 -- | The page "What's new?" on a server (WP5.66 of docs/PLAN.md): the
--- changelog's entries read and refused ("Wiki.Server.WhatsNew.Entry"),
+-- changelog's entries read and refused ("Wiki.Api.WhatsNew.Entry"),
 -- what the server was compiled with ("Wiki.Server.WhatsNew"), the
 -- endpoint, the session's word on it, the page the server renders, and
 -- the option that turns it all off.
@@ -32,11 +32,16 @@ unitSpec = describe "the changelog's entries" $ do
   describe "an entry" $ do
     it "reads its front matter and its sections, in order, without the blank lines around them" $
       parseEntry (entry "158" "A copy button" [features, "## Bug fixes\n\n- No more hangs.\n"])
-        `shouldBe` Right Entry {pr = 158, title = "A copy button", sections = [(NewFeatures, featuresText), (BugFixes, "- No more hangs.")]}
+        `shouldBe` Right Entry {pr = 158, title = "A copy button", technical = False, sections = [(NewFeatures, featuresText), (BugFixes, "- No more hangs.")]}
 
     it "takes any one section alone, and pr: 0, not numbered yet" $ do
       (\e -> (e.pr, map fst e.sections)) <$> parseEntry (entry "0" "Later" ["## Other changes\n\nFaster builds.\n"]) `shouldBe` Right (0, [OtherChanges])
       (\e -> map fst e.sections) <$> parseEntry (entry "1" "Fix" ["## Bug fixes\n\n- Fixed.\n"]) `shouldBe` Right [BugFixes]
+
+    it "reads technical: true or false before the last ---, and an entry without the line as not technical" $ do
+      (\e -> (e.pr, e.technical, e.sections)) <$> parseEntry (technicalEntry "true" [bugs]) `shouldBe` Right (4, True, [(BugFixes, "- Fixed.")])
+      (\e -> e.technical) <$> parseEntry (technicalEntry " \tfalse " [bugs]) `shouldBe` Right False
+      (\e -> e.technical) <$> parseEntry (entry "4" "T" [bugs]) `shouldBe` Right False
 
     it "keeps a fence's own lines, a nested fence, a heading inside one, and deeper headings" $ do
       let nested = "## New features\n\n- Listings:\n\n  ````markdown\n  ```haskell\n  ## not a heading\n  ```\n  ````\n\n### A detail\n\n~~~sh\n# a comment\n~~~\n"
@@ -44,7 +49,7 @@ unitSpec = describe "the changelog's entries" $ do
         `shouldBe` Right [(NewFeatures, "- Listings:\n\n  ````markdown\n  ```haskell\n  ## not a heading\n  ```\n  ````\n\n### A detail\n\n~~~sh\n# a comment\n~~~")]
 
     it "is shown with each section under a heading of level three" $
-      entryMarkdown Entry {pr = 1, title = "T", sections = [(NewFeatures, "a"), (OtherChanges, "b")]}
+      entryMarkdown Entry {pr = 1, title = "T", technical = False, sections = [(NewFeatures, "a"), (OtherChanges, "b")]}
         `shouldBe` "### New features\n\na\n\n### Other changes\n\nb"
 
     it "is refused, with the line and what is wrong, when it is not written as the grammar says" $ do
@@ -72,6 +77,14 @@ unitSpec = describe "the changelog's entries" $ do
       refused (entry "3" "T" ["## New features\n\n```sh\nnever closed\n"]) "line 8: the code block opened here is not closed"
       refused (entry "3" "T" ["## New features\n\n````sh\n```\n"]) "the code block opened here is not closed"
       refused ("---\r\npr: 3\r\ntitle: T\r\n---\r\n\r\n" <> bugs) "Unix"
+      -- A technical entry is checked as any other, its lines counted with
+      -- the front matter's fifth.
+      refused (technicalEntry "yes" [bugs]) "line 4: technical must be true or false, not \"yes\""
+      refused (technicalEntry "" [bugs]) "line 4: technical must be true or false, not \"\""
+      refused (technicalEntry "True" [bugs]) "line 4: technical must be true or false"
+      refused ("---\npr: 4\ntitle: T\ntechnical: true\n\n" <> bugs) "line 5: the file must start with the front matter"
+      refused ("---\npr: 4\ntitle: T\ndraft: true\n---\n\n" <> bugs) "line 4: the file must start with the front matter"
+      refused (technicalEntry "true" ["## Bug fixes\n\n", "## Other changes\n\nx\n"]) "line 7: the section ## Bug fixes is empty"
 
   describe "the directory" $ do
     it "names a file by its number and a slug" $ do
@@ -79,9 +92,11 @@ unitSpec = describe "the changelog's entries" $ do
       map entryFileName ["README.md", "heading-spoilers.md", "0160-x.md", "00160.md", "00160-.md", "00160-x_y.md", "00160--a.md", "00160-a--b.md", "00160-Ab.md", "00160-a.txt", "abcde-x.md"]
         `shouldBe` replicate 11 False
 
-    it "refuses a malformed entry, naming its file and the problem" $
+    it "refuses a malformed entry, naming its file and the problem" $ do
       readEntries [("changelog/00001-good.md", entry "1" "Good" [bugs]), ("changelog/00002-bad.md", entry "2" "Bad" ["## Bug fixes\n"])]
         `shouldBe` Left "changelog/00002-bad.md: line 6: the section ## Bug fixes is empty"
+      readEntries [("changelog/00004-ci.md", technicalEntry "yes" [bugs])]
+        `shouldBe` Left "changelog/00004-ci.md: line 4: technical must be true or false, not \"yes\""
 
     it "refuses a file named with another number than its pr" $ do
       readEntries [("changelog/00159-spoilers.md", entry "160" "S" [bugs])]
@@ -98,7 +113,7 @@ unitSpec = describe "the changelog's entries" $ do
       length <$> readEntries [("changelog/00000-a.md", entry "0" "A" [bugs]), ("changelog/00000-b.md", entry "0" "B" [bugs])] `shouldBe` Right 2
 
     it "shows the newest twelve by number, the newest first, and none not numbered yet" $ do
-      let numbered n = Entry {pr = n, title = show n, sections = [(BugFixes, "x")]}
+      let numbered n = Entry {pr = n, title = show n, technical = False, sections = [(BugFixes, "x")]}
           all' = map numbered ([0, 0] <> [1 .. 20])
       map (\e -> e.pr) (newestEntries shownEntries all') `shouldBe` [20, 19 .. 9]
       map (\e -> e.pr) (newestEntries 12 (map numbered [3, 0, 150, 7])) `shouldBe` [150, 7, 3]
@@ -107,13 +122,27 @@ unitSpec = describe "the changelog's entries" $ do
       map (\e -> e.url) (take 1 answered.entries) `shouldBe` ["https://github.com/Swordlash/blog/pull/20"]
       answered.version `shouldBe` "v1"
 
+    it "leaves the technical entries out, so that the twelve shown are the newest twelve that are not" $ do
+      let made n t = Entry {pr = n, title = show n, technical = t, sections = [(BugFixes, "x")]}
+          -- The odd numbers from 21 to 39 are technical, the newest among them.
+          all' = [made n (odd n && n > 20) | n <- [1 .. 39]]
+          shown = [38, 36 .. 22] <> [20, 19, 18]
+      map (\e -> e.pr) (newestEntries shownEntries all') `shouldBe` shown
+      map (\e -> e.pr) (userEntries all') `shouldBe` [n | n <- [1 .. 39], even n || n <= 20]
+      let answered = toWhatsNew "v1" (embeddedWhatsNew.built) all'
+      map (\e -> e.pr) answered.entries `shouldBe` shown
+      -- The newest entry, which the sidebar's dot compares with, is the
+      -- newest shown: 38, not the technical 39.
+      newestEntry answered `shouldBe` 38
+
   describe "the server, as it was compiled" $ do
     -- The test runs in the package's directory, where the link to the
     -- repository's changelog is.
-    it "carries every entry of the repository's changelog, as they read now" $ do
+    it "carries every entry of the repository's changelog that is not technical, as they read now" $ do
       names <- sort <$> listDirectory "changelog"
       files <- for names $ \name -> ("changelog/" <> name,) . decodeUtf8 <$> BS.readFile ("changelog" </> name)
-      readEntries files `shouldBe` Right changelogEntries
+      userEntries <$> readEntries files `shouldBe` Right changelogEntries
+      changelogEntries `shouldSatisfy` all (\e -> not e.technical)
 
     it "answers the newest of them, at most twelve, with its version" $ do
       map (\e -> e.pr) embeddedWhatsNew.entries `shouldBe` map (\e -> e.pr) (newestEntries 12 changelogEntries)
@@ -129,6 +158,7 @@ unitSpec = describe "the changelog's entries" $ do
     (defaultServeOptions "data").whatsNew `shouldBe` True
   where
     entry n t sections = "---\npr: " <> n <> "\ntitle: " <> t <> "\n---\n\n" <> T.concat sections
+    technicalEntry b sections = "---\npr: 4\ntitle: CI\ntechnical: " <> b <> "\n---\n\n" <> T.concat sections
     featuresText = "- A button copies the code:\n\n  ```markdown\n  ```haskell {.numbered}\n  ```"
     features = "## New features\n\n" <> featuresText <> "\n\n"
     bugs = "## Bug fixes\n\n- Fixed.\n\n"

@@ -1,6 +1,7 @@
 ---
 pr: 161
 title: A deploy for a locked-down machine
+technical: true
 ---
 
 ## New features

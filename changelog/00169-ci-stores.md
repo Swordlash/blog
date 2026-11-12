@@ -1,6 +1,7 @@
 ---
 pr: 169
 title: CI checks the oldest supported GHC
+technical: true
 ---
 
 ## New features

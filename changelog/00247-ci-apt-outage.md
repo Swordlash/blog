@@ -1,6 +1,7 @@
 ---
 pr: 247
 title: CI installs its system packages without the mirror when it can
+technical: true
 ---
 
 ## Other changes

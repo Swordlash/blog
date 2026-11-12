@@ -1,6 +1,7 @@
 ---
 pr: 176
 title: The deploy's TeX step runs in the maker
+technical: true
 ---
 
 ## Other changes

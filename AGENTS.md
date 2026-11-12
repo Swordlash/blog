@@ -77,7 +77,11 @@ front to five digits, so that the files list in order. The session writes it
 with the branch as `00000-<slug>.md` with `pr: 0`, and in one more commit,
 once it has opened the pull request and before Codex's review, fills in the
 number and renames the file to match (`00169-<slug>.md`, `pr: 169`); CI's
-`changelog` job checks both. The label `no-changelog` exempts a pull request; it is the owner's, and
+`changelog` job checks both. The session marks its entry `technical: true`
+when it gives nobody using the wiki in a browser the thought "a new feature,
+I will try it" or "that bug is fixed now": nothing of it is seen on the
+wiki's pages (CI, tests, scripts, the console, the deploy; the owner,
+2026-11-12). The page "What's new?" leaves such an entry out. The label `no-changelog` exempts a pull request; it is the owner's, and
 the session never applies it.
 
 The owner merges. The session does not merge a pull request unless the owner asks it

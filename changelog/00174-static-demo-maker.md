@@ -1,6 +1,7 @@
 ---
 pr: 174
 title: The demo's deploy goes through the maker too
+technical: true
 ---
 
 ## Other changes

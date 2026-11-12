@@ -1,6 +1,7 @@
 ---
 pr: 215
 title: libsodium's source from a file, for a deploy that downloads nothing
+technical: true
 ---
 
 ## New features

@@ -10,9 +10,9 @@
 {-# OPTIONS_GHC -fforce-recomp #-}
 
 -- | The page "What's new?" in the demo (WP5.71 of docs/PLAN.md): the
--- newest entries of the repository's @changelog\/@, read when the
--- application was compiled, as the server reads them, since the demo has
--- no server to ask. The demo's wiki ("Wiki.App.Demo") carries it, and its
+-- newest entries of the repository's @changelog\/@ that are not
+-- technical, read when the application was compiled, as the server reads
+-- them, since the demo has no server to ask. The demo's wiki ("Wiki.App.Demo") carries it, and its
 -- backend answers it ("Wiki.App.Backend.Mem"). The version is the one the
 -- build's stamp names (@WIKI_BUILD_VERSION@ in CI), else @unknown@: the
 -- WebAssembly compiler's Template Haskell cannot read the environment or
@@ -31,8 +31,8 @@ import Wiki.Api.WhatsNew (WhatsNew)
 import Wiki.Api.WhatsNew.Embed (embedBuildTime, embedEntries, stampVersion)
 import Wiki.Api.WhatsNew.Entry (toWhatsNew)
 
--- | The demo's answer to "What's new?": the newest twelve entries, the
--- version and the time of the build.
+-- | The demo's answer to "What's new?": the newest twelve entries that
+-- are not technical, the version and the time of the build.
 demoWhatsNew :: WhatsNew
 demoWhatsNew =
   toWhatsNew

@@ -12,9 +12,9 @@
 
 -- | The page "What's new?" as this server was built (WP5.66 of
 -- docs/PLAN.md): the newest changelog entries of the repository's
--- @changelog\/@, the version and the time of the build, read when the
--- server was compiled ("Wiki.Api.WhatsNew.Embed"), so that the binary
--- carries them wherever it runs. @GET api\/v1\/whats-new@ answers
+-- @changelog\/@ that are not technical, the version and the time of the
+-- build, read when the server was compiled ("Wiki.Api.WhatsNew.Embed"),
+-- so that the binary carries them wherever it runs. @GET api\/v1\/whats-new@ answers
 -- 'embeddedWhatsNew', unless the server runs with @--no-whats-new@.
 module Wiki.Server.WhatsNew
   ( embeddedWhatsNew
@@ -35,7 +35,8 @@ import Wiki.Api.WhatsNew.Entry (Entry, toWhatsNew)
 import Wiki.Server.WhatsNew.Version (embedVersion)
 
 -- | Every entry of the changelog this server was compiled with, numbered
--- or not.
+-- or not, but for the technical ones, which are left out when the
+-- changelog is embedded.
 changelogEntries :: [Entry]
 changelogEntries = $(embedEntries)
 {-# NOINLINE changelogEntries #-}

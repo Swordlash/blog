@@ -2221,8 +2221,9 @@ to the demo, keeping `data/`.
   the very bottom of the left sidebar, shows the server's version (what `git
   describe --tags --always --dirty` said where it was compiled, or the
   `WIKI_BUILD_VERSION` the build was given, or `unknown`), the date it was
-  built, and the newest twelve changelog entries it was compiled with
-  ([Changelog entries](#changelog-entries)), newest first: each headed "#N
+  built, and the newest twelve changelog entries it was compiled with that
+  are not technical ([Changelog entries](#changelog-entries)), newest
+  first: each headed "#N
   Title", a link to its pull request, and rendered as a page is, so its
   examples are highlighted and its spoilers open and close. The link carries
   a dot while the server has an entry newer than the newest the reader has
@@ -2548,10 +2549,10 @@ itself. Toolchain and conventions follow haskell-halogen's.
 
 Every pull request adds one entry under `changelog/`: a Markdown file that
 says what the pull request changed, for the wiki's users, in plain language.
-The server shows the newest twelve on its page "What's new?" (it embeds them
-when it is compiled, so a malformed entry is a compile error naming the file
-and the line), and CI's `changelog` job checks the entry on every pull
-request. An entry looks like this:
+The server shows the newest twelve that are not technical on its page "What's
+new?" (it embeds them when it is compiled, so a malformed entry is a compile
+error naming the file and the line), and CI's `changelog` job checks the
+entry on every pull request. An entry looks like this:
 
 ````text
 ---
@@ -2579,8 +2580,9 @@ title: Section spoilers on the heading
 - Faster builds.
 ````
 
-The grammar, which `toolchain/check-changelog.sh` and wiki-server's reader
-(`wiki-server/src/Wiki/Server/WhatsNew/Entry.hs`) both enforce:
+The grammar, which `toolchain/check-changelog.sh` and the reader wiki-server
+and wiki-app are compiled with (`wiki-api/src/Wiki/Api/WhatsNew/Entry.hs`)
+both enforce:
 
 - **The file** is `changelog/<number>-<slug>.md`: the number is the entry's
   `pr` with zeros in front to five digits (`00000` before the pull request is
@@ -2594,8 +2596,11 @@ The grammar, which `toolchain/check-changelog.sh` and wiki-server's reader
   digits without a leading zero; `pr: 0` means "not numbered yet" (the page
   leaves such an entry out, and the check refuses it on a pull request). T is
   the title: short, not empty, at most 80 bytes (80 letters of English; a
-  letter outside ASCII counts two or more). Spaces around N and T do not
-  count. No two entries have the same number, but for 0.
+  letter outside ASCII counts two or more). A technical entry has one more
+  line before the last `---`, `technical: true` (below); `technical: false`
+  is allowed too, and an entry without the line is not technical. Spaces
+  around N, T and the value do not count. No two entries have the same
+  number, but for 0.
 - **The sections** come after the front matter and any blank lines: `## New
   features`, `## Bug fixes` and `## Other changes`, each line written exactly
   so (no other words, no trailing spaces), each at most once and in that
@@ -2616,6 +2621,32 @@ The grammar, which `toolchain/check-changelog.sh` and wiki-server's reader
 The body is the wiki's own Markdown, so the page highlights the examples and
 everything a page can hold works in an entry. Write for the wiki's readers
 and administrators: what they can now do and how, not how it was built.
+
+The page "What's new?" holds what makes someone using the wiki in a browser
+think "a new feature, I will try it" or "that bug is fixed now". An entry that
+gives a user neither thought is **technical**, whatever it touched. To tell:
+nothing of it is seen on the wiki's pages. CI, the tests, the build and deploy
+scripts, the configuration wizard, the server's console commands and options,
+backups and upgrades, the toolchain and the repository's own process are
+technical; so is a change whose only trace on a page is one nobody would try
+or notice, such as a refactoring with no change in behaviour or a speed-up
+nobody could see. A fix of a bug a user could have met on a page is not
+technical, however small. A technical entry says so in its front matter:
+
+```text
+---
+pr: 247
+title: CI installs its system packages without the mirror when it can
+technical: true
+---
+```
+
+The page "What's new?" leaves a technical entry out: it is not compiled into
+the server or the demo, takes none of the twelve places, and does not make
+the link's dot appear. It is still checked for its form, and it is still the
+pull request's one entry. An entry that also changes something a reader, an
+editor or an administrator sees or does in the browser, the administration's
+pages included, is not technical.
 
 `sh toolchain/check-changelog.sh changelog/my-entry.md` checks an entry's
 form; on a pull request, CI runs `sh toolchain/check-changelog.sh --pr N

@@ -1,6 +1,7 @@
 ---
 pr: 230
 title: The browser signs in with the same OPAQUE package as the server
+technical: true
 ---
 
 ## Other changes

@@ -1,6 +1,7 @@
 ---
 pr: 210
 title: Faster, more visible deploys, and a rehearsal that passes with personal spaces
+technical: true
 ---
 
 ## Other changes

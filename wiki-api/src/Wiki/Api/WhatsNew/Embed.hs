@@ -33,12 +33,13 @@ import Language.Haskell.TH.Syntax (addDependentFile, lift)
 import Protolude hiding (lift)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
-import Wiki.Api.WhatsNew.Entry (readEntries)
+import Wiki.Api.WhatsNew.Entry (readEntries, userEntries)
 
--- | Every entry of the changelog, as an expression of type
--- @['Wiki.Api.WhatsNew.Entry.Entry']@. An entry that is not written as
--- "Wiki.Api.WhatsNew.Entry" says is a compile error, which names the file
--- and the problem. Each file read is a dependency of the module, so that
+-- | Every entry of the changelog that is not technical, as an expression
+-- of type @['Wiki.Api.WhatsNew.Entry.Entry']@. An entry that is not written
+-- as "Wiki.Api.WhatsNew.Entry" says is a compile error, which names the
+-- file and the problem, technical or not: every entry is read and checked
+-- before the technical ones are left out ('userEntries'). Each file read is a dependency of the module, so that
 -- GHC compiles it again when one changes; a file added is seen because the
 -- module is compiled every time the package is (@-fforce-recomp@ there).
 embedEntries :: Q Exp
@@ -57,7 +58,7 @@ embedEntries = do
       Right t -> pure ("changelog/" <> name, t)
   case readEntries files of
     Left why -> fail ("What's new: a changelog entry is malformed: " <> toS why)
-    Right entries -> lift entries
+    Right entries -> lift (userEntries entries)
 
 -- | The version the package's @changelog.stamp@ names (its line
 -- @version=…@, from the environment variable @WIKI_BUILD_VERSION@ when

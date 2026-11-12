@@ -1,6 +1,7 @@
 ---
 pr: 206
 title: The deploy rehearses an upgrade on a copy of the wiki first
+technical: true
 ---
 
 ## New features

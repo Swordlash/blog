@@ -1,6 +1,7 @@
 ---
 pr: 175
 title: The deploy's builds run in the maker
+technical: true
 ---
 
 ## Other changes

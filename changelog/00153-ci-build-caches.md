@@ -1,6 +1,7 @@
 ---
 pr: 153
 title: Faster builds in CI
+technical: true
 ---
 
 ## Other changes

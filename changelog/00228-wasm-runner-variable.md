@@ -1,6 +1,7 @@
 ---
 pr: 228
 title: CI can send its browser build to GitHub's machines with one setting
+technical: true
 ---
 
 ## Other changes

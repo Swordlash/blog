@@ -1,6 +1,7 @@
 ---
 pr: 150
 title: The deploy installs a TeX that works
+technical: true
 ---
 
 ## New features

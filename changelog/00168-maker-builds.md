@@ -1,6 +1,7 @@
 ---
 pr: 168
 title: The builds and tests run through the maker
+technical: true
 ---
 
 ## New features

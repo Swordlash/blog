@@ -1,6 +1,7 @@
 ---
 pr: 237
 title: The upgrade's check looks at how people sign in
+technical: true
 ---
 
 ## New features

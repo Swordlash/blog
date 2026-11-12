@@ -1,6 +1,7 @@
 ---
 pr: 170
 title: Changelog entries numbered in their names
+technical: true
 ---
 
 ## Other changes

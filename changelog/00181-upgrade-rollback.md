@@ -1,6 +1,7 @@
 ---
 pr: 181
 title: Upgrades that check the database, and go back when it fails
+technical: true
 ---
 
 ## New features
