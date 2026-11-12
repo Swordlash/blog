@@ -440,6 +440,8 @@ data SqliteProbe
 sqliteVerdict :: SqliteFloor -> SqliteProbe -> Line
 sqliteVerdict floor' = \case
   ProbeNotBuilt -> lacks "cc cannot build a program with sqlite3.h and -lsqlite3"
+  ProbeRan 126 err _ ->
+    Ok "SQLite" ("sqlite3.h and -lsqlite3 build a program, which cannot be run here (" <> err <> "): the library it would load is not checked")
   ProbeRan code err out
     | code /= 0 || isNothing (digits (field "number")) ->
         let why = if null err then "it exited " <> show code else err

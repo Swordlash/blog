@@ -333,6 +333,10 @@ case \$command in
           exit 127 ;;
       esac
     fi
+    if [ -f "$case_dir/sqlite-unknown" ]; then
+      printf 'Invalid argument \`sqlite'"'"'\n\nUsage: wiki-server [COMMAND | ...]\n' >&2
+      exit 1
+    fi
     if [ -f "$case_dir/sqlite-refused" ]; then
       printf 'wiki-server: wiki-server needs SQLite 3.32.0 or later, and the SQLite library on this machine is 3.26.0: install a newer SQLite (Debian, Ubuntu: libsqlite3-0; RHEL, Fedora: sqlite-libs).\n' >&2
       exit 1
@@ -2389,6 +2393,7 @@ for rehearsal in '' --no-rehearsal; do
   assert_contains "$out" 'error while loading shared libraries: libsqlite3.so.0: cannot open shared object file'
   assert_contains "$out" "or run the deploy from a shell whose LD_LIBRARY_PATH names it, which the deploy writes into the unit"
   assert_contains "$EVENTS" 'wiki-server sqlite saw LD_LIBRARY_PATH= FAKE_SHELL_ONLY='
+  assert_lacks "$EVENTS" 'FAKE_SHELL_ONLY=1'
   running_untouched "not found $rehearsal"
 done
 # A shell whose LD_LIBRARY_PATH no longer names the library: the unit
@@ -2398,18 +2403,33 @@ done
 # running deployment stays as the cases after this one expect it).
 : >"$EVENTS"
 out=$case_dir/sqlite-elsewhere
-if LD_LIBRARY_PATH=/opt/sqlite-old/lib deploy --no-build >"$out" 2>&1; then fail 'deployed a server whose LD_LIBRARY_PATH no longer names its library'; fi
+if FAKE_SHELL_ONLY=1 LD_LIBRARY_PATH=/opt/sqlite-old/lib deploy --no-build >"$out" 2>&1; then fail 'deployed a server whose LD_LIBRARY_PATH no longer names its library'; fi
 assert_contains "$EVENTS" 'wiki-server sqlite saw LD_LIBRARY_PATH=/opt/sqlite-old/lib FAKE_SHELL_ONLY='
+assert_lacks "$EVENTS" 'FAKE_SHELL_ONLY=1'
 assert_contains "$out" "the new wiki-server does not start in the service's environment"
 running_untouched 'LD_LIBRARY_PATH elsewhere'
 : >"$EVENTS"
 out=$case_dir/sqlite-found
 if FAKE_REHEARSE_EXIT=6 FAKE_SHELL_ONLY=1 LD_LIBRARY_PATH=/opt/sqlite/lib deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose rehearsal failed succeeded'; fi
 assert_contains "$EVENTS" 'wiki-server sqlite saw LD_LIBRARY_PATH=/opt/sqlite/lib FAKE_SHELL_ONLY='
+assert_lacks "$EVENTS" 'FAKE_SHELL_ONLY=1'
 assert_contains "$out" "the new wiki-server runs on SQLite 3.45.1, the system's library, in the service's environment"
 assert_contains "$EVENTS" 'wiki-server rehearse'
 [ "$(line_of "$EVENTS" 'wiki-server sqlite')" -lt "$(line_of "$EVENTS" 'wiki-server rehearse')" ] || fail 'the SQLite check did not come before the rehearsal'
 rm "$case_dir/sqlite-library"
+# A wiki-server from before the command (a --no-build over an older
+# build) cannot be asked: its usage error is not a refusal, and the
+# deploy goes on without the check, saying so. The rehearsal is made to
+# fail, so that the running deployment stays as the cases after this one
+# expect it.
+touch "$case_dir/sqlite-unknown"
+: >"$EVENTS"
+out=$case_dir/sqlite-unknown-out
+if FAKE_REHEARSE_EXIT=6 deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose rehearsal failed succeeded'; fi
+rm "$case_dir/sqlite-unknown"
+assert_contains "$out" 'the new wiki-server does not know the command sqlite'
+assert_lacks "$out" 'refuses the SQLite library'
+assert_contains "$EVENTS" 'wiki-server rehearse'
 pass "the new server is asked which SQLite it loads in the service's environment before anything changes: a refusal or a server that cannot start stops the deploy with the old server running, with or without the rehearsal"
 
 # A migration that fails rolls back the same way; when the restore of the

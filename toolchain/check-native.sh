@@ -311,10 +311,17 @@ EOF
       why=$(sed -n '1p' "$probe/err")
       why=${why#"$probe/sqlite: "}
       [ -n "$why" ] || why="it exited $sqlite_status"
-      if [ "$sqlite_status" = 127 ]; then
-        why="$why; the loader does not find at run time the library the build linked: give its directory in LD_LIBRARY_PATH, or put it on the loader's path (/etc/ld.so.conf.d, then ldconfig)"
+      if [ "$sqlite_status" = 126 ]; then
+        # The program could not be executed at all (a temporary directory
+        # mounted noexec): nothing is known of the library, and the deploy
+        # still asks the built wiki-server before the swap.
+        report SQLite ok "sqlite3.h and -lsqlite3 build a program, which cannot be run here ($why): the library it would load is not checked"
+      else
+        if [ "$sqlite_status" = 127 ]; then
+          why="$why; the loader does not find at run time the library the build linked: give its directory in LD_LIBRARY_PATH, or put it on the loader's path (/etc/ld.so.conf.d, then ldconfig)"
+        fi
+        lack SQLite libsqlite3-dev sqlite-devel "a program built with sqlite3.h and -lsqlite3 does not run: $why"
       fi
-      lack SQLite libsqlite3-dev sqlite-devel "a program built with sqlite3.h and -lsqlite3 does not run: $why"
     else
       sqlite_header=$(field header)
       sqlite_version=$(field version)

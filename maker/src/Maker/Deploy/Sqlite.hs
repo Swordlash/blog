@@ -16,7 +16,9 @@
 -- links the library either way. A library the server refuses (too old,
 -- or built without what it needs) stops a deploy of a wiki in SQLite
 -- only: a wiki in PostgreSQL never opens a SQLite database, and the
--- deploy says so and goes on.
+-- deploy says so and goes on. A program from before the command answers
+-- with its usage, which is not a refusal: the deploy says the library is
+-- not checked, and goes on.
 --
 -- The environment is the unit's: the systemd user manager's environment
 -- (@systemctl --user show-environment@), which every unit of the user
@@ -32,7 +34,7 @@ where
 
 import Control.Exception (IOException, try)
 import Control.Monad (when)
-import Data.List (isInfixOf, stripPrefix)
+import Data.List (isInfixOf, isPrefixOf, stripPrefix)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Maker.Deploy.Plan
 import Maker.Deploy.Unit (environmentValue)
@@ -94,6 +96,11 @@ checkServerSqlite p unit = do
   case code of
     ExitSuccess -> say ("the new wiki-server runs on " <> stripDot (firstLine said) <> ", " <> service)
     ExitFailure 1
+      | not (any ("wiki-server: " `isPrefixOf`) (lines said)) ->
+          warn
+            ( "the new wiki-server does not know the command sqlite (a program from before it, as a --no-build over an older build gives), so the SQLite library it loads in the service's environment is not checked:\n"
+                <> words'
+            )
       | postgres ->
           warn
             ( "the new wiki-server would refuse the SQLite library it loads "

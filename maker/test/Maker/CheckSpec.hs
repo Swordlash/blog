@@ -109,6 +109,9 @@ sqliteSpec = do
     sqliteVerdict floor' (ProbeRan 127 "error while loading shared libraries: libsqlite3.so.0: cannot open shared object file: No such file or directory" [])
       `shouldBe` Missing (lack "a program built with sqlite3.h and -lsqlite3 does not run: error while loading shared libraries: libsqlite3.so.0: cannot open shared object file: No such file or directory; the loader does not find at run time the library the build linked: give its directory in LD_LIBRARY_PATH, or put it on the loader's path (/etc/ld.so.conf.d, then ldconfig)")
     sqliteVerdict floor' (ProbeRan 0 "" []) `shouldBe` Missing (lack "a program built with sqlite3.h and -lsqlite3 does not run: it exited 0")
+  it "passes a program that cannot be executed here, saying the library is not checked" $
+    sqliteVerdict floor' (ProbeRan 126 "Permission denied" [])
+      `shouldBe` Ok "SQLite" "sqlite3.h and -lsqlite3 build a program, which cannot be run here (Permission denied): the library it would load is not checked"
   it "says a program cc cannot build" $
     sqliteVerdict floor' ProbeNotBuilt `shouldBe` Missing (lack "cc cannot build a program with sqlite3.h and -lsqlite3")
   it "prints in its probe each key the verdict reads, and builds the probe check-native.sh builds" $ do

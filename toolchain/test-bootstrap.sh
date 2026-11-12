@@ -314,7 +314,8 @@ pass 'build installs the compilers and Node, and neither Chromium nor fourmolu; 
 # Debian's, 3.45.1, unless SQLITE_HEADER, SQLITE_VERSION and SQLITE_NUMBER,
 # SQLITE_FILE, SQLITE_THREADSAFE, SQLITE_OMIT_WAL, SQLITE_OMIT_FOREIGN_KEY
 # or SQLITE_MAX_VARIABLES say otherwise, and fails as the loader does when
-# it finds no library if SQLITE_NOT_LOADED is set,
+# it finds no library if SQLITE_NOT_LOADED is set, and cannot be executed
+# if SQLITE_NOT_EXECUTABLE is,
 # pkg-config knows libpq, and zlib unless ZLIB_MISSING is set, and make and
 # pg_config answer. libsodium is the fixture's, as toolchain/libsodium.sh
 # leaves it, so the maker does not build it.
@@ -361,6 +362,9 @@ else
   printf '#!/bin/sh\n' >"$output"
 fi
 chmod +x "$output"
+# A probe that cannot be executed, as in a temporary directory mounted
+# noexec.
+[ -z "$sqlite" ] || [ -z "${SQLITE_NOT_EXECUTABLE:-}" ] || chmod -x "$output"
 EOF
 printf '#!/bin/sh\ncase $* in "--exists libpq") exit 0 ;; "--exists zlib") [ -z "${ZLIB_MISSING:-}" ] ;; *) exit 1 ;; esac\n' >"$case_dir/bin/pkg-config"
 printf '#!/bin/sh\nprintf "/usr/lib/postgresql/17/bin\\n"\n' >"$case_dir/bin/pg_config"
@@ -579,6 +583,12 @@ for name in toolchain/check-native.sh 'maker check native'; do
     [ "$status" = 1 ] || fail "the check with a library built with ${refused#*:} exited $status, not 1"
     assert_contains "$out" "missing  SQLite      sqlite3.h and the library a program built with -lsqlite3 loads are 3.45.1 (/usr/lib/x86_64-linux-gnu/libsqlite3.so.0), built with ${refused#*:}, which wiki-server refuses (Debian"
   done
+  # A probe that cannot be executed here tells nothing of the library: the
+  # item passes, saying so, as the check passed before it ran the probe.
+  sqlite_check not-executable SQLITE_NOT_EXECUTABLE=1
+  [ "$status" = 0 ] || fail "the check with a probe that cannot be executed exited $status, not 0: $(cat "$out")"
+  assert_contains "$out" 'ok       SQLite      sqlite3.h and -lsqlite3 build a program, which cannot be run here ('
+  assert_contains "$out" '): the library it would load is not checked'
   sqlite_check variables SQLITE_MAX_VARIABLES=999
   [ "$status" = 1 ] || fail "the check with a library built with MAX_VARIABLE_NUMBER=999 exited $status, not 1"
   assert_contains "$out" 'built with MAX_VARIABLE_NUMBER=999, which wiki-server refuses (it needs 32766 or more) (Debian'
