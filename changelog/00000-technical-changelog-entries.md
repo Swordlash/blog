@@ -1,6 +1,7 @@
 ---
 pr: 0
 title: "What's new?" lists only what you can see in the wiki
+technical: true
 ---
 
 ## Other changes
