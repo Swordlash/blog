@@ -49,7 +49,7 @@ module Test.Database
   , choiceOf
   , placeOptionsOf
   , withConnectionTo
-  , undoStep16
+  , forgetStep
   )
 where
 
@@ -431,11 +431,17 @@ choiceOf = \case
 placeOptionsOf :: Place -> PlaceOptions
 placeOptionsOf at = PlaceOptions {dataDir = at.dataDir, database = choiceOf at.database, programs = at.programs}
 
--- | What undoes step 16 of the schema (@0016-chained-versions@), the same
--- on both databases: for a test that plays a database from before it,
--- whose steps from then on run again.
-undoStep16 :: Text
-undoStep16 = "ALTER TABLE sealed_versions DROP COLUMN chain_number; ALTER TABLE sealed_versions DROP COLUMN previous_tag;"
+-- | Make a database forget one step of its schema, as if the step had
+-- never been applied to it: the step's row in @wiki_schema@ goes, after
+-- the statements given, which undo what the step made (none for a step
+-- that made nothing). The next migration applies that step again, and only
+-- that one ('Wiki.Server.Storage.Migrate' applies every step not
+-- recorded), so the steps after it need no undoing: a new step costs a test
+-- that forgets an older one nothing.
+forgetStep :: (Backend be) => Int -> [Text] -> Connection be -> IO ()
+forgetStep n undo c = do
+  traverse_ (runScript c) undo
+  runScript c ("DELETE FROM wiki_schema WHERE version = " <> show n <> ";")
 
 -- | A connection of its own to a place's database, outside any storage:
 -- for a test that looks at the database as the storage leaves it, or

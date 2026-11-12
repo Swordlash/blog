@@ -11,7 +11,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Database.Beam (all_, runSelectReturningList, select)
 import Protolude
-import Test.Database (Backing (..), undoStep16, withConnectionTo)
+import Test.Database (Backing (..), forgetStep, withConnectionTo)
 import Test.Hspec
 import Test.Storage.Fixture (demoArchive, withPlaceIn, withStorageIn)
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
@@ -41,14 +41,11 @@ spec backing = describe "the table of links" $ do
     withDemoAt backing $ \at st -> do
       written <- linkRows st
       written `shouldSatisfy` (not . null)
-      -- The database as it was at step 13: no table, no step 14 or
-      -- after it, no version of the links. Step 15 runs again, and finds
-      -- no login to rename; step 16's columns go, and it runs again.
+      -- The database as it was before step 14: no table, no step 14, no
+      -- version of the links. Step 14 alone runs again.
       withConnectionTo at $ \c -> do
         begin True c
-        runScript c "DROP TABLE page_links;"
-        runScript c undoStep16
-        runScript c "DELETE FROM wiki_schema WHERE version >= 14;"
+        forgetStep 14 ["DROP TABLE page_links;"] c
         runDb c (deleteSettingsLike linksVersionSetting [])
         commitTransaction c
       withStorageAside at $ \reopened -> do

@@ -53,6 +53,7 @@ module Wiki.Server.Storage.Migrate
   , applySteps
   , applyMigrations
   , schemaVersion
+  , hasStep
   , databaseVersion
   , SchemaTooNew (..)
   , OldSchema (..)
@@ -62,9 +63,10 @@ where
 
 import Data.FileEmbed (embedDir, makeRelativeToProject)
 import Data.List ((\\))
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
-import Database.Beam (aggregate_, all_, insert, insertValues, max_, runInsert, runSelectReturningOne, select)
+import Database.Beam (aggregate_, all_, insert, insertValues, max_, runInsert, runSelectReturningList, runSelectReturningOne, select)
 import Protolude
 import System.FilePath (dropExtension, takeBaseName, takeExtension)
 import Wiki.Server.Storage.Backend (Backend (..), withTransaction)
@@ -206,7 +208,12 @@ pendingSteps given c = do
   let known = maybe 0 stepNumber (lastMay steps)
   when (current > known) $
     throwIO SchemaTooNew {found = current, known}
-  let pending = filter (\s -> stepNumber s > current) steps
+  -- Every step not recorded, in order. A database migrated by this module
+  -- records 1, 2, 3 and so on, so these are the steps after its version;
+  -- a test that forgets one step (and what that step made) has that step
+  -- applied again, and only that one, whatever steps came after it.
+  recorded <- if current == 0 then pure mempty else runDb c recordedVersions
+  let pending = filter (\s -> stepNumber s `Set.notMember` recorded) steps
   said <- for pending $ \s -> do
     told <- case s of
       InSql m -> [] <$ runScript c m.statements
@@ -266,6 +273,15 @@ schemaVersion c = do
     then runDb c lastVersion
     else pure 0
 
+-- | Whether a database records a step of the schema as applied: what a
+-- check that depends on one step asks, rather than comparing the version,
+-- since a test may make a database forget one step alone (see
+-- 'pendingSteps').
+hasStep :: (Backend be) => Int -> Connection be -> IO Bool
+hasStep n c = do
+  tables <- runDb c tableNames
+  if "wiki_schema" `elem` tables then Set.member n <$> runDb c recordedVersions else pure False
+
 -- | 'schemaVersion', refusing a database that holds tables but none of
 -- this schema's version with 'OldSchema': what a backup before a deploy
 -- asks, so that a deploy over the database of an earlier wiki-server
@@ -280,6 +296,10 @@ versionOf c = do
     | "wiki_schema" `elem` tables -> runDb c lastVersion
     | null tables -> pure 0
     | otherwise -> throwIO (OldSchema tables)
+
+-- | The numbers of the steps a database records as applied.
+recordedVersions :: (Backend be) => Db be (Set Int)
+recordedVersions = Set.fromList . map (\v -> fromIntegral v.version) <$> runSelectReturningList (select (all_ schemaDb.wiki_schema))
 
 lastVersion :: (Backend be) => Db be Int
 lastVersion = maybe 0 fromIntegral . join <$> runSelectReturningOne (select (aggregate_ (\v -> max_ v.version) (all_ schemaDb.wiki_schema)))

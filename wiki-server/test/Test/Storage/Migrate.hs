@@ -10,7 +10,7 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Database.Beam (all_, insert, insertValues, runInsert, runSelectReturningList, select)
 import Protolude
-import Test.Database (Backing (..), withConnectionTo)
+import Test.Database (Backing (..), forgetStep, withConnectionTo)
 import Test.Hspec
 import Test.Storage.Fixture (demoArchive, ok, withEmptyPlaceIn)
 import Wiki.Api.Vault (StoredVault (..))
@@ -118,6 +118,18 @@ spec backing = describe "the schema's versions" $ do
       migrate c `shouldReturn` []
       tablesOf c `shouldReturn` tables
       versionsOf c `shouldReturn` versions
+
+  -- What a test that plays a database from before a step relies on
+  -- ('Test.Database.forgetStep'): the step forgotten is applied again,
+  -- and no step after it.
+  it "apply a step the database forgot, and only that one" $
+    withEmptyPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
+      let known = knownVersion (schemaSuffix c)
+      _ <- migrate c
+      forgetStep 14 ["DROP TABLE page_links;"] c
+      migrate c `shouldReturn` [14]
+      versionsOf c `shouldReturn` [1 .. known]
+      tablesOf c `shouldReturn` wikiTables
 
   it "run when the storage is opened, and find the database migrated the next time" $
     withEmptyPlaceIn backing $ \at -> do

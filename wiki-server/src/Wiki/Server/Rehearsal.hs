@@ -139,7 +139,7 @@ import Wiki.Server.Storage (Place (..), withDatabase)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Backup (Restore (..), backupInto, restore)
 import Wiki.Server.Storage.Layout (PgPrograms (..))
-import Wiki.Server.Storage.Migrate (schemaVersion)
+import Wiki.Server.Storage.Migrate (hasStep)
 import Wiki.Server.Storage.Migrate.Code.Step0013 (step0013)
 import Wiki.Server.Storage.Migrate.Code.Step0015 (Renamed (..), renamedLogins, step0015)
 import Wiki.Server.Storage.Migrate.CodeStep (CodeStep (..))
@@ -1256,8 +1256,10 @@ loginsCheck =
 -- password.
 seedLogins :: Seeding -> IO (Either Text (Maybe (Text, Text)))
 seedLogins seeding = runExceptT $ do
-  version <- liftIO (withDatabase seeding.copy schemaVersion)
-  if version >= step0015.version
+  -- Whether the program rehearsed from has step 15 already: then it has
+  -- renamed every login it would.
+  done <- liftIO (withDatabase seeding.copy (hasStep step0015.version))
+  if done
     then pure Nothing
     else do
       tag <- liftIO (decodeUtf8 . convertToBase @ByteString Base16 <$> (getRandomBytes 8 :: IO ByteString))
