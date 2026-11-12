@@ -79,7 +79,7 @@ function wikiFitMeasure(root) {
     // diagrams were drawn then.
     if (Array.isArray(globalThis.wikiFitLog)) {
       const diagrams = slide.querySelectorAll(".wiki-mermaid");
-      globalThis.wikiFitLog.push({ slide: found.length, below: fit ? fit[0] : null, wider: fit ? fit[1] : null, diagrams: diagrams.length, drawn: slide.querySelectorAll(".wiki-mermaid svg").length });
+      globalThis.wikiFitLog.push({ slide: found.length, below: fit ? fit[0] : null, diagrams: diagrams.length, drawn: slide.querySelectorAll(".wiki-mermaid svg").length });
     }
   }
   return found;

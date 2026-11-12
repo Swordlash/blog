@@ -146,7 +146,7 @@ spec m = do
         _ <- find ui (".editor-cm .cm-content .cm-lintRange-" <> severity)
         unsafeIOToPageM (js_hover (toJSText (".cm-content .cm-lintRange-" <> severity))) `shouldReturn` True
         _ <- find ui (".cm-tooltip-hover .cm-tooltip-lint .cm-diagnostic-" <> severity)
-        readable (".cm-tooltip-lint .cm-diagnostic-" <> severity <> " .cm-diagnosticText")
+        readable (".cm-tooltip-hover .cm-tooltip-lint .cm-diagnostic-" <> severity <> " .cm-diagnosticText")
       -- The box a mark in the gutter opens, a tooltip of its own.
       unsafeIOToPageM (js_hover (toJSText (".cm-gutter-lint .cm-lint-marker-warning" :: Text))) `shouldReturn` True
       _ <- find ui ".cm-tooltip.cm-tooltip-lint .cm-diagnostic-warning"
