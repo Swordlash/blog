@@ -1,5 +1,4 @@
 {-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 -- | The editor's preview: a draft rendered as the page view will show it
 -- once it is saved ("Wiki.App.View.Body"), each block after a marker of
@@ -35,17 +34,16 @@ where
 import Control.Monad.UUID (MonadUUID)
 import Data.Aeson (decodeStrict)
 import Halogen qualified as H
-import Halogen.JSBits (Callback, Safety (..), browserJS, freeCallback, inBrowser, jsValText, mkSyncCallback)
+import Halogen.JSBits (inBrowser)
 import Halogen.Subscription qualified as HS
 import Halogen.TH (hh)
 import Protolude hiding (State)
--- With its constructor: the FFI passes the value inside the newtype.
-import Web.DOM.Internal.Types (Element (..))
 import Wiki.App.Backend (MonadLoad (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
+import Wiki.App.SlideFit (FitWatch, measureAgain, stopFits, watchFits)
 import Wiki.App.View.Body (IslandSlots, Place (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common (Context (..))
@@ -101,18 +99,6 @@ data Action
   | FromIsland IslandKey Islands.Output
   | Measured Text
 
--- | The measuring of a presentation's cards (@jsbits/slide-fit.js@): its
--- number there, and the callback the measures come through, freed when it
--- stops.
-data FitWatch = FitWatch Int Callback
-
-$( browserJS
-     ["jsbits/slide-fit.js"]
-     [ ("js_fit_watch", "wiki_fit_watch", Safe, [t|Element -> Callback -> IO Int|])
-     , ("js_fit_stop", "wiki_fit_stop", Safe, [t|Int -> IO ()|])
-     ]
- )
-
 component :: forall query m. (MonadLoad m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input Output m
 component =
   H.mkComponent
@@ -164,14 +150,17 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action IslandSlots Output m ()
     handleAction = \case
-      Initialize -> resolvePeople >> watchFits
-      Finalize -> gets (\st -> st.watch) >>= traverse_ (\(FitWatch i callback) -> liftIO (js_fit_stop i >> freeCallback callback))
+      Initialize -> resolvePeople >> startWatch
+      Finalize -> gets (\st -> st.watch) >>= traverse_ stopFits
       Receive new -> do
         old <- gets (\st -> st.input)
         unless (same old new) $ do
           modify (\st -> st {input = new})
           resolvePeople
-          watchFits
+          startWatch
+          -- Each text shown is measured, also when its cards are laid out
+          -- as the last ones were.
+          gets (\st -> st.watch) >>= traverse_ measureAgain
       -- A link in the preview is followed as in the page: the shell asks
       -- before it leaves unsaved changes behind.
       FollowLink target -> do
@@ -188,8 +177,8 @@ component =
           H.raise (SlidesMeasured st.input.body fits)
 
     -- Start measuring a presentation's cards, once they are rendered.
-    watchFits :: H.HalogenM State Action IslandSlots Output m ()
-    watchFits = when inBrowser $ do
+    startWatch :: H.HalogenM State Action IslandSlots Output m ()
+    startWatch = when inBrowser $ do
       st <- get
       when (isJust st.input.slides && isNothing st.watch) $
         H.getRef st.root
@@ -197,9 +186,8 @@ component =
             ( \element -> do
                 channel <- liftIO HS.create
                 void (H.subscribe channel.emitter)
-                callback <- liftIO (mkSyncCallback (HS.notify channel.listener . Measured . jsValText))
-                i <- liftIO (js_fit_watch element callback)
-                modify (\s -> s {watch = Just (FitWatch i callback)})
+                watch <- watchFits element (HS.notify channel.listener . Measured)
+                modify (\s -> s {watch})
             )
 
     resolvePeople :: H.HalogenM State Action IslandSlots Output m ()

@@ -111,6 +111,7 @@ library
       Wiki.App.Route
       Wiki.App.Security
       Wiki.App.Shell
+      Wiki.App.SlideFit
       Wiki.App.Editor.Browser
       Wiki.App.Editor.Problems
       Wiki.App.Vault

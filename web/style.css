@@ -1420,6 +1420,13 @@ select {
   border: 0;
 }
 
+/* On a slide, the slide's body caps the frame (wiki-app/jsbits/islands.js),
+   not the window: nothing in a slide's layout depends on the window, so
+   that the editor's measure of a slide is the slide as presented. */
+.slide .wiki-html {
+  max-height: none;
+}
+
 /* An interactive SVG (Wiki.Core.Markdown.Frame; Wiki.App.Islands'
    SvgFrame): a frame as wide as the text, at the height its height
    attribute gives, which the reader can drag taller or shorter by its

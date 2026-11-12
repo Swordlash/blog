@@ -21,7 +21,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, startOn, startWith)
-import Test.Browser.Text (editorHost, editorText, inputsSeen, markdown, problemsMarked, selectText, setMarkdown, watchEditor)
+import Test.Browser.Text (editorHost, editorText, inputsSeen, insertText, markdown, problemsMarked, selectText, setMarkdown, watchEditor)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
@@ -44,6 +44,7 @@ $( browserJS
      , ("js_fit_log", "wiki_test_fit_log", Safe, [t|IO JSText|])
      , ("js_slide_cut", "wiki_test_slide_cut", Safe, [t|Int -> IO JSText|])
      , ("js_fit_hold", "wiki_test_fit_hold", Safe, [t|Bool -> IO ()|])
+     , ("js_viewport_rules", "wiki_test_viewport_rules", Safe, [t|IO JSText|])
      ]
  )
 
@@ -249,6 +250,29 @@ spec m = do
     selectText ui (lineStart fitting 5) (lineStart fitting 5)
     editorText ui >>= (`typeText` "Still ")
     eventually $ editorFits `shouldReturn` ["fits", "fits", "overflowing"]
+    -- A change that leaves every card laid out as it was (a blank line in
+    -- a slide, the look's line naming the default theme) is measured
+    -- again too: the marks come back, and the problem with them.
+    -- Each edit moves the long slide down: its problem is marked on its
+    -- new lines once the edit is measured.
+    let longAt text = maybe [] (\n -> [lineStart text n]) (head [n | (n, l) <- zip [1 ..] (T.splitOn "\n" text), l == "## Long"])
+        measuredAgain = do
+          text <- markdown ui
+          eventually $ do
+            marked <- problemsMarked ui
+            [a | (a, _, _) <- marked] `shouldBe` longAt text
+            editorFits `shouldReturn` ["fits", "fits", "overflowing"]
+    before <- markdown ui
+    insertText ui (lineStart before 4) "\n"
+    measuredAgain
+    -- A look, then the theme changed from light to dark: the same layout,
+    -- the cards' classes changed.
+    insertText ui (lineStart before 2) "\n[[!style]]{theme=light}\n"
+    _ <- find ui ".editor-preview .slides-theme-light"
+    measuredAgain
+    markdown ui >>= setMarkdown ui . T.replace "theme=light" "theme=dark"
+    _ <- find ui ".editor-preview .slides-theme-dark"
+    measuredAgain
 
   it "never shows a slide as fitting that the slides view cuts at 1024, 1280 or 1920 pixels wide, a measure taken before a diagram draws followed by the right one" $ runPage $ do
     for_ [("beamer", "16:9"), ("light", "4:3"), ("dark", "16:9"), ("beamer", "4:3"), ("light", "16:9"), ("dark", "4:3")] $ \(theme, aspect) -> do
@@ -258,7 +282,7 @@ spec m = do
       -- Every slide measured, with its diagram drawn.
       fits <- eventually $ do
         found <- editorFits
-        length found `shouldBe` 20
+        length found `shouldBe` 24
         found `shouldSatisfy` notElem "unmeasured"
         length <$> findAll ui ".editor-preview .wiki-mermaid svg" `shouldReturn` 1
         log' <- fitLog
@@ -270,6 +294,13 @@ spec m = do
       log' <- fitLog
       [() | d <- log', d.diagrams > 0, d.drawn == 0] `shouldSatisfy` (not . null)
       lastMay fits `shouldBe` Just "overflowing"
+      -- A title slide whose title runs below the slide, and a slide whose
+      -- heading leaves its body no room, with nothing below the body's
+      -- own room to tell it.
+      (atMay fits 20, atMay fits 22) `shouldBe` (Just "overflowing", Just "overflowing")
+      -- Nothing in a slide's layout depends on the window: no length in
+      -- the viewport's units, no media query on the window's size.
+      unsafeIOToPageM (fromJSText <$> js_viewport_rules) `shouldReturn` "[]"
       unmount ui
       shown <- startOn m wiki (PageSlides (slugs ["blog"]) (slugs ["hello-world"]) 1 1)
       _ <- find shown ".slides-view"
@@ -353,7 +384,10 @@ deck = T.intercalate "\n" ["# Deck", "", "By me.", "", "## One", "", "First.", "
 
 -- | A deck to measure: its look, a title slide, slides of 1, 3, … 29
 -- paragraphs, a slide with an image 600 pixels wide, one with an @html@
--- frame taller than the slide, one with formulas and one with a diagram
+-- frame taller than the slide, one with formulas, one with a block of
+-- each other kind, a title slide whose title runs below the slide, a
+-- heading of one unbroken word, a heading that leaves its body no room,
+-- and one with a diagram
 -- that, under three paragraphs, the slide cannot hold.
 fitDeck :: Text -> Text -> Text
 fitDeck theme aspect =
@@ -363,6 +397,10 @@ fitDeck theme aspect =
       <> ["## Image", "Above it.", "![A picture](attachment:none.png){width=600 height=600}"]
       <> ["## Frame", "```html\n<div style=\"height: 2000px\">Tall</div>\n```"]
       <> ["## Formulas", "$$\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$$", "$$\\int_0^1 x^2 \\, dx = \\frac{1}{3}$$", "$$\\prod_{k=1}^{n} k = n!$$"]
+      <> ["## Kinds", "```haskell\nmain = pure ()\n```", "| a | b |\n|---|---|\n| 1 | 2 |", "> Quoted.", "> [!NOTE]\n> A box.", "- one\n- two", "`code` and **strong**"]
+      <> ["# " <> T.unwords (replicate 60 "Section"), "Under the title."]
+      <> ["## " <> T.replicate 120 "W", "Text."]
+      <> ["## " <> T.unwords (replicate 60 "Heading"), "A paragraph of its own, one line long.", "A paragraph of its own, one line long.", "A paragraph of its own, one line long.", "A paragraph of its own, one line long."]
       <> ["## Diagram", "Above it.", "And more.", "And more still.", "```mermaid\ngraph TD\n" <> T.intercalate "\n" ["  N" <> show i <> " --> N" <> show (i + 1) | i <- [1 .. 12 :: Int]] <> "\n```"]
 
 -- | A deck where a slide uses a macro an earlier one defines, and two
