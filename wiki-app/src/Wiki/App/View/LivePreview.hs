@@ -33,7 +33,7 @@ import Halogen.HTML qualified as HH
 import Halogen.Subscription qualified as HS
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), UrlOwner, WikiError)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), UrlOwner, WikiError, noUrlOwner)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser (LiveFeed, followLine, listenLive, stopLive)
 import Wiki.App.Islands (MonadIslands)
@@ -137,11 +137,10 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           article <- H.newRefLabel "live-preview"
-          urlOwner <- newUrlOwner
-          found <- atOnce (fetchSaved urlOwner input)
+          found <- atOnce (fetchSaved noUrlOwner input)
           pure $ case found of
-            Just (Fetched shown attachments addresses) -> State {input, shown, feed = Nothing, article, attachments, addresses, owners = Body.ownersOf urlOwner, page = 0, refreshes = 0, fetched = True}
-            Nothing -> State {input, shown = Loading, feed = Nothing, article, attachments = [], addresses = Body.noAddresses, owners = Body.ownersOf urlOwner, page = 0, refreshes = 0, fetched = False}
+            Just (Fetched shown attachments addresses) -> State {input, shown, feed = Nothing, article, attachments, addresses, owners = Body.ownersOf noUrlOwner, page = 0, refreshes = 0, fetched = True}
+            Nothing -> State {input, shown = Loading, feed = Nothing, article, attachments = [], addresses = Body.noAddresses, owners = Body.ownersOf noUrlOwner, page = 0, refreshes = 0, fetched = False}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.receive = Just . Receive, H.initialize = Just Initialize, H.finalize = Just Finalize}
       }
@@ -171,6 +170,7 @@ component =
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
       Initialize -> do
+        Body.startOwned (\st -> st.owners) (\owners st -> st {owners})
         -- The channel first, so that an open editor is asked at once, and
         -- what it says is shown whether or not the page has loaded.
         input <- gets (\st -> st.input)
@@ -208,7 +208,8 @@ component =
         -- and its own editor to listen for.
         when (liveKey old.space.id old.path /= liveKey input.space.id input.path) $ do
           stopListening
-          Body.resetOwned (\st -> st.owners) (\owners st -> st {owners})
+          -- 'Initialize', run again for the new page, registers its owner.
+          Body.releaseOwned (\st -> st.owners) (\owners st -> st {owners})
           modify (\st -> st {shown = Loading, attachments = [], addresses = Body.noAddresses, page = st.page + 1, fetched = False})
           handleAction Initialize
       Listened raw -> case eitherDecodeStrict @Heard (encodeUtf8 raw) of

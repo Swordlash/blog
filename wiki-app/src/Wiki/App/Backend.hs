@@ -169,6 +169,7 @@ module Wiki.App.Backend
     MonadWiki (..)
   , WikiError (..)
   , UrlOwner (..)
+  , noUrlOwner
 
     -- * Loading
   , MonadLoad (..)
@@ -368,6 +369,14 @@ maxAttachmentSize = 50 * 1024 * 1024
 -- ('releaseUrls') when what it shows is replaced or it closes.
 newtype UrlOwner = UrlOwner Int
   deriving stock (Eq, Ord, Show)
+
+-- | The owner no backend registers: addresses asked for under it are
+-- those that need no owner (a server's, the demo's), and none of an
+-- encrypted page's. A view asks under it before its life has begun (in
+-- its initial state, which may run for a view that never starts, and so
+-- never ends), and registers an owner of its own when it starts.
+noUrlOwner :: UrlOwner
+noUrlOwner = UrlOwner 0
 
 -- | 'MonadWiki' is the backend interface: every read and write the
 -- application makes on the wiki.

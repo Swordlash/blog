@@ -86,7 +86,7 @@ import Web.UIEvent.KeyboardEvent (KeyboardEvent)
 import Web.UIEvent.KeyboardEvent qualified as KeyboardEvent
 import Web.UIEvent.TouchEvent (TouchEvent (..))
 import Web.UIEvent.TouchEvent qualified as TouchEvent
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), UrlOwner, WikiError)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), UrlOwner, WikiError, noUrlOwner)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
@@ -179,8 +179,7 @@ component =
         -- over a backend that can ('atOnce'); otherwise in 'Initialize'.
         initialState = \input -> do
           view <- H.newRefLabel "slides"
-          firstOwner <- newUrlOwner
-          loaded <- fromMaybe Loading <$> atOnce (fetch firstOwner input)
+          loaded <- fromMaybe Loading <$> atOnce (fetch noUrlOwner input)
           let (current, step) = within loaded (input.slide, input.step)
           pure
             State
@@ -195,7 +194,7 @@ component =
               , asked = []
               , view
               , touch = Nothing
-              , owners = Body.ownersOf firstOwner
+              , owners = Body.ownersOf noUrlOwner
               }
       , render
       , eval =
@@ -337,6 +336,7 @@ component =
       -- page was loaded with the initial state, and the shell is told; or
       -- it is loaded now.
       Initialize -> do
+        Body.startOwned ownersOf' setOwners
         keys <- H.liftEffect slideKeys
         void $ H.subscribe (Key <$> keys)
         gets (\st -> st.loaded) >>= \case

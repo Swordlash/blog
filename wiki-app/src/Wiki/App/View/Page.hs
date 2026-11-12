@@ -145,7 +145,7 @@ import Protolude hiding (State)
 import Web.Event.Event (EventType (..))
 import Wiki.Api.Events (PageEvent (..), Readers (..), applyEvent, noReaders)
 import Wiki.Api.Export (ExportFormat, pageFormats)
-import Wiki.App.Backend (ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (exports, user), UrlOwner, WikiError (..))
+import Wiki.App.Backend (ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (exports, user), UrlOwner, WikiError (..), noUrlOwner)
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (MonadEncryption (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
@@ -348,8 +348,7 @@ component =
         -- render is the page the prerender shows (see "Wiki.App.Shell"),
         -- over a backend that can ('atOnce'); otherwise in 'Initialize'.
         initialState = \input -> do
-          firstOwner <- newUrlOwner
-          loaded <- fromMaybe Loading <$> atOnce (fetch firstOwner input)
+          loaded <- fromMaybe Loading <$> atOnce (fetch noUrlOwner input)
           threads <- case loaded of
             Ready page _ _ _ | commentsHere input -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
             _ -> pure ThreadsLoading
@@ -386,7 +385,7 @@ component =
               , lastBox = Nothing
               , writing = False
               , chainProblem = Nothing
-              , owners = Body.ownersOf firstOwner
+              , owners = Body.ownersOf noUrlOwner
               }
       , render
       , eval =
@@ -790,6 +789,7 @@ component =
       -- or it is loaded now. From now on its comments' events are
       -- received, and the comments are loaded if they were not with it.
       Initialize -> do
+        Body.startOwned ownersOf' setOwners
         subscribeFeed
         gets (\st -> st.loaded) >>= \case
           Loading -> load >> H.liftEffect revealFragment

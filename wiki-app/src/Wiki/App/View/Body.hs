@@ -46,6 +46,7 @@ module Wiki.App.View.Body
   , ownersOf
   , beginOwned
   , settleOwned
+  , startOwned
   , resetOwned
   , releaseOwned
   , People (..)
@@ -193,6 +194,13 @@ settleOwned get' set' o taken = do
     else do
       modify (set' Owners {shown = before.shown, pending = pending'})
       releaseUrls o
+
+-- | The view starts (its @Initialize@): it registers the owner it shows
+-- under from now on. Its initial state asked under 'noUrlOwner', which
+-- no backend registers: an initial state may run for a component that
+-- never starts, and then never ends to let go of what it registered.
+startOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m ()
+startOwned = resetOwned
 
 -- | Let go of every owner the view registered, those of its fetches not
 -- answered included, which then make no address, and register a new owner

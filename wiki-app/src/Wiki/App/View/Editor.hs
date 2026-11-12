@@ -269,7 +269,7 @@ import Wiki.Api.ServerSettings (HomePage (showAnonymous, showRecent, showSpaces)
 import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Assistant.Keys (Keys (..), changeKeys, loadFollowedKeys)
 import Wiki.App.Assistant.Sync (MonadVault)
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), UrlOwner, WikiError (..), maxAttachmentSize)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), UrlOwner, WikiError (..), maxAttachmentSize, noUrlOwner)
 import Wiki.App.Backend.Admin (MonadAdmin (setHomePage))
 import Wiki.App.Backend.Notifications (MonadNotifications (mentionCandidates))
 import Wiki.App.Browser (replacingEntry)
@@ -743,12 +743,11 @@ component =
           -- can ('atOnce'), so that the first render is the editor a
           -- prerendered page shows (see "Wiki.App.Shell"); otherwise
           -- loaded in 'Initialize'.
-          urlOwner <- newUrlOwner
-          Fetched loaded found hasDraft <- fromMaybe (Fetched Loading Nothing False) <$> atOnce (fetchWork urlOwner input)
+          Fetched loaded found hasDraft <- fromMaybe (Fetched Loading Nothing False) <$> atOnce (fetchWork noUrlOwner input)
           pure
             State
               { input
-              , owners = Body.ownersOf urlOwner
+              , owners = Body.ownersOf noUrlOwner
               , loaded
               , pending = Nothing
               , autosave = Nothing
@@ -1571,6 +1570,7 @@ component =
       -- After the first render, so that render is the same whatever the
       -- browser has stored.
       Initialize -> do
+        Body.startOwned (\st -> st.owners) (\owners st -> st {owners})
         remembered <- H.liftEffect (Storage.getItem LocalStorage sideBySideKey)
         when (remembered == Just (Right True)) $
           modify (\st -> st {sideBySide = True, previewMounted = True})

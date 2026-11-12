@@ -448,7 +448,7 @@ spec m = do
     void (ok =<< run env (encryptSpace secret.id))
     made <- ok =<< run env (createPage secret.id Nothing "Deck" "First.")
     void (ok =<< run env (getPage secret.id [made.slug]))
-    void (ok =<< run env (uploadAttachment made.id "a.svg" "image/svg+xml" (svgOf 3 "A")))
+    attached <- ok =<< run env (uploadAttachment made.id "a.svg" "image/svg+xml" (svgOf 3 "A"))
     again <- ok =<< run env (getPage secret.id [made.slug])
     void (ok =<< run env (savePage made.id again.updatedAt "Deck" "![a](attachment:a.svg)"))
     serveDemo
@@ -467,11 +467,27 @@ spec m = do
           , R.LivePreview [secretSlug] [made.slug]
           ]
     before <- held
-    for_ [1 .. 5 :: Int] $ \_ -> for_ routes $ \route -> do
-      ui <- startServerOver m tab route
-      -- The view is open, and holds an owner.
-      eventually (held >>= (`shouldSatisfy` (> before)))
-      unmount ui
+    -- Unmounting runs a view's finalizer on the component tree's loop, after
+    -- the unmount returns: 'settle' lets the loop run what is queued, the
+    -- finalizer among it, before the owners are counted. Each view, closed,
+    -- leaves the count where it was: an owner left behind is found at the
+    -- view that left it.
+    let openAndClose route = do
+          ui <- startServerOver m tab route
+          -- The view is open, and holds an owner.
+          eventually (held >>= (`shouldSatisfy` (> before)))
+          unmount ui
+          settle
+          (route,) <$> held `shouldReturn` (route, before)
+    for_ [1 .. 5 :: Int] $ \_ -> for_ routes openAndClose
+    -- Closed while their fetches are still out: the encrypted page's, and its
+    -- attachment's bytes, held back. What they would have made, they make
+    -- for no owner once they come.
+    holdAt "GET" (endpointUrl (\e -> e.encrypted.pageAt secret.id [made.slug]))
+    holdAt "GET" ("api/v1/attachments/" <> attached.id.text <> "/" <> attached.id.text)
+    for_ (drop 4 routes) openAndClose
+    release
+    settle
     held `shouldReturn` before
 
   -- The live channel says only that a page's threads changed: the page
