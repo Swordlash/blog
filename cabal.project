@@ -48,14 +48,16 @@ package wiki-server
 
 -- haskell-halogen comes from one pinned commit: only haskell-halogen-core is on
 -- Hackage, and the application needs the router, the hooks and the th quoters
--- as well. Every package it is used from is listed, jsbits included (the WASM
+-- as well, and the smoke tests haskell-halogen-playwright (native only: no
+-- package of the wasm build depends on it, so that build never plans it).
+-- Every package it is used from is listed, jsbits included (the WASM
 -- FFI embeds its JavaScript at compile time), so all of them are at the same
 -- commit. Bump the tag deliberately, in its own commit, together with the
 -- toolchain pins in toolchain/bootstrap.sh and cabal-wasm.project.
 source-repository-package
   type: git
   location: https://github.com/Swordlash/haskell-halogen
-  tag: 3459805e6476781961e2d754fe3574af0345ef09
+  tag: ed831311662b440ee723f44bb54551c747bfbf76
   subdir:
     core
     jsbits
@@ -65,6 +67,7 @@ source-repository-package
     th
     th-plugin
     hspec-halogen
+    playwright
 
 -- opaque-hs, OPAQUE (RFC 9807: password sign-in), comes from one pinned
 -- commit of its own repository, which runs the package's tests (the RFCs'
