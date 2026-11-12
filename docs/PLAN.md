@@ -1535,6 +1535,43 @@ confirms it against reality and the plan is amended if it does not hold.
     into each protected place through the browser against a real server
     and looks for it in every file of the data directory, a dump of
     PostgreSQL, and every request, answer and WebSocket frame.
+77. **A page has a kind: a document or a presentation (WP5.97, #191,
+    #253; the owner's answers of 2026-11-11, the rest decided while he
+    slept).** The kind is a column of the page (step 19, no `CHECK`:
+    plugins will bring kinds; one this program does not know is kept and
+    shown as a document), not part of a version: changing it is not a
+    save. In an encrypted space it is in the clear. Wherever two pages
+    are compared (an import, the guide's update), the kind is part of the
+    page. "New page" asks the kind first, then what to start from; a
+    space's home page is always a document. **Syntax.** The parser does
+    not know the kind; the kind decides how a page is shown. In a
+    presentation every top-level heading of level 1 or 2 opens a slide
+    (`#` a title slide), `---` is a rule on its slide, the look is one
+    line `[[!style]]{theme=… aspect=…}`, `[[!pause]]` is read on a line
+    of its own (in a quotation too) and among a paragraph's words, where
+    Beamer's `\pause` works (not in a table cell, a heading, emphasis or
+    a link: the wiki's rule), and `{.incremental}` on the line before a
+    list steps through it. A marker a page's kind does not read is a
+    warning in the editor. What "top level" is for slides is defined
+    once, and the cutting, the warnings and the editor's slides read it.
+    **The editor** has two modes over the same Markdown for a
+    presentation: raw, and slide by slide (every slide folded but the
+    open ones, by the folding of WP5.96; a button and a handle a slide;
+    a move is one edit; slides are named by their first line in the
+    current text). The preview renders the whole deck as one document
+    and shows the card asked for. **Overflow.** Every slide is laid out
+    1024 px wide and measured against its own box, heading included,
+    with nothing that depends on the window taking part: fits, yellow
+    (less than half a line to spare up to one line cut) or red, grey
+    while not measured; the promise is for a projector at least that
+    wide. **Embedding.** `![Caption](page){.presentation}` is the link
+    until it comes near the window in a browser, then a viewer of the
+    slides, drawn in the page; the server's render and adoption ask for
+    nothing. What a viewer shows belongs to one reader at one revision
+    and is dropped when either changes; its ids and fragment links live
+    under a prefix of its own. A presentation's page shows its viewer
+    above the page as a document. A document's address of slides shows a
+    note with a link.
 
 ## Repository layout
 
@@ -1641,7 +1678,7 @@ decision 58); #188 (emojis: the
 done and closed: WP5.86, #236; the owner, 2026-11-11: Slack's names that
 GitHub's list does not have are not needed); #189 (backlinks, done: decision 71, #239); #196 (done: decision 72, #238); #200 (done: decision 73, #249: an interactive SVG in a frame
 that runs scripts and shares no origin, the frame the plugins will run
-in); #204's TODO lists (done: decision 74, #243; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3), started 2026-11-11 at night, with the editor's folding (WP5.96) and #191 (WP5.97) beside it by the owner's word, ahead of #187. WP5.96 is done (#252); #213's first part is done (#251, decision 76), its second part and #253 are open. Then the three large ones, in the owner's order of
+in); #204's TODO lists (done: decision 74, #243; its day's page and calendar, WP5.92 and WP5.93, wait for the plugins' interface and are built as a plugin); #213 (WP5.74b3), started 2026-11-11 at night, with the editor's folding (WP5.96) and #191 (WP5.97) beside it by the owner's word, ahead of #187. WP5.96 is done (#252); #213's first part is done (#251, decision 76) and its second part is open; #191 is done (#253, decision 77). Then the three large ones, in the owner's order of
 2026-11-11: #187 (autocompletion); #191 (presentations, which bring the
 notion of a kind of page); and last #186 (plugins: decision 69, WP5.84
 first), with #190 (table views) and #204's calendar after it as plugins.
@@ -1673,27 +1710,8 @@ which the wiki pins since #227.
   the user's keys from the device. Decrypted titles under the bell, with
   stars and search through one request for headings. Hiding the
   controls the server still refuses, from one predicate the server's
-  checks share. Schema steps from 20 (the presentations' is 19). The
+  checks share. Schema steps from 20 (the presentations' is 19, decision 77). The
   canary of decision 76 gains a place for each.
-- **WP5.97 Presentations as a kind of page (#191; the owner's answers of
-  2026-11-11; one pull request, #253, on WP5.96's folding, which is merged: #252).** A page has a kind, stored:
-  a document or a presentation. "New page" offers the two kinds, and a
-  document's templates come after choosing "Document" (the owner: the
-  other templates leave the menu's first level). The presentation's
-  syntax: each `##` opens a slide, `---` is no longer needed; `:::` gives
-  way to `[[style]]` (theme, aspect), `[[pause]]`, `[[notes]]`;
-  `[[incremental]]` or `{.incremental}` before a list as today. A
-  section's spoiler does nothing in the presentation, where a section is
-  a slide; in the editor it folds (WP5.96). The editor has two modes over
-  the same Markdown: raw, and an editor mode that lists the slides folded
-  under their titles, opens one at a time (more with Ctrl or Cmd),
-  reorders them by a handle and adds one below. The preview shows the
-  current slide as a card in editor mode, and either one slide or the
-  whole document in raw mode. The editor warns when a slide overflows,
-  yellow for a little and red for a lot. A presentation embedded in
-  another page is a viewer of its slides with first, previous, next and
-  last, drawn in the page, not a frame. Pages written in the old syntax
-  get no migration (the owner: nobody has presentations).
 - **WP5.98 The smoke tests wait on the program, and run slowed down
   (the owner, 2026-11-12: "mamy bardzo dużo timing issues w testach
   dymnych"; after #251 and #253).** Two days of red runs fell into two
@@ -2706,6 +2724,27 @@ needs. Each was true when its package merged; check before relying on one.
   database. One failure in 38 runs is not explained: sessions on the
   killed run's databases thirty seconds after the kill; the message now
   prints them.
+- **Presentations (WP5.97, decision 77, #253).** Left out: the detached
+  preview window shows a presentation as a document; no theme from the
+  space's settings and no look per slide; on a slide, and in the editor's
+  document preview, an embed with the class is a link; an embed by an old
+  version's address is a link; a presentation as a blog post is listed as
+  a document; history does not record a change of kind; `[[!slides]]` is
+  no longer read and old decks got no migration. Not pinned by a test:
+  the viewer of a deck in an encrypted space; an answer read before a
+  sign-out arriving after it (the viewer's generation check covers it in
+  code). A viewer's id prefix is written at the two producers the
+  renderer does not prefix itself (raw HTML, the generated contents),
+  not in one pass over the rendered deck: the one pass broke navigation
+  in the built program for a reason not found. The drag spec timed out
+  once on CI waiting for the handle to be "visible and stable" and not
+  again; no loop of measures was found (WP5.98's throttled run). A
+  screen narrower than 1024 px can cut more than a slide's mark says. A
+  Mermaid diagram not drawn yet is measured as it stands and again when
+  drawn, so a mark can be green for a moment. The slides' drag is
+  written by hand over HTML5 drag and drop: the nodes are CodeMirror's
+  and Halogen's, and what moves is a range of text only the component
+  can compute. A text with `\r` has no slides in the editor.
 
 ## Assumptions
 
