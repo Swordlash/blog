@@ -166,6 +166,7 @@ component =
           body = "slide-row-body-" <> show k
           number = maybe "" (\n -> " " <> show n) h.number
           ready = isJust st.input.master
+          movable = st.input.movable && ready
        in HH.div
             ( [ HP.class_ (HH.ClassName ("slide-row" <> (if st.input.open then " open" else "") <> dropClass st.input.dropMark))
               , HP.attr (HH.AttrName "data-fit") (fitName h.fit)
@@ -178,60 +179,77 @@ component =
                     ]
                   else []
             )
-            ( [ HH.span
-                  [ HP.class_ (HH.ClassName "slide-row-handle")
-                  , HP.attr (HH.AttrName "draggable") "true"
-                  , HP.attr (HH.AttrName "role") "button"
-                  , HP.attr (HH.AttrName "tabindex") "0"
-                  , HP.attr (HH.AttrName "aria-label") ("Move slide" <> number <> " (Alt+Up, Alt+Down)")
-                  , HP.attr (HH.AttrName "title") "Drag to move, or Alt+Up and Alt+Down"
-                  , HE.handler' (EventType "dragstart") (\ev -> if markDragged ev h.key then Just DragStart else Just DragStart)
-                  , HE.handler' (EventType "dragend") (const (Just DragEnd))
-                  , HE.preventingDefault (HE.handler' (EventType "keydown") (\ev -> (Pressed <$> historyKey ev) <|> (MoveBy <$> moveKey ev)))
+            -- One card: its header, the first line, holds the handle (or a
+            -- blank of its width in a row that does not move), the button
+            -- that opens the row (the chevron, the number, the title, and at
+            -- the right what is said of the slide and its fit), and the
+            -- delete button (or a blank of its width), so that the rows'
+            -- numbers, titles and fit dots stand in columns. The body is
+            -- the rest of the card. The "+" hangs in the gap below it.
+            [ HH.div
+                [HP.class_ (HH.ClassName "slide-row-head")]
+                ( [ if movable
+                      then
+                        HH.span
+                          [ HP.class_ (HH.ClassName "slide-row-handle")
+                          , HP.attr (HH.AttrName "draggable") "true"
+                          , HP.attr (HH.AttrName "role") "button"
+                          , HP.attr (HH.AttrName "tabindex") "0"
+                          , HP.attr (HH.AttrName "aria-label") ("Move slide" <> number <> " (Alt+Up, Alt+Down)")
+                          , HP.attr (HH.AttrName "title") "Drag to move, or Alt+Up and Alt+Down"
+                          , HE.handler' (EventType "dragstart") (\ev -> if markDragged ev h.key then Just DragStart else Just DragStart)
+                          , HE.handler' (EventType "dragend") (const (Just DragEnd))
+                          , HE.preventingDefault (HE.handler' (EventType "keydown") (\ev -> (Pressed <$> historyKey ev) <|> (MoveBy <$> moveKey ev)))
+                          ]
+                          [HH.text "\x2807"]
+                      else blank "slide-row-handle-space"
+                  , HH.button
+                      [ HP.attr (HH.AttrName "type") "button"
+                      , HP.class_ (HH.ClassName "slide-row-toggle")
+                      , HP.attr (HH.AttrName "aria-expanded") (if st.input.open then "true" else "false")
+                      , HP.attr (HH.AttrName "aria-controls") body
+                      , HP.disabled (not ready)
+                      , HE.onClick (const Clicked)
+                      , HE.preventingDefault (HE.handler' (EventType "keydown") (\ev -> (Pressed <$> historyKey ev) <|> (if st.input.movable then MoveBy <$> moveKey ev else Nothing)))
+                      ]
+                      ( [ HH.span [HP.class_ (HH.ClassName "slide-row-number")] [HH.text (maybe "" (\n -> show n <> ".") h.number)]
+                        , HH.span [HP.class_ (HH.ClassName "slide-row-title")] [HH.text (titleOf h)]
+                        ]
+                          <> [HH.span [HP.class_ (HH.ClassName "slide-row-part")] [HH.text ("part of slide " <> show n)] | Just n <- [h.partOf]]
+                          <> [HH.span [HP.class_ (HH.ClassName "slide-row-problems")] [HH.text (problemsPhrase h.problems)] | h.problems > 0]
+                          <> [ -- Where a search's matches in the slide will be told.
+                               HH.span [HP.class_ (HH.ClassName "slide-row-matches")] []
+                             , HH.span [HP.class_ (HH.ClassName ("slide-row-fit slide-fit-" <> fitName h.fit)), HP.attr (HH.AttrName "aria-hidden") "true"] []
+                             , HH.span [HP.class_ (HH.ClassName "visually-hidden")] [HH.text (", " <> fitPhrase h)]
+                             ]
+                      )
+                  , if movable
+                      then
+                        HH.button
+                          [ HP.attr (HH.AttrName "type") "button"
+                          , HP.class_ (HH.ClassName "slide-row-delete")
+                          , HP.attr (HH.AttrName "aria-label") ("Delete slide" <> number)
+                          , HP.attr (HH.AttrName "title") "Delete this slide (Ctrl+Z brings it back)"
+                          , HE.onClick (const Delete)
+                          ]
+                          [HH.text "\x00d7"]
+                      else blank "slide-row-delete-space"
                   ]
-                  [HH.text "\x2807"]
-              | st.input.movable && ready
-              ]
-                <> [ HH.button
-                       [ HP.attr (HH.AttrName "type") "button"
-                       , HP.class_ (HH.ClassName "slide-row-toggle")
-                       , HP.attr (HH.AttrName "aria-expanded") (if st.input.open then "true" else "false")
-                       , HP.attr (HH.AttrName "aria-controls") body
-                       , HP.disabled (not ready)
-                       , HE.onClick (const Clicked)
-                       , HE.preventingDefault (HE.handler' (EventType "keydown") (\ev -> (Pressed <$> historyKey ev) <|> (if st.input.movable then MoveBy <$> moveKey ev else Nothing)))
-                       ]
-                       ( [ HH.span [HP.class_ (HH.ClassName "slide-row-number")] [HH.text (maybe "" (\n -> show n <> ".") h.number)]
-                         , HH.span [HP.class_ (HH.ClassName "slide-row-title")] [HH.text (titleOf h)]
-                         , HH.span [HP.class_ (HH.ClassName ("slide-row-fit slide-fit-" <> fitName h.fit)), HP.attr (HH.AttrName "aria-hidden") "true"] []
-                         , HH.span [HP.class_ (HH.ClassName "visually-hidden")] [HH.text (", " <> fitPhrase h)]
-                         ]
-                           <> [HH.span [HP.class_ (HH.ClassName "slide-row-part")] [HH.text ("part of slide " <> show n)] | Just n <- [h.partOf]]
-                           <> [HH.span [HP.class_ (HH.ClassName "slide-row-problems")] [HH.text (problemsPhrase h.problems)] | h.problems > 0]
-                       )
-                   ]
-                <> [ HH.button
-                       [ HP.attr (HH.AttrName "type") "button"
-                       , HP.class_ (HH.ClassName "slide-row-delete")
-                       , HP.attr (HH.AttrName "aria-label") ("Delete slide" <> number)
-                       , HP.attr (HH.AttrName "title") "Delete this slide (Ctrl+Z brings it back)"
-                       , HE.onClick (const Delete)
-                       ]
-                       [HH.text "\x00d7"]
-                   | st.input.movable && ready
-                   ]
-                <> [ HH.div [HP.class_ (HH.ClassName "slide-row-body editor-cm"), HP.id body, HP.ref st.host, HP.hidden (not st.input.open)] []
-                   , HH.button
-                       [ HP.attr (HH.AttrName "type") "button"
-                       , HP.class_ (HH.ClassName "slide-row-add")
-                       , HP.attr (HH.AttrName "aria-label") ("New slide after slide" <> number)
-                       , HP.attr (HH.AttrName "title") "A new slide after this one"
-                       , HP.disabled (not ready)
-                       , HE.onClick (const AddAfter)
-                       ]
-                       [HH.text "+"]
-                   ]
-            )
+                )
+            , HH.div [HP.class_ (HH.ClassName "slide-row-body editor-cm"), HP.id body, HP.ref st.host, HP.hidden (not st.input.open)] []
+            , HH.button
+                [ HP.attr (HH.AttrName "type") "button"
+                , HP.class_ (HH.ClassName "slide-row-add")
+                , HP.attr (HH.AttrName "aria-label") ("New slide after slide" <> number)
+                , HP.attr (HH.AttrName "title") "A new slide after this one"
+                , HP.disabled (not ready)
+                , HE.onClick (const AddAfter)
+                ]
+                [HH.text "+"]
+            ]
+      where
+        -- The room of a control a row does not have.
+        blank name = HH.span [HP.class_ (HH.ClassName name), HP.attr (HH.AttrName "aria-hidden") "true"] []
 
     handleAction :: Action -> H.HalogenM State Action Empty Output m ()
     handleAction = \case
