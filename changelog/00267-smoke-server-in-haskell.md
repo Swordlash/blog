@@ -1,5 +1,5 @@
 ---
-pr: 0
+pr: 267
 title: The server's smoke test is written in Haskell and waits on the page
 technical: true
 ---
