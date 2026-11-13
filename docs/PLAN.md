@@ -1844,13 +1844,6 @@ which the wiki pins since #227.
   Shell, Tasks, Spaces, Slides, Search and Notifications move (about
   70 examples), and AGENTS.md's gate names the native suite. Until
   then nothing moves.
-- **WP5.107 The browser tests' bundle is built once, not at every run
-  (found by WP5.106's measures).** `wiki-app/test/web/bundle.sh`
-  (esbuild of every island, the TikZ patch, the licences) runs at
-  every wasm test run and took 10.2 s alone: two thirds of the gap
-  between a wasm run and a native one with nothing rebuilt. Keep its
-  output and rebuild only when what it reads has changed (the web
-  sources, the lockfile, the script itself).
 - **WP5.105 A jump to a far slide holds the page for seconds (found
   by #263's measures, from #259; the owner, 2026-11-13: after WP5.98's
   (c), one after the other).** On a deck of 60 slides of 100
@@ -2944,6 +2937,22 @@ needs. Each was true when its package merged; check before relying on one.
   base. And while `main` does not build, the `native (sqlite)` job of
   every pull request fails, the fix's own included: it builds the base
   branch's `wiki-server` first, for the upgrade's rehearsal.
+- **The browser tests' bundle after #266 (WP5.107).**
+  `wiki-app/test/web/bundle.sh` keeps a finished bundle under
+  `dist-newstyle/wasm/test-bundle/<digest>/` and copies it while the
+  contents of what it reads are unchanged (everything under `web/` and
+  `wiki-app/test/web/`, both lockfiles, npm's record of what is
+  installed, Node's version, `HALOGEN_BASE_PATH`); a small run went
+  from about 20 s to 11 s. A directory under a digest's name is whole
+  or absent: it gets the name by one rename and loses it by one rename
+  before anything in it is deleted, and a copy is compared with the
+  bundle's list of files before it is used. Not seen by the digest: a
+  file changed by hand inside `node_modules`
+  (`WIKI_TEST_BUNDLE_REBUILD=1` builds whatever the digest says).
+  GitHub's runners restore nothing of that directory, so CI gains
+  nothing and builds the bundle once per job as before. `mv -T` and
+  `xargs -r` are GNU's: on another system the script would build every
+  time rather than keep.
 - **The editor's search after #263.** Codex ran eight rounds (3, 2, 2,
   2, 3, 2, 1, 0); most findings came from leaning on
   `@codemirror/search` for more than its cursors (its `test` and
