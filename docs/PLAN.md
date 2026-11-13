@@ -1620,6 +1620,60 @@ confirms it against reality and the plan is amended if it does not hold.
     smtp-mail 0.5.0.2 or later: an HTTP/1.1 request without a `Host`
     header, or any with two, is answered 400.
 
+80. **Encrypted spaces, the second part (#255, issue #213 closed).**
+    On decision 76. **Export.** "Export, decrypted here" is made in the
+    browser of any reader who holds the key: a space-only archive in
+    the wiki's own format (latest titles and texts, attachments,
+    comments with their authors' names; no versions, users or grants),
+    zipped, read back and compared before the file is handed over; not
+    offered during a conversion. **Conversion.** A space with pages is
+    encrypted, and encryption turned off, page by page by the browser
+    of an administrator who holds the key: it stages a page's
+    ciphertext (every version as a chain, comments, attachments), reads
+    the staging back and opens it, and commits with the server's digest
+    of what is staged, which names each blob's hash and size. One
+    browser converts at a time: the server holds a lease (holder, token,
+    expiry; step 23) required on every stage, upload, read-back and
+    commit; "Take over here" is the same user's way to take it. A
+    conversion can be stopped and turned back. It is finished only once
+    SQLite's truncating checkpoint has run after its last commit, tried
+    without waiting and owed after every write and at start when a
+    reader holds it back (`clearing`); on PostgreSQL the plain text is
+    gone only once the database is vacuumed, which the dialog and the
+    README say. A conversion that ends as plain writes every page's
+    links again. **Chains.** A chain of versions carries an origin, a
+    random id bound in every version's encryption (`wiki-page/3`, step
+    22): a page encrypted again starts a new chain, which a browser
+    accepts; an earlier chain shown again is `Superseded`, a history
+    whose oldest version is not a chain's first is `Truncated`; export
+    and decryption check head, links and start through one function
+    (`pageTrusted`) before anything is written. **The gate.** A space's
+    administrators may have it ask for a passkey or the password each
+    time it is opened (step 21; every way the vault unlocks is
+    offered). The gate is the interface's, not the encryption's: behind
+    a gate not confirmed in this tab nothing of the space is decrypted,
+    read by a plain route or shown, a decryption's result is given back
+    only if the reader and the gate are as they were when it started,
+    and on leaving, at a sign-out here or in another tab and at the
+    session's end what is shown of an encrypted space, the tab's title
+    included, is taken off the screen before any request is made
+    (`sealScreen`); unsaved changes to an encrypted page are dropped
+    then and said so. Signing out removes the user's vault key and
+    private key from the device and the other tabs; a page that starts
+    with nobody signed in drops every user's. **Titles.** The bell and
+    the stars show a decrypted title only through the gate, from one
+    request for headings by ids (`POST encrypted/headings`); mentions
+    in an encrypted space are named from the space's readers, asked for
+    by the space's id. **What is offered.** One rule, `Wiki.Core.Offered`,
+    for the server's refusals and the interface's controls. **A tab
+    left behind.** The server's refusals that mean "the space is not in
+    the state you believe" carry a code (409 `Stale`); a tab that gets
+    one reads the spaces again and sends a read once more by the right
+    route, learning a page encrypted since first; a write is never sent
+    again. Steps 20 to 23. Ten Codex rounds were started and nine
+    finished (5, 3, 4, 3, 3, 1, 1, 2, 1 findings, all fixed); the owner
+    merged before the tenth.
+
 ## Repository layout
 
 ```
@@ -1737,28 +1791,6 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
-- **WP5.74b3, second part: the rest of #213 (the owner, 2026-11-12:
-  #213 merges in parts; the first part is #251, decision 76).** An export
-  decrypted in the browser, with a round trip through an import
-  (the archive carries no versions, users or grants; any reader holding
-  the key may export). Encrypting a space that has pages, and turning
-  encryption off: the browser of an administrator who holds the key
-  stages each page's ciphertext (every version, comments, attachments)
-  and commits page by page; the space is read-only meanwhile, the
-  conversion resumes after an interruption, converted pages get new
-  random slugs, and what was plain is gone from the database
-  afterwards (backups from before keep it until they are pruned, and
-  the dialog says so); the browser opens again what it staged before it
-  commits. The option of an encrypted space to ask for the passkey or
-  the password before each opening (the owner's word of 2026-11-11, the
-  small form: a gate in the interface, the space's key dropped when the
-  reader leaves, the option's text saying it does not stop someone with
-  the developer tools on an unlocked device), with signing out removing
-  the user's keys from the device. Decrypted titles under the bell, with
-  stars and search through one request for headings. Hiding the
-  controls the server still refuses, from one predicate the server's
-  checks share. Schema steps from 20 (the presentations' is 19, decision 77). The
-  canary of decision 76 gains a place for each.
 - **WP5.103 A presentation's slides are rows, each with an editor of its
   own (the owner, 2026-11-12, after using #253's slide-by-slide mode:
   "raczej jako listę rozwijalnych wierszy z których każda ma osobny
@@ -2816,6 +2848,32 @@ needs. Each was true when its package merged; check before relying on one.
   editor's other specs and passes alone, on `main` as on every branch
   (Enter in the empty emoji search is expected to be prevented and is
   not); CI's sharding happens to pass it. Nobody has looked for the cause.
+- **Encrypted spaces after #255 (decision 80).** Left on purpose or
+  not possible: a reader who never read a page under its new
+  encryption can be shown its old chain; grants of a space's key are
+  sealed and not signed, so the server could seal a key of its own
+  making to a reader (part 1's trust model); versions from before
+  versions were numbered cannot be checked, comments are not chained,
+  and the browser cannot tell a page the server leaves out of a
+  conversion's or an export's list. On PostgreSQL the plain text of a
+  converted space stays in the database's files until a vacuum. The
+  search finds nothing of a space behind a gate not confirmed, and the
+  server's search finds none of a space's plain pages until its
+  conversion ends. A tab that believes a space plain lists only plain
+  pages after a conversion started elsewhere, until a request is
+  refused. Versions and threads a tab read plain stay cached there
+  after the page was encrypted elsewhere. A history entry or tab title
+  made before #255 can hold a decrypted title. A reader granted after
+  the readers' list was fetched shows as a bare login until the key is
+  opened again. The whole-wiki export names the encrypted spaces it
+  leaves out; its note and the assistant's line ("what you ask about
+  leaves this browser decrypted") have no browser spec. Not covered by
+  tests: the lease's expiry by time, the "Take over here" button
+  itself, attachments of encrypted pages fetched with `no-cache`.
+  Moving a space to a destination the encryption rule refuses, and
+  turning "private from parent" off under a plain parent, are offered
+  and then refused. Codex's tenth round on the merged head is owed and
+  its findings, if any, are a follow-up.
 - **Encrypted spaces after #251 (decision 76).** The server still sees:
   the words a reader searches for (the search page's address carries
   them, and the server searches the plain spaces with them), sizes of
