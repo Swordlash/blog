@@ -1598,7 +1598,20 @@ confirms it against reality and the plan is amended if it does not hold.
     a library older than 3.32.0 (upsert, `VACUUM INTO`, more than 999
     parameters in a statement) or built without threads, the write-ahead
     log or foreign keys (`Wiki.Server.Storage.SqliteLibrary`); it says
-    which SQLite it runs on at start and in `wiki-server check`. SHA-256
+    which SQLite it runs on at start and in `wiki-server check`. The
+    library is judged twice before a deploy changes anything (#257):
+    `toolchain/check-native.sh` and the maker's `check native` build and
+    run a probe and judge the library it loads by the server's own
+    rules, naming its file and the header's version when the two
+    differ (the floors are in `toolchain/pins.env` and in
+    `SqliteLibrary.hs`, and the maker's tests hold them equal); and the
+    deploy runs the new server's `wiki-server sqlite` in the service's
+    environment (the systemd user manager's, read back through
+    systemd's own quoting, with the unit's `Environment=` lines over
+    it, the copied `LD_LIBRARY_PATH` among them) before the rehearsal,
+    so with `--no-rehearsal` too: a server that does not start there
+    stops the deploy, and so does a refused library for a wiki in
+    SQLite; for one in PostgreSQL a refusal is a warning. SHA-256
     goes through one module, `Wiki.Server.Sha256`, over crypton; the
     stored digests (a blob's id, a session id's hash, a vault key's id,
     the guide's record) are pinned by constants the earlier library
