@@ -3455,6 +3455,21 @@ skipped. `npm run dev-test` runs it in browser GHCi under ghciwatch;
 `sh toolchain/dev-test.sh --repl` and `--open-browser` (from another terminal)
 do the same by hand, with `:main` typed into GHCi.
 
+The runner runs `wiki-app/test/web/bundle.sh` before every run of the suite,
+and building the bundle takes about ten seconds. The script keeps the bundle it
+built in `dist-newstyle/wasm/test-bundle/`, under a digest of the contents of
+everything it is built from (every file under `web/` and
+`wiki-app/test/web/`, `package.json`, `package-lock.json`,
+`node_modules/.package-lock.json`, Node's version and `HALOGEN_BASE_PATH`),
+and copies the kept bundle while that digest is unchanged. A line on standard
+error says which, and why it built: `test bundle: reused 882d95e48c63 (the
+inputs are unchanged)`, or `test bundle: building … (changed since the bundle
+used last: web/src/islands.js)`. `WIKI_TEST_BUNDLE_REBUILD=1` builds it again
+whatever the digest says, after a file under `node_modules` was changed by
+hand. `sh toolchain/test-test-bundle.sh` tests the script against a fake
+islands bundle, in a few seconds; CI runs it in the `native` job's `deploy`
+group.
+
 The application routes by path (`/s/<space path>/p/<page path>/`, see
 `Wiki.App.Route`) under the page's `<base href>`, which `wiki-app-prerender` writes
 from `HALOGEN_BASE_PATH` (default `/`), so the built directory can be served from a
