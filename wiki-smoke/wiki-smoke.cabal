@@ -9,8 +9,10 @@ description:
   suites wait on the program rather than on the clock (docs/PLAN.md,
   WP5.98). They depend on neither the application's nor the server's
   library, only on what their builds wrote: npm run build-wasm's demo in
-  dist-newstyle/wasm/public/app. Each suite is pending without that build,
-  unless WIKI_SMOKE_REQUIRED=1, which toolchain/smoke-suite.sh sets.
+  dist-newstyle/wasm/public/app, and for the passkeys' and the server's
+  suites the native wiki-server and wiki-app-prerender (WIKI_SERVER and
+  WIKI_PRERENDER). Each suite is pending without what it needs, unless
+  WIKI_SMOKE_REQUIRED=1, which toolchain/smoke-suite.sh sets.
 license:            MIT
 license-file:       LICENSE
 author:             Mateusz Goślinowski

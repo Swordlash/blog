@@ -83,7 +83,7 @@ main = withServerSuite "the server's build, served by a real wiki-server" $ \bui
         withServer build (serverOptions dataDir database) {guide = False} $ \server -> do
           wiki <- newWiki server.origin
           admin <- newIORef Nothing
-          canary <- newCanary
+          canary <- newCanary wiki
           chain <- newChain
           let smoke = Smoke {build, server, wiki, origin = server.origin, dataDir, database, restoreDatabase, provider, admin, canary, chain}
           run . playwright $ do

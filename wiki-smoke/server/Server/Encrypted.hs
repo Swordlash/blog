@@ -849,7 +849,9 @@ conversions w step' = do
     readerReads w "under the first encryption"
     let backups = smoke.dataDir </> "backups"
         leftOut f = (backups <> "/") `isPrefixOf` f || plainBlob `isSuffixOf` f
-    places' <- assertGone smoke.canary smoke.dataDir smoke.database [pm p | p <- ["title", "older", "text", "quote", "comment", "name", "bytes"]] from leftOut
+    -- The browsers' requests since, asked again as the administrator, the
+    -- reader of the space and nobody.
+    gone <- assertGone smoke.canary smoke.dataDir smoke.database [pm p | p <- ["title", "older", "text", "quote", "comment", "name", "bytes"]] from leftOut [Just ada2.session, Just bea.session, Nothing]
     -- The check looks where the text was: the attachment's plain file is
     -- there, left out as the backup names it, and so, on SQLite, is the
     -- text in the backup itself.
@@ -860,7 +862,8 @@ conversions w step' = do
         kept <- ByteString.readFile (backups </> Text.unpack backupFile)
         expect (Text.encodeUtf8 (pm "text") `ByteString.isInfixOf` kept) "the backup made before the conversion does not keep the plain text"
       PostgreSQL {} -> pure ()
-    report ("none of 7 markers written plain before the conversion is in any of " <> tshow places' <> " files, requests and answers since, but for the backup made before it")
+    report ("none of 7 markers written plain before the conversion is in any of " <> tshow gone.places <> " files, requests and answers since, but for the backup made before it")
+    report ("the places: " <> Text.intercalate ", " [tshow n <> " " <> k | (k, n) <- gone.kinds])
 
   step' "turns the space's encryption off page by page, every page plain again with its versions, comment and attachment" $ \_ -> do
     ada2 <- need w.ada2 "the converting browser"
