@@ -77,7 +77,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Protolude
 import Wiki.Core.Markdown.Ast (Block (..), Inline, parseDeckSpans, plainText)
-import Wiki.Core.Slides (deckLevel)
+import Wiki.Core.Slides (deckLevel, parserLineStarts)
 
 -- | 'RowKey' names a row while its text changes. The editor keeps a
 -- counter of keys and never gives a key twice, so that a new row never
@@ -519,23 +519,6 @@ openers source = case parseDeckSpans source of
       (l, level, xs) : rest -> case drop (l - n) starts of
         s : starts' -> (s, level, xs) : atLines (s : starts') l rest
         [] -> []
-
--- | The character each line of a text starts at, as the Markdown parser
--- counts lines: commonmark 0.3.1's tokenizer ends a line at a line feed,
--- and at a carriage return together with every line feed right after it
--- (it groups characters with @Data.Text.groupBy@, which compares each
--- character with the first of the group).
-parserLineStarts :: Text -> [Int]
-parserLineStarts = (0 :) . go 0 . T.unpack
-  where
-    go i = \case
-      '\n' : rest -> (i + 1) : go (i + 1) rest
-      '\r' : rest ->
-        let feeds = length (takeWhile (== '\n') rest)
-            next = i + 1 + feeds
-         in next : go next (drop feeds rest)
-      _ : rest -> go (i + 1) rest
-      [] -> []
 
 ----------------------------------------------------------------------
 -- Text
