@@ -1578,7 +1578,17 @@ confirms it against reality and the plan is amended if it does not hold.
     block left open in one row does not take the rows below (they are
     marked "part of slide N", and the slide that swallows them gets a
     problem). Whatever a row decides from text (may a completion open
-    here) it asks of the whole document. The preview renders the whole
+    here) it asks of the whole document. **The search** (#263) is the
+    wiki's own, over the whole text, in Raw, in a document and slide by
+    slide: a panel above the text (query, case, regular expression,
+    whole word, a count, steps, Replace and Replace all), opened by
+    Ctrl+F from anywhere in the editor; the browser's find stays in the
+    browser's menu. One sequence of matches (`eachMatch`) serves the
+    count, the marks, the steps and both replacements; a match that
+    starts in a titled page's guarded `# ` is not one; a step opens the
+    row a match starts in and closes none; Replace all is one step of
+    the history. Its state lives in the editor component, so a reload
+    keeps it. The preview renders the whole
     deck as one document and shows the card asked for. **Overflow.** Every slide is laid out
     1024 px wide and measured against its own box, heading included,
     with nothing that depends on the window taking part: fits, yellow
@@ -1811,21 +1821,17 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
-- **WP5.103b Search over the whole presentation (what is left of
-  WP5.103 after #259; the owner, 2026-11-12: Ctrl-F per slide "trochę
-  słabe").** Ctrl+F in a row opens one search over the whole text, on
-  the master; next and previous walk the matches across slides,
-  opening the row that holds the match and selecting it; replace and
-  replace all are entries of the one history. The design (kept with
-  #259's builder's notes): `@codemirror/search` for the matching only
-  (`SearchQuery`, a cursor over a text without a view; verify on the
-  version the lockfile pins), a panel of the wiki's own above the
-  list, matches marked in the open rows and counted on a closed row's
-  header (the slot `.slide-row-matches` is there). **Waits for the
-  owner's word**: the same panel in Raw too, in place of the
-  browser's find, or in Slides only. With it: fit marks and the
-  preview's following for a text with carriage returns (see the known
-  gaps).
+- **WP5.105 A jump to a far slide holds the page for seconds (found
+  by #263's measures, from #259).** On a deck of 60 slides of 100
+  lines, moving the cursor to a far slide (a jump that opens its row,
+  a search step, "next problem") held the page 4.6, 11.5 and 23.6
+  seconds in three measures; a near one costs 18 to 55 ms, and a
+  keystroke in a row on that deck 30 to 150 ms. The cause is not
+  established: the preview following the slide (`SlideAt`) and the
+  row's opening are the suspects. First measure where the time goes
+  (the page's main thread, by a profile in the browser on that deck),
+  then fix the cause; a test holds the cost (the longest hold of the
+  page for a jump across the deck under a bound).
 - **WP5.98 The smoke tests wait on the program, and run slowed down
   (the owner, 2026-11-12: "mamy bardzo dużo timing issues w testach
   dymnych"; after #251 and #253).** Two days of red runs fell into two
@@ -2907,6 +2913,29 @@ needs. Each was true when its package merged; check before relying on one.
   base. And while `main` does not build, the `native (sqlite)` job of
   every pull request fails, the fix's own included: it builds the base
   branch's `wiki-server` first, for the upgrade's rehearsal.
+- **The editor's search after #263.** Codex ran eight rounds (3, 2, 2,
+  2, 3, 2, 1, 0); most findings came from leaning on
+  `@codemirror/search` for more than its cursors (its `test` and
+  `wholeWord` options end a multiline search at the first rejection;
+  its step and replace commands start a cursor at the selection; its
+  replacement writes an unmatched group as "undefined"). What is left
+  of the library is the query's parsing and its two regular-expression
+  cursors; the wiki's own loop over the text would be about thirty
+  lines, to consider if the cursors are found at fault. Left as they
+  are: a plain query runs as an escaped regular expression, so no
+  Unicode normalisation (a composed é does not match a decomposed
+  one); the replacement is literal but for `$&`, `$1` to `$99` and
+  `$$`, so a line break cannot be written with `\n`; the count stops
+  at 1000 ("1000+", rows past it say "matches not counted"); "k of N"
+  does not name a match of no length; repeated Replace and Replace all
+  can differ where a match depends on its neighbours (whole word,
+  look-around, word edges), as in any editor; Escape in the text closes
+  the search and no longer makes one cursor of a selection; nothing
+  opens the panel without a keyboard; the sticky panel's height when
+  the toolbar wraps differently is not tested. A text with carriage
+  returns has its slides now (fit marks, the preview's following),
+  except one where two slides, or the preamble and a slide, start on
+  one of CodeMirror's lines.
 - **The slides' rows after #259 (decision 77).** Codex ran nine
   rounds (6, 2, 3, 1, 2, 1, 1, 1, 1 findings, most of one family: the
   caret the author sees and the master's selection in different
@@ -2914,9 +2943,8 @@ needs. Each was true when its package merged; check before relying on one.
   (three seeds of fifty steps in the suite) hold that family. Left: a
   text with carriage returns is edited by rows and comes back byte for
   byte, but its rows have no fit marks and the preview does not follow
-  the cursor's slide, since `Slides.slideSpans` gives no slides for a
-  text with `\r` (the parser and the editor count its lines
-  differently; rows go by characters). A drag of a slide is HTML5 drag
+  the cursor's slide, since `Slides.slideSpans` gave no slides for a
+  text with `\r` (fixed in #263, see the search's note). A drag of a slide is HTML5 drag
   and drop: none by touch. The focus a move of DOM takes from an
   editor is given back by watching the element for one second
   (Halogen has no hook after its patch). The textarea shows above the
