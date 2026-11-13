@@ -1823,19 +1823,34 @@ which the wiki pins since #227.
 
 - **WP5.106 Components without JavaScript tested natively, over
   haskell-halogen's `remote` (the owner, 2026-11-13: "jeśli będzie to
-  szybsze. Wszystkie pure halogen testy").** haskell-halogen's `remote`
-  package runs a component natively and sends its DOM operations to a
-  thin client in a real page; with the Playwright driver a spec is a
-  native process that holds the component (its state, its outputs) and
-  drives a real browser, with no wasm build. It cannot serve a view
-  that hands a node to JavaScript (the editor, the islands, the vault,
-  the preview). First a spike: one existing spec of a view of Halogen
-  alone, written this way beside the wasm one, with the time from an
-  edit to a result measured both ways and what had to be worked around
-  written down. If it is faster by a clear margin, every browser spec
-  of a view without JavaScript moves, and the rule is written into
-  AGENTS.md's gate; if not, the entry is closed with the numbers.
-  After WP5.98's (c).
+  szybsze. Wszystkie pure halogen testy").** The spike is done (branch
+  `wp5106-remote-tests-spike`, one commit, not pushed: a test-suite
+  `wiki-app-remote-test` with a harness and the permissions spec
+  written a second time). **It is faster**: from an edit to a result
+  18.6 s natively against 50.5 s on wasm, cold 139 s against 446 s,
+  the run alone 6.9 s against 22 s (each example about 0.2 s slower
+  natively, and the examples run one at a time). **But one module of
+  53 can move today.** Of 674 examples, 436 in 27 modules stay in wasm
+  whatever happens (the editor, the islands, the vault, the HTTP
+  backend); about 103 are of Halogen alone, and all but the 5 of the
+  permissions spec follow a router link, which does nothing over the
+  wire: `Router.isPlainLeftClick` is never true natively. **Waits for
+  haskell-halogen**: the router's plain click read from the event's
+  JSON, the probe answered by the session (per session), a mount per
+  connection, a client that does not reconnect, and `focus`,
+  `showModal` and `scrollIntoView` forwarded as operations (the list
+  is with the spike's notes). With those: new specs of such views are
+  written natively, the three pure modules and the pure parts of
+  Shell, Tasks, Spaces, Slides, Search and Notifications move (about
+  70 examples), and AGENTS.md's gate names the native suite. Until
+  then nothing moves.
+- **WP5.107 The browser tests' bundle is built once, not at every run
+  (found by WP5.106's measures).** `wiki-app/test/web/bundle.sh`
+  (esbuild of every island, the TikZ patch, the licences) runs at
+  every wasm test run and took 10.2 s alone: two thirds of the gap
+  between a wasm run and a native one with nothing rebuilt. Keep its
+  output and rebuild only when what it reads has changed (the web
+  sources, the lockfile, the script itself).
 - **WP5.105 A jump to a far slide holds the page for seconds (found
   by #263's measures, from #259; the owner, 2026-11-13: after WP5.98's
   (c), one after the other).** On a deck of 60 slides of 100
