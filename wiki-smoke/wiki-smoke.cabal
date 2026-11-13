@@ -111,6 +111,9 @@ test-suite wiki-smoke-demo
   hs-source-dirs:   demo
   main-is:          Main.hs
   other-modules:
+      Demo.Assistant
+      Demo.Looks
+      Demo.Offline
       Demo.Prerendered
       Demo.Site
       Demo.Walk
@@ -126,6 +129,7 @@ test-suite wiki-smoke-demo
         filepath,
         http-client,
         http-types,
+        network-uri,
         process,
         text,
         time,

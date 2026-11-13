@@ -46,6 +46,9 @@ module Main (main) where
 import Data.List (sort)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Demo.Assistant qualified as Assistant
+import Demo.Looks qualified as Looks
+import Demo.Offline qualified as Offline
 import Demo.Prerendered qualified as Prerendered
 import Demo.Site
 import Demo.Walk qualified as Walk
@@ -63,6 +66,9 @@ main = withDemoIO "the demo, as a static host serves it" $ \demo -> do
   pure $ playwright $ do
     Prerendered.spec site paths visitor
     Walk.spec walk
+    describe "a dark scheme, a phone, slides, the clipboard and comments" $ Looks.spec site
+    describe "the demo as an application, offline" $ Offline.spec site
+    describe "the writing assistant, with the scripted provider" $ Assistant.spec site
 
 -- | Every index.html under the directory, as the route that serves it:
 -- @/@, @/s/docs/@.
