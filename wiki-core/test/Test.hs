@@ -5,6 +5,7 @@ import Test.Anchor qualified as Anchor
 import Test.Assistant qualified as Assistant
 import Test.Attachment qualified as Attachment
 import Test.Blog qualified as Blog
+import Test.Cases (wasmCases)
 import Test.Comment qualified as Comment
 import Test.Diff qualified as Diff
 import Test.Encrypted qualified as Encrypted
@@ -46,7 +47,7 @@ import Test.User qualified as User
 import Test.Vault qualified as Vault
 
 main :: IO ()
-main = hspec . parallel $ do
+main = hspec . parallel . wasmCases $ do
   Slug.spec
   Ast.spec
   Box.spec

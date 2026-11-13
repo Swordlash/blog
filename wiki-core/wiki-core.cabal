@@ -162,6 +162,7 @@ test-suite wiki-core-test
       Test.Assistant
       Test.Attachment
       Test.Blog
+      Test.Cases
       Test.Comment
       Test.Diff
       Test.Encrypted
