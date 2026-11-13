@@ -7,7 +7,7 @@
 //
 //   node toolchain/measure-slide-jumps.mjs [--deck mixed|plain|noted]
 //     [--how select|near|line|open3|afteredit|search|header|type|problem]
-//     [--runs 3] [--loads 1] [--port 18705] [--out dir] [--app dir]
+//     [--runs 3] [--loads 1] [--quiet 1500] [--port 18705] [--out dir] [--app dir]
 //     [--profile] [--trace]
 //
 // The decks: "mixed" has paragraphs, a list, a code block and a formula on
@@ -29,7 +29,8 @@
 // (gaps, start+length after the move; holdSum, holdMax), the long tasks
 // Chromium reports, and the time each wiki-* event's handler took (the
 // Halogen action and the render and patch it runs at once) with the fit
-// measures (spans). The move ends when the page has been quiet for 1.5 s.
+// measures (spans). The move ends when the page has been quiet for 1.5 s
+// (--quiet).
 // --profile writes a CPU profile of each move into --out, --trace a trace.
 // app.wasm is stripped of its names; a profile names Haskell's functions
 // only with the linker's own output put in its place (--app a copy).
@@ -53,6 +54,9 @@ const runs = Number(opt("runs", "3"));
 const loads = Number(opt("loads", "1"));
 const port = Number(opt("port", "18705"));
 const slides = Number(opt("slides", "60"));
+// How long the page must be quiet for a move to be over: the pause after a
+// key typed holds the page in slices for tens of seconds on this deck.
+const quietMs = Number(opt("quiet", "1500"));
 if (flag("profile") || flag("trace")) fs.mkdirSync(outDir, { recursive: true });
 
 const require = createRequire(path.join(worktree, "package.json"));
@@ -232,7 +236,7 @@ async function jump(page, label, target, action) {
   const wall = Date.now();
   await action();
   await page.waitForFunction((target) => !!document.querySelectorAll(".editor-slides > li")[target]?.querySelector(".cm-editor"), target, { timeout: 180000, polling: 50 });
-  await settle(page, 1500, 180000);
+  await settle(page, quietMs, 180000);
   const r = await page.evaluate(() => {
     clearInterval(globalThis.wpStallTimer);
     const t0 = globalThis.wpT0;
