@@ -34,6 +34,7 @@ module Wiki.Smoke.Demo
   , nothingThrown
   , nothingWrong
   , nothingWrongBut
+  , nothingWrongExcept
   )
 where
 
@@ -193,11 +194,23 @@ nothingWrong = nothingWrongBut ["404"]
 -- words: what a test makes happen on purpose (a page read offline cannot
 -- load what was not kept).
 nothingWrongBut :: (HasCallStack) => [Text] -> Page -> Expectation
-nothingWrongBut expected page = do
-  nothingThrown page
-  errors <- filter (\m -> m.kind == "error" && not (any (`Text.isInfixOf` m.text) expected)) <$> consoleMessages page
+nothingWrongBut expected = nothingWrongExcept (\m -> any (`Text.isInfixOf` m.text) expected) (const False)
+
+-- | Fail if the page has thrown an error it did not catch, or written an
+-- error on its console, but for the errors the test expects: console
+-- messages by what they say and where they were written ('ConsoleMessage''s
+-- @url@ and @line@: a frame's sandbox refusing what its script tries), and
+-- uncaught errors by their text.
+nothingWrongExcept :: (HasCallStack) => (ConsoleMessage -> Bool) -> (Text -> Bool) -> Page -> Expectation
+nothingWrongExcept expectedMessage expectedThrow page = do
+  thrown <- filter (not . expectedThrow) <$> pageErrors page
+  unless (null thrown) $ expectationFailure ("the page threw: " <> show thrown)
+  errors <- filter (\m -> m.kind == "error" && not (expectedMessage m)) <$> consoleMessages page
   unless (null errors) $
-    expectationFailure ("the page wrote errors on its console:\n" <> unlines [Text.unpack (m.text <> maybe "" (" at " <>) m.url) | m <- errors])
+    expectationFailure
+      ( "the page wrote errors on its console:\n"
+          <> unlines [Text.unpack (m.text <> maybe "" (" at " <>) m.url <> maybe "" (\l -> ":" <> Text.pack (show l)) m.line) | m <- errors]
+      )
 
 -- | A 32 by 32 PNG, standing in for the demo's photograph.
 standIn :: ByteString

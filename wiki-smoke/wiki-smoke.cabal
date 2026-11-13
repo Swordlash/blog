@@ -9,8 +9,10 @@ description:
   suites wait on the program rather than on the clock (docs/PLAN.md,
   WP5.98). They depend on neither the application's nor the server's
   library, only on what their builds wrote: npm run build-wasm's demo in
-  dist-newstyle/wasm/public/app. Each suite is pending without that build,
-  unless WIKI_SMOKE_REQUIRED=1, which toolchain/smoke-suite.sh sets.
+  dist-newstyle/wasm/public/app, and for the passkeys' and the server's
+  suites the native wiki-server and wiki-app-prerender (WIKI_SERVER and
+  WIKI_PRERENDER). Each suite is pending without what it needs, unless
+  WIKI_SMOKE_REQUIRED=1, which toolchain/smoke-suite.sh sets.
 license:            MIT
 license-file:       LICENSE
 author:             Mateusz Goślinowski
@@ -38,14 +40,21 @@ common shared
       StrictData
 
 -- What the suites share: finding the built demo, serving it as a static
--- host does, and a page of it at a fixed size. Native only, as
--- haskell-halogen-playwright is: it drives Chromium from outside the page.
+-- host does, and a page of it at a fixed size; a walk of examples on one
+-- page; and for the server's suites, the server's build, a real
+-- wiki-server on free ports, its API over http-client, and signing in
+-- through the header's form. Native only, as haskell-halogen-playwright
+-- is: it drives Chromium from outside the page.
 library
   import:           shared
   hs-source-dirs:   src
   exposed-modules:
       Wiki.Smoke.Adoption
+      Wiki.Smoke.Api
+      Wiki.Smoke.Browser
       Wiki.Smoke.Demo
+      Wiki.Smoke.Server
+      Wiki.Smoke.Walk
   if arch(wasm32) || arch(javascript)
     buildable: False
   else
@@ -53,11 +62,21 @@ library
         base >= 4.20 && < 5,
         aeson,
         base64-bytestring,
-        http-types,
         bytestring,
+        case-insensitive,
+        crypton,
         directory,
         filepath,
+        hspec,
+        http-client,
+        http-types,
+        scientific,
+        stm,
+        temporary,
         text,
+        time,
+        process,
+        typed-process,
         haskell-halogen-playwright
 
 -- The README's screenshots, from the built demo (npm run screenshots, which
@@ -137,6 +156,26 @@ test-suite wiki-smoke-demo
         haskell-halogen-playwright,
         wiki-smoke
 
+-- The assistant's keys synced with real passkeys, from Chromium's virtual
+-- authenticator, against a real wiki-server (Main's haddock says what it
+-- checks). npm run smoke-test runs it.
+test-suite wiki-smoke-passkeys
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   passkeys
+  main-is:          Main.hs
+  ghc-options:      -threaded
+  if arch(wasm32) || arch(javascript)
+    buildable: False
+  else
+    build-depends:
+        base,
+        aeson,
+        filepath,
+        text,
+        haskell-halogen-playwright,
+        wiki-smoke
+
 -- The rules of Wiki.Smoke.Adoption that need no browser (which changes
 -- adoption may make, which pages a page embeds as presentations, which
 -- requests are a viewer's): pure examples, run by cabal test with no build.
@@ -150,5 +189,53 @@ test-suite wiki-smoke-adoption
   else
     build-depends:
         base,
+        haskell-halogen-playwright,
+        wiki-smoke
+
+-- The server's smoke test: the server's build of the page served by a real
+-- wiki-server, on SQLite or on PostgreSQL (WIKI_SMOKE_POSTGRES=1), driven
+-- end to end, with the encrypted spaces' walk and the canary (Main's
+-- haddock says what it checks). npm run smoke-test runs it.
+test-suite wiki-smoke-server
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   server
+  main-is:          Main.hs
+  other-modules:
+      Server.Canary
+      Server.Encrypted
+      Server.Health
+      Server.Migrate
+      Server.Offline
+      Server.Provider
+      Server.Site
+      Server.Svg
+      Server.Walk
+  ghc-options:      -threaded
+  if arch(wasm32) || arch(javascript)
+    buildable: False
+  else
+    build-depends:
+        base,
+        aeson,
+        base64-bytestring,
+        bytestring,
+        case-insensitive,
+        containers,
+        crypton,
+        directory,
+        filepath,
+        hspec,
+        http-client,
+        http-types,
+        network,
+        ram,
+        stm,
+        text,
+        time,
+        typed-process,
+        wai,
+        warp,
+        zip-archive,
         haskell-halogen-playwright,
         wiki-smoke

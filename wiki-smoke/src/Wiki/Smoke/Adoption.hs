@@ -1,7 +1,5 @@
 -- | What the smoke suites allow a program to change on a page it adopts,
--- and the adoption check they run: the Haskell twin of
--- @toolchain/smoke-adoption.mjs@, which the server's JavaScript smoke test
--- still imports until it is ported too.
+-- and the adoption check they run.
 --
 -- A suite holds the program's request (@app.wasm@), marks every node of
 -- the page the server sent, lets the program go, and counts every change
@@ -25,6 +23,7 @@ module Wiki.Smoke.Adoption
   , fittedFrame
   , adoptionMayChange
   , adoptionOptions
+  , serverAdoptionOptions
 
     -- * Loading a page and checking its adoption
   , Shown (..)
@@ -32,6 +31,7 @@ module Wiki.Smoke.Adoption
   , Adopted (..)
   , adoptedAfter
   , markPrerendered
+  , markPrerenderedWith
   , framesFitted
   , sortRepairs
   , stillPrerendered
@@ -109,6 +109,21 @@ fittedHeight style = case Text.stripPrefix "height: " style >>= Text.stripSuffix
 adoptionOptions :: AdoptionOptions
 adoptionOptions = defaultAdoptionOptions {leaveOutContents = islands, ignoredAttributes = scriptAttributes}
 
+-- | What the server's suite compares: as 'adoptionOptions', and the
+-- inside of the editor's host too, where CodeMirror goes in place of the
+-- textarea; and not at all what the browser fills in from what it keeps
+-- itself after the first render, whatever the server sent: the
+-- directory's spaces visited last, which this browser's local storage
+-- holds ("Wiki.App.Recent"), and the editor's bubbles of the writing
+-- assistant, which come with the settings this browser's IndexedDB keeps
+-- for the user ("Wiki.App.Assistant").
+serverAdoptionOptions :: AdoptionOptions
+serverAdoptionOptions =
+  adoptionOptions
+    { leaveOut = [".recent-spaces", ".editor-providers"]
+    , leaveOutContents = islands <> [".editor-cm"]
+    }
+
 -- | What a page shows of its route: the document's title, the heading of
 -- the content, the view it is in, and the error shown in its place, if
 -- any.
@@ -181,8 +196,12 @@ adoptedAfter gate page navigate = do
 -- shell still carrying it is the one the page arrived with
 -- ('stillPrerendered').
 markPrerendered :: Page -> IO ()
-markPrerendered page = do
-  markServed adoptionOptions page
+markPrerendered = markPrerenderedWith adoptionOptions
+
+-- | 'markPrerendered', with the options given.
+markPrerenderedWith :: AdoptionOptions -> Page -> IO ()
+markPrerenderedWith options page = do
+  markServed options page
   _ :: Bool <- evaluate page "(() => { document.querySelector('#app .wiki').dataset.prerendered = 'true'; return true; })()"
   pure ()
 
@@ -199,9 +218,15 @@ stillPrerendered page = do
 -- script gives it, once the frame's document has loaded: the frame's own
 -- load, not the program's work, so a condition. Without it, the height was
 -- there or not when the page was compared, depending on whether the
--- frame's document had loaded in time.
+-- frame's document had loaded in time. Asked with 'evaluateWith' until it
+-- holds rather than with 'waitForFunctionWith', whose function the page
+-- evaluates from text, which a server's page refuses: its Content
+-- Security Policy allows no @unsafe-eval@.
 framesFitted :: Page -> IO ()
-framesFitted page = waitForFunctionWith page "(frame) => document.querySelectorAll(`#app ${frame}:not([style])`).length === 0" fittedFrame
+framesFitted page =
+  eventually page $ do
+    unfitted :: Int <- evaluateWith page "(frame) => document.querySelectorAll(`#app ${frame}:not([style])`).length" fittedFrame
+    unless (unfitted == 0) $ expectationFailure (show unfitted <> " html fences' frames without their height")
 
 -- | Repairs, and the changes that are the demo's attachments, apart; the
 -- changes 'adoptionMayChange' allows are dropped. An attachment uploaded

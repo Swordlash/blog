@@ -1,8 +1,8 @@
 -- | The rules of "Wiki.Smoke.Adoption" that need no browser: which
 -- attribute changes adoption may make, which pages a page embeds as
--- presentations, and which requests are a presentation viewer's. They are
--- the twins of @toolchain/smoke-adoption.mjs@'s, and these examples are
--- that module's cases.
+-- presentations, and which requests are a presentation viewer's. These
+-- examples were first the cases of the JavaScript module those rules were
+-- written in.
 module Main (main) where
 
 import Halogen.Playwright.Hspec

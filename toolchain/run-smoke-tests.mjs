@@ -1,23 +1,16 @@
-// Run independent smoke programs in isolated processes, using Node's test
-// runner for bounded concurrency and failure reporting. Each program keeps
-// its own browser, server and data directory. The demo's smoke test is
-// wiki-smoke's demo suite, in Haskell, which toolchain/smoke-test.sh runs
-// before these.
+// Run the smoke test's programs that stay in node, in isolated processes,
+// using Node's test runner for bounded concurrency and failure reporting:
+// those that test JavaScript modules without a browser. The smoke suites
+// that drive the built page are wiki-smoke's, in Haskell, which
+// toolchain/smoke-test.sh runs before these.
 import { run } from "node:test";
 import { spec } from "node:test/reporters";
 import { pipeline } from "node:stream/promises";
 
 const concurrency = Number(process.env.SMOKE_JOBS ?? 2);
 if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new Error("SMOKE_JOBS must be a positive integer");
-// SQLite runs must use their temporary data directories, even when a caller
-// has exported the address of a live deployment's database.
-delete process.env.WIKI_DATABASE_URL;
-delete process.env.WIKI_SMOKE_RESTORE_DATABASE_URL;
 const tests = run({
   files: [
-    "toolchain/smoke-test-server.mjs",
-    "toolchain/smoke-test-postgres.mjs",
-    "toolchain/test-passkeys.mjs",
     "toolchain/test-assistant.mjs",
     "toolchain/test-tikz-letters.mjs",
   ],

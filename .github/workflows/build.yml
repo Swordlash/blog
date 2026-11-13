@@ -547,6 +547,13 @@ jobs:
       if: matrix.group == 'unit'
       run: sh toolchain/test-check-tex.sh
 
+    # That the smoke scripts read a relative path their caller gives
+    # (WIKI_SERVER=dist-newstyle/...) from the caller's directory, and
+    # leave a bare command name for PATH: a second.
+    - name: Test caller-paths.sh
+      if: matrix.group == 'unit'
+      run: sh toolchain/test-caller-paths.sh
+
     # The changelog job's check, on pull requests made in a repository of
     # its own: a few seconds.
     - name: Test check-changelog.sh
@@ -1110,7 +1117,20 @@ jobs:
         HALOGEN_PLAYWRIGHT_TIMEOUT: '120000'
       run: sh toolchain/smoke-suite.sh demo
 
-    # Independent SQLite and PostgreSQL smoke runs can overlap. PostgreSQL
+    # The passkeys' and the server's smoke suites likewise, on SQLite: about
+    # nine minutes throttled where they take three plain.
+    - name: Smoke-test the server with the processor throttled
+      if: github.job == 'smoke-throttled'
+      env:
+        HALOGEN_PLAYWRIGHT_THROTTLE: '4'
+        HALOGEN_PLAYWRIGHT_TIMEOUT: '120000'
+      run: |
+        status=0
+        sh toolchain/smoke-suite.sh passkeys || status=1
+        sh toolchain/smoke-suite.sh server || status=1
+        exit "$status"
+
+    # The server's smoke suite runs on SQLite, then on PostgreSQL, which
     # uses the container toolchain/ci-postgres.sh starts, as the native job's
     # tests do; without Docker (a self-hosted runner) only on SQLite, and
     # it says so.
@@ -1125,9 +1145,11 @@ jobs:
           echo "::warning::Docker does not answer on this runner: the smoke test's server runs on SQLite only."
         fi
 
-    # The demo's smoke test (wiki-smoke-demo, in Haskell), then the
-    # server's build against a real wiki-server and the other node programs
-    # (toolchain/smoke-test.sh).
+    # The smoke suites in Haskell (toolchain/smoke-test.sh): the demo's
+    # (wiki-smoke-demo), the passkeys' (wiki-smoke-passkeys), and the
+    # server's build against a real wiki-server (wiki-smoke-server) on SQLite
+    # and on the PostgreSQL started above; then the node programs that test
+    # JavaScript modules without a browser.
     - name: Smoke-test the page in a browser
       if: github.job == 'wasm'
       run: npm run smoke-test
@@ -1193,13 +1215,14 @@ jobs:
       HALOGEN_BASE_PATH: /${{ github.event.repository.name }}/
     steps: *wasm-steps
 
-  # The demo's smoke test again, with every page's processor four times
-  # slower (HALOGEN_PLAYWRIGHT_THROTTLE=4; WP5.98 of docs/PLAN.md): a test
+  # The smoke suites again (the demo's, the passkeys' and the server's on
+  # SQLite), with every page's processor four times slower
+  # (HALOGEN_PLAYWRIGHT_THROTTLE=4; WP5.98 of docs/PLAN.md): a test
   # that passes only because the page is quick enough fails here, so races
   # between the test and the page, or within the page, are found on purpose
   # rather than on someone's pull request. It runs the wasm job's steps on
   # the same runner, after it, so the build is the one wasm saved or left
-  # there, and its own step is the only test it runs. Weekly (the schedule
+  # there, and its own steps are the only tests it runs. Weekly (the schedule
   # above) and by hand only, and never for a pull request, which does not
   # wait for it: on a push to main the plan usually skips wasm, as the pull
   # request's run tested the tree, and a throttled run for every merge would
