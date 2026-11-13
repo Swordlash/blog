@@ -596,7 +596,8 @@ instance NFData SlideSpan where
 -- text with @\\r\\n@ line breaks has its slides on the lines the editor
 -- shows (its rows' fits, the preview following the cursor). None when
 -- two slides would start on one line of CodeMirror's (a lone @\\r@
--- between them): the editor then has no slides to mark or follow.
+-- between them, the slide of what comes before the first opener
+-- included): the editor then has no slides to mark or follow.
 slideSpans :: Text -> [SlideSpan]
 slideSpans source = slideSpansParsed source (either (const []) (map (first (fmap fst))) (parseDeckSpans source))
 
@@ -606,17 +607,20 @@ slideSpans source = slideSpansParsed source (either (const []) (map (first (fmap
 -- editor's check of the text and its slides.
 slideSpansParsed :: Text -> [(Maybe Int, Block)] -> [SlideSpan]
 slideSpansParsed source spans
-  | not (and (zipWith (<) starts (drop 1 starts))) = []
+  | not (and (zipWith (<) allStarts (drop 1 allStarts))) = []
   | otherwise =
       let ends = map (subtract 1) (drop 1 starts) <> [lineCount]
-          -- The slide of what comes before the first opener, when
-          -- 'deckOf' makes one: not of a look, footnotes or pauses alone.
-          untitled = case (deckOf (map snd spans)).slides of
-            s : _ -> isNothing s.title && not (null s.body && null s.notes)
-            [] -> False
           preamble = [SlideSpan {from = 1, to = lastNonBlank 1 (maybe lineCount (subtract 1) (head starts)), level = Nothing, title = ""} | untitled]
        in preamble <> [SlideSpan {from = l, to = lastNonBlank l e, level = Just lvl, title} | ((l, lvl, title), e) <- zip openers ends]
   where
+    -- The slide of what comes before the first opener, when 'deckOf' makes
+    -- one: not of a look, footnotes or pauses alone.
+    untitled = case (deckOf (map snd spans)).slides of
+      s : _ -> isNothing s.title && not (null s.body && null s.notes)
+      [] -> False
+    -- Every slide's first line, that slide of what comes before the first
+    -- opener's included: no two may be the same line of CodeMirror's.
+    allStarts = [1 | untitled] <> starts
     found = [(l, lvl, plainText xs) | (Just l, Heading lvl _ xs) <- deckLevel spans, lvl <= 2]
     openers = zipWith (\l (_, lvl, title) -> (l, lvl, title)) (editorLines [l | (l, _, _) <- found]) found
     starts = [l | (l, _, _) <- openers]
