@@ -606,10 +606,20 @@ function wiki_test_tell_dropped(slot) {
   other.close();
 }
 
-// How many keys the page still holds that can be exported, through the
-// vault's own functions (Wiki.App.Assistant's): every handle given so far
-// is tried as the key to wrap, with a wrapping key from a passkey the
-// stub makes for this, which is no touch of the person's.
+// Where an example starts counting the keys it leaves: the last handle the
+// page's registry of keys (wiki-app/jsbits/vault.js) gave out. The examples
+// share the page and its registry, whose handles only ever grow, so a key
+// an earlier example left behind has a handle at or below the mark, and
+// is that example's failure, not this one's.
+function wiki_test_keys_mark() {
+  globalThis.wikiTestKeysFrom = globalThis.wikiKeyRegistry?.next ?? 0;
+}
+
+// How many keys the page still holds that can be exported, of those given
+// out since the mark (wiki_test_keys_mark), through the vault's own
+// functions (Wiki.App.Assistant's): every such handle is tried as the key
+// to wrap, with a wrapping key from a passkey the stub makes for this,
+// which is no touch of the person's.
 async function wiki_test_exportable_keys_left() {
   const vault = Object.getOwnPropertySymbols(globalThis)
     .map((symbol) => globalThis[symbol])
@@ -625,7 +635,7 @@ async function wiki_test_exportable_keys_left() {
     wikiTestPasskeys.touches--;
     if (!got.wrapping) throw new Error(`No wrapping key for the probe: ${got.error}`);
     let left = 0;
-    for (let handle = 1; handle < got.wrapping; handle++) {
+    for (let handle = (globalThis.wikiTestKeysFrom ?? 0) + 1; handle < got.wrapping; handle++) {
       if (JSON.parse(await vault.wiki_vault_wrap(got.wrapping, handle, "probe")).key !== undefined) left++;
     }
     vault.wiki_vault_forget_key(got.wrapping);

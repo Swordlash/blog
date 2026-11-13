@@ -80,6 +80,7 @@ $( browserJS
      , ("js_restore_page_keys", "wiki_test_page_keys_restore", Safe, [t|IO ()|])
      , ("js_other_tab_dropsPromise", "wiki_test_other_tab_drops", Safe, [t|JSText -> IO (Promise ())|])
      , ("js_exportablePromise", "wiki_test_exportable_keys_left", Safe, [t|IO (Promise Int)|])
+     , ("js_keys_mark", "wiki_test_keys_mark", Safe, [t|IO ()|])
      , ("js_existing", "wiki_test_passkeys_existing", Safe, [t|IO JSText|])
      , ("js_offered", "wiki_test_passkeys_offered", Safe, [t|IO Bool|])
      , ("js_pick", "wiki_test_passkeys_pick", Safe, [t|IO ()|])
@@ -130,6 +131,15 @@ js_identity_export a1 = if inBrowser then wait =<< js_identity_exportPromise a1 
 js_exportable :: IO Int
 js_exportable = if inBrowser then wait =<< js_exportablePromise else pure inert
 
+-- | 'runPage' for an example of this module, which counts the keys that can
+-- be exported from its own start: the examples share the page and its
+-- registry of keys, so a key one example leaves fails that example alone,
+-- and not every example after it.
+runOwn :: (HasCallStack) => (forall s. PageM s a) -> IO a
+runOwn test = do
+  js_keys_mark
+  runPage test
+
 js_assistant_key :: JSText -> Bool -> IO ()
 js_assistant_key a1 a2 = if inBrowser then wait =<< js_assistant_keyPromise a1 a2 else pure inert
 
@@ -151,7 +161,7 @@ spec m = do
 -- there is neither.
 signing :: forall m -> (Specs m) => Spec
 signing m = describe "signing in with a passkey" $ do
-  it "signs in with the button, and with the passkey the login field offers" $ runPage $ do
+  it "signs in with the button, and with the passkey the login field offers" $ runOwn $ do
     (ui, id') <- signedOut m
     me <- signedInAs "user-editor"
     answerWith "PUT" "api/v1/session/passkey" 200 me
@@ -177,7 +187,7 @@ signing m = describe "signing in with a passkey" $ do
     find again ".account .user-name" >>= (`shouldHaveText` "Edgar Editor")
     closedSignedIn again
 
-  it "says why a passkey did not sign in, and offers it again" $ runPage $ do
+  it "says why a passkey did not sign in, and offers it again" $ runOwn $ do
     (ui, _) <- signedOut m
     answerWith "PUT" "api/v1/session/passkey" 400 (Aeson.object ["error" Aeson..= ("Invalid" :: Text), "message" Aeson..= ("This passkey is not one of this wiki's: it may have been removed. Sign in with your password." :: Text)])
     find ui ".sign-in-toggle" >>= click
@@ -189,7 +199,7 @@ signing m = describe "signing in with a passkey" $ do
     eventually $ unsafeIOToPageM js_offered `shouldReturn` False
     closedSignedIn ui
 
-  it "starts no offer in the login field whose challenge arrives after the form closed" $ runPage $ do
+  it "starts no offer in the login field whose challenge arrives after the form closed" $ runOwn $ do
     (ui, _) <- signedOut m
     holdAt "POST" "api/v1/session/passkey"
     find ui ".sign-in-toggle" >>= click
@@ -203,7 +213,7 @@ signing m = describe "signing in with a passkey" $ do
     unsafeIOToPageM js_offers `shouldReturn` 1
     closedSignedIn ui
 
-  it "opens no passkey dialog whose challenge arrives after the form closed" $ runPage $ do
+  it "opens no passkey dialog whose challenge arrives after the form closed" $ runOwn $ do
     (ui, _) <- signedOut m
     find ui ".sign-in-toggle" >>= click
     eventually $ unsafeIOToPageM js_offered `shouldReturn` True
@@ -220,7 +230,7 @@ signing m = describe "signing in with a passkey" $ do
     length . filter (\r -> r.method == "PUT") <$> asked `shouldReturn` 0
     closedSignedIn ui
 
-  it "completes a password's sign-in with a passkey in place of the code" $ runPage $ do
+  it "completes a password's sign-in with a passkey in place of the code" $ runOwn $ do
     (ui, id') <- signedOut m
     me <- signedInAs "user-editor"
     answerWith "POST" "api/v1/session" 401 (Aeson.object ["error" Aeson..= ("SecondFactorRequired" :: Text)])
@@ -237,7 +247,7 @@ signing m = describe "signing in with a passkey" $ do
     find ui ".account .user-name" >>= (`shouldHaveText` "Edgar Editor")
     closedSignedIn ui
 
-  it "lists the account's passkeys, adds one with a name, and removes one" $ runPage $ do
+  it "lists the account's passkeys, adds one with a name, and removes one" $ runOwn $ do
     serverStarts
     serveDemo
     me <- signedInAs "user-editor"
@@ -274,7 +284,7 @@ signing m = describe "signing in with a passkey" $ do
     find ui ".passkey-name" >>= (`shouldHaveText` "My phone")
     closedSignedIn ui
 
-  it "offers no passkey on a page served over plain HTTP, and says why" $ runPage $ do
+  it "offers no passkey on a page served over plain HTTP, and says why" $ runOwn $ do
     serverStarts
     serveDemo
     answerWith "GET" "api/v1/session" 200 nobody
@@ -333,7 +343,7 @@ signing m = describe "signing in with a passkey" $ do
 
 vault :: forall m -> (Specs m) => Spec
 vault m = do
-  it "turns syncing on with a passkey, and sends the server the keys sealed only" $ runPage $ do
+  it "turns syncing on with a passkey, and sends the server the keys sealed only" $ runOwn $ do
     ui <- opened m True True
     anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
     find ui ".assistant-sync-off-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Sync across devices: off")
@@ -353,7 +363,7 @@ vault m = do
     unsafeIOToPageM (evaluate =<< js_stores_key (toJSText "user-editor")) `shouldReturn` True
     closed ui
 
-  it "unlocks on a second device with one touch, keeping a key typed there while it was locked" $ runPage $ do
+  it "unlocks on a second device with one touch, keeping a key typed there while it was locked" $ runOwn $ do
     first' <- opened m True True
     turnOn first'
     unmount first'
@@ -379,7 +389,7 @@ vault m = do
     sentKey `shouldReturn` False
     closed ui
 
-  it "takes a key changed on another device when the wiki opens, without a touch" $ runPage $ do
+  it "takes a key changed on another device when the wiki opens, without a touch" $ runOwn $ do
     first' <- opened m True True
     turnOn first'
     unmount first'
@@ -399,7 +409,7 @@ vault m = do
     sentKey `shouldReturn` False
     closed ui
 
-  it "asks for the passkey each time the wiki opens, when told to, and keeps no key then" $ runPage $ do
+  it "asks for the passkey each time the wiki opens, when told to, and keeps no key then" $ runOwn $ do
     ui <- opened m True True
     turnOn ui
     -- Syncing keeps the key, which is the vault key, in the vault's slot
@@ -426,7 +436,7 @@ vault m = do
     stored "vault:user-editor" `shouldReturn` True
     closed again
 
-  it "adds a passkey on an unlocked device, and removes one, with its copy of the key" $ runPage $ do
+  it "adds a passkey on an unlocked device, and removes one, with its copy of the key" $ runOwn $ do
     ui <- opened m True True
     turnOn ui
     before <- touches
@@ -443,13 +453,13 @@ vault m = do
     (length . fromMaybe [] . (>>= arrayOf) . field ["passkeys"]) <$> vaultState `shouldReturn` 1
     closed ui
 
-  it "makes a passkey whose PRF output comes only when it is used, with one more touch" $ runPage $ do
+  it "makes a passkey whose PRF output comes only when it is used, with one more touch" $ runOwn $ do
     ui <- opened m True False
     turnOn ui
     touches `shouldReturn` 2
     closed ui
 
-  it "refuses a passkey without the PRF extension for the keys, says why, and keeps it to sign in with" $ runPage $ do
+  it "refuses a passkey without the PRF extension for the keys, says why, and keeps it to sign in with" $ runOwn $ do
     ui <- opened m False False
     find ui ".assistant-sync-on-button" >>= click
     eventually $ find ui ".assistant-sync-problem" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "It was kept to sign in with")
@@ -458,7 +468,7 @@ vault m = do
     find ui ".assistant-sync-off-state" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "off")
     closed ui
 
-  it "empties the password field after an attempt to make a passkey, which a retry sends again" $ runPage $ do
+  it "empties the password field after an attempt to make a passkey, which a retry sends again" $ runOwn $ do
     ui <- opened m True True
     find ui ".assistant-passkey-password" >>= (`typeText` "editor's password")
     unsafeIOToPageM js_cancel_next
@@ -474,7 +484,7 @@ vault m = do
     map (\r -> field ["password"] =<< decodeStrict (encodeUtf8 r.body)) proved `shouldBe` replicate 2 (Just (Aeson.String "editor's password"))
     closed ui
 
-  it "makes a new passkey for syncing when the one the user has is not used" $ runPage $ do
+  it "makes a new passkey for syncing when the one the user has is not used" $ runOwn $ do
     ui <- opened m True True
     existing <- fromJSText <$> unsafeIOToPageM js_existing
     find ui ".assistant-passkey-password" >>= (`typeText` "editor's password")
@@ -487,7 +497,7 @@ vault m = do
       `shouldBe` (Just (Aeson.String existing), 2, True)
     closed ui
 
-  it "turns syncing on with a passkey the user has already, making none" $ runPage $ do
+  it "turns syncing on with a passkey the user has already, making none" $ runOwn $ do
     ui <- opened m True True
     existing <- fromJSText <$> unsafeIOToPageM js_existing
     find ui ".assistant-sync-on-button" >>= click
@@ -499,7 +509,7 @@ vault m = do
       `shouldBe` (Just (Aeson.String existing), 1, True)
     closed ui
 
-  it "turns syncing off with no passkey, and keeps the keys in this browser" $ runPage $ do
+  it "turns syncing off with no passkey, and keeps the keys in this browser" $ runOwn $ do
     ui <- opened m True True
     turnOn ui
     before <- touches
@@ -513,7 +523,7 @@ vault m = do
     unsafeIOToPageM (evaluate =<< js_stores_key (toJSText "user-editor")) `shouldReturn` True
     closed ui
 
-  it "keeps the vault's latest settings when syncing is turned off on a device that did not change them" $ runPage $ do
+  it "keeps the vault's latest settings when syncing is turned off on a device that did not change them" $ runOwn $ do
     first' <- opened m True True
     turnOn first'
     unmount first'
@@ -537,7 +547,7 @@ vault m = do
     unsafeIOToPageM js_uninstall
     serverStops
 
-  it "offers for unlocking only the passkeys that hold a copy of the vault's key" $ runPage $ do
+  it "offers for unlocking only the passkeys that hold a copy of the vault's key" $ runOwn $ do
     first' <- opened m True True
     turnOn first'
     unmount first'
@@ -550,7 +560,7 @@ vault m = do
     touches `shouldReturn` (before + 1)
     closed ui
 
-  it "follows the vault another device made meanwhile, when asked to turn syncing on" $ runPage $ do
+  it "follows the vault another device made meanwhile, when asked to turn syncing on" $ runOwn $ do
     first' <- opened m True True
     turnOn first'
     unmount first'
@@ -568,7 +578,7 @@ vault m = do
     touches `shouldReturn` before
     closed ui
 
-  it "takes the key another tab stored, and lets go of the one another tab let go of" $ runPage $ do
+  it "takes the key another tab stored, and lets go of the one another tab let go of" $ runOwn $ do
     ui <- opened m True True
     -- This tab, as another one, holds the key from before syncing.
     unsafeIOToPageM js_save_page_keys
@@ -588,9 +598,9 @@ vault m = do
     unsafeIOToPageM (evaluate =<< js_stores_key (toJSText "user-editor")) `shouldReturn` True
     closed again
 
-  it "leaves no key that can be exported in the page when a step fails" $ runPage $ do
+  it "leaves no key that can be exported in the page when a step fails" $ runOwn $ do
     ui <- opened m True True
-    -- None before the steps, from another test of the page.
+    -- None before the steps.
     exportable `shouldReturn` 0
     turnOn ui
     exportable `shouldReturn` 0
@@ -612,7 +622,7 @@ vault m = do
     exportable `shouldReturn` 0
     closed ui
 
-  it "seals the settings stored as text before the vault, and keeps no key as text" $ runPage $ do
+  it "seals the settings stored as text before the vault, and keeps no key as text" $ runOwn $ do
     unsafeIOToPageM (evaluate =<< js_new_device)
     let old = withModel Anthropic "claude-test" (withKey Anthropic (Just secretKey) defaultSettings)
     unsafeIOToPageM (runTest (IDB.put assistantDatabase "settings" "user-editor" (BSL.toStrict (encode old)) :: m ()))
@@ -717,7 +727,7 @@ signedInAs uid = unsafeIOToPageM $ do
 -- the one each sign-in with the same password gives.
 userKeys :: forall m -> (Specs m) => Spec
 userKeys m = describe "the user's keys" $ do
-  it "makes the key pair at the first sign-in with a password, and keeps neither its private key exportable nor the export key in the page" $ runPage $ do
+  it "makes the key pair at the first sign-in with a password, and keeps neither its private key exportable nor the export key in the page" $ runOwn $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
     made <- madeKeys
@@ -728,7 +738,7 @@ userKeys m = describe "the user's keys" $ do
     unsafeIOToPageM (fromJSText <$> js_export_key_traces) `shouldReturn` "[]"
     closed ui
 
-  it "makes the key pair once a sign-in with a password is completed by its second factor" $ runPage $ do
+  it "makes the key pair once a sign-in with a password is completed by its second factor" $ runOwn $ do
     ui <- signedOut "editor's password"
     unsafeIOToPageM js_opaque_second_factor
     me <- signedInAs "user-editor"
@@ -744,7 +754,7 @@ userKeys m = describe "the user's keys" $ do
     isJust (field ["vault", "password", "key"] made) `shouldBe` True
     closed ui
 
-  it "gives a passkey's sign-in no key of a password sign-in left at its second factor" $ runPage $ do
+  it "gives a passkey's sign-in no key of a password sign-in left at its second factor" $ runOwn $ do
     ui <- signedOut "editor's password"
     unsafeIOToPageM js_opaque_second_factor
     -- A password sign-in reaches its second factor, and is left there.
@@ -768,7 +778,7 @@ userKeys m = describe "the user's keys" $ do
     field ["vault"] <$> vaultState `shouldReturn` Just Aeson.Null
     closed ui
 
-  it "turns the assistant's syncing on in the vault the first sign-in made, with the password and a new passkey" $ runPage $ do
+  it "turns the assistant's syncing on in the vault the first sign-in made, with the password and a new passkey" $ runOwn $ do
     ui <- signedOutAt AssistantSettings "editor's password"
     signIn ui "editor's password"
     made <- madeKeys
@@ -786,7 +796,7 @@ userKeys m = describe "the user's keys" $ do
       `shouldBe` (True, True, True, True)
     closed ui
 
-  it "unlocks the key pair on a second device with the password: the same key pair, and nothing stored again" $ runPage $ do
+  it "unlocks the key pair on a second device with the password: the same key pair, and nothing stored again" $ runOwn $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
     made <- madeKeys
@@ -800,7 +810,7 @@ userKeys m = describe "the user's keys" $ do
     (field ["publicKey", "keyId"] now, field ["revision"] now) `shouldBe` (field ["publicKey", "keyId"] made, field ["revision"] made)
     closed again
 
-  it "keeps the key pair through a change of password: the new password unlocks it on another device" $ runPage $ do
+  it "keeps the key pair through a change of password: the new password unlocks it on another device" $ runOwn $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
     made <- madeKeys
@@ -823,7 +833,7 @@ userKeys m = describe "the user's keys" $ do
     field ["publicKey", "keyId"] <$> vaultState `shouldReturn` field ["publicKey", "keyId"] made
     closed again
 
-  it "makes a new key pair after a reset of the password that alone unlocked the keys, after saying what is lost" $ runPage $ do
+  it "makes a new key pair after a reset of the password that alone unlocked the keys, after saying what is lost" $ runOwn $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
     _ <- madeKeys
@@ -844,7 +854,7 @@ userKeys m = describe "the user's keys" $ do
     (T.length before', before' /= after') `shouldBe` (79, True)
     closed again
 
-  it "offers to unlock the keys with the password after a sign-in, and withdraws the offer at the sign-out" $ runPage $ do
+  it "offers to unlock the keys with the password after a sign-in, and withdraws the offer at the sign-out" $ runOwn $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
     _ <- madeKeys
@@ -874,7 +884,7 @@ userKeys m = describe "the user's keys" $ do
   -- that types no password, as one through a provider, finds the keys
   -- locked, until a passkey or the password unlocks them.
   for_ [False, True] $ \shared ->
-    it ("lets go of the vault key and the private key at the sign-out, in every tab, and " <> (if shared then "of the assistant's key that is the vault key" else "keeps the assistant's own key")) $ runPage $ do
+    it ("lets go of the vault key and the private key at the sign-out, in every tab, and " <> (if shared then "of the assistant's key that is the vault key" else "keeps the assistant's own key")) $ runOwn $ do
       ui <- signedOut "editor's password"
       signIn ui "editor's password"
       _ <- madeKeys
@@ -906,7 +916,7 @@ userKeys m = describe "the user's keys" $ do
   -- A session can end with no tab open. A page that starts and hears from
   -- the server that nobody is signed in in this browser lets go of every
   -- user's keys this device keeps, as a sign-out would have.
-  it "lets go of every user's keys when a page starts with nobody signed in" $ runPage $ do
+  it "lets go of every user's keys when a page starts with nobody signed in" $ runOwn $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
     _ <- madeKeys
@@ -934,7 +944,7 @@ userKeys m = describe "the user's keys" $ do
   -- looks the keys up, then deletes them: a key kept in between (a
   -- sign-in completed meanwhile, here or in another tab) stops it, decided
   -- in the same transaction as the deletion.
-  it "lets go of no key when one was kept between the drop's look and its deletion" $ runPage $ do
+  it "lets go of no key when one was kept between the drop's look and its deletion" $ runOwn $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
     _ <- madeKeys
@@ -958,7 +968,7 @@ userKeys m = describe "the user's keys" $ do
   -- The view of a space that asks each time, pressed as a reader does: a
   -- wrong password leaves it shut, with nothing of it decrypted; the right
   -- one opens it; and, once a passkey unlocks the keys, the passkey.
-  it "opens a space that asks each time with the password typed in its view, not with a wrong one, and with a passkey" $ runPage $ do
+  it "opens a space that asks each time with the password typed in its view, not with a wrong one, and with a passkey" $ runOwn $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
     made <- madeKeys
@@ -1008,7 +1018,7 @@ userKeys m = describe "the user's keys" $ do
     eventually (find other ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Opened with the password."))
     closed other
 
-  it "unlocks the key pair with a passkey added to it, on a device where the password was not typed" $ runPage $ do
+  it "unlocks the key pair with a passkey added to it, on a device where the password was not typed" $ runOwn $ do
     ui <- signedOut "editor's password"
     signIn ui "editor's password"
     made <- madeKeys
@@ -1035,7 +1045,7 @@ userKeys m = describe "the user's keys" $ do
   -- key. What needs WebCrypto, the user's keys, says why it is not there.
   -- The page's crypto is put back even when the test fails, since the
   -- tests after it share the page.
-  it "signs in and changes the password on a page served over plain HTTP, without crypto.subtle, and makes no keys there" $ (`finally` js_plain_http_end) $ runPage $ do
+  it "signs in and changes the password on a page served over plain HTTP, without crypto.subtle, and makes no keys there" $ (`finally` js_plain_http_end) $ runOwn $ do
     -- A device that holds no key of an earlier test's, so that none is
     -- found on it at the end unless this test made one.
     unsafeIOToPageM (evaluate =<< js_new_device)
@@ -1105,11 +1115,10 @@ userKeys m = describe "the user's keys" $ do
       printed <- find ui ".keys-fingerprint code" >>= textContent
       find ui ".account-toggle" >>= click
       pure printed
-    -- Every test ends with no key in the page that can be exported: the
-    -- page shares its keys between the tests, so a key one leaves would
-    -- fail another's count. A step still running (a vault being made after
-    -- a sign-in) is waited for: stopped halfway by the unmount, it would
-    -- leave its key behind.
+    -- Every test ends with no key of its own in the page that can be
+    -- exported ('runOwn' counts from the test's start). A step still
+    -- running (a vault being made after a sign-in) is waited for: stopped
+    -- halfway by the unmount, it would leave its key behind.
     closed ui = do
       eventually $ unsafeIOToPageM (evaluate =<< js_exportable) `shouldReturn` 0
       unmount ui
