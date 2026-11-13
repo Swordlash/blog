@@ -105,6 +105,7 @@ was run locally first):
 
 - `npm run build-native` and `npm run test-native` pass.
 - `npm run build-wasm` passes, and `npm run test-wasm` once there are browser tests.
+- `npm run smoke-test` passes: wiki-smoke's suites, which CI runs.
 - fourmolu reports nothing (`npm run format` changes nothing).
 - No warnings on either backend. `-Wall -Wextra` live in each `.cabal` file and `-Werror` in
   `cabal.project` only, as in haskell-halogen; CPP gives each backend different code, so a
@@ -130,8 +131,9 @@ passed.
 Pins follow haskell-halogen exactly and are bumped together with its `source-repository-package`
 pin: GHC 9.14.1 natively, cabal 3.16.1.0, `wasm32-wasi-ghc-9.14.1.20260731` from the
 ghc-wasm-meta revision haskell-halogen's `.github/workflows/build.yml` names, Node 24 or later,
-Chromium for Playwright. Targets are native GHC and wasm; the GHC JavaScript backend is not a
-target here. Cloud sessions start without GHC: the `SessionStart` hook under `.claude/` installs
+and Chromium for Playwright, which the browser suites (hspec-halogen) and the smoke suites
+(haskell-halogen-playwright's driver, which node runs) use. Targets are native GHC and wasm;
+the GHC JavaScript backend is not a target here. Cloud sessions start without GHC: the `SessionStart` hook under `.claude/` installs
 the toolchain, and a session where it has not run should run it before building.
 The hook runs `toolchain/bootstrap.sh` (`sh toolchain/bootstrap.sh` by hand; see the README).
 
@@ -175,6 +177,11 @@ Those of haskell-halogen's `AGENTS.md` apply unchanged, in short:
   is a reason to look for another, not to reimplement it; if nothing exists, say so in the
   report so the plan records it. Keep JavaScript to `browserJS` bindings and a few lines
   around a library's call.
+- A smoke suite waits on the program, never on the clock: `visit` after a navigation,
+  `waitQuiet` after an action that asks the server, a condition named in a comment only for
+  what is not the program's, `afterEvent` for an event the browser fires late; a failure
+  goes through `expectationFailure` so that it names the suite's line on every GHC (the
+  README's "The smoke tests").
 - The packages' `CHANGELOG.md` files are frozen as they stood on 2026-11-11 and are not
   added to (the owner, 2026-11-11: the paragraph each pull request added at the top of
   "Unreleased" conflicted on nearly every pull request). What a pull request changed is
