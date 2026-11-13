@@ -925,6 +925,11 @@ How it works:
   assistant's own key stays, unless it is the vault's key. The other tabs
   let go at once of every encrypted space they hold open (its keys, its
   pages, its attachments' addresses) and ask the server who is signed in.
+  What a tab shows of an encrypted space leaves the screen at that moment,
+  before any request, even offline (the same when you leave a space that
+  asks each time): an editor's changes not saved to an encrypted page go
+  with it, and the tab says so once; drafts of encrypted pages are never
+  kept. A plain page's editor keeps its changes as before.
   A page that opens and hears from the server that nobody is signed in
   deletes every user's keys on the device the same way, so that a session
   that ended with no tab open (expired, or signed out from another

@@ -135,6 +135,9 @@ data Output
   | -- | The user turned their personal space on or off, or changed their
     -- avatar: the session and the spaces are to be read again.
     SpacesChanged
+  | -- | The user asked to sign out, before the request is sent: what is
+    -- shown of encrypted spaces goes at once, whatever its answer.
+    SigningOut
 
 -- | Which step of signing in the form is at.
 data Step
@@ -785,6 +788,7 @@ component =
         st <- get
         unless st.busy $ do
           modify (\s -> s {busy = True})
+          H.raise SigningOut
           result <- lift st.input.accounts.signOut
           modify (\s -> s {busy = False})
           when (isRight result) dropKeysOffer

@@ -182,6 +182,7 @@ module Wiki.Server.Storage.Rows
   , linksVersion
   , linksVersionSetting
   , writeLinks
+  , rewriteSpaceLinks
   , markSpaceLinks
   , resolvePendingLinks
   , ensureLinks
@@ -2242,6 +2243,15 @@ writeLinks pid body = do
         | (ordinal, destination) <- zip [0 ..] (Links.pageLinks body)
         ]
   for_ (chunksOf 100 rows) $ \chunk -> runInsert (insert wikiDb.page_links (insertValues chunk))
+
+-- | Write the links of every page of a space again from its text, as a
+-- save writes a page's ('writeLinks'): the end of a conversion that leaves
+-- the space plain, whose pages' links were left out while it had a key
+-- ('resolvePendingLinks').
+rewriteSpaceLinks :: (Backend be) => SpaceId -> Db be ()
+rewriteSpaceLinks sid = do
+  bodies <- runSelectReturningList (select ((\p -> (p.id, p.body)) <$> filter_ (\p -> p.space_id ==. val_ sid.text) (all_ wikiDb.pages)))
+  for_ bodies $ \(pid, body) -> writeLinks (PageId pid) body
 
 -- | Delete the links of these pages.
 deleteLinksFrom :: (Backend be) => [PageId] -> Db be ()

@@ -616,6 +616,10 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
   assert.deepEqual(backThreads.map((t) => [t.anchor?.exact, t.comments.map((x) => x.body)]), [[pm.quote, [pm.comment]]], "the comment, plain again");
   const backVersions = (await raw(ada2, `pages/${encodeURIComponent(back.id)}/versions`)).body;
   assert.equal(backVersions.length, 2, "the page's two versions, plain again");
+  // What the server derives from the text, as a save makes it: the
+  // server's search finds the page by its text again.
+  const found = (await raw(ada2, `search?q=${encodeURIComponent(pm.text)}&space=${encodeURIComponent(convert.body.id)}`)).body;
+  assert.ok(found.some((h) => h.page === back.id), `the server's search finds the page plain again: ${JSON.stringify(found)}`);
   // In the tab that turned it off: read plain, its attachment the
   // server's, its comment, its history, and a save by the plain route.
   await converter.goto(url(`/s/smoke-convert/p/${back.slug}/`));

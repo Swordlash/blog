@@ -64,7 +64,7 @@ import Wiki.Core.Offered qualified as Offered
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
-import Wiki.Core.Search (SearchQuery (..), searchQuery)
+import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (mkSlug, slugText)
 import Wiki.Core.Space (Space (..), SpaceProfile (..))
 import Wiki.Core.Space qualified as Space
@@ -1281,6 +1281,46 @@ spec backing = describe "encrypted spaces in the storage" $ do
       home <- ok =<< as p.ada (listPages secret.id)
       read' <- ok =<< as p.ada (getPage secret.id [s' | x <- home, x.id == pid, s' <- [x.slug]])
       sort (map (\x -> x.name.text) read'.attachments) `shouldBe` ["notes (2).txt", "notes.txt"]
+
+    -- What the server derives from a page's text (its links, and so the
+    -- backlinks of the pages they lead to, and its search text) goes when
+    -- the space is encrypted, and comes back, as a save makes it, when its
+    -- encryption is turned off: for every page, not only the last one
+    -- committed.
+    it "derives from its pages' texts what it did before, once a space encrypted is plain again" $ withSystemTempDirectory "conversion" $ \dir -> withPeople backing $ \st p -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+      s <- privateSpace st p.ada "Linked"
+      made <- for ["Alpha", "Beta", "Gamma"] $ \t -> ok =<< as p.ada (createPage s.id Nothing t (t <> " text."))
+      for_ made $ \x -> do
+        let body = x.title <> " zephyrword links " <> T.unwords ["[" <> o.title <> "](/l/" <> o.id.text <> ")" | o <- made, o.id /= x.id]
+        void (ok =<< as p.ada (savePage x.id x.updatedAt x.title body))
+      let derived = do
+            back <- for made $ \x -> (x.id,) . sort . map (\b -> b.page) <$> (ok =<< as p.ada (pageBacklinks x.id))
+            found <- sort . map (\h -> h.page) <$> as p.ada (searchPages (searchQuery "") {text = "zephyrword", space = Just s.id})
+            pure (back, found)
+      plainBefore <- derived
+      fst plainBefore `shouldSatisfy` all (\(_, b) -> length b == 2)
+      length (snd plainBefore) `shouldBe` 3
+      -- Each version's text, to make plain again as it was.
+      pages <- ok =<< as p.ada (listPages s.id)
+      texts <- fmap (Map.fromList . concat) . for pages $ \x -> do
+        vs <- ok =<< as p.ada (listVersions x.id (VersionsQuery Nothing 50))
+        for vs $ \v -> (\full -> ((x.id, v.updatedAt), (full.title, full.body))) <$> (ok =<< as p.ada (getVersion x.id v.updatedAt))
+      started <- ok =<< as p.ada (startEncrypting s.id StartEncrypting {keys = [startKey p s.id]})
+      for_ started.left $ \x -> encryptPage st p.ada dir s.id x.page []
+      -- Encrypted: none of it is left.
+      rows <- tableRows st
+      [r | ("page_links", rs) <- rows, r <- rs, any (\x -> x.id.text `T.isInfixOf` r) made] `shouldBe` []
+      decrypting <- ok =<< as p.ada (startDecrypting s.id)
+      lease <- leaseOn st p.ada s.id
+      for_ decrypting.left $ \x -> do
+        versions <- ok =<< as p.ada (sealedVersions x.page (VersionsQuery Nothing 50))
+        ok =<< as p.ada (stagePlain x.page lease StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title, body} | v <- versions, Just (title, body) <- [Map.lookup (x.page, v.updatedAt) texts]], threads = [], comments = [], attachments = []})
+        staged <- ok =<< as p.ada (stagedPage x.page lease)
+        void (ok =<< as p.ada (commitConverted x.page lease ConversionCommit {digest = staged.digest}))
+      ((\i -> i.running) <$> (ok =<< as p.ada (conversionInfo s.id))) `shouldReturn` Nothing
+      derived `shouldReturn` plainBefore
 
     -- A plain page takes one name once (UNIQUE (page_id, name)), and the
     -- commit renames every attachment of a page: names that end distinct

@@ -60,7 +60,7 @@ import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, i
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
-import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, release, serveDemo, serverStarts, startServer, startServerOver, tellServer)
+import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, offline, release, serveDemo, serverStarts, startServer, startServerOver, tellServer)
 import Test.Browser.Mount (clickButton)
 import Test.Browser.Text (editorText)
 import Test.Hspec.Halogen
@@ -1158,6 +1158,76 @@ spec m = do
     unsafeIOToPageM (heldNow tab) `shouldReturn` HeldNow {keys = mempty, found = mempty, confirmed = mempty, attachments = 0, urls = 0}
     run tab (getPage secret.id [made.slug]) >>= (`shouldSatisfy` isLeft)
     unmount ui
+
+  -- #213, the review's P1: when the keys go, what is shown of an encrypted
+  -- space goes from the screen before anything waits on the network, and
+  -- an editor's changes not saved with it, said once: offline, the reload
+  -- after it fails, and nothing decrypted stays. A plain page's editor
+  -- keeps its changes as before.
+  describe "the screen when the keys go, offline" $ do
+    let openEditor gated = do
+          env <- encryptedSpace "user-admin"
+          void (ok =<< run env (encryptSpace secret.id))
+          made <- ok =<< run env (createPage secret.id Nothing "Secret draft" "Saved text.")
+          when gated (void (ok =<< run env (setEntry secret.id ConfirmEach)))
+          serveDemo
+          answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+          tab <- unsafeIOToPageM (newHttpEnv browserTransport)
+          when gated $ do
+            void (run tab listSpaces)
+            run tab (confirmedEntry secret.id)
+          pure (tab, made)
+        typed ui = do
+          text <- eventually (editorText ui)
+          typeText text " Unsaved canary."
+          eventually (find ui ".wiki" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Unsaved canary"))
+        gone ui = do
+          eventually (find ui ".wiki" >>= textContent >>= (`shouldSatisfy` \t -> not (any (`T.isInfixOf` t) ["Unsaved canary", "Saved text.", "Secret draft"])))
+          eventually (find ui ".dropped-unsaved" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "dropped"))
+
+    it "takes an encrypted editor's unsaved text off the screen when another tab signs out" $ runPage $ do
+      (tab, made) <- openEditor False
+      ui <- startServerOver m tab (R.EditPage [secretSlug] [made.slug])
+      typed ui
+      offline True
+      unsafeIOToPageM (js_tell_dropped (toJSText ("vault:user-admin" :: Text)))
+      gone ui
+      unmount ui
+
+    it "takes an encrypted editor's unsaved text off the screen at this tab's sign-out" $ runPage $ do
+      (tab, made) <- openEditor False
+      ui <- startServerOver m tab (R.EditPage [secretSlug] [made.slug])
+      typed ui
+      offline True
+      find ui ".account-toggle" >>= click
+      find ui ".account .sign-out" >>= click
+      gone ui
+      unmount ui
+
+    it "takes an encrypted editor's unsaved text off the screen when the reader leaves its gate" $ runPage $ do
+      (tab, made) <- openEditor True
+      ui <- startServerOver m tab (R.EditPage [secretSlug] [made.slug])
+      typed ui
+      offline True
+      unsafeIOToPageM (js_go_to (toJSText ("/" :: Text)))
+      find ui ".leave-confirm .danger" >>= click
+      eventually (find ui ".wiki" >>= textContent >>= (`shouldSatisfy` \t -> not (any (`T.isInfixOf` t) ["Unsaved canary", "Saved text."])))
+      unmount ui
+
+    it "keeps a plain page's unsaved text when another tab signs out" $ runPage $ do
+      _ <- encryptedSpace "user-admin"
+      serveDemo
+      answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+      let docs = either (const (panic "not a slug")) identity . mkSlug
+      ui <- startServer m (R.EditPage [docs "docs"] [docs "tour"])
+      text <- eventually (editorText ui)
+      typeText text " Plain unsaved."
+      offline True
+      unsafeIOToPageM (js_tell_dropped (toJSText ("vault:user-admin" :: Text)))
+      unsafeIOToPageM (threadDelay 500_000)
+      find ui ".wiki" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Plain unsaved.")
+      length <$> findAll ui ".dropped-unsaved" `shouldReturn` 0
+      unmount ui
 
   -- The preview of a page detached from its editor, in a window of its own,
   -- shows nothing of a page of an encrypted space once its editor goes:

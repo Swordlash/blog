@@ -89,7 +89,9 @@ title: Encrypted spaces: a decrypted export, encrypting pages, asking each time
   closes every encrypted space open in another tab; so does opening the
   wiki once your session has ended. Signing in with your password unlocks
   them again by itself; after signing in with a provider, unlock them with
-  a passkey before reading an encrypted space.
+  a passkey before reading an encrypted space. What is shown of an
+  encrypted space leaves the screen at once, even offline: changes not
+  saved to an encrypted page are dropped then, and the wiki tells you so.
 - In an encrypted space, the wiki no longer offers what the server cannot
   do there: **Use as template**, **Show as a blog**, the **Public** switch,
   and moving a page to another space. While a space's pages are being

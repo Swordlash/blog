@@ -5311,6 +5311,10 @@ endIfDone way root covered = do
       when (way == Decrypting) $ do
         clearSpaceKey x.id
         deleteGrantsOfSpace x.id
+        -- Its pages' links, left out while it had a key, written again
+        -- from their texts, as a save writes them: the transaction's end
+        -- resolves them, the space plain now.
+        rewriteSpaceLinks x.id
     case way of
       Decrypting -> record "space.decrypted" (spaceSubject root) [("spaces", show (length covered))]
       Encrypting -> record "space.encrypted" (spaceSubject root) [("spaces", show (length covered))]

@@ -371,10 +371,12 @@ call (HttpWiki program) = HttpWiki (ReaderT (\env -> liftIO (try (runReaderT pro
 -- A refusal that says a space is not in the state this tab believes
 -- ('stateChanged': plain or encrypted, converted or not, a page of it
 -- read one way or the other) makes the tab learn the space's state again
--- here, whatever the request: what it cached is emptied, as after a write,
--- and the list of spaces is read from the server, which lets go of the
--- keys and pages of a space plain now ('freshSpaces'). The request is not
--- sent again here: a read is, once, where its route is chosen
+-- here, whatever the request: the list of spaces is read from the server,
+-- which lets go of the keys and pages of a space plain now
+-- ('freshSpaces'), and the shell's records of spaces are forgotten, to be
+-- read again. It is the one time a read of the list is owed to a guess
+-- proved wrong: the tab otherwise routes by what it last knew. The request
+-- is not sent again here: a read is, once, where its route is chosen
 -- ('afterStale'); a write is not.
 send :: (MonadIO m) => HttpWiki IO a -> HttpWiki m (Either WikiError a)
 send endpoint = do
@@ -383,7 +385,7 @@ send endpoint = do
     Left (Stale st _) | stateChanged st -> do
       immediate <- HttpWiki (asks (\env -> env.immediate))
       unless immediate $ do
-        modifyCache afterWrite
+        modifyCache (\c -> c {Cache.spaceAt = mempty})
         void freshSpaces
     _ -> pass
   pure result
@@ -1896,18 +1898,28 @@ encryptionIn sid spaces = find (\s -> s.id == sid) spaces >>= \s -> s.encryption
 -- | A request about a space's pages: the plain one, or for an encrypted
 -- space the encrypted one with the space's current key id. Which one is
 -- decided from the list of spaces in the cache, which the shell always
--- holds (read again when a write emptied the cache), so that a read of a
--- plain space costs no request more. When the
+-- holds; without one (a write emptied the cache), the plain read is tried
+-- first, so that a read of a plain space costs no request more. When the
 -- server says the space is not in that state ('send', 'stateChanged'), the
 -- tab learns it again, and a read is sent once more by the route the
 -- fresh list names ('afterStale'); a write is not ('writeOnce'). A read
 -- sends no text of the page, so trying the plain read first is safe.
 encryptedOr :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError a) -> (KeyId -> HttpWiki m (Either WikiError a)) -> HttpWiki m (Either WikiError a)
-encryptedOr sid plain sealed =
-  -- The list as cached, or read now when a write emptied the cache.
-  spacesNow >>= \case
-    Right spaces -> maybe plain sealed (encryptionIn sid spaces)
-    Left _ -> plain
+encryptedOr sid plain sealed = (\c -> c.spaces >>= encryptionIn sid) <$> readCache >>= maybe plain sealed
+
+-- | 'encryptedOr' for a page this tab read encrypted ('heldPages'): when
+-- no list of spaces is cached (a write emptied the cache), its space is
+-- taken as last known, encrypted, under the space's key held here or the
+-- one the page's key is wrapped with. No list is read for it: a refusal
+-- teaches otherwise ('send', 'Stale').
+heldSealedOr :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError a) -> (KeyId -> HttpWiki m (Either WikiError a)) -> HttpWiki m (Either WikiError a)
+heldSealedOr sid plain sealed =
+  (\c -> c.spaces) <$> readCache >>= \case
+    Just spaces -> maybe plain sealed (encryptionIn sid spaces)
+    Nothing -> do
+      h <- readHeld
+      let known = (fst <$> Map.lookup sid h.heldKeys) <|> head [k.spaceKeyId | (x, k) <- Map.elems h.heldPages, x == sid]
+      maybe plain sealed known
 
 -- | The space's current key id: the one given, or the one a renewal made
 -- since.
@@ -2670,7 +2682,7 @@ sealedCreatePage kind sid parent title body current =
 
 sealedSavePage :: (MonadIO m) => SpaceId -> PageId -> PageKey -> UTCTime -> Text -> Text -> HttpWiki m (Either WikiError Page)
 sealedSavePage sid pid k base title body =
-  encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+  heldSealedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
     withSpaceKeyWriting NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> runExceptT $ do
       when (T.null (T.strip title)) $ throwError (Invalid "A page's title cannot be blank.")
       -- Not on top of versions this tab found wrong: the reader is shown
@@ -2686,7 +2698,7 @@ sealedSavePage sid pid k base title body =
 
 sealedVersions :: (MonadIO m) => SpaceId -> PageId -> PageKey -> VersionsQuery -> HttpWiki m (Either WikiError [VersionInfo])
 sealedVersions sid pid k q =
-  encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+  heldSealedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
     readingSealed NoRefresh sid current $ \key ->
       send (endpoints.encrypted.versions pid (VersionTime <$> q.before) (mfilter (/= versionsPageSize) (Just q.limit))) >>= \case
         Left e -> pure (Left e, True)
@@ -2716,7 +2728,7 @@ listedVersions pid q listed opened = do
 
 sealedVersion :: (MonadIO m) => SpaceId -> PageId -> PageKey -> UTCTime -> HttpWiki m (Either WikiError Version)
 sealedVersion sid pid k at =
-  encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+  heldSealedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
     readingSealed NoRefresh sid current $ \key ->
       send (endpoints.encrypted.version pid (VersionTime at)) >>= \case
         Left e -> pure (Left e, True)
@@ -2781,7 +2793,7 @@ instance FromJSON AttachmentMeta where
 -- replaced, which only this browser can tell.
 sealedUpload :: (MonadIO m) => SpaceId -> PageId -> PageKey -> Text -> Text -> ByteString -> HttpWiki m (Either WikiError Attachment)
 sealedUpload sid pid k name mediaType bytes =
-  encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+  heldSealedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
     withSpaceKeyWriting NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> runExceptT $ do
       n <- either (throwError . Invalid) pure (parseFileName name)
       aid <- AttachmentId . (\p -> p.text) <$> ExceptT (first Invalid <$> liftIO newPageId)
@@ -2816,7 +2828,7 @@ sealedAttachmentUrls owner aid at =
     Nothing
       | not (Set.member owner h.heldOwners) -> pure none
       | otherwise ->
-          encryptedOr
+          heldSealedOr
             at.space
             (pure (Left (Conflict "This space is no longer encrypted.")))
             ( \current -> withSpaceKey NoRefresh at.space current $ \key -> withPageKey key at.space at.page at.key $ \pk ->
@@ -2877,7 +2889,7 @@ linkType given
 -- decrypted, each with the key of its page's it names.
 sealedListThreads :: (MonadIO m) => SpaceId -> PageId -> HttpWiki m (Either WikiError [Thread])
 sealedListThreads sid pid =
-  encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+  heldSealedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
     readingSealed NoRefresh sid current $ \key ->
       send (endpoints.encrypted.threads pid) >>= \case
         Left e -> pure (Left e, True)
@@ -2930,7 +2942,7 @@ sealedOpenThread sid pid anchor body =
   sealedPage pid >>= \case
     Nothing -> pure (Left (Conflict inEncryptedSpace))
     Just (_, k) ->
-      encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+      heldSealedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
         withSpaceKeyWriting NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> runExceptT $ do
           tid <- CommentThreadId . (\p -> p.text) <$> ExceptT (first Invalid <$> liftIO newPageId)
           cid <- CommentId . (\p -> p.text) <$> ExceptT (first Invalid <$> liftIO newPageId)
@@ -2950,7 +2962,7 @@ sealedComment sid pid tid editing body =
   sealedPage pid >>= \case
     Nothing -> pure (Left (Conflict inEncryptedSpace))
     Just (_, k) ->
-      encryptedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
+      heldSealedOr sid (pure (Left (Conflict "This space is no longer encrypted."))) $ \current ->
         withSpaceKeyWriting NoRefresh sid current $ \key -> withPageKey key sid pid k $ \pk -> runExceptT $ do
           cid <- maybe (CommentId . (\p -> p.text) <$> ExceptT (first Invalid <$> liftIO newPageId)) pure editing
           content <- ExceptT (first Invalid <$> liftIO (sealCommentText pk sid pid k.keyId tid cid body))

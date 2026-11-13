@@ -437,6 +437,10 @@ data State m = State
   -- what is shown then stays, since showing the failure in its place
   -- would unmount it and lose them, and a line above it says so. The
   -- next reload that succeeds clears it.
+  , droppedUnsaved :: Bool
+  -- ^ Whether changes not saved to a page of an encrypted space were
+  -- taken off the screen with the space ('sealScreen'): said once, until
+  -- the reader dismisses it. The text is kept nowhere.
   }
 
 -- | Whose changes a route followed away would lose ('leaving'): what the
@@ -486,6 +490,8 @@ data Action
   | RetryWorld
   | RetryHere
   | RetryStale
+  | DismissDropped
+  | SigningOut
   | FromAccount SignInView.Output
   | SessionChanged Session
   | OpenSignIn
@@ -568,6 +574,7 @@ component =
                   , backlinks = Nothing
                   , seen = Nothing
                   , stale = Nothing
+                  , droppedUnsaved = False
                   }
           -- The page's backlinks too, if the backend has them at once, so
           -- that the sidebar's first render is the prerendered one; else
@@ -613,6 +620,12 @@ component =
                 <p class="conversion-notice" role="status">{{ why }}</p>
               {% end %}
               {% for e in maybeToList st.stale %}{{ staleNotice e RetryStale }}{% end %}
+              {% if st.droppedUnsaved %}
+                <div class="error dropped-unsaved" role="alert">
+                  <p>Unsaved changes to a page of an encrypted space were dropped when its keys were let go (a sign-out, here or in another tab, or the space closed). Drafts of encrypted pages are not kept.</p>
+                  <button type="button" class="dismiss" onClick={{ const DismissDropped }}>Dismiss</button>
+                </div>
+              {% end %}
               {% for (_, unsaved) in maybeToList st.leaving %}
                 {{ leaveConfirm unsaved }}
               {% end %}
@@ -1414,6 +1427,13 @@ component =
         loadEverything
       RetryHere -> loadHere True
       RetryStale -> reload Nothing
+      DismissDropped -> modify (\st -> st {droppedUnsaved = False})
+      -- This tab's sign-out, before its request: what is shown of
+      -- encrypted spaces goes at once, whether the request then succeeds
+      -- or not (offline, it does not).
+      SigningOut -> do
+        lift forgetEncrypted
+        sealScreen
       Online False -> modify (\st -> st {offline = True})
       -- Back online: whatever failed to load because the server could not
       -- be reached is loaded again, as "Try again" would. A view whose own
@@ -1438,6 +1458,7 @@ component =
       -- for again, with everything shown.
       KeysDropped -> do
         lift forgetEncrypted
+        sealScreen
         reload Nothing
       Arrived r -> do
         now <- H.liftEffect historyEntry
@@ -1545,6 +1566,7 @@ component =
         now <- H.liftEffect historyEntry
         modify (\st -> st {entry = now})
       -- Someone signed in or out: reload everything, as the new user.
+      FromAccount SignInView.SigningOut -> handleAction SigningOut
       FromAccount (SignInView.AccountChanged s) -> do
         forgetFormer s
         -- A sign-in completed: a tab about to let go of every user's keys
@@ -1608,6 +1630,7 @@ component =
     -- in again is shown, saying why.
     sessionEnded :: Session -> H.HalogenM (State m) Action Slots output m ()
     sessionEnded s = do
+      sealScreen
       forgetFormer s
       modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
       restartFeed
@@ -1668,7 +1691,10 @@ component =
       -- A gate closed: the views' revision moves on, so that the header's
       -- bell and stars forget the titles they show decrypted of the space.
       closed <- gatesAt (settledRoute r)
-      modify (shut . \st -> st {route = settledRoute r, settled = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing, generation = if closed then st.generation + 1 else st.generation})
+      -- A gate left: the space behind it goes from the screen at once, as
+      -- its keys do ('sealScreen').
+      when closed sealScreen
+      modify (shut . \st -> st {route = settledRoute r, settled = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
       canonicalAdmin
       whatsNewSeen
       loadHere False
@@ -1686,6 +1712,28 @@ component =
         spaces <- gets (\st -> st.spaces)
         let nearest p = listToMaybe [x.id | n <- reverse [1 .. length p], Just chain <- [findSpace spaces (take n p)], Just x <- [lastMay chain]]
         lift (readerAt spaces (path >>= nearest))
+
+    -- Take what is shown of an encrypted space off the screen, at once,
+    -- before anything waits: the keys were let go (a sign-out, here or in
+    -- another tab, the session ended or changed user). The space shown, if
+    -- it is encrypted, is unmounted with every view in it (the page, the
+    -- editor and its preview, the history, the source, the slides, the
+    -- comments, a dialog over them), changes not saved with it: they are
+    -- dropped, and said so once ('droppedUnsaved'). The bell, the stars
+    -- and the search's results see a new revision, which names encrypted
+    -- pages as the server does and searches again. Nothing here waits on
+    -- the network, so nothing decrypted stays on the screen when a request
+    -- then fails.
+    sealScreen :: H.HalogenM (State m) Action Slots output m ()
+    sealScreen = do
+      st <- get
+      let encrypted path = maybe False (any (\x -> isJust x.encryption)) (findSpace st.spaces path)
+      case st.here of
+        InSpace path _ _ | encrypted path -> do
+          dirty <- isJust <$> unsavedShown
+          modify (\s -> s {here = LoadingSpace path, shown = Nothing, stale = Nothing, leaving = Nothing, droppedUnsaved = s.droppedUnsaved || dirty})
+        _ -> pass
+      modify (\s -> s {generation = s.generation + 1})
 
     -- After a change: reload everything, and every view's own data too.
     reload :: Maybe Route -> H.HalogenM (State m) Action Slots output m ()
