@@ -1555,11 +1555,31 @@ confirms it against reality and the plan is amended if it does not hold.
     warning in the editor. What "top level" is for slides is defined
     once, and the cutting, the warnings and the editor's slides read it.
     **The editor** has two modes over the same Markdown for a
-    presentation: raw, and slide by slide (every slide folded but the
-    open ones, by the folding of WP5.96; a button and a handle a slide;
-    a move is one edit; slides are named by their first line in the
-    current text). The preview renders the whole deck as one document
-    and shows the card asked for. **Overflow.** Every slide is laid out
+    presentation: raw, and slide by slide. Slide by slide is a list of
+    rows drawn by Halogen, one a slide, each a card: its header holds
+    a handle, a chevron, the number, the title, the problems' count,
+    the fit and a delete; an open row holds a CodeMirror over that
+    slide's Markdown, and several may be open (#259, after the owner
+    used #253's one editor with folds: "raczej jako listę rozwijalnych
+    wierszy z których każda ma osobny edytor"). Raw's CodeMirror stays
+    mounted, hidden: the master. It holds the whole text, the one undo
+    history, the problems and the assistant's tracked changes; a row is
+    a view over a range of it that forwards every transaction, and the
+    master mirrors into the rows what they did not make. The invariant,
+    held in the master's one update listener: the focused row's
+    selection is the master's; any other change either brings the
+    row's selection along or moves the focus to the cursor's row,
+    opening it, and after an undo, a redo or "next problem" the row
+    left closes. A move, a delete and a new slide are entries of the
+    same history, with the rows' layout and keys. Where the text is
+    cut is `Wiki.Core.SlideRows`: a row starts at a slide's heading,
+    the line break before it belongs to no row, and after an edit only
+    the changed rows are cut again, each on its own text, so that a
+    block left open in one row does not take the rows below (they are
+    marked "part of slide N", and the slide that swallows them gets a
+    problem). Whatever a row decides from text (may a completion open
+    here) it asks of the whole document. The preview renders the whole
+    deck as one document and shows the card asked for. **Overflow.** Every slide is laid out
     1024 px wide and measured against its own box, heading included,
     with nothing that depends on the window taking part: fits, yellow
     (less than half a line to spare up to one line cut) or red, grey
@@ -1791,29 +1811,21 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
-- **WP5.103 A presentation's slides are rows, each with an editor of its
-  own (the owner, 2026-11-12, after using #253's slide-by-slide mode:
-  "raczej jako listę rozwijalnych wierszy z których każda ma osobny
-  edytor, a nie taką listę w jednym edytorze, wygląda to dość dziwnie i
-  hacky").** The "Slides" mode of decision 77, one CodeMirror over the
-  whole text with every slide folded and its controls drawn as widgets
-  at the slide's first line, is replaced, not kept beside the new one.
-  The new mode is a list of rows drawn by Halogen, one per slide: a
-  closed row shows the slide's number, its title, its fit mark and a
-  handle to move it; an open row holds a CodeMirror over that slide's
-  Markdown, heading included; several rows may be open. Raw stays as it
-  is, and the stored text stays one Markdown document. Undo and search
-  are the whole presentation's, not a slide's (the owner, the same day:
-  "ctrl-z zahaczające o inny slajd zamknie obecny i przejdzie do tamtego
-  (i cofnie)"): one history, in which a move, a delete, a new slide, a
-  split and a merge are entries like typing, and an undo of a change in
-  another slide opens that slide's row and undoes it there; Ctrl+F
-  searches the whole text and walks its matches across rows. A design
-  stage comes first (which text is cut into rows when a slide leaves a
-  fence open, rows' identity, split and merge, how the editor's eight
-  whole-document mechanisms reach a row); decision 77 is amended when
-  the package merges. The fit's measure and its tests are WP5.102's and
-  do not depend on the mode.
+- **WP5.103b Search over the whole presentation (what is left of
+  WP5.103 after #259; the owner, 2026-11-12: Ctrl-F per slide "trochę
+  słabe").** Ctrl+F in a row opens one search over the whole text, on
+  the master; next and previous walk the matches across slides,
+  opening the row that holds the match and selecting it; replace and
+  replace all are entries of the one history. The design (kept with
+  #259's builder's notes): `@codemirror/search` for the matching only
+  (`SearchQuery`, a cursor over a text without a view; verify on the
+  version the lockfile pins), a panel of the wiki's own above the
+  list, matches marked in the open rows and counted on a closed row's
+  header (the slot `.slide-row-matches` is there). **Waits for the
+  owner's word**: the same panel in Raw too, in place of the
+  browser's find, or in Slides only. With it: fit marks and the
+  preview's following for a text with carriage returns (see the known
+  gaps).
 - **WP5.98 The smoke tests wait on the program, and run slowed down
   (the owner, 2026-11-12: "mamy bardzo dużo timing issues w testach
   dymnych"; after #251 and #253).** Two days of red runs fell into two
@@ -1854,7 +1866,20 @@ which the wiki pins since #227.
   of the scripts' helpers and the README. `test-assistant.mjs` and
   `test-tikz-letters.mjs` test JavaScript modules without a browser and
   stay in node. The driver's author's notes on the port are kept with
-  pull request (a).
+  pull request (a). **(a) is done (#260, merged with #259):** the pin
+  is at ed83131, the pauses follow the rule (stated in
+  `Wiki.App.View.Common`), and `wiki-smoke`, a native-only package,
+  has two suites run in CI's wasm job: the README's screenshots, and
+  proofs of the waits, both also with `HALOGEN_PLAYWRIGHT_THROTTLE=4`.
+  One thing in the notes did not hold: the assistant's turn reaches
+  its view through an emitter, so `waitQuiet` returns right after
+  Send; (b) begins by giving the turn a counted wait in
+  `Assistant.hs`. For (b) and (c), three tests that raced in CI on the
+  night of 2026-11-12: `DeckViewer` "when the server refuses the
+  page" (the request an `IntersectionObserver` starts after
+  `bringNear`, waited for two seconds), the Vault suite's check for an
+  exportable key (one example's leak fails every later one), and
+  `page.goBack` in the server smoke test's interactive SVG walk.
 - **WP5.95 No view takes an older answer over a newer one (found by
   Codex on #243, rounds 12 and 13; left there on purpose).** The page view
   drops a fetched page older than the one it shows (`takesPage`, by
@@ -2848,6 +2873,27 @@ needs. Each was true when its package merged; check before relying on one.
   editor's other specs and passes alone, on `main` as on every branch
   (Enter in the empty emoji search is expected to be prevented and is
   not); CI's sharding happens to pass it. Nobody has looked for the cause.
+- **The slides' rows after #259 (decision 77).** Codex ran nine
+  rounds (6, 2, 3, 1, 2, 1, 1, 1, 1 findings, most of one family: the
+  caret the author sees and the master's selection in different
+  places); the invariant and a seeded random walk in the browser
+  (three seeds of fifty steps in the suite) hold that family. Left: a
+  text with carriage returns is edited by rows and comes back byte for
+  byte, but its rows have no fit marks and the preview does not follow
+  the cursor's slide, since `Slides.slideSpans` gives no slides for a
+  text with `\r` (the parser and the editor count its lines
+  differently; rows go by characters). A drag of a slide is HTML5 drag
+  and drop: none by touch. The focus a move of DOM takes from an
+  editor is given back by watching the element for one second
+  (Halogen has no hook after its patch). The textarea shows above the
+  disabled rows while CodeMirror loads. The walk's quiet waits are
+  fixed times, and its three examples add about 75 s to a browser
+  shard that has 600. Not this package's, found by its measures: a
+  code block of 500 lines stalls the page about a second after each
+  pause in typing, in Raw as in a row (the check, the preview's
+  highlighting and the slides' measures). The forwarding between the
+  master and the rows is about 300 lines of JavaScript, glue around
+  CodeMirror's dispatch that could not be Haskell's.
 - **Encrypted spaces after #255 (decision 80).** Left on purpose or
   not possible: a reader who never read a page under its new
   encryption can be shown its old chain; grants of a space's key are
@@ -2921,10 +2967,8 @@ needs. Each was true when its package merged; check before relying on one.
   again; no loop of measures was found (WP5.98's throttled run). A
   screen narrower than 1024 px can cut more than a slide's mark says. A
   Mermaid diagram not drawn yet is measured as it stands and again when
-  drawn, so a mark can be green for a moment. The slides' drag is
-  written by hand over HTML5 drag and drop: the nodes are CodeMirror's
-  and Halogen's, and what moves is a range of text only the component
-  can compute. A text with `\r` has no slides in the editor.
+  drawn, so a mark can be green for a moment. (The editor's slides
+  are rows since #259: see "The slides' rows after #259".)
 - **Dependencies to watch (the audit of 2026-11-12, WP5.100).** 391
   packages over the native, wasm and maker builds; none deprecated, no
   open advisory against a version in use. cborg and serialise,
