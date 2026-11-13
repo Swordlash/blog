@@ -1,5 +1,5 @@
 ---
-pr: 0
+pr: 260
 title: The README's screenshots are taken by a Haskell test that waits on the page
 technical: true
 ---
