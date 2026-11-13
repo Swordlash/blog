@@ -1869,7 +1869,7 @@ which the wiki pins since #227.
   (`mkSyncCallback`), observer, listener and timer a view keeps in its
   state to stop in `Finalize`. Read them all, make each in the step
   that keeps it (`H.liftEffect`), and say the rule in AGENTS.md's
-  conventions. After #268, which it shares files with.
+  conventions.
 - **WP5.98 The smoke tests wait on the program, and run slowed down
   (the owner, 2026-11-12: "mamy bardzo dużo timing issues w testach
   dymnych"; after #251 and #253).** Two days of red runs fell into two
@@ -2985,6 +2985,34 @@ needs. Each was true when its package merged; check before relying on one.
   should carry a skipped thunk's slots over). A keystroke's own
   handler on that deck is 47 to 90 ms. The pause after typing is
   WP5.108.
+- **A view closed as it opens, after #268.** CI met it twice in a row:
+  a view unmounted within milliseconds of its mount left one owner of
+  attachments' addresses registered in the tab. Nothing of a view runs
+  after its finalizer (the pinned haskell-halogen cancels its fibers
+  and subscriptions); the hole was that `Body.ensureOwned` and
+  `beginOwned` registered the owner through `lift`, on a worker
+  thread, and wrote it into the view's state in the next step, which a
+  close between the two never took. The rule, in `Body.Owners`: the
+  backend's part and the write to the state are one step of the view's
+  program (`H.liftEffect`), so a close comes before both or after
+  both; `newUrlOwner` and `releaseUrls` must not wait. The embedded
+  deck's watch had the same shape and was fixed by reading; the other
+  views are WP5.109. The example that holds it closes each view at the
+  hold of its first registering action: on the code before, another
+  backend action straddling the registration could take the hold and
+  that route would pass falsely (never seen).
+- **Events the browser fires late (found by #268's CI run).** The
+  Playwright driver's `settle` ends after one background task and an
+  idle probe, which can be before an event the browser sends with the
+  next animation frame: a modal `<dialog>`'s `close` after Escape (not
+  yet fired in 19 runs of 40 on a bare page), `popstate` after a
+  page's own `history.back()`. The program is idle then, so
+  `waitQuiet` is no signal. A test whose read depends on such an event
+  listens for it itself before the action and waits for it (`afterEvent`
+  in `wiki-smoke/demo/Demo/Looks.hs`, through a promise: the page's
+  policy refuses `waitForFunction`). The demo's suite was read for it
+  (38 pairs, 3 fixed); `wiki-smoke/server/` and `wiki-smoke/src/` were
+  not, and go with WP5.98 (d).
 - **The editor's search after #263.** Codex ran eight rounds (3, 2, 2,
   2, 3, 2, 1, 0); most findings came from leaning on
   `@codemirror/search` for more than its cursors (its `test` and
