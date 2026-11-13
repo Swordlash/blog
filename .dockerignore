@@ -17,6 +17,7 @@
 !wiki-api/
 !wiki-app/
 !wiki-server/
+!wiki-smoke/wiki-smoke.cabal
 !changelog/
 !maker/
 maker/cabal.project.local

@@ -131,7 +131,7 @@ import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
 import Data.Row (type (.+), type (.==))
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (NominalDiffTime, UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -1198,7 +1198,7 @@ component =
       took <- maybe (pure False) (\e -> liftIO (copyText e address)) element
       modify (\st -> st {copied = (\c -> c {outcome = Just took}) <$> st.copied})
       waiting <- H.fork $ do
-        liftIO (threadDelay (if took then copiedTime else 4 * copiedTime))
+        H.delay (if took then copiedTime else 4 * copiedTime)
         modify (\st -> st {copied = Nothing, copiedWait = Nothing})
       modify (\st -> st {copiedWait = Just waiting})
 
@@ -1599,8 +1599,8 @@ permanentAddress st page = Router.href st.input.context.router (PermanentLink pa
 
 -- | How long the notice of a copied address stays: long enough to be read
 -- in passing.
-copiedTime :: Int
-copiedTime = 2_000_000
+copiedTime :: NominalDiffTime
+copiedTime = 2
 
 -- | What the notice of a copied address says before the address.
 copiedLabel :: Copied -> Text

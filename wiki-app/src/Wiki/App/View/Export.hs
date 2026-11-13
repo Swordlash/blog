@@ -30,6 +30,7 @@ module Wiki.App.View.Export
 where
 
 import Data.Row (Empty)
+import Data.Time (NominalDiffTime)
 import Halogen qualified as H
 import Halogen.TH (hh)
 import Protolude hiding (State)
@@ -134,7 +135,7 @@ component =
     say refused text = do
       clearNotice
       waiting <- H.fork $ do
-        liftIO (threadDelay (if refused then refusalTime else noticeTime))
+        H.delay (if refused then refusalTime else noticeTime)
         modify (\st -> st {notice = Nothing, noticeWait = Nothing})
       modify (\st -> st {notice = Just Notice {refused, text}, noticeWait = Just waiting})
 
@@ -156,11 +157,11 @@ makingLabel f = "Making the " <> noun <> "…"
       BeamerTex -> "Beamer source"
       BeamerPdf -> "PDF"
 
--- | How long a notice that is not a refusal stays, in microseconds.
-noticeTime :: Int
-noticeTime = 6_000_000
+-- | How long a notice that is not a refusal stays, in seconds.
+noticeTime :: NominalDiffTime
+noticeTime = 6
 
--- | How long a refusal stays unless it is dismissed, in microseconds: long
+-- | How long a refusal stays unless it is dismissed, in seconds: long
 -- enough to read a reason of a few lines.
-refusalTime :: Int
-refusalTime = 15_000_000
+refusalTime :: NominalDiffTime
+refusalTime = 15

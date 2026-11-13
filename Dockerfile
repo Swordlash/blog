@@ -86,6 +86,9 @@ COPY wiki-core/wiki-core.cabal wiki-core/
 COPY wiki-api/wiki-api.cabal wiki-api/
 COPY wiki-app/wiki-app.cabal wiki-app/
 COPY wiki-server/wiki-server.cabal wiki-server/
+# The smoke suites are not built here, but cabal.project lists the package,
+# and cabal reads every package the project lists.
+COPY wiki-smoke/wiki-smoke.cabal wiki-smoke/
 ARG LIBRARIES="wiki-core:lib:wiki-core wiki-api:lib:wiki-api wiki-app:lib:wiki-app"
 RUN --mount=type=cache,id=wiki-dist-newstyle,target=/src/dist-newstyle,sharing=locked \
     cabal update \

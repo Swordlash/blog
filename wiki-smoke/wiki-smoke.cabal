@@ -1,0 +1,98 @@
+cabal-version:      3.0
+name:               wiki-smoke
+version:            0.1.0.0
+synopsis:           The wiki's smoke tests: the built page driven in Chromium from Haskell
+description:
+  Native test suites that drive the wiki as it is built and served, in
+  headless Chromium, through haskell-halogen-playwright. After every action
+  the driver waits until the page's Halogen program says it is idle, so the
+  suites wait on the program rather than on the clock (docs/PLAN.md,
+  WP5.98). They depend on neither the application's nor the server's
+  library, only on what their builds wrote: npm run build-wasm's demo in
+  dist-newstyle/wasm/public/app. Each suite is pending without that build,
+  unless WIKI_SMOKE_REQUIRED=1, which toolchain/smoke-suite.sh sets.
+license:            MIT
+license-file:       LICENSE
+author:             Mateusz Goślinowski
+maintainer:         mateusz.goslinowski@gmail.com
+category:           Web, Testing
+build-type:         Simple
+
+-- The warnings every package here is built with (cabal.project makes them
+-- errors) and the extensions the suites assume. The suites use base's
+-- Prelude, as haskell-halogen-playwright's own do: Halogen.Playwright.Hspec
+-- exports the part of hspec a suite is written with.
+common shared
+  default-language: GHC2021
+  ghc-options: -Wall -Wextra -Wcompat -Wterm-variable-capture -Wredundant-constraints -Wunused-packages
+
+  default-extensions:
+      DataKinds
+      DerivingStrategies
+      DuplicateRecordFields
+      LambdaCase
+      NamedFieldPuns
+      NoFieldSelectors
+      OverloadedRecordDot
+      OverloadedStrings
+      StrictData
+
+-- What the suites share: finding the built demo, serving it as a static
+-- host does, and a page of it at a fixed size. Native only, as
+-- haskell-halogen-playwright is: it drives Chromium from outside the page.
+library
+  import:           shared
+  hs-source-dirs:   src
+  exposed-modules:
+      Wiki.Smoke.Demo
+  if arch(wasm32) || arch(javascript)
+    buildable: False
+  else
+    build-depends:
+        base >= 4.20 && < 5,
+        base64-bytestring,
+        bytestring,
+        directory,
+        filepath,
+        text,
+        haskell-halogen-playwright
+
+-- The README's screenshots, from the built demo (npm run screenshots, which
+-- writes them to docs/screenshots). Elsewhere they go to a temporary
+-- directory, so that a run of every suite after a wasm build changes no file
+-- of the repository: each is still taken and checked to be under 300 KB.
+test-suite wiki-smoke-screenshots
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   screenshots
+  main-is:          Screenshots.hs
+  ghc-options:      -threaded
+  if arch(wasm32) || arch(javascript)
+    buildable: False
+  else
+    build-depends:
+        base,
+        directory,
+        filepath,
+        temporary,
+        text,
+        haskell-halogen-playwright,
+        wiki-smoke
+
+-- That the driver's waits hold on the wiki: waitQuiet after typing returns
+-- once the debounced preview is drawn, after a save with "Saved" still
+-- shown, and while the writing assistant's seconds counter ticks.
+test-suite wiki-smoke-waits
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   waits
+  main-is:          Waits.hs
+  ghc-options:      -threaded
+  if arch(wasm32) || arch(javascript)
+    buildable: False
+  else
+    build-depends:
+        base,
+        text,
+        haskell-halogen-playwright,
+        wiki-smoke

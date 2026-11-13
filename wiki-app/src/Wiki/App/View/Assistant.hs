@@ -870,7 +870,7 @@ component =
     startTicker = do
       gets (\st -> st.ticker) >>= traverse_ H.kill
       ticker <- H.fork . forever $ do
-        liftIO (threadDelay 1_000_000)
+        H.delay 1
         handleAction Tick
       modify (\st -> st {ticker = Just ticker})
 

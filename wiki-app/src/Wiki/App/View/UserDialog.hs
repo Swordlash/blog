@@ -70,6 +70,7 @@ import Control.Monad.UUID (MonadUUID)
 import Data.List (partition)
 import Data.Row (Empty)
 import Data.Text qualified as T
+import Data.Time (NominalDiffTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -631,7 +632,7 @@ component =
     tell saying = do
       gets (\st -> st.notice) >>= traverse_ H.kill
       waiting <- H.fork $ do
-        liftIO (threadDelay savedNoticeTime)
+        H.delay savedNoticeTime
         modify (\st -> st {told = Nothing, notice = Nothing})
       modify (\st -> st {told = Just saying, notice = Just waiting})
 
@@ -639,8 +640,8 @@ component =
     yourself st = Just st.input.user.user.id == ((\me -> me.id) <$> st.input.context.session.user)
 
 -- | How long "Saved" stays: five seconds.
-savedNoticeTime :: Int
-savedNoticeTime = 5_000_000
+savedNoticeTime :: NominalDiffTime
+savedNoticeTime = 5
 
 -- | The badges of a user: administrator, creates spaces, second factor,
 -- disabled. The table's rows show the same.
