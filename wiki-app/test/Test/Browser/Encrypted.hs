@@ -143,6 +143,8 @@ $( browserJS
      , ("js_decryptions_done", "wiki_test_encrypted_decryptions_done", Safe, [t|IO Int|])
      , ("js_committed", "wiki_test_encrypted_committed", Safe, [t|IO JSText|])
      , ("js_go_to", "wiki_test_encrypted_go_to", Safe, [t|JSText -> IO ()|])
+     , ("js_settle", "wiki_test_encrypted_settle", Safe, [t|JSText -> JSText -> IO ()|])
+     , ("js_sealed_again", "wiki_test_encrypted_sealed_again", Safe, [t|JSText -> IO ()|])
      , ("js_history_back", "wiki_test_encrypted_history_back", Safe, [t|IO ()|])
      , ("js_member", "wiki_test_encrypted_member", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
      , ("js_tell_dropped", "wiki_test_encrypted_tell_dropped", Safe, [t|JSText -> IO ()|])
@@ -1416,6 +1418,85 @@ spec m = do
     sent <- asked
     [r.url | r <- sent, ("pages/" <> made.id.text <> "/threads") `T.isSuffixOf` r.url, not ("encrypted" `T.isInfixOf` r.url)] `shouldSatisfy` (not . null)
     [r.url | r <- sent, ("encrypted/pages/" <> made.id.text <> "/threads") `T.isSuffixOf` r.url] `shouldBe` []
+
+  -- #213, the review's P2: a tab open while another browser changed the
+  -- space's state reads it as it is now, at its next read, with no reload:
+  -- the server's refusal says the space is not in the state the tab
+  -- believed, and the tab reads the spaces again and sends the read once
+  -- more by the route they name. A write is not sent again.
+  describe "a tab left in a space's old state" $ do
+    let setUp = do
+          env <- encryptedSpace "user-admin"
+          void (ok =<< run env (encryptSpace secret.id))
+          unsafeIOToPageM (js_strip_home (toJSText secret.id.text))
+          first' <- ok =<< run env (createPage secret.id Nothing "First" "First text.")
+          second' <- ok =<< run env (createPage secret.id Nothing "Second" "Second text.")
+          pure (first', second')
+        madePlain p = unsafeIOToPageM (js_made_plain (toJSText p.id.text) (toJSText ("Plain " <> p.title)) (toJSText ("Plain " <> p.body)))
+        settled how = unsafeIOToPageM (js_settle (toJSText secret.id.text) (toJSText (how :: Text)))
+        converting way = unsafeIOToPageM (js_converting (toJSText secret.id.text) (toJSText (way :: Text)))
+        opened who = do
+          tab <- as who
+          run tab endPreload
+          void (run tab listSpaces)
+          pure tab
+        titles tab = map (\p -> p.title) <$> (ok =<< run tab (listPages secret.id))
+
+    it "reads a space whose encryption another browser turned off, plain, and writes nothing to it encrypted" $ runPage $ do
+      (first', second') <- setUp
+      tab <- opened "user-admin"
+      read' <- ok =<< run tab (getPage secret.id [first'.slug])
+      read'.body `shouldBe` "First text."
+      editing <- ok =<< run tab (getPage secret.id [second'.slug])
+      -- Turned off elsewhere, to the end.
+      traverse_ madePlain [first', second']
+      settled "plain"
+      again <- ok =<< run tab (getPage secret.id [first'.slug])
+      (again.title, again.body) `shouldBe` ("Plain First", "Plain First text.")
+      sort <$> titles tab `shouldReturn` ["Plain First", "Plain Second"]
+      (\h -> Set.member secret.id h.keys) <$> unsafeIOToPageM (heldNow tab) `shouldReturn` False
+      -- A save from an editor opened before: refused, and nothing sent
+      -- again by another route.
+      before <- length <$> asked
+      run tab (savePage second'.id editing.updatedAt "Second" "Typed before.") >>= (`shouldSatisfy` isLeft)
+      sent <- drop before <$> asked
+      [r.url | r <- sent, r.method == "PUT"] `shouldSatisfy` all (\u -> not ("api/v1/pages/" `T.isPrefixOf` u))
+      [r.body | r <- sent] `shouldSatisfy` all (not . T.isInfixOf "Typed before.")
+
+    it "shows a space another browser encrypted as locked to a reader without its key, and sends nothing plain" $ runPage $ do
+      (first', second') <- setUp
+      traverse_ madePlain [first', second']
+      settled "plain"
+      tab <- opened "user-reader"
+      ((\p -> p.body) <$> (ok =<< run tab (getPage secret.id [first'.slug]))) `shouldReturn` "Plain First text."
+      -- Encrypted elsewhere, to the end.
+      settled "encrypted"
+      run tab (getPage secret.id [first'.slug]) >>= \case
+        Left e -> show e `shouldSatisfy` (not . T.isInfixOf "Plain")
+        Right p -> panic ("read: " <> show p)
+
+    it "reads the mixed state of a conversion another browser started since this tab listed the space" $ runPage $ do
+      (first', second') <- setUp
+      tab <- opened "user-admin"
+      sort <$> titles tab `shouldReturn` ["First", "Second"]
+      -- Decrypted elsewhere, its first page so far.
+      converting "decrypting"
+      madePlain first'
+      sort <$> titles tab `shouldReturn` ["Plain First", "Second"]
+      ((\p -> p.body) <$> (ok =<< run tab (getPage secret.id [first'.slug]))) `shouldReturn` "Plain First text."
+      ((\p -> p.body) <$> (ok =<< run tab (getPage secret.id [second'.slug]))) `shouldReturn` "Second text."
+
+    it "reads a page a conversion turned back elsewhere encrypted again" $ runPage $ do
+      (first', _) <- setUp
+      converting "decrypting"
+      madePlain first'
+      tab <- opened "user-admin"
+      ((\p -> p.body) <$> (ok =<< run tab (getPage secret.id [first'.slug]))) `shouldReturn` "Plain First text."
+      -- Turned back elsewhere: the page encrypted again.
+      converting "encrypting"
+      unsafeIOToPageM (js_sealed_again (toJSText first'.id.text))
+      ((\p -> p.body) <$> (ok =<< run tab (getPage secret.id [first'.slug]))) `shouldReturn` "First text."
+      sort <$> titles tab `shouldReturn` ["First", "Second"]
 
   -- #213, the review's P2: a conversion paused halfway leaves pages of
   -- both kinds in one space, a page of one kind under a page of the other.

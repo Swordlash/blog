@@ -48,7 +48,7 @@ import Wiki.Api.Opaque (PasswordRecord (..))
 import Wiki.Api.Opaque qualified as Opaque
 import Wiki.Api.Upload (SealedUpload (..))
 import Wiki.Api.Vault (NewPublicKey (..), VaultChange (..))
-import Wiki.App.Backend (MonadWiki (..), WikiError (..))
+import Wiki.App.Backend (MonadWiki (..), Staleness (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
@@ -944,7 +944,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
             let reason = Offered.refusalOf a chain
             reason `shouldSatisfy` isJust
             Offered.offerOf a chain `shouldBe` Offered.Hidden
-            r `shouldBe` Left (Conflict (fromMaybe "" reason))
+            r `shouldBe` Left (Stale SpaceIsEncrypted (fromMaybe "" reason))
       made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
       plainSpace <- privateSpace st p.ada "Plain"
       [chain] <- (\xs -> [[x] | x <- xs, x.id == secret.id]) <$> as p.ada listSpaces
@@ -965,7 +965,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
       reason `shouldSatisfy` isJust
       Offered.offerOf Offered.Write during `shouldBe` Offered.Unavailable (fromMaybe "" reason)
       for_ [as p.ada (void <$> createPage converting.id Nothing "Another" "Text."), as p.ada (void <$> savePage page.id page.updatedAt "A page" "Changed."), as p.ada (void <$> setSpaceProfile converting.id SpaceProfile {description = "Changed", icon = Nothing, blog = False, boxNumbering = Space.InPage})] $ \w ->
-        w `shouldReturn` Left (Conflict (fromMaybe "" reason))
+        w `shouldReturn` Left (Stale ConversionRuns (fromMaybe "" reason))
 
   -- #213: the titles under the bell and the stars, asked for by the pages'
   -- ids alone, encrypted, and only of the pages the caller may view whose
@@ -1969,7 +1969,7 @@ randomPicks seed bound = map (\x -> (x `div` 65536) `mod` bound) (drop 1 (iterat
 -- | Whether a write was refused while the space's key must be renewed.
 renewalRefused :: Either WikiError a -> Bool
 renewalRefused = \case
-  Left (Conflict why) -> "key must be renewed" `T.isInfixOf` why
+  Left (Stale RenewalDue _) -> True
   _ -> False
 
 --------------------------------------------------------------------------------
@@ -1978,6 +1978,7 @@ renewalRefused = \case
 conflict :: Either WikiError a -> Bool
 conflict = \case
   Left (Conflict _) -> True
+  Left (Stale _ _) -> True
   _ -> False
 
 invalid :: Either WikiError a -> Bool
@@ -1990,10 +1991,11 @@ invalid = \case
 ruleRefused :: Text -> Either WikiError a -> Bool
 ruleRefused why = \case
   Left (Conflict t) -> why `T.isInfixOf` t
+  Left (Stale _ t) -> why `T.isInfixOf` t
   _ -> False
 
 -- | Whether a plain operation was refused because the space is encrypted.
 refusedAsEncrypted :: Either WikiError a -> Bool
 refusedAsEncrypted = \case
-  Left (Conflict why) -> "is not possible in an encrypted space" `T.isInfixOf` why
+  Left (Stale st why) -> st `elem` [SpaceIsEncrypted, PageReadsEncrypted] && "is not possible in an encrypted space" `T.isInfixOf` why
   _ -> False

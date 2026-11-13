@@ -367,6 +367,7 @@ toApiError = \case
   NotFound -> Just ApiError.NotFound
   Forbidden -> Just ApiError.Forbidden
   Conflict t -> Just (ApiError.Conflict t)
+  Stale st t -> Just (ApiError.Stale st t)
   Invalid t -> Just (ApiError.Invalid t)
   Unreachable _ -> Nothing
 

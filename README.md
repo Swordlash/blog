@@ -801,7 +801,17 @@ renews for two minutes. Another administrator's browser can continue
 only once it has stopped that long; the same user can take it over from
 another of their browsers at once ("Take over here"), and the browser it
 was taken from writes nothing more, not even a request it had already
-sent. Before a page is committed, its attachments' bytes as the server
+sent. A tab left open while another browser started, ended or turned
+back a conversion learns of it at its next request the server refuses
+for that reason (each such refusal carries a code, `Stale` in
+`docs/api.md`): it reads the spaces again, lets go of the keys and pages
+of a space plain now, and sends a read once more by the route the space
+now takes; a write is not sent again, and the author is told to reload
+the page. A tab that believed the space encrypted lists its pages after
+asking the server whether it is being converted, so the pages a
+conversion made plain since are in its list; one that believed it plain
+lists the plain pages until a request of it is refused, or the spaces are
+read again. Before a page is committed, its attachments' bytes as the server
 staged them are compared, by hash and size, with what the browser sent,
 read back, and opened with the page's key as stored. A page encrypted gets a new address
 made of random letters, since its old one spelled its title; its link by

@@ -199,6 +199,7 @@ fromApiError = \case
   ApiError.NotFound -> NotFound
   ApiError.Forbidden -> Forbidden
   ApiError.Conflict t -> Conflict t
+  ApiError.Stale st t -> Stale st t
   ApiError.Invalid t -> Invalid t
   -- Signing in's own error, which the server never returns to a
   -- 'Wiki.App.Backend.MonadWiki' request; if a proxy in front of it does,

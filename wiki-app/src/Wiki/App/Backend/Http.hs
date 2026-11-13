@@ -120,7 +120,7 @@ import Wiki.Api.Activity (ActivityQuery (..), firstPage)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..), UserQuery (..))
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
-import Wiki.Api.Encrypted (ConversionCommit (..), ConversionInfo (..), ConversionLease (..), ConversionPage (..), EncryptSpace (..), HeadingsQuery (..), LeaseRequest (..), LeaseToken, NewEncryptedSubspace (..), NewGrant (..), NewGrants (..), NewSealedComment (..), NewSealedPage (..), NewSealedThread (..), PageHeading (..), PlainAnchor (..), PlainComment (..), PlainMeta (..), PlainVersion (..), RotatedPage (..), Rotation (..), RotationInfo (..), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedThread (..), SealedThreads (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..), SpaceEntry (..), SpaceKeyStart (..), StagedAnchor (..), StagedBlob (..), StagedComment (..), StagedMeta (..), StagedPage (..), StagedPlain (..), StagedSealed (..), StagedVersion (..), StartEncrypting (..), leaseRefusal, maxHeadings, notConvertedYet)
+import Wiki.Api.Encrypted (ConversionCommit (..), ConversionInfo (..), ConversionLease (..), ConversionPage (..), EncryptSpace (..), HeadingsQuery (..), LeaseRequest (..), LeaseToken, NewEncryptedSubspace (..), NewGrant (..), NewGrants (..), NewSealedComment (..), NewSealedPage (..), NewSealedThread (..), PageHeading (..), PlainAnchor (..), PlainComment (..), PlainMeta (..), PlainVersion (..), RotatedPage (..), Rotation (..), RotationInfo (..), SealedAttachment (..), SealedCommentEdit (..), SealedCommentInfo (..), SealedEdit (..), SealedPage (..), SealedSummary (..), SealedThread (..), SealedThreads (..), SealedVersion (..), SealedVersionInfo (..), SpaceEncryption (..), SpaceEntry (..), SpaceKeyStart (..), StagedAnchor (..), StagedBlob (..), StagedComment (..), StagedMeta (..), StagedPage (..), StagedPlain (..), StagedSealed (..), StagedVersion (..), StartEncrypting (..), maxHeadings)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Export (dispositionFileName, formatExtension, formatMediaType)
@@ -139,7 +139,7 @@ import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Assistant (KeyRef, MonadAssistant, deviceKeyIO, forgetHeld, wrapForPassword)
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..), Rewrap (..))
-import Wiki.App.Backend (Document (..), ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (..), UrlOwner (..), WikiError (..), sessionPrincipal, withOwnUser)
+import Wiki.App.Backend (Document (..), ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (..), Staleness (..), UrlOwner (..), WikiError (..), sessionPrincipal, withOwnUser)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), keyStateText)
@@ -367,8 +367,56 @@ call :: (MonadIO m) => HttpWiki IO a -> HttpWiki m (Either ClientError a)
 call (HttpWiki program) = HttpWiki (ReaderT (\env -> liftIO (try (runReaderT program env))))
 
 -- | Call an endpoint, and read the result as the backend returns it.
+--
+-- A refusal that says a space is not in the state this tab believes
+-- ('stateChanged': plain or encrypted, converted or not, a page of it
+-- read one way or the other) makes the tab learn the space's state again
+-- here, whatever the request: what it cached is emptied, as after a write,
+-- and the list of spaces is read from the server, which lets go of the
+-- keys and pages of a space plain now ('freshSpaces'). The request is not
+-- sent again here: a read is, once, where its route is chosen
+-- ('afterStale'); a write is not.
 send :: (MonadIO m) => HttpWiki IO a -> HttpWiki m (Either WikiError a)
-send endpoint = answer <$> call endpoint
+send endpoint = do
+  result <- answer <$> call endpoint
+  case result of
+    Left (Stale st _) | stateChanged st -> do
+      immediate <- HttpWiki (asks (\env -> env.immediate))
+      unless immediate $ do
+        modifyCache afterWrite
+        void freshSpaces
+    _ -> pass
+  pure result
+
+-- | Whether a refusal says a space, or a page of it, is in another state
+-- than the request believed: the state a tab learns again ('send').
+stateChanged :: Staleness -> Bool
+stateChanged = (`elem` [SpaceIsPlain, SpaceIsEncrypted, PageReadsPlain, PageReadsEncrypted, ConversionRuns, NoConversionRuns])
+
+-- | A read whose route is chosen from what this tab believes of a space
+-- (encrypted or plain, a page read one way or the other), sent once more
+-- when it was refused because that is no longer so ('stateChanged'): the
+-- tab has learnt the space's state again by then ('send'), so the route is
+-- chosen anew. A second refusal is the answer. A page of the space that
+-- reads plain now is forgotten as one read encrypted first.
+afterStale :: (MonadIO m) => Maybe PageId -> HttpWiki m (Either WikiError a) -> HttpWiki m (Either WikiError a)
+afterStale page request =
+  request >>= \case
+    Left (Stale st _) | stateChanged st -> do
+      when (st `elem` [SpaceIsPlain, PageReadsPlain]) (traverse_ forgetSealedPage page)
+      request
+    other -> pure other
+
+-- | A write refused because the space is no longer in the state this tab
+-- believed ('stateChanged'): never sent again, nor by another route, which
+-- could send ciphertext to a plain route or plain text unasked. The tab
+-- has learnt the space's state ('send'); the author is told, as of a page
+-- saved elsewhere meanwhile, and reloads the page as it is now.
+writeOnce :: (MonadIO m) => HttpWiki m (Either WikiError a) -> HttpWiki m (Either WikiError a)
+writeOnce request =
+  request <&> \case
+    Left (Stale st why) | stateChanged st -> Left (Conflict (why <> " Nothing was sent again: reload the page as it is now."))
+    other -> other
 
 -- | Call an endpoint whose response has no body.
 send_ :: (MonadIO m) => HttpWiki IO NoContent -> HttpWiki m (Either WikiError ())
@@ -629,11 +677,11 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   shiftSpace sid by = write (endpoints.spaces.shift sid ShiftBy {shift = by})
   shiftPage pid by = write (endpoints.pages.shift pid ShiftBy {shift = by})
   listPages sid =
-    encryptedOr sid (pageContent (\c -> Map.lookup sid c.pages) (endpoints.spaces.listPages sid) (withPages sid)) (sealedListPages sid)
+    afterStale Nothing (encryptedOr sid (pageContent (\c -> Map.lookup sid c.pages) (endpoints.spaces.listPages sid) (withPages sid)) (sealedListPages sid))
       >>= keepingSpaces (map (\p -> (p.id, p.space)))
   postDetails sid = pageContent (\c -> Map.lookup sid c.postDetails) (endpoints.spaces.postDetails sid) (withPostDetails sid)
   getPage sid path =
-    encryptedOr sid (readPlain =<< pageContent (cachedPage sid path) (getResponse <$> endpoints.spaces.pageAt sid path) (withPageAt sid path)) (sealedGetPage sid path)
+    afterStale Nothing (encryptedOr sid (readPlain =<< pageContent (cachedPage sid path) (getResponse <$> endpoints.spaces.pageAt sid path) (withPageAt sid path)) (sealedGetPage sid path))
       >>= keepingSpaces (\p -> [(p.id, p.space)])
 
   -- Page content (see "Wiki.App.Backend.Http.Cache"): cached only while
@@ -649,14 +697,16 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   pageBacklinks pid = pageContent (\c -> Map.lookup pid c.backlinks) (endpoints.pages.backlinks pid) (withBacklinks pid)
   createPage = createPageOf Kind.Document
   createPageOf kind sid parent title body =
-    encryptedFetched sid (write (getResponse <$> endpoints.spaces.createPage sid NewPage {parent, title, body, kind})) (\current -> renewingThen sid (freshKey sid current >>= sealedCreatePage kind sid parent title body))
-      >>= keepingSpaces (\p -> [(p.id, p.space)])
+    writeOnce $
+      encryptedFetched sid (write (getResponse <$> endpoints.spaces.createPage sid NewPage {parent, title, body, kind})) (\current -> renewingThen sid (freshKey sid current >>= sealedCreatePage kind sid parent title body))
+        >>= keepingSpaces (\p -> [(p.id, p.space)])
   savePage pid base title body =
-    sealedPage pid >>= \case
-      Nothing -> plainPageWrite pid (write (getResponse <$> endpoints.pages.save pid (PageVersion base) PageEdit {title, body}))
-      -- The page's key as held when the save is sent: a renewal of the
-      -- space's key gives the page a new one.
-      Just (sid, _) -> renewingThen sid (sealedPage pid >>= maybe (pure (Left (Conflict inEncryptedSpace))) (\(_, k) -> sealedSavePage sid pid k base title body))
+    writeOnce $
+      sealedPage pid >>= \case
+        Nothing -> plainPageWrite pid (write (getResponse <$> endpoints.pages.save pid (PageVersion base) PageEdit {title, body}))
+        -- The page's key as held when the save is sent: a renewal of the
+        -- space's key gives the page a new one.
+        Just (sid, _) -> renewingThen sid (sealedPage pid >>= maybe (pure (Left (Conflict inEncryptedSpace))) (\(_, k) -> sealedSavePage sid pid k base title body))
   movePage pid space parent = write (endpoints.pages.move pid PageMove {space, parent})
   setPageTemplate pid template = write (endpoints.pages.template pid PageTemplate {template})
   setPageKind pid kind = write (endpoints.pages.kind pid PageKindChange {kind})
@@ -666,9 +716,10 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- bytes and its name and media type, and sent as ciphertext
   -- ('sealedUpload'); never as plain bytes, even to be refused.
   uploadAttachment pid name mediaType bytes =
-    sealedPage pid >>= \case
-      Nothing -> plainPageWrite pid (write (withBoundary (endpoints.pages.upload pid) AttachmentUpload {name, mediaType, payload = toS bytes}))
-      Just (sid, _) -> renewingThen sid (sealedPage pid >>= maybe (pure (Left (Conflict inEncryptedSpace))) (\(_, k) -> sealedUpload sid pid k name mediaType bytes))
+    writeOnce $
+      sealedPage pid >>= \case
+        Nothing -> plainPageWrite pid (write (withBoundary (endpoints.pages.upload pid) AttachmentUpload {name, mediaType, payload = toS bytes}))
+        Just (sid, _) -> renewingThen sid (sealedPage pid >>= maybe (pure (Left (Conflict inEncryptedSpace))) (\(_, k) -> sealedUpload sid pid k name mediaType bytes))
   deleteAttachment aid = write_ (endpoints.attachments.delete aid) <* forgetAttachments (\i _ -> i == aid)
 
   -- The server serves an attachment's bytes at an API address, which the
@@ -769,9 +820,10 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- The first page of a history is asked for at the address it always
   -- had, with no query.
   listVersions pid q =
-    sealedPage pid >>= \case
-      Just (sid, k) -> sealedVersions sid pid k q
-      Nothing -> plainPageRead pid plainVersions
+    afterStale (Just pid) $
+      sealedPage pid >>= \case
+        Just (sid, k) -> sealedVersions sid pid k q
+        Nothing -> plainPageRead pid plainVersions
     where
       plainVersions =
         pageContent
@@ -779,9 +831,10 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
           (endpoints.pages.versions pid (VersionTime <$> q.before) (mfilter (/= versionsPageSize) (Just q.limit)))
           (withVersions pid q)
   getVersion pid at =
-    sealedPage pid >>= \case
-      Just (sid, k) -> sealedVersion sid pid k at
-      Nothing -> plainPageRead pid (cached (\c -> Map.lookup (pid, at) c.versions) (endpoints.pages.version pid (VersionTime at)) (withVersion pid at))
+    afterStale (Just pid) $
+      sealedPage pid >>= \case
+        Just (sid, k) -> sealedVersion sid pid k at
+        Nothing -> plainPageRead pid (cached (\c -> Map.lookup (pid, at) c.versions) (endpoints.pages.version pid (VersionTime at)) (withVersion pid at))
 
   -- The server cannot restore a version of an encrypted page, whose text
   -- it cannot read: the browser decrypts the version and saves it again.
@@ -883,21 +936,25 @@ instance (MonadIO m) => MonadComments (HttpWiki m) where
   -- refused. Deleting and resolving carry no text, and go by the plain
   -- routes.
   listThreads pid =
-    sealedPage pid >>= \case
-      Just (sid, _) -> sealedListThreads sid pid
-      Nothing -> plainPageRead pid (cached (\c -> Map.lookup pid c.threads) (endpoints.comments pid).list (withThreads pid))
+    afterStale (Just pid) $
+      sealedPage pid >>= \case
+        Just (sid, _) -> sealedListThreads sid pid
+        Nothing -> plainPageRead pid (cached (\c -> Map.lookup pid c.threads) (endpoints.comments pid).list (withThreads pid))
   openThread pid anchor body =
-    sealedPage pid >>= \case
-      Just (sid, _) -> renewingThen sid (sealedOpenThread sid pid anchor body)
-      Nothing -> commentWrite pid ThreadOpened ((endpoints.comments pid).open NewThread {anchor, body})
+    writeOnce $
+      sealedPage pid >>= \case
+        Just (sid, _) -> renewingThen sid (sealedOpenThread sid pid anchor body)
+        Nothing -> commentWrite pid ThreadOpened ((endpoints.comments pid).open NewThread {anchor, body})
   reply pid tid body =
-    sealedPage pid >>= \case
-      Just (sid, _) -> renewingThen sid (sealedComment sid pid tid Nothing body)
-      Nothing -> commentWrite pid CommentAdded ((endpoints.comments pid).reply tid CommentText {body})
+    writeOnce $
+      sealedPage pid >>= \case
+        Just (sid, _) -> renewingThen sid (sealedComment sid pid tid Nothing body)
+        Nothing -> commentWrite pid CommentAdded ((endpoints.comments pid).reply tid CommentText {body})
   editComment pid tid cid body =
-    sealedPage pid >>= \case
-      Just (sid, _) -> renewingThen sid (sealedComment sid pid tid (Just cid) body)
-      Nothing -> commentWrite pid CommentEdited ((endpoints.comments pid).edit tid cid CommentText {body})
+    writeOnce $
+      sealedPage pid >>= \case
+        Just (sid, _) -> renewingThen sid (sealedComment sid pid tid (Just cid) body)
+        Nothing -> commentWrite pid CommentEdited ((endpoints.comments pid).edit tid cid CommentText {body})
   deleteComment pid tid cid = commentWrite_ pid (CommentDeleted tid cid) ((endpoints.comments pid).deleteComment tid cid)
   deleteThread pid tid = commentWrite_ pid (ThreadDeleted tid) ((endpoints.comments pid).delete tid)
   setResolved pid tid resolved =
@@ -1579,6 +1636,11 @@ data Held = Held
   -- the reader left its gate, the user signed out, or the space is plain
   -- now. A step that decrypts with a space's key gives its result only if
   -- this count is the one it started under ('published').
+  , heldWasSealed :: Set PageId
+  -- ^ The pages this tab read encrypted whose spaces are plain now
+  -- ('freshSpaces'): a write of one, made from what was read encrypted, is
+  -- not sent plain unasked ('plainPageWrite'), until the page is read
+  -- plain ('readPlain').
   , heldSession :: Int
   -- ^ How many times this tab let go of everything for a change of user
   -- ('forgetHeldOf'): a key opened for the user before is not held after
@@ -1586,7 +1648,7 @@ data Held = Held
   }
 
 noneHeld :: Held
-noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldOwners = mempty, heldNextOwner = 1, heldLowest = mempty, heldReaders = mempty, heldConfirmed = mempty, heldLeases = mempty, heldClosings = mempty, heldSession = 0}
+noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldOwners = mempty, heldNextOwner = 1, heldLowest = mempty, heldReaders = mempty, heldConfirmed = mempty, heldLeases = mempty, heldClosings = mempty, heldWasSealed = mempty, heldSession = 0}
 
 -- | Where the bytes of an attachment of an encrypted page are, and what
 -- decrypts them: its space and page, the key of its page's that encrypts
@@ -1822,7 +1884,8 @@ freshSpaces = do
         let plain = Set.fromList [s.id | s <- spaces, isNothing s.encryption]
         gone <- atomicHeld $ \h ->
           let (h', dropped) = dropSpaces (`Set.member` plain) h
-           in (h' {heldPages = Map.filter (\(sid, _) -> Set.notMember sid plain) h'.heldPages}, dropped)
+              (wasSealed, kept') = Map.partition (\(sid, _) -> Set.member sid plain) h'.heldPages
+           in (h' {heldPages = kept', heldWasSealed = Set.union (Map.keysSet wasSealed) h'.heldWasSealed}, dropped)
         liftIO (letGo gone)
       pure result
 
@@ -1830,29 +1893,21 @@ freshSpaces = do
 encryptionIn :: SpaceId -> [Space] -> Maybe KeyId
 encryptionIn sid spaces = find (\s -> s.id == sid) spaces >>= \s -> s.encryption
 
--- | A read of a space's pages: the plain one, or for an encrypted space the
--- encrypted one with the space's current key id. Which one is decided from
--- the list of spaces in the cache, which the shell always holds, so that a
--- read of a plain space costs no request more. A plain read refused
--- because the space is encrypted (409; the list was not cached, or was
--- cached before the space was encrypted) fetches the list again
--- ('freshSpaces') and sends the encrypted read instead. A read sends no
--- text of the page, so trying the plain read first is safe.
+-- | A request about a space's pages: the plain one, or for an encrypted
+-- space the encrypted one with the space's current key id. Which one is
+-- decided from the list of spaces in the cache, which the shell always
+-- holds (read again when a write emptied the cache), so that a read of a
+-- plain space costs no request more. When the
+-- server says the space is not in that state ('send', 'stateChanged'), the
+-- tab learns it again, and a read is sent once more by the route the
+-- fresh list names ('afterStale'); a write is not ('writeOnce'). A read
+-- sends no text of the page, so trying the plain read first is safe.
 encryptedOr :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError a) -> (KeyId -> HttpWiki m (Either WikiError a)) -> HttpWiki m (Either WikiError a)
 encryptedOr sid plain sealed =
-  (\c -> c.spaces >>= encryptionIn sid) <$> readCache >>= \case
-    Just k -> sealed k
-    Nothing ->
-      plain >>= \case
-        refused@(Left (Conflict _)) ->
-          freshSpaces >>= \case
-            Right spaces | Just k <- encryptionIn sid spaces -> do
-              -- The space's cached record says it is plain: the shell
-              -- reads it again.
-              modifyCache (\c -> c {Cache.spaceAt = Map.filter (either (const True) (\s -> s.id /= sid)) c.spaceAt})
-              sealed k
-            _ -> pure refused
-        other -> pure other
+  -- The list as cached, or read now when a write emptied the cache.
+  spacesNow >>= \case
+    Right spaces -> maybe plain sealed (encryptionIn sid spaces)
+    Left _ -> plain
 
 -- | The space's current key id: the one given, or the one a renewal made
 -- since.
@@ -1883,6 +1938,9 @@ plainPageWrite :: (MonadIO m) => PageId -> HttpWiki m (Either WikiError a) -> Ht
 plainPageWrite pid plain =
   readHeld >>= \h -> case (Map.lookup pid h.heldPages, Map.lookup pid h.heldSpaces) of
     (Just _, _) -> pure (Left (Conflict inEncryptedSpace))
+    -- Read encrypted here, its space plain since: what was written from
+    -- it is not sent plain unasked.
+    _ | Set.member pid h.heldWasSealed -> pure (Left (Conflict "This page's space is no longer encrypted: what was written here, from the page as it was read encrypted, was not sent. Reload the page as it is now, plain."))
     (Nothing, Nothing) -> plain
     (Nothing, Just sid) ->
       freshSpaces >>= \case
@@ -2168,7 +2226,7 @@ renewOpenKey sid e =
 -- first ("Wiki.Server.Storage"'s refusal while a rotation is due).
 renewalRefused :: Either WikiError a -> Bool
 renewalRefused = \case
-  Left (Conflict why) -> "key must be renewed" `T.isInfixOf` why
+  Left (Stale RenewalDue _) -> True
   _ -> False
 
 -- | A write of a page of an encrypted space, renewed and sent once more
@@ -2191,6 +2249,7 @@ renewingThen sid sending =
   where
     errorText = \case
       Conflict why -> why
+      Stale _ why -> why
       other -> show other
 
 -- | 'Refresh': whether 'openKey' asks the server for the readers waiting
@@ -2283,7 +2342,9 @@ unreadable = "(a page this browser cannot decrypt)"
 -- routes from now on ('forgetSealedPage').
 readPlain :: (MonadIO m) => Either WikiError Page -> HttpWiki m (Either WikiError Page)
 readPlain result = do
-  for_ result $ \p -> whenM (Map.member p.id . (\h -> h.heldPages) <$> readHeld) (forgetSealedPage p.id)
+  for_ result $ \p -> do
+    whenM (Map.member p.id . (\h -> h.heldPages) <$> readHeld) (forgetSealedPage p.id)
+    modifyHeld (\h -> h {heldWasSealed = Set.delete p.id h.heldWasSealed})
   pure result
 
 -- | Remember the latest versions of pages read here ('heldHeads').
@@ -2518,8 +2579,10 @@ sealedListPagesWith sid current =
           _ -> h
         order <- pageOrderOf sid
         -- While the space is converted, the pages that read plain are
-        -- listed by the plain route, beside these.
-        converting <- either (const False) (any (\s -> s.id == sid && isJust s.conversion)) <$> spacesNow
+        -- listed by the plain route, beside these. Whether it is, is read
+        -- from the server: a conversion started in another browser since
+        -- this tab listed the spaces refuses nothing here.
+        converting <- either (const False) (any (\s -> s.id == sid && isJust s.conversion)) <$> freshSpaces
         plain <- if converting then either (const []) identity <$> send (endpoints.spaces.listPages sid) else pure []
         let sealed = [summaryFrom p (Map.findWithDefault unreadable p.id titles) | p <- listed]
             others = [p | p <- plain, p.id `notElem` map (\x -> x.id) sealed]
@@ -2531,7 +2594,7 @@ sealedGetPage sid path current = plainWhileConverting sid (readPlain =<< send (g
     send (getResponse <$> endpoints.encrypted.pageAt sid path) >>= \case
       -- A page a conversion of its space has not encrypted yet, or has
       -- decrypted already: read by the plain route.
-      Left (Conflict why) | notConvertedYet `T.isPrefixOf` why -> (,True) <$> (readPlain =<< send (getResponse <$> endpoints.spaces.pageAt sid path))
+      Left (Stale PageReadsPlain _) -> (,True) <$> (readPlain =<< send (getResponse <$> endpoints.spaces.pageAt sid path))
       Left e -> pure (Left e, True)
       Right p -> do
         rememberPages sid [(p.id, p.pageKey)]
@@ -3317,7 +3380,7 @@ convertNextPage sid = runExceptT $ do
       -- The lease lost (another browser took it): said as it is, and asked
       -- for again at the next "Continue".
       for_ (leftToMaybe converted) $ \case
-        Conflict why | leaseRefusal `T.isPrefixOf` why -> lift (dropLease top) >> throwError (Conflict why)
+        Stale LeaseLost why -> lift (dropLease top) >> throwError (Stale LeaseLost why)
         _ -> pass
       -- A page that stops the conversion is named, with why, so that it
       -- can be mended (shortened, an attachment deleted) or the

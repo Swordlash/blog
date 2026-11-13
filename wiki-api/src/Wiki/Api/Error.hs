@@ -15,6 +15,8 @@
 -- the HTTP backend).
 module Wiki.Api.Error
   ( ApiError (..)
+  , Staleness (..)
+  , stalenessName
   , errorStatus
   , errorForStatus
   )
@@ -53,6 +55,10 @@ data ApiError
   | -- | Something has changed since the request was made, as the text
     -- says: status 409.
     Conflict Text
+  | -- | The request was made for a space, or a page of it, in another state
+    -- than the one it is in now ('Staleness'), as the text says: status
+    -- 409. The browser that made it reads the space's record again.
+    Stale Staleness Text
   | -- | The request cannot be carried out as it is, as the text says:
     -- status 400.
     Invalid Text
@@ -78,6 +84,7 @@ instance ToJSON ApiError where
         NotFound -> ("NotFound", [])
         Forbidden -> ("Forbidden", [])
         Conflict t -> ("Conflict", ["message" .= t])
+        Stale st t -> ("Stale", ["state" .= stalenessName st, "message" .= t])
         Invalid t -> ("Invalid", ["message" .= t])
         Unauthenticated -> ("Unauthenticated", [])
         TooManyRequests t -> ("TooManyRequests", ["message" .= t])
@@ -89,6 +96,10 @@ instance FromJSON ApiError where
       ("NotFound" :: Text) -> pure NotFound
       "Forbidden" -> pure Forbidden
       "Conflict" -> Conflict <$> o .: "message"
+      "Stale" ->
+        o .: "state" >>= \name -> case find (\st -> stalenessName st == name) [minBound .. maxBound] of
+          Just st -> Stale st <$> o .: "message"
+          Nothing -> Conflict <$> o .: "message"
       "Invalid" -> Invalid <$> o .: "message"
       "Unauthenticated" -> pure Unauthenticated
       "TooManyRequests" -> TooManyRequests <$> o .: "message"
@@ -96,11 +107,56 @@ instance FromJSON ApiError where
       other -> parseFail ("not an error the API knows: " <> show other)
 
 -- | The HTTP status of an error response.
+-- | 'Staleness': what a request of an encrypted space, or of one being
+-- converted, found the space or the page in, which the browser that sent
+-- it did not believe: told apart by this code, never by the text, which is
+-- for a person. Each makes the browser read the space's record again
+-- before anything else ("Wiki.App.Backend.Http"'s 'routed').
+data Staleness
+  = -- | The space is not encrypted (its encryption was turned off).
+    SpaceIsPlain
+  | -- | The space is encrypted (or being encrypted): its pages are read
+    -- and written by the encrypted routes.
+    SpaceIsEncrypted
+  | -- | The page reads plain while its space is converted: read it by the
+    -- plain routes.
+    PageReadsPlain
+  | -- | The page reads encrypted while its space is converted: read it by
+    -- the encrypted routes.
+    PageReadsEncrypted
+  | -- | A conversion of the space runs: nothing else is written in it.
+    ConversionRuns
+  | -- | No conversion of the space runs, or not this way.
+    NoConversionRuns
+  | -- | The space's key, or the page's, was renewed since.
+    KeyRenewed
+  | -- | The space's key must be renewed before anything more is written
+    -- in it: a reader who held it was removed.
+    RenewalDue
+  | -- | Another browser holds the conversion's lease
+    -- ("Wiki.Api.Encrypted"'s 'ConversionLease').
+    LeaseLost
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+-- | A 'Staleness' as the API names it.
+stalenessName :: Staleness -> Text
+stalenessName = \case
+  SpaceIsPlain -> "space-plain"
+  SpaceIsEncrypted -> "space-encrypted"
+  PageReadsPlain -> "page-plain"
+  PageReadsEncrypted -> "page-encrypted"
+  ConversionRuns -> "converting"
+  NoConversionRuns -> "not-converting"
+  KeyRenewed -> "key-renewed"
+  RenewalDue -> "renewal-due"
+  LeaseLost -> "lease-lost"
+
 errorStatus :: ApiError -> Int
 errorStatus = \case
   NotFound -> 404
   Forbidden -> 403
   Conflict _ -> 409
+  Stale _ _ -> 409
   Invalid _ -> 400
   Unauthenticated -> 401
   TooManyRequests _ -> 429

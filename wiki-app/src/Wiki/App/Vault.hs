@@ -780,5 +780,6 @@ wikiText = \case
   NotFound -> "The server knows nothing of it."
   Forbidden -> "The server refused it."
   Conflict t -> t
+  Stale _ t -> t
   Invalid t -> t
   Unreachable t -> "The server could not be reached: " <> t

@@ -243,6 +243,7 @@ errorView e = [hh|<div class="error {{ errorClass e }}" role="alert">{{ errorMes
       NotFound -> "error-not-found"
       Forbidden -> "error-forbidden"
       Conflict _ -> "error-conflict"
+      Stale _ _ -> "error-conflict"
       Invalid _ -> "error-invalid"
       Unreachable _ -> "error-unreachable"
 
@@ -279,6 +280,7 @@ errorMessage = \case
   NotFound -> "There is nothing here: it may have been moved or deleted."
   Forbidden -> "You do not have permission for this. Switch to someone who has, at the top right."
   Conflict why -> why
+  Stale _ why -> why
   Invalid why -> why
   Unreachable why -> "The wiki's server could not be reached (" <> why <> "). Check the connection, and try again."
 

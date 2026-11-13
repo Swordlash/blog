@@ -459,6 +459,7 @@ apiOver providers seed = do
       NotFound -> ApiError.NotFound
       Forbidden -> ApiError.Forbidden
       Conflict t -> ApiError.Conflict t
+      Stale st t -> ApiError.Stale st t
       Invalid t -> ApiError.Invalid t
       Unreachable t -> ApiError.Invalid t
     -- A search's address, read back into its query.

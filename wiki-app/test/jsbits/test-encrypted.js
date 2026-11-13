@@ -38,7 +38,7 @@ function wikiTestEncDue(s) {
   return s.grants.some((g) => g.keyId === s.space.encryption && (!s.readers.includes(g.recipient) || wikiTestEncrypted.directory.get(g.recipient)?.keyId !== g.recipientKeyId));
 }
 
-const wikiTestEncRenewal = { error: "Conflict", text: "This space's key must be renewed before anything more is written in it: someone who held the key can no longer read the space. An administrator of the space who holds the key renews it by opening the space, and then this can be done again." };
+const wikiTestEncRenewal = { error: "Stale", state: "renewal-due", message: "This space's key must be renewed before anything more is written in it: someone who held the key can no longer read the space. An administrator of the space who holds the key renews it by opening the space, and then this can be done again." };
 
 function wikiTestEncSealed(p) {
   const latest = p.versions[p.versions.length - 1];
@@ -200,7 +200,13 @@ function wikiTestEncServer(request) {
         if (p?.plain && path === `pages/${plain[1]}/versions`) return wikiTestEncJson(200, [{ page: p.id, updatedAt: p.versions.at(-1).updatedAt, title: p.plain.title, author: null, number: 1 }]);
         if (p?.plain && path === `pages/${plain[1]}/threads`) return wikiTestEncJson(200, []);
       }
-      return wikiTestEncJson(409, { error: "Conflict", text: "This page is in an encrypted space." });
+      return wikiTestEncJson(409, { error: "Stale", state: "space-encrypted", message: "This page is in an encrypted space." });
+    }
+    // A space plain (its encryption turned off): its pages, made plain,
+    // listed by the plain route.
+    if (s && !s.space.encryption && s.readers.includes(me) && request.method === "GET" && path === `spaces/${plain[1]}/pages`) {
+      const made = [...wikiTestEncrypted.pages.values()].filter((x) => x.space === s.space.id && x.plain);
+      return wikiTestEncJson(200, made.map((x) => ({ id: x.id, space: x.space, parent: x.parent, title: x.plain.title, slug: x.slug, createdAt: x.versions[0].updatedAt, updatedAt: x.versions.at(-1).updatedAt, position: x.position, template: false, kind: "document" })));
     }
   }
   // An attachment deleted, by the plain route, which carries no text.
@@ -253,7 +259,7 @@ function wikiTestEncServer(request) {
       s.space.homePage = home.page.id;
       return wikiTestEncJson(200, s.space);
     }
-    if (!s.space.encryption) return wikiTestEncJson(409, { error: "Conflict", text: "This space is not encrypted." });
+    if (!s.space.encryption) return wikiTestEncJson(409, { error: "Stale", state: "space-plain", message: "This space is not encrypted." });
     // Its conversion, as far as a test of the permissions' view needs it:
     // what runs and the pages left, and turning the encryption off.
     if (rest === "/conversion" && request.method === "GET") return wikiTestEncJson(200, wikiTestEncConversion(s));
@@ -379,7 +385,7 @@ function wikiTestEncServer(request) {
       const p = slug === "" ? pages.find((x) => x.id === s.space.homePage) : pages.find((x) => x.slug === slug);
       if (!p) return wikiTestEncJson(404, { error: "NotFound" });
       // The server's refusal, as text (Wiki.Api.Encrypted's notConvertedYet).
-      if (p.plain) return { status: 409, body: "This page is read as plain text while its space is converted: read it by the plain routes.", headers: {} };
+      if (p.plain) return wikiTestEncJson(409, { error: "Stale", state: "page-plain", message: "This page is read as plain text while its space is converted: read it by the plain routes." });
       const sealed = wikiTestEncSealed(p);
       return wikiTestEncJson(200, sealed, { ETag: wikiTestEncTag(sealed.updatedAt) });
     }
@@ -404,6 +410,7 @@ function wikiTestEncServer(request) {
     const p = wikiTestEncrypted.pages.get(decodeURIComponent(m[1]));
     const s = p && wikiTestEncrypted.spaces.get(p.space);
     if (!p || !(s.readers.includes(me) || s.leaked.includes(me))) return wikiTestEncJson(404, { error: "NotFound" });
+    if (!s.space.encryption) return wikiTestEncJson(409, { error: "Stale", state: "space-plain", message: "This space is not encrypted." });
     const rest = m[2] ?? "";
     if (rest === "" && request.method === "PUT") {
       const latest = p.versions[p.versions.length - 1];
@@ -554,7 +561,7 @@ async function wikiTestEncStaging(request, header, id, rest) {
   const p = wikiTestEncrypted.pages.get(id);
   const s = p && wikiTestEncrypted.spaces.get(p.space);
   if (!p || !s.space.conversion) return wikiTestEncJson(409, { error: "Conflict", text: "This page's space is not being converted now." });
-  if (header("wiki-conversion-lease") !== s.lease) return wikiTestEncJson(409, { error: "Conflict", text: "Another browser is converting this space, or took this browser's lease over: nothing was written." });
+  if (header("wiki-conversion-lease") !== s.lease) return wikiTestEncJson(409, { error: "Stale", state: "lease-lost", message: "Another browser is converting this space, or took this browser's lease over: nothing was written." });
   p.staged ??= { plain: { versions: [], threads: [], comments: [], attachments: [] }, bytes: new Map() };
   const swap = wikiTestEncrypted.swapStaged;
   const other = new TextEncoder().encode("bytes another browser staged");
@@ -610,9 +617,31 @@ function wiki_test_encrypted_made_plain(page, title, body) {
   wikiTestEncrypted.pages.get(page).plain = { title, body };
 }
 
-// The space in the middle of a conversion, as the server lists it.
+// The space in the middle of a conversion, as the server lists it; or,
+// for "", settled.
 function wiki_test_encrypted_converting(space, way) {
-  wikiTestEncrypted.spaces.get(space).space.conversion = way;
+  wikiTestEncrypted.spaces.get(space).space.conversion = way || null;
+}
+
+// A conversion ended elsewhere: the space plain, each of its pages read as
+// made plain ("plain"); or encrypted again, every page by the encrypted
+// routes ("encrypted").
+function wiki_test_encrypted_settle(space, state) {
+  const s = wikiTestEncrypted.spaces.get(space);
+  s.space.conversion = null;
+  if (state === "plain") {
+    s.keyWas = s.space.encryption ?? s.keyWas;
+    s.space.encryption = null;
+    s.space.entry = "at-once";
+  } else {
+    s.space.encryption = s.space.encryption ?? s.keyWas;
+    for (const p of wikiTestEncrypted.pages.values()) if (p.space === space) delete p.plain;
+  }
+}
+
+// A page turned back to encrypted by a conversion turned round elsewhere.
+function wiki_test_encrypted_sealed_again(page) {
+  delete wikiTestEncrypted.pages.get(page).plain;
 }
 
 // A reader of one space alone (a subspace), not of the spaces around it.

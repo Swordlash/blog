@@ -258,7 +258,7 @@ import Wiki.Api.ServerSettings qualified as SS
 import Wiki.Api.Stars (StarredPage (StarredPage), maxStars)
 import Wiki.Api.Stars qualified as Star
 import Wiki.Api.Upload (SealedUpload (..))
-import Wiki.App.Backend (MonadWiki (..), Session (..), UrlOwner (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
+import Wiki.App.Backend (MonadWiki (..), Session (..), Staleness (..), UrlOwner (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -3341,23 +3341,26 @@ restoreVersionTx pid at base = do
 -- checked first, so that a reader who may not see the space learns
 -- nothing from the refusal.
 requirePlain :: Text -> [Space] -> Tx ()
-requirePlain what c = when (any (\s -> isJust s.encryption) c) (failWith (Conflict (encryptedRefusal what)))
+requirePlain what c = when (any (\s -> isJust s.encryption) c) (failWith (Stale SpaceIsEncrypted (encryptedRefusal what)))
 
 -- | The reason a plain operation is refused in an encrypted space, as the
 -- application shows it.
 encryptedRefusal :: Text -> Text
 encryptedRefusal = Offered.encryptedRefusal
 
--- | 'Conflict' for an action the space's state refuses
+-- | 'Stale' for an action the space's state refuses
 -- ('Wiki.Core.Offered.refusalOf'): the rule the interface asks before it
--- draws the action's control.
+-- draws the action's control. A conversion running ('ConversionRuns'), or
+-- else the space encrypted ('SpaceIsEncrypted'): either is a state the
+-- browser that asked did not know of.
 requireOffered :: Offered.Action -> [Space] -> Tx ()
-requireOffered a c = traverse_ (failWith . Conflict) (Offered.refusalOf a c)
+requireOffered a c = for_ (Offered.refusalOf a c) $ \why ->
+  failWith (Stale (if Offered.blockedByConversion a && any (\s -> isJust s.conversion) c then ConversionRuns else SpaceIsEncrypted) why)
 
 -- | The current key of an encrypted space, or 'Conflict' for a space whose
 -- pages are plain text.
 requireEncrypted :: Space -> Tx KeyId
-requireEncrypted s = maybe (failWith (Conflict "This space is not encrypted: its pages are read and written as plain text.")) pure s.encryption
+requireEncrypted s = maybe (failWith (Stale SpaceIsPlain "This space is not encrypted: its pages are read and written as plain text.")) pure s.encryption
 
 -- | Whether base64url text holds exactly so many bytes.
 holdsBytes :: Int -> Text -> Bool
@@ -3410,7 +3413,7 @@ rotationDueTx sid c k = readersOf c >>= \readers -> db (renewalDue sid k readers
 -- | 'Conflict' while a rotation of the space's key is due: nothing is
 -- sealed under a key that someone who can no longer read the space holds.
 requireNoRenewal :: SpaceId -> [Space] -> KeyId -> Tx ()
-requireNoRenewal sid c k = whenM (rotationDueTx sid c k) (failWith (Conflict renewalRefusal))
+requireNoRenewal sid c k = whenM (rotationDueTx sid c k) (failWith (Stale RenewalDue renewalRefusal))
 
 -- | Why a write in an encrypted space is refused while its key must be
 -- renewed, and who renews it.
@@ -3606,7 +3609,7 @@ insertSealedHome s k new = do
   db (pageNode new.id) >>= traverse_ (\_ -> failWith (Conflict "A page with this id exists already."))
   checkSealedParts new.pageKey new.content
   unless (new.pageKey.spaceKeyId == k) $
-    failWith (Conflict "The space's key has changed since: open the space again.")
+    failWith (Stale KeyRenewed "The space's key has changed since: open the space again.")
   unless (maybe False isFirstChain new.content.chain) $
     failWith (Conflict outOfChain)
   random <- T.take 12 . T.filter (/= '-') <$> newId
@@ -3659,7 +3662,7 @@ grantSpaceKeyTx sid req = do
   when (length req.grants > maxGrantsAtOnce) $
     invalid ("At most " <> show maxGrantsAtOnce <> " grants are made at once.")
   unless (req.keyId == k) $
-    failWith (Conflict "The space's key has changed since: open the space again.")
+    failWith (Stale KeyRenewed "The space's key has changed since: open the space again.")
   requireNoRenewal sid c k
   grants <- db (grantsOfKey spaceKind sid.text k)
   keys <- db (currentPublicKeys (ordNub (me : map (\g -> g.recipient) req.grants)))
@@ -3725,7 +3728,7 @@ rotateSpaceKeyTx sid r = do
   k <- requireEncrypted s
   me <- maybe (failWith Forbidden) pure ctx.author
   unless (r.from == k) $
-    failWith (Conflict "The space's key has changed since: open the space again.")
+    failWith (Stale KeyRenewed "The space's key has changed since: open the space again.")
   when (length r.grants > maxRotatedGrants || sum [1 + length p.rewrapped | p <- r.pages] > maxRotatedKeys) $
     invalid ("This space is too large for its key to be renewed in one request: at most " <> show maxRotatedGrants <> " readers and " <> show maxRotatedKeys <> " keys of pages.")
   grants <- db (grantsOfKey spaceKind sid.text k)
@@ -3897,7 +3900,7 @@ createSealedPageTx sid new = do
   db (pageNode new.id) >>= traverse_ (\_ -> failWith (Conflict "A page with this id exists already."))
   checkSealedParts new.pageKey new.content
   unless (new.pageKey.spaceKeyId == k) $
-    failWith (Conflict "The space's key has changed since: open the space again.")
+    failWith (Stale KeyRenewed "The space's key has changed since: open the space again.")
   -- The first version of the chain ("Wiki.Core.Encrypted"): a browser of
   -- before versions were chained sends none, and is told to reload.
   unless (maybe False isFirstChain new.content.chain) $
@@ -3951,7 +3954,7 @@ saveSealedPageTx pid base edit = do
   -- A version encrypted with an older key of the page's, from a tab that
   -- read the page before its space's key was renewed.
   when (edit.content.keyId /= pk.keyId) $
-    failWith (Conflict "This page's key has changed since it was opened: the space's key was renewed. Open the page again.")
+    failWith (Stale KeyRenewed "This page's key has changed since it was opened: the space's key was renewed. Open the page again.")
   checkSealedParts pk edit.content
   when (p.updatedAt /= base) $
     failWith (Conflict "The page has been saved by someone else since this edit began.")
@@ -4688,7 +4691,7 @@ pageReadsSealed s pid = case s.conversion of
 -- space is refused.
 requirePlainPage :: Text -> [Space] -> PageId -> Tx ()
 requirePlainPage what c pid = case lastMay c of
-  Just s | isJust s.conversion -> whenM (pageReadsSealed s pid) (failWith (Conflict (encryptedRefusal what)))
+  Just s | isJust s.conversion -> whenM (pageReadsSealed s pid) (failWith (Stale PageReadsEncrypted (encryptedRefusal what)))
   _ -> requirePlain what c
 
 -- | 'Conflict' for a read of a page by the encrypted routes while it reads
@@ -4696,7 +4699,7 @@ requirePlainPage what c pid = case lastMay c of
 requireSealedPage :: Space -> PageId -> Tx ()
 requireSealedPage s pid =
   unlessM (pageReadsSealed s pid) $
-    failWith (Conflict (E.notConvertedYet <> ": read it by the plain routes."))
+    failWith (Stale PageReadsPlain (E.notConvertedYet <> ": read it by the plain routes."))
 
 -- | The pages of a space, among those given, that read by the encrypted
 -- routes now.
@@ -4924,7 +4927,7 @@ convertingPage pid way t renewing = do
   (s, c) <- findSpace p.space
   requireView c
   unless (s.conversion == Just way) $
-    failWith (Conflict ("This page's space is not being " <> (case way of Encrypting -> "encrypted"; Decrypting -> "decrypted") <> " now."))
+    failWith (Stale NoConversionRuns ("This page's space is not being " <> (case way of Encrypting -> "encrypted"; Decrypting -> "decrypted") <> " now."))
   (me, k) <- requireConverter s
   requireLease s t renewing
   whenM (db (pageConverted pid)) $ failWith (Conflict "This page is converted already.")
@@ -4951,7 +4954,7 @@ takeLeaseTx :: SpaceId -> E.LeaseRequest -> Tx E.ConversionLease
 takeLeaseTx sid req = do
   (s, c) <- findSpace sid
   requireView c
-  when (isNothing s.conversion) $ failWith (Conflict "No conversion of this space runs.")
+  when (isNothing s.conversion) $ failWith (Stale NoConversionRuns "No conversion of this space runs.")
   root <- conversionRootOf s
   covered <- filter (\x -> isJust x.conversion) <$> subtreeOf root.id
   for_ covered requireConverter
@@ -4960,7 +4963,7 @@ takeLeaseTx sid req = do
   held <- db (loadLease root.id)
   for_ held $ \l ->
     when (l.expiresAt > time && not (l.holder == me && req.takeOver)) $
-      failWith (Conflict (leaseHeld me l))
+      failWith (Stale LeaseLost (leaseHeld me l))
   token <- (<>) <$> newId <*> newId
   let lease = Lease {holder = me, token, expiresAt = addUTCTime leaseFor time}
   db (putLease root.id lease)
@@ -4986,7 +4989,7 @@ requireLease s t renewing = do
     Just l | l.token == t.text -> when (renewing == Renews) $ do
       time <- now
       db (putLease root.id Lease {holder = l.holder, token = l.token, expiresAt = addUTCTime leaseFor time})
-    _ -> failWith (Conflict (E.leaseRefusal <> ", or took this browser's lease over: nothing was written. Open the space's settings again to see who converts it."))
+    _ -> failWith (Stale LeaseLost (E.leaseRefusal <> ", or took this browser's lease over: nothing was written. Open the space's settings again to see who converts it."))
 
 -- | 'checkSealedText' for a ciphertext staged by a conversion, which names
 -- any key of the page's: one of before a renewal of the space's key made
@@ -5009,7 +5012,7 @@ stageSealedTx pid lease req = do
     unless (holdsBytes keyIdBytes pk.keyId.text && holdsBytes nonceBytes pk.wrapped.nonce.text && holdsBytes sealedKeyBytes pk.wrapped.key.text) $
       invalid "This is not a key this wiki keeps: a part of the page's key is not of its length."
     unless (pk.spaceKeyId == k) $
-      failWith (Conflict "The space's key has changed since: open the space again.")
+      failWith (Stale KeyRenewed "The space's key has changed since: open the space again.")
     -- A key comes with the page's latest version, so that no page has a
     -- key without one, which a renewal of the space's key reads.
     unless (any (\v -> Just (micro v.updatedAt) == lastMay times) req.versions) $
@@ -5110,7 +5113,7 @@ stageBytesTx pid aid lease size store = do
   p <- findNode pid
   (s, c) <- findSpace p.space
   requireView c
-  way <- maybe (failWith (Conflict "This page's space is not being converted now.")) pure s.conversion
+  way <- maybe (failWith (Stale NoConversionRuns "This page's space is not being converted now.")) pure s.conversion
   -- The lease is checked before the bytes are stored: a browser that lost
   -- it stores nothing.
   _ <- convertingPage pid way lease Renews
@@ -5139,7 +5142,7 @@ stagedPageTx pid lease = do
   p <- findNode pid
   (s, c) <- findSpace p.space
   requireView c
-  way <- maybe (failWith (Conflict "This page's space is not being converted now.")) pure s.conversion
+  way <- maybe (failWith (Stale NoConversionRuns "This page's space is not being converted now.")) pure s.conversion
   _ <- convertingPage pid way lease Keeps
   stagedPageOf pid way
 
@@ -5151,7 +5154,7 @@ stagedBytesTx pid aid lease = do
   p <- findNode pid
   (s, c) <- findSpace p.space
   requireView c
-  way <- maybe (failWith (Conflict "This page's space is not being converted now.")) pure s.conversion
+  way <- maybe (failWith (Stale NoConversionRuns "This page's space is not being converted now.")) pure s.conversion
   _ <- convertingPage pid way lease Keeps
   staged <- stagedPageOf pid way
   dir <- asks (\x -> x.blobs)
@@ -5218,7 +5221,7 @@ commitConvertedTx pid lease commit = do
   p <- findNode pid
   (s, c) <- findSpace p.space
   requireView c
-  way <- maybe (failWith (Conflict "This page's space is not being converted now.")) pure s.conversion
+  way <- maybe (failWith (Stale NoConversionRuns "This page's space is not being converted now.")) pure s.conversion
   (_, _, _, _, k) <- convertingPage pid way lease Renews
   staged <- stagedPageOf pid way
   unless (staged.digest == commit.digest) $
@@ -5339,7 +5342,7 @@ reverseConversionTx :: SpaceId -> Tx E.ConversionInfo
 reverseConversionTx sid = do
   (s, c) <- findSpace sid
   requireView c
-  way <- maybe (failWith (Conflict "No conversion of this space runs.")) pure s.conversion
+  way <- maybe (failWith (Stale NoConversionRuns "No conversion of this space runs.")) pure s.conversion
   root <- conversionRootOf s
   covered <- filter (\x -> isJust x.conversion) <$> subtreeOf root.id
   for_ covered requireConverter
@@ -5385,7 +5388,7 @@ requireUuid what i = when (isNothing (UUID.fromText i)) (invalid (what <> "'s id
 checkSealedText :: PageKey -> KeyId -> Sealed -> Int -> Tx ()
 checkSealedText pk k s most = do
   unless (k == pk.keyId) $
-    failWith (Conflict "This page's key has changed since it was opened: the space's key was renewed. Open the page again.")
+    failWith (Stale KeyRenewed "This page's key has changed since it was opened: the space's key was renewed. Open the page again.")
   unless (holdsBytes nonceBytes s.nonce.text && boundedBytes 16 most s.ciphertext.text) $
     invalid "This is not a ciphertext this wiki keeps: a nonce or a text is not of its length."
 

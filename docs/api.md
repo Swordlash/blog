@@ -65,6 +65,7 @@ of the backend's `WikiError`, with its text where it has one:
 | 403 | `{"error": "Forbidden"}` | it names something the user may see, but may not do this to |
 | 400 | `{"error": "Invalid", "message": "…"}` | the request cannot be carried out as it is |
 | 409 | `{"error": "Conflict", "message": "…"}` | the wiki has changed since the request was made |
+| 409 | `{"error": "Stale", "state": "…", "message": "…"}` | the request was made for a space, or a page of it, in another state than the one it is in now, which `state` names: `space-plain` (its encryption is off), `space-encrypted` (it is encrypted, or being encrypted: the plain routes refuse), `page-plain` and `page-encrypted` (during a conversion, the page reads by the other routes), `converting` (a conversion runs: nothing else is written), `not-converting`, `key-renewed` (the space's or the page's key changed since), `renewal-due` (the space's key must be renewed first), `lease-lost` (another browser holds the conversion's lease). The browser tells these apart by `state`, never by the text |
 | 401 | `{"error": "Unauthenticated"}` | signing in failed: no account has that login and password, or it cannot sign in |
 | 429 | `{"error": "TooManyRequests", "message": "…"}` | signing in was tried too often; `Retry-After` says how many seconds to wait |
 | 401 | `{"error": "SecondFactorRequired"}` | the login and password are right, and the account has a second factor: the code is to come (below) |
