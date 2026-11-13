@@ -3002,10 +3002,11 @@ needs. Each was true when its package merged; check before relying on one.
   page's own `history.back()`. The program is idle then, so
   `waitQuiet` is no signal. A test whose read depends on such an event
   listens for it itself before the action and waits for it (`afterEvent`
-  in `wiki-smoke/demo/Demo/Looks.hs`, through a promise: the page's
-  policy refuses `waitForFunction`). The demo's suite was read for it
-  (38 pairs, 3 fixed); `wiki-smoke/server/` and `wiki-smoke/src/` were
-  not, and go with WP5.98 (d).
+  in `Wiki.Smoke.Browser`, through a promise: the page's policy
+  refuses `waitForFunction`). Every suite was read for it: the demo's
+  (38 pairs of an action and a read that does not wait, 3 fixed, #268)
+  and the server's, the passkeys' and the shared modules (218
+  actions, 7 such pairs, 1 fixed, #270).
 - **The server's smoke suite after #267 (WP5.98c).** Found by the port
   and left: "Back to editing" in the editor's preview, with an SVG
   there that navigates its own frame, undoes the frame's navigation;
@@ -3130,12 +3131,11 @@ needs. Each was true when its package merged; check before relying on one.
 - **`toolchain/test-postgres-namespaces.sh` (#244, fixed in #251).** It
   killed a test run when it saw a database of the run's, which could be
   one an example drops at once; it now waits for the run's template
-  database. One failure in 38 runs is not explained: sessions on the
-  killed run's databases thirty seconds after the kill; the message now
-  prints them. It failed the same way once more on #265's `native
-  (postgres)` job (2026-11-13) and passed on the re-run: thirty seconds
-  is a clock where the script needs a condition; it goes with the raced
-  tests listed under WP5.98.
+  database. The one failure in 38 runs, and another on #265's `native
+  (postgres)` job, are explained since #271: not a session the killed
+  run left, but PostgreSQL's autovacuum worker on a leftover database,
+  seen by one look more than the wait had made. The script counts
+  client backends only and waits for ten looks in a row without one.
 - **The compilers below the default (#265).** GHC 9.12.4 is built by a
   weekly job only (and by hand), so an error that only it reports is
   seen up to a week after its pull request: #265's was a local function
