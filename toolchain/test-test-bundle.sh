@@ -255,6 +255,194 @@ fi
 step
 expect 'and the next run builds' built 'web/src/islands.js'
 
+# Fakes of rm and cp, first on PATH only for the cases below that need
+# them, and otherwise the real programs. With FAKE_RM_HANG set, rm hangs
+# inside the removal of a directory that holds a bundle, after it has
+# removed islands.js there, so that a kill lands with the directory half
+# deleted. With FAKE_CP_PAUSE set, a recursive copy out of a kept bundle
+# copies one file, says so (touches $FAKE_CP_PAUSED), waits for
+# $FAKE_CP_GO, and then copies the files still there, silently skipping
+# those gone, as a copy that a retire overtakes may.
+REAL_RM=$(command -v rm)
+REAL_CP=$(command -v cp)
+FAKE_CP_PAUSED=$work/cp.paused
+FAKE_CP_GO=$work/cp.go
+export REAL_RM REAL_CP FAKE_CP_PAUSED FAKE_CP_GO
+mkdir -p "$work/bin"
+cat >"$work/bin/rm" <<'EOF'
+#!/bin/sh
+if [ -n "${FAKE_RM_HANG:-}" ]; then
+  for arg; do
+    case $arg in -*) continue ;; esac
+    if [ -d "$arg" ]; then
+      found=$(find "$arg" -name islands.js -type f | head -n 1)
+      if [ -n "$found" ]; then
+        "$REAL_RM" -f "$found"
+        printf '%s\n' "$$" >"$FAKE_PID.tmp"
+        "$REAL_CP" "$FAKE_PID.tmp" "$FAKE_PID"
+        exec sleep 60
+      fi
+    fi
+  done
+fi
+exec "$REAL_RM" "$@"
+EOF
+cat >"$work/bin/cp" <<'EOF'
+#!/bin/sh
+if [ -n "${FAKE_CP_PAUSE:-}" ] && [ "$1" = -R ]; then
+  src=${2%/.} dst=$3
+  case $src in
+    */test-bundle/.*) ;;
+    */test-bundle/*)
+      mkdir -p "$dst"
+      first=1
+      for f in $(cd "$src" && find . -type f | LC_ALL=C sort); do
+        if [ -f "$src/$f" ]; then
+          mkdir -p "$dst/$(dirname "$f")"
+          "$REAL_CP" "$src/$f" "$dst/$f"
+        fi
+        if [ -n "$first" ]; then
+          first=
+          : >"$FAKE_CP_PAUSED"
+          while [ ! -e "$FAKE_CP_GO" ]; do sleep 0.05; done
+        fi
+      done
+      exit 0
+      ;;
+  esac
+fi
+exec "$REAL_CP" "$@"
+EOF
+chmod 755 "$work/bin/rm" "$work/bin/cp"
+
+# wait_for <file>: until the file exists, five seconds at most.
+wait_for() {
+  tries=0
+  while [ ! -e "$1" ] && [ $tries -lt 50 ]; do sleep 0.1; tries=$((tries + 1)); done
+}
+
+# The digest directory of the bundle the last run reused or built.
+last_kept() {
+  short=$(sed -n 's/^test bundle: [a-z]* \([0-9a-f]*\) .*/\1/p' "$work/stderr" | head -n 1)
+  for dir in "$keep/$short"*; do
+    if [ -d "$dir" ]; then printf '%s\n' "$dir"; fi
+  done
+}
+
+# What a run killed with SIGKILL leaves besides a retired bundle (its build
+# and its list of inputs) is removed by a later build once an hour old:
+# made that old here.
+age_leftovers() {
+  for left in "$keep"/.build.* "$keep"/.inputs.*; do
+    if [ -e "$left" ]; then touch -d '2001-01-01 00:00' "$left"; fi
+  done
+}
+
+# No leftovers of retired bundles once a run has built.
+no_retired() {
+  if ls -a "$keep" | grep -q '^\.retired\.'; then
+    fail "$1" "a retired bundle was left: $(ls -a "$keep" | tr '\n' ' ')"
+  else
+    ok "$1"
+  fi
+}
+
+# A forced rebuild killed while the bundle it replaces is being deleted:
+# nothing the next run reuses is left under the digest.
+step
+expect 'a run before the killed forced rebuild' reused
+rm -f "$FAKE_PID"
+PATH="$work/bin:$PATH" FAKE_RM_HANG=1 WIKI_TEST_BUNDLE_REBUILD=1 sh "$repo/wiki-app/test/web/bundle.sh" "$work/out" 2>"$work/stderr" &
+script_pid=$!
+wait_for "$FAKE_PID"
+if [ -f "$FAKE_PID" ]; then
+  kill -KILL "$script_pid" "$(cat "$FAKE_PID")" 2>/dev/null || true
+  wait "$script_pid" 2>/dev/null || true
+  age_leftovers
+  step
+  expect 'after a forced rebuild killed inside the deletion the next run builds' built
+  no_retired 'and what the killed deletion left is removed'
+else
+  kill -KILL "$script_pid" 2>/dev/null || true
+  fail 'a forced rebuild deletes the bundle it replaces' 'the fake rm never ran on it'
+fi
+
+# The same for a bundle pruned: the oldest of four is removed, and the run
+# is killed inside its deletion. A run whose inputs are that bundle's
+# builds it again.
+step
+expect 'a run with no base path (to be pruned)' reused
+for base in /a/ /b/; do
+  builds_before=$(builds)
+  HALOGEN_BASE_PATH=$base bundle
+  expect "a run with the base path $base" built
+done
+rm -f "$FAKE_PID"
+PATH="$work/bin:$PATH" FAKE_RM_HANG=1 HALOGEN_BASE_PATH=/c/ sh "$repo/wiki-app/test/web/bundle.sh" "$work/out" 2>"$work/stderr" &
+script_pid=$!
+wait_for "$FAKE_PID"
+if [ -f "$FAKE_PID" ]; then
+  kill -KILL "$script_pid" "$(cat "$FAKE_PID")" 2>/dev/null || true
+  wait "$script_pid" 2>/dev/null || true
+  age_leftovers
+  step
+  expect 'after pruning killed inside the deletion, a run with the pruned inputs builds' built
+  no_retired 'and what the killed pruning left is removed'
+else
+  kill -KILL "$script_pid" 2>/dev/null || true
+  fail 'the fourth bundle prunes the oldest' 'the fake rm never ran on it'
+fi
+
+# A kept bundle with a file gone (deleted by hand, or by a cleaner of the
+# build directory) is built again, not copied.
+step
+expect 'a run before a kept file is deleted' reused
+dir=$(last_kept)
+find "$dir" -name islands.js -type f -exec "$REAL_RM" -f {} +
+step
+expect 'a kept bundle with a file gone is built again' built 'could not be copied whole'
+
+# A digest directory without its marker (the list of the bundle's files,
+# written last) is built again, not copied.
+step
+expect 'a run before the marker is deleted' reused
+dir=$(last_kept)
+"$REAL_RM" -f "$dir/files"
+step
+expect 'a digest directory without its marker is built again' built 'had no list of its files'
+
+# A reader that started its copy before the bundle was retired: another
+# run prunes it while the copy is half done. The reader ends with a whole
+# bundle, built again.
+for base in /a/ /b/; do
+  builds_before=$(builds)
+  HALOGEN_BASE_PATH=$base bundle
+done
+step
+expect 'a run with no base path (the reader to be overtaken)' reused
+for base in /a/ /b/; do
+  builds_before=$(builds)
+  HALOGEN_BASE_PATH=$base bundle
+done
+"$REAL_RM" -f "$FAKE_CP_PAUSED" "$FAKE_CP_GO"
+builds_before=$(builds)
+rm -rf "$work/out"
+PATH="$work/bin:$PATH" FAKE_CP_PAUSE=1 sh "$repo/wiki-app/test/web/bundle.sh" "$work/out" 2>"$work/stderr" &
+reader_pid=$!
+wait_for "$FAKE_CP_PAUSED"
+if [ -e "$FAKE_CP_PAUSED" ]; then
+  rm -rf "$work/out-c"
+  HALOGEN_BASE_PATH=/c/ sh "$repo/wiki-app/test/web/bundle.sh" "$work/out-c" 2>/dev/null
+  : >"$FAKE_CP_GO"
+  status=0
+  wait "$reader_pid" || status=$?
+  builds_before=$((builds_before + 1))
+  expect 'a reader overtaken by a retire ends with a whole bundle, built again' built 'could not be copied whole'
+else
+  kill -KILL "$reader_pid" 2>/dev/null || true
+  fail 'a reader copies the kept bundle' 'the fake cp never paused'
+fi
+
 # Without npm's record of the installed packages, every run builds and
 # nothing is kept.
 rm "$repo/node_modules/.package-lock.json"

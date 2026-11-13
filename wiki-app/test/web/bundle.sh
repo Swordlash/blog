@@ -103,52 +103,121 @@ changed() {
   ' "$1" "$2"
 }
 
+# A kept bundle is a directory named by its digest, holding:
+#
+#   bundle/   the bundle, as it is copied into the output directory;
+#   inputs    the list of inputs it was built from, which the line of a
+#             later build compares with to say what changed;
+#   files     the list of the bundle's files with their digests, written
+#             last, before the directory gets its digest's name.
+#
+# A directory under a digest's name is whole or absent, always. It gets
+# that name by one rename of a finished build (the build happens under a
+# name starting with a dot, which no lookup matches), and loses it by one
+# rename out of the digests' names before anything in it is deleted
+# (retire, below). A kill at any moment leaves at most a directory under a
+# dotted name, which a later build removes.
+#
+# Two checks guard the copy, and both are wanted. The marker, files, makes
+# a directory without it count as absent: none should exist, but one left
+# by an older version of this script, or by a hand that deleted part of
+# the cache, is retired and built again rather than copied. And the copy is
+# compared with files after it is made, because a run beside this one (the
+# shards of HSPEC_HALOGEN_JOBS, CI's on the owner's runner, two terminals)
+# may retire the directory while it is being copied: the rename makes the
+# rest of the copy fail or come out short. A copy that does not match is
+# thrown away and the bundle built. So a run gets a whole bundle, kept or
+# built, never a part of one.
+
+# The names of the dot-directories, by what they hold: .build.* a build in
+# progress, .reading.* a copy being checked, .retired.* a bundle being
+# deleted, .inputs.* a run's list of inputs.
 mkdir -p "$keep"
 list=$(mktemp "$keep/.inputs.XXXXXX")
-build=''
-cleanup() { rm -rf "$list" "$list.after" ${build:+"$build"}; }
+build='' reading=''
+cleanup() { rm -rf "$list" "$list.after" ${build:+"$build"} ${reading:+"$reading"}; }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
+# The list of a bundle's files, "<sha-256>  ./<path>", sorted.
+files() {
+  (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r $hasher)
+}
+
+# Take a kept bundle out of the digests' names, then delete it. Nothing to
+# do when another run has retired it first.
+retire() {
+  if [ -e "$1" ]; then
+    retired=$(mktemp -d "$keep/.retired.XXXXXX")
+    mv "$1" "$retired/" 2>/dev/null || true
+    rm -rf "$retired"
+  fi
+}
+
+# Copy a kept bundle into the output directory, whole, or fail and copy
+# nothing: the bundle is copied beside the kept ones first, and compared
+# there with its list of files.
+reuse() {
+  reading=$(mktemp -d "$keep/.reading.XXXXXX") || return 1
+  cp "$1/files" "$reading/files" 2>/dev/null || return 1
+  cp -R "$1/bundle" "$reading/bundle" 2>/dev/null || return 1
+  files "$reading/bundle" >"$reading/found" || return 1
+  cmp -s "$reading/files" "$reading/found" || return 1
+  cp -R "$reading/bundle/." "$out" || return 1
+  rm -rf "$reading"
+  reading=''
+}
+
 inputs >"$list"
 key=$($hasher <"$list" | cut -d ' ' -f 1)
+short=${key%"${key#????????????}"}
 kept=$keep/$key
 
+why=''
 if [ -n "${WIKI_TEST_BUNDLE_REBUILD:-}" ]; then
   why='WIKI_TEST_BUNDLE_REBUILD is set'
 elif [ ! -e node_modules/.package-lock.json ]; then
   why='node_modules/.package-lock.json is missing, so the installed packages are unknown (npm ci writes it); not kept'
+elif [ -d "$kept" ] && [ ! -f "$kept/files" ]; then
+  retire "$kept"
+  why='the bundle kept for these inputs had no list of its files'
 elif [ -d "$kept" ]; then
-  # Reused: copied, not linked, since the output directory is written to
-  # after this script (dev-test.sh copies into it), and a link would write
-  # into the kept bundle. The times of the kept bundle and of its list of
-  # inputs are renewed: the pruning below keeps the bundles used last, and
-  # the next build names what changed since the list used last.
-  cp -R "$kept/." "$out"
-  touch "$kept" "$keep/$key.inputs"
-  say "reused ${key%"${key#????????????}"} (the inputs are unchanged)"
-  exit 0
-else
-  last=$(ls -t "$keep"/*.inputs 2>/dev/null | head -n 1)
+  if reuse "$kept"; then
+    # Copied, not linked, since the output directory is written to after
+    # this script (dev-test.sh copies into it), and a link would write
+    # into the kept bundle. The times of the kept bundle and of its list
+    # of inputs are renewed (-c: never made again if retired meanwhile):
+    # the pruning below keeps the bundles used last, and the next build
+    # names what changed since the list used last.
+    touch -c "$kept" "$kept/inputs"
+    say "reused $short (the inputs are unchanged)"
+    exit 0
+  fi
+  # Either another run retired it during the copy, or it is damaged: in
+  # the second case it must go, and in the first it is gone already.
+  rm -rf "$reading"
+  reading=''
+  retire "$kept"
+  why='the bundle kept for these inputs could not be copied whole (retired meanwhile, or damaged)'
+fi
+if [ -z "$why" ]; then
+  last=$(ls -t "$keep"/*/inputs 2>/dev/null | head -n 1)
   if [ -n "$last" ]; then
     why="changed since the bundle used last: $(changed "$last" "$list")"
   else
     why='no bundle kept yet'
   fi
 fi
-say "building ${key%"${key#????????????}"} ($why)"
+say "building $short ($why)"
 
-# Built into a directory of its own beside the kept bundles, then renamed to
-# its digest in one step: an interrupted or failed build leaves no directory
-# under a digest, so no later run reuses half a bundle. The directory is
-# removed on the way out unless it was renamed.
 build=$(mktemp -d "$keep/.build.XXXXXX")
-sh web/bundle.sh "$build"
-rm -f "$build/sw.js" "$build/wasi-shim.js"
-cp web/style.css "$build/style.css"
-node wiki-app/test/web/policy.mjs web/index.html "$build/0-policy.js"
-cp -R "$build/." "$out"
+mkdir "$build/bundle"
+sh web/bundle.sh "$build/bundle"
+rm -f "$build/bundle/sw.js" "$build/bundle/wasi-shim.js"
+cp web/style.css "$build/bundle/style.css"
+node wiki-app/test/web/policy.mjs web/index.html "$build/bundle/0-policy.js"
+cp -R "$build/bundle/." "$out"
 
 # Kept only when the inputs did not change while the bundle was built (an
 # edit in those ten seconds would put the new contents under the old
@@ -160,23 +229,26 @@ if ! cmp -s "$list" "$list.after"; then
 fi
 rm -f "$list.after"
 if [ ! -e node_modules/.package-lock.json ]; then exit 0; fi
+mv "$list" "$build/inputs"
+files "$build/bundle" >"$build/files"
 # A forced build replaces the bundle kept under its digest. Otherwise a
 # directory there was kept by a run beside this one, and stays.
-if [ -n "${WIKI_TEST_BUNDLE_REBUILD:-}" ]; then rm -rf "$kept"; fi
+if [ -n "${WIKI_TEST_BUNDLE_REBUILD:-}" ]; then retire "$kept"; fi
 # mv -T renames onto the digest's name, and fails rather than move the
 # directory into one that a run beside this one has just kept.
 if mv -T "$build" "$kept" 2>/dev/null; then
   build=''
-  mv "$list" "$keep/$key.inputs"
 else
   say "not kept: the build could not be renamed to $kept (kept meanwhile by a run beside this one?)"
 fi
 
 # The three bundles used last are kept (about 20 MB each), so that going
-# back to a branch does not build again, and the rest removed, with what
-# interrupted builds left behind an hour ago or more.
-ls -t "$keep" | grep -v -e '\.inputs$' -e '^\.' | tail -n +4 | while read -r old; do
-  rm -rf "${keep:?}/$old" "${keep:?}/$old.inputs"
+# back to a branch does not build again, and the rest retired. What killed
+# runs left is removed: retired bundles at once (nothing reads them), and
+# builds and copies an hour old or more (a run beside this one may still
+# be making them).
+ls -t "$keep" | tail -n +4 | while read -r old; do
+  retire "$keep/$old"
 done
-find "$keep" -maxdepth 1 -name '.build.*' -mmin +60 -exec rm -rf {} + 2>/dev/null || true
-find "$keep" -maxdepth 1 -name '.inputs.*' -mmin +60 -exec rm -f {} + 2>/dev/null || true
+find "$keep" -maxdepth 1 -name '.retired.*' -exec rm -rf {} + 2>/dev/null || true
+find "$keep" -maxdepth 1 \( -name '.build.*' -o -name '.reading.*' -o -name '.inputs.*' \) -mmin +60 -exec rm -rf {} + 2>/dev/null || true
