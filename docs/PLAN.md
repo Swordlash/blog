@@ -2873,6 +2873,18 @@ needs. Each was true when its package merged; check before relying on one.
   editor's other specs and passes alone, on `main` as on every branch
   (Enter in the empty emoji search is expected to be prevented and is
   not); CI's sharding happens to pass it. Nobody has looked for the cause.
+- **Two pull requests merged without a run together broke `main`
+  (2026-11-13, #261).** #255 added a top-level `writable` to
+  `Wiki.App.View.Common` and #259 bound a local `writable` in
+  `Editor.hs`; each was green alone, `-Werror=name-shadowing` refused
+  the pair, and every job of `main` failed for two hours. A pull
+  request's run tests its merge with the base as the base was when the
+  run started: two pull requests green at once say nothing of the two
+  together. A stack avoids it (each run includes the one below); so
+  does merging one, then letting the other's run finish on the new
+  base. And while `main` does not build, the `native (sqlite)` job of
+  every pull request fails, the fix's own included: it builds the base
+  branch's `wiki-server` first, for the upgrade's rehearsal.
 - **The slides' rows after #259 (decision 77).** Codex ran nine
   rounds (6, 2, 3, 1, 2, 1, 1, 1, 1 findings, most of one family: the
   caret the author sees and the master's selection in different
