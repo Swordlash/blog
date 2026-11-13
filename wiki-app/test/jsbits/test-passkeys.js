@@ -607,12 +607,34 @@ function wiki_test_tell_dropped(slot) {
 }
 
 // Where an example starts counting the keys it leaves: the last handle the
-// page's registry of keys (wiki-app/jsbits/vault.js) gave out. The examples
-// share the page and its registry, whose handles only ever grow, so a key
-// an earlier example left behind has a handle at or below the mark, and
-// is that example's failure, not this one's.
+// page's registry of keys (wiki-app/jsbits/vault.js) gave out when the
+// example before it was checked (wiki_test_keys_checked), or, for the
+// first, now. The examples share the page and its registry, whose handles
+// only ever grow, so a key an earlier example left behind and was failed
+// for has a handle at or below the mark; one given out after that
+// example's check (a step of its that ended late) is above it, and fails
+// this example rather than none.
 function wiki_test_keys_mark() {
-  globalThis.wikiTestKeysFrom = globalThis.wikiKeyRegistry?.next ?? 0;
+  globalThis.wikiTestKeysFrom = globalThis.wikiTestKeysChecked ?? globalThis.wikiKeyRegistry?.next ?? 0;
+}
+
+// The keys an example left that can be exported, once it has ended: every
+// key the registry holds above the example's mark whose CryptoKey says it
+// is extractable, as "<handle>:<algorithm>:<usages>", space-separated (empty
+// when there is none). Read from the registry itself, which is the page's
+// and outlives the example's passkey stub, so it needs no passkey; a key
+// that is extractable is one the vault's wrap would export, which is what
+// wiki_test_exportable_keys_left counts while the stub is there. The next
+// example counts from here.
+function wiki_test_keys_checked() {
+  const registry = globalThis.wikiKeyRegistry;
+  const from = globalThis.wikiTestKeysFrom ?? 0;
+  globalThis.wikiTestKeysChecked = registry?.next ?? 0;
+  if (!registry) return "";
+  return [...registry.keys.entries()]
+    .filter(([handle, key]) => handle > from && key?.extractable === true)
+    .map(([handle, key]) => `${handle}:${key.algorithm?.name}:${(key.usages ?? []).join("+")}`)
+    .join(" ");
 }
 
 // How many keys the page still holds that can be exported, of those given

@@ -81,6 +81,7 @@ $( browserJS
      , ("js_other_tab_dropsPromise", "wiki_test_other_tab_drops", Safe, [t|JSText -> IO (Promise ())|])
      , ("js_exportablePromise", "wiki_test_exportable_keys_left", Safe, [t|IO (Promise Int)|])
      , ("js_keys_mark", "wiki_test_keys_mark", Safe, [t|IO ()|])
+     , ("js_keys_checked", "wiki_test_keys_checked", Safe, [t|IO JSText|])
      , ("js_existing", "wiki_test_passkeys_existing", Safe, [t|IO JSText|])
      , ("js_offered", "wiki_test_passkeys_offered", Safe, [t|IO Bool|])
      , ("js_pick", "wiki_test_passkeys_pick", Safe, [t|IO ()|])
@@ -131,14 +132,23 @@ js_identity_export a1 = if inBrowser then wait =<< js_identity_exportPromise a1 
 js_exportable :: IO Int
 js_exportable = if inBrowser then wait =<< js_exportablePromise else pure inert
 
--- | 'runPage' for an example of this module, which counts the keys that can
--- be exported from its own start: the examples share the page and its
--- registry of keys, so a key one example leaves fails that example alone,
--- and not every example after it.
+-- | 'runPage' for an example of this module, which fails it if it leaves a
+-- key in the page that can be exported, counted from its own start: the
+-- examples share the page and its registry of keys, so a key one example
+-- leaves fails that example alone, and not every example after it. The
+-- check is made once the example has ended, its views unmounted, whether
+-- or not it checked at a point of its own (as 'closed' does, while its
+-- passkey stub is still there for the vault's own count): an example that
+-- forgot to check is checked all the same. An example that failed is not
+-- checked again; the next counts from where it ended.
 runOwn :: (HasCallStack) => (forall s. PageM s a) -> IO a
 runOwn test = do
   js_keys_mark
-  runPage test
+  result <- runPage test `onException` js_keys_checked
+  left <- fromJSText <$> js_keys_checked
+  unless (T.null left) $
+    panic ("the example left keys in the page that can be exported (handle:algorithm:usages): " <> left)
+  pure result
 
 js_assistant_key :: JSText -> Bool -> IO ()
 js_assistant_key a1 a2 = if inBrowser then wait =<< js_assistant_keyPromise a1 a2 else pure inert
