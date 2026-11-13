@@ -18,6 +18,12 @@
 --
 -- Following a notification's link marks it read.
 --
+-- Opening the list fetches it again: a page of an encrypted space is
+-- titled as this tab can decrypt it now ("Wiki.App.Backend.Http"
+-- decrypts such titles), and not as it could when the
+-- list was last fetched, inside a space that asks each time it is opened
+-- and that the reader has left since.
+--
 -- The list closes on a press outside it and on Escape
 -- ("Wiki.App.View.Popup"), and when one of its links is followed.
 module Wiki.App.View.Bell
@@ -47,8 +53,10 @@ import Wiki.App.Route (Route (..), pageRoute)
 import Wiki.App.View.Comments (threadElementId)
 import Wiki.App.View.Common
 import Wiki.App.View.Popup (watchPopup)
+import Wiki.Core.Encrypted (encryptedPageTitle)
 import Wiki.Core.Id (NotificationId)
-import Wiki.Core.Notification (Notification (..), PageLocation (..), notificationText)
+import Wiki.Core.Notification (Notification (..), PageLocation (..), notificationText, withTitle)
+import Wiki.Core.Space (Space (encryption))
 
 data Input = Input
   { context :: Context
@@ -65,6 +73,12 @@ data State = State
   -- closes the list.
   , listWatch :: Maybe H.SubscriptionId
   -- ^ The watch for a press outside or Escape, while the list is open.
+  , heard :: [Notification]
+  -- ^ The notifications the live channel told of since the list was last
+  -- fetched. Of these, a fetch keeps those told of while it was under way
+  -- and not in the server's answer yet; the server's answer is the truth
+  -- for those told of before it was asked, which it may leave out (a page
+  -- the reader may no longer read).
   }
 
 data Action
@@ -85,7 +99,7 @@ component =
       { initialState = \input -> do
           notices <- atOnce notifications
           holder <- H.newRefLabel "notifications"
-          pure State {input, notices, open = False, busy = False, holder, listWatch = Nothing}
+          pure State {input, notices, open = False, busy = False, holder, listWatch = Nothing, heard = []}
       , render
       , eval =
           H.mkEval
@@ -193,7 +207,12 @@ component =
       Receive input -> do
         old <- gets (\st -> st.input)
         modify (\st -> st {input})
-        when (old.context.revision /= input.context.revision) reload
+        -- The titles of pages of encrypted spaces go at once, as the server
+        -- names them, before the list is read again: the reader may have
+        -- left a space that asks each time it is opened.
+        when (old.context.revision /= input.context.revision) $ do
+          modify (\st -> st {notices = fmap (\ns -> ns {items = map (sealedAgain input.context) ns.items}) <$> st.notices})
+          reload
       Toggle -> do
         isOpen <- gets (\st -> st.open)
         if isOpen
@@ -202,12 +221,13 @@ component =
             modify (\st -> st {open = True})
             watch <- gets (\st -> st.holder) >>= (`watchPopup` Close)
             modify (\st -> st {listWatch = watch})
+            reload
       Close -> close
       Heard heard -> case heard of
         -- A notification received twice (a tab that received it, then
         -- fetched it) counts once.
         Live.Notice n -> modify $ \st ->
-          st {notices = fmap (\ns -> if any (\x -> x.id == n.id) ns.items then ns else ns {unread = ns.unread + 1, items = n : ns.items}) <$> st.notices}
+          st {notices = fmap (\ns -> if any (\x -> x.id == n.id) ns.items then ns else ns {unread = ns.unread + 1, items = n : ns.items}) <$> st.notices, heard = n : filter (\x -> x.id /= n.id) st.heard}
         Live.Reopened -> reload
         _ -> pass
       MarkRead i -> marking ReadMark {ids = [i], everything = False}
@@ -225,16 +245,30 @@ component =
       traverse_ H.unsubscribe st.listWatch
       when st.open $ modify (\s -> s {open = False, listWatch = Nothing})
 
+    -- A list read under another revision of the wiki than the one now (the
+    -- reader left a space that asks each time it is opened while titles
+    -- were decrypted for it) is dropped: the reload the new revision
+    -- started gives the list.
     reload :: H.HalogenM State Action Empty output m ()
     reload = do
+      asked <- gets (\st -> st.input.context.revision)
+      before <- gets (\st -> map (\n -> n.id) st.heard)
       notices <- lift notifications
-      modify (\st -> st {notices = Just notices})
+      modify $ \st ->
+        if st.input.context.revision /= asked
+          then st
+          else case notices of
+            Right ns ->
+              let missing = [n | n <- st.heard, n.id `notElem` before, all (\x -> x.id /= n.id) ns.items]
+               in st {notices = Just (Right ns {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}), heard = missing}
+            Left _ -> st {notices = Just notices}
 
     marking :: ReadMark -> H.HalogenM State Action Empty output m ()
     marking m = do
       modify (\st -> st {busy = True})
+      asked <- gets (\st -> st.input.context.revision)
       result <- lift (markRead m)
-      modify (\st -> st {busy = False, notices = either (const st.notices) (Just . Right) result})
+      modify (\st -> st {busy = False, notices = if st.input.context.revision /= asked then st.notices else either (const st.notices) (Just . Right) result})
 
 -- | A notification's kind, as a class the stylesheet and the tests use.
 kindClass :: Notification -> Text
@@ -244,3 +278,11 @@ kindClass n = T.toLower (show n.kind)
 -- the server prerenders and in the program.
 stamped :: UTCTime -> Text
 stamped = toS . formatTime defaultTimeLocale "%-d %b %Y, %H:%M UTC"
+
+-- | A notification as the server names its page, when the page is in an
+-- encrypted space, or nowhere this tab knows: by what it is, not by its
+-- title decrypted.
+sealedAgain :: Context -> Notification -> Notification
+sealedAgain ctx n = case n.location of
+  Just l | Just chain <- findSpace ctx.spaces l.space, Just sp <- lastMay chain, isNothing sp.encryption -> n
+  _ -> withTitle encryptedPageTitle n

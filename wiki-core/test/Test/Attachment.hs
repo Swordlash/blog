@@ -2,12 +2,30 @@ module Test.Attachment (spec) where
 
 import Protolude
 import Test.Hspec
+import Test.Hspec.QuickCheck (prop)
+import Test.QuickCheck (Gen, elements, forAll, listOf, (===))
 import Wiki.Core.Attachment
 import Wiki.Core.Id
 import Wiki.Core.Url (Url (..))
 
 spec :: Spec
 spec = describe "Attachment" $ do
+  -- #213: names made distinct for a plain page, as the export and a
+  -- decryption make them: the first holder of each name keeps it, and a
+  -- generated name is no name any attachment has, so that a page's text
+  -- naming one still finds it.
+  describe "distinctNamesBy" $ do
+    let names :: Gen [Text]
+        names = listOf (elements ["plans.txt", "plans (2).txt", "plans (3).txt", "Plans.txt", "notes", "notes (2)", "a.b.c"])
+        distinct = fst . distinctNamesBy identity const
+    prop "keeps the name of the first holder of each, gives distinct names, and none another had" $ forAll names $ \xs ->
+      let ys = distinct xs
+          firsts = [i | (i, x) <- zip [0 :: Int ..] xs, x `notElem` take i xs]
+       in (map (ys `atIndex`) firsts, length (ordNub ys), [y | (i, y) <- zip [0 :: Int ..] ys, i `notElem` firsts, y `elem` xs])
+            === (map (xs `atIndex`) firsts, length ys, [])
+    prop "is the identity on distinct names" $ forAll names $ \xs -> let ds = ordNub xs in distinct ds === ds
+    it "does not give a later plans.txt the name plans (2).txt that another has" $
+      distinct ["plans.txt", "plans.txt", "plans (2).txt"] `shouldBe` ["plans.txt", "plans (3).txt", "plans (2).txt"]
   describe "parseFileName" $ do
     it "trims a name of white space" $
       parseFileName "  notes.txt \n" `shouldBe` Right (FileName "notes.txt")
@@ -54,3 +72,6 @@ spec = describe "Attachment" $ do
     it "is found by its name" $ do
       findAttachment "talk.webm" [diagram, talk] `shouldBe` Just talk
       findAttachment "missing.png" [diagram, talk] `shouldBe` Nothing
+
+atIndex :: [a] -> Int -> a
+atIndex xs i = fromMaybe (panic "no such index") (head (drop i xs))

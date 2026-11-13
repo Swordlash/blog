@@ -169,6 +169,7 @@ module Wiki.App.Backend
   ( -- * The interface
     MonadWiki (..)
   , WikiError (..)
+  , Staleness (..)
   , UrlOwner (..)
   , noUrlOwner
 
@@ -201,6 +202,7 @@ import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Numeric.Natural (Natural)
 import Protolude
+import Wiki.Api.Error (Staleness (..))
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.ServerSettings (AssistantService, HomePage, defaultHomePage)
 import Wiki.Core.Access (Access (..))
@@ -232,6 +234,11 @@ data WikiError
   | -- | Something has changed since the request was made: the text says
     -- what, for a person to read.
     Conflict Text
+  | -- | The request was made for a space, or a page of it, in another state
+    -- than the one it is in now ("Wiki.Api.Error"'s 'Staleness'): a
+    -- conflict whose kind the backend tells apart by its code, and the text
+    -- for a person to read.
+    Stale Staleness Text
   | -- | The request cannot be carried out as it is: the text says why, for a
     -- person to read.
     Invalid Text

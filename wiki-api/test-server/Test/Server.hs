@@ -382,6 +382,8 @@ stubs =
           , rotate = \_ _ -> refuse NotFound
           , pages = \_ -> refuse NotFound
           , contents = \_ -> refuse NotFound
+          , headings = \_ -> refuse NotFound
+          , readers = \_ -> refuse NotFound
           , pageAt = \_ _ -> refuse NotFound
           , createPage = \_ _ -> refuse NotFound
           , save = \_ _ _ -> refuse NotFound
@@ -392,6 +394,18 @@ stubs =
           , reply = \_ _ _ -> refuse NotFound
           , editComment = \_ _ _ _ -> refuse NotFound
           , upload = \_ _ -> refuse NotFound
+          , conversion = \_ -> refuse NotFound
+          , startEncrypting = \_ _ -> refuse NotFound
+          , startDecrypting = \_ -> refuse NotFound
+          , reverseConversion = \_ -> refuse NotFound
+          , setEntry = \_ _ -> refuse NotFound
+          , lease = \_ _ -> refuse NotFound
+          , stageSealed = \_ _ _ -> refuse NotFound
+          , stagePlain = \_ _ _ -> refuse NotFound
+          , stageBytes = \_ _ _ _ -> refuse NotFound
+          , staged = \_ _ -> refuse NotFound
+          , stagedBytes = \_ _ _ _ respond -> liftIO (respond (responseLBS (toEnum 404) [(hContentType, "application/json")] (encode NotFound)))
+          , commit = \_ _ _ -> refuse NotFound
           }
     }
 

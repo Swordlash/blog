@@ -195,7 +195,7 @@ component =
       st <- get
       let logins = Body.unasked st.known [st.input.body]
       unless (null logins) . void . H.fork $
-        lift (attempt (Body.askPeople logins)) >>= \case
+        lift (attempt (Body.askPeople st.input.place.space logins)) >>= \case
           Right found -> modify (\s -> s {known = Body.answered logins found s.known})
           Left _ -> pass
 

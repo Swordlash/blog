@@ -46,6 +46,8 @@ module Wiki.App.Vault
   , identitySlot
   , readDevice
   , writeDevice
+  , forgetUserKeys
+  , forgetEveryUsersKeys
 
     -- * The user's keys
   , UserKeys (..)
@@ -90,11 +92,12 @@ where
 import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, encode, object, withObject, (.!=), (.:?), (.=))
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Protolude
 import Wiki.Api.Account (PasswordChange (..), SignInMethods)
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), NewPublicKey (..), PublicKeyEntry (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..), VaultChange (..))
 import Wiki.App.Account (SignInError (..), passwordErrorText)
-import Wiki.App.Assistant (KeyRef, Made (..), MonadAssistant (..), NewIdentity (..), PasskeyRefusal (..), Used (..))
+import Wiki.App.Assistant (KeyRef, Made (..), MonadAssistant (..), NewIdentity (..), PasskeyRefusal (..), Used (..), deviceSlotsIO, dropSlotsIfIO, vaultGenerationIO)
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..), Rewrap (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Assistant.Vault (DeviceRecord (..), Stored (..), assistantItem, readStored, sealingData, wrappingData, wrappingInfo)
@@ -146,6 +149,64 @@ readDevice u =
 -- | Record what this device holds of the user's vault.
 writeDevice :: (MonadAssistant m) => UserId -> VaultDevice -> m (Either Text ())
 writeDevice u d = keepDeviceRecord (vaultSlot u) (Just (BSL.toStrict (encode d)))
+
+-- | Let go of the user's keys on this device, when they sign out or the
+-- tab learns that their session ended or is someone else's now: the vault
+-- key and the private key of their key pair, in this page and in
+-- IndexedDB, and in the wiki's other tabs, which the browser's channel
+-- tells ('dropDeviceKey'). After this, nothing on the device opens the
+-- vault until a passkey or the password unlocks it again. A sign-in with
+-- the password unlocks it with the key the password gives
+-- ('afterSignIn'); a user who signs in with a provider types no password,
+-- and unlocks with a passkey before an encrypted space can be read.
+--
+-- The assistant's own key stays, as what was typed in its settings is
+-- sealed with it, unless it is the vault key: what the vault key seals,
+-- it opens. Without the vault key here to compare, the assistant's key is
+-- taken for the vault key when the assistant's settings sync, sealed with
+-- the vault key ('shareWithAssistant').
+forgetUserKeys :: (MonadAssistant m) => UserId -> m ()
+forgetUserKeys u = slotsOfUser u >>= traverse_ dropDeviceKey
+
+-- | The slots of a user's keys on this device that a sign-out lets go of
+-- ('forgetUserKeys'): the vault's and the private key's, and the
+-- assistant's when its key is the vault key.
+slotsOfUser :: (MonadAssistant m) => UserId -> m [UserId]
+slotsOfUser u = do
+  vaultKey <- deviceKey (vaultSlot u)
+  assistantKey <- deviceKey u
+  same <- case (vaultKey, assistantKey) of
+    (Just v, Just a) ->
+      sealWith v "the same key" probeData >>= \case
+        Right sealed -> isRight <$> openWith a sealed probeData
+        Left _ -> pure False
+    (Nothing, Just _) ->
+      deviceRecord u <&> \case
+        Right (Just bytes) | Right (Current r) <- readStored bytes -> isJust r.server
+        _ -> False
+    _ -> pure False
+  traverse_ forgetKey vaultKey
+  traverse_ forgetKey assistantKey
+  pure ([vaultSlot u, identitySlot u] <> [u | same])
+  where
+    probeData = "wiki-vault/1 same-key"
+
+-- | Let go of the keys of every user this device keeps them for, as
+-- 'forgetUserKeys' does for one: what a page does when the server says
+-- that nobody is signed in in this browser. A session can end with no tab
+-- open (it expires, or is signed out from another device), and a page
+-- opened after it does not know whose keys were here: so every user's go,
+-- as a sign-out would have done.
+forgetEveryUsersKeys :: (MonadAssistant m, MonadIO m) => m ()
+forgetEveryUsersKeys = do
+  -- The store's generation first: a key kept anywhere after it (a
+  -- sign-in that completed meanwhile) stops the deletion, which compares
+  -- it in the same transaction as it deletes.
+  generation <- liftIO vaultGenerationIO
+  slots <- liftIO deviceSlotsIO
+  let users = ordNub [UserId u | s <- slots, Just u <- [T.stripPrefix "vault:" s <|> T.stripPrefix "identity:" s]]
+  doomed <- concat <$> traverse slotsOfUser users
+  unless (null doomed) (void (liftIO (dropSlotsIfIO generation doomed)))
 
 --------------------------------------------------------------------------------
 -- The user's keys
@@ -719,5 +780,6 @@ wikiText = \case
   NotFound -> "The server knows nothing of it."
   Forbidden -> "The server refused it."
   Conflict t -> t
+  Stale _ t -> t
   Invalid t -> t
   Unreachable t -> "The server could not be reached: " <> t

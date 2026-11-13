@@ -141,12 +141,12 @@ import Web.Storage.Storage qualified as Storage
 import Wiki.Api.Links (archiveExportUrl)
 import Wiki.Api.ServerSettings (HomePage (showAnonymous, title))
 import Wiki.App.Account (Accounts (..))
-import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Assistant (MonadAssistant, announceSignIn, keysDroppedElsewhere, listenToOtherTabs)
 import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous, sameAsking, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
-import Wiki.App.Backend.Encrypted (MonadEncryption)
+import Wiki.App.Backend.Encrypted (MonadEncryption (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Backend.Stars (MonadStars)
 import Wiki.App.Backend.WhatsNew (MonadWhatsNew)
@@ -163,6 +163,7 @@ import Wiki.App.Recent (rememberVisit)
 import Wiki.App.Route (AdminSection, Route (..), adminSections, locationRoute, sectionName, sectionTitle, settledRoute)
 import Wiki.App.Route qualified as R
 import Wiki.App.Security (MonadSecurity)
+import Wiki.App.Vault (forgetEveryUsersKeys, forgetUserKeys)
 import Wiki.App.View.Access qualified as AccessView
 import Wiki.App.View.Activity qualified as ActivityView
 import Wiki.App.View.AssistantSettings qualified as AssistantSettingsView
@@ -210,11 +211,13 @@ import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Export (Archive (..), readArchive, withoutHomeDocument, writeArchive)
 import Wiki.Core.Id (PageId, SpaceId, UserId)
 import Wiki.Core.Markdown (Destination (..), classifyDestination, parseMarkdown)
+import Wiki.Core.Offered qualified as Offered
 import Wiki.Core.Page (Page (attachments, body, id, title), PageSummary (id, title), summaryOf, templatePages, treePages)
 import Wiki.Core.Path (PathError (..), findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), canView, hasGlobalPermission, mayCreateSpace)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (blog, description, encryption, icon, id, name, parent, personalContainer), containerName, pageAt, pagesAt, rootPage, subspacesOf)
+import Wiki.Core.Space qualified as Space
 import Wiki.Core.User (Login (..), User (..))
 
 -- | The shell's input: the router; a route the home page invites a
@@ -405,6 +408,9 @@ data State m = State
   -- the service worker served offline was loaded without a network, and no
   -- event reports that.
   , offlineCopy :: Maybe UTCTime
+  , keysLooked :: Bool
+  -- ^ Whether this page start has looked whether nobody is signed in, to
+  -- let go of every user's keys: once a page start.
   -- ^ When the page shown was stored, if the service worker served it
   -- offline from its stored copy; kept until the reader navigates
   -- elsewhere.
@@ -431,6 +437,10 @@ data State m = State
   -- what is shown then stays, since showing the failure in its place
   -- would unmount it and lose them, and a line above it says so. The
   -- next reload that succeeds clears it.
+  , droppedUnsaved :: Bool
+  -- ^ Whether changes not saved to a page of an encrypted space were
+  -- taken off the screen with the space ('sealScreen'): said once, until
+  -- the reader dismisses it. The text is kept nowhere.
   }
 
 -- | Whose changes a route followed away would lose ('leaving'): what the
@@ -460,6 +470,7 @@ data Told = Told
 data Action
   = Initialize
   | Arrived Route
+  | KeysDropped
   | Followed (Follow Route)
   | ToggleSwitcher
   | CloseSwitcher
@@ -479,6 +490,8 @@ data Action
   | RetryWorld
   | RetryHere
   | RetryStale
+  | DismissDropped
+  | SigningOut
   | FromAccount SignInView.Output
   | SessionChanged Session
   | OpenSignIn
@@ -555,11 +568,13 @@ component =
                   , entry = 0
                   , offline = False
                   , offlineCopy = Nothing
+                  , keysLooked = False
                   , installable = False
                   , shown = Nothing
                   , backlinks = Nothing
                   , seen = Nothing
                   , stale = Nothing
+                  , droppedUnsaved = False
                   }
           -- The page's backlinks too, if the backend has them at once, so
           -- that the sidebar's first render is the prerendered one; else
@@ -601,7 +616,16 @@ component =
             </button>
             <main class="wiki-content">
               {{ offlineCopyLine st }}
+              {% for why in maybeToList (conversionNotice st) %}
+                <p class="conversion-notice" role="status">{{ why }}</p>
+              {% end %}
               {% for e in maybeToList st.stale %}{{ staleNotice e RetryStale }}{% end %}
+              {% if st.droppedUnsaved %}
+                <div class="error dropped-unsaved" role="alert">
+                  <p>Unsaved changes to a page of an encrypted space were dropped when its keys were let go (a sign-out, here or in another tab, or the space closed). Drafts of encrypted pages are not kept.</p>
+                  <button type="button" class="dismiss" onClick={{ const DismissDropped }}>Dismiss</button>
+                </div>
+              {% end %}
               {% for (_, unsaved) in maybeToList st.leaving %}
                 {{ leaveConfirm unsaved }}
               {% end %}
@@ -893,10 +917,23 @@ component =
           <div class="actions">
             <a class="button demo-export" href={{ archiveExportUrl }} download>Export the wiki</a>
           </div>
+          {% if not (null sealed) %}
+            <p class="export-leaves-out" role="note">{{ leftOutLine }}</p>
+          {% end %}
           {{ importer <$> st.migration }}
         </div>
       |]
       where
+        -- The server writes the file, and cannot read an encrypted space:
+        -- the file leaves every one out, which is said here, before it is
+        -- downloaded.
+        sealed = [x.name | x <- st.spaces, isJust x.encryption]
+        leftOutLine =
+          show (length sealed)
+            <> (if length sealed == 1 then " encrypted space is" else " encrypted spaces are")
+            <> " not in this file: "
+            <> T.intercalate ", " sealed
+            <> ". Each is exported from its own list of pages, decrypted in a browser that holds its key."
         importer migration = HH.slot "view" ImporterSlot ImportView.component ImportView.Input {migration} FromView
 
     -- The demo's content as a whole: whether it is saved, exporting it,
@@ -1359,6 +1396,11 @@ component =
           modify (\st -> st {offlineCopy = copy, offline = isJust copy || not online})
         installs <- H.liftEffect installChanges
         void $ H.subscribe (InstallChanged <$ installs)
+        -- Another tab's sign-out lets go of the keys there: this tab lets
+        -- go of what it opened with them.
+        H.liftEffect (liftIO listenToOtherTabs)
+        dropped <- H.liftEffect keysDroppedElsewhere
+        void $ H.subscribe (KeysDropped <$ dropped)
         handleAction InstallChanged
         router <- gets (\st -> st.router)
         void $ H.subscribe (Arrived <$> Router.changes router)
@@ -1385,6 +1427,13 @@ component =
         loadEverything
       RetryHere -> loadHere True
       RetryStale -> reload Nothing
+      DismissDropped -> modify (\st -> st {droppedUnsaved = False})
+      -- This tab's sign-out, before its request: what is shown of
+      -- encrypted spaces goes at once, whether the request then succeeds
+      -- or not (offline, it does not).
+      SigningOut -> do
+        lift forgetEncrypted
+        sealScreen
       Online False -> modify (\st -> st {offline = True})
       -- Back online: whatever failed to load because the server could not
       -- be reached is loaded again, as "Try again" would. A view whose own
@@ -1404,6 +1453,13 @@ component =
       Install -> do
         void install
         handleAction InstallChanged
+      -- Another tab let go of the user's keys (a sign-out there): nothing
+      -- of an encrypted space stays open here, and the session is asked
+      -- for again, with everything shown.
+      KeysDropped -> do
+        lift forgetEncrypted
+        sealScreen
+        reload Nothing
       Arrived r -> do
         now <- H.liftEffect historyEntry
         before <- gets (\st -> st.route)
@@ -1510,7 +1566,12 @@ component =
         now <- H.liftEffect historyEntry
         modify (\st -> st {entry = now})
       -- Someone signed in or out: reload everything, as the new user.
+      FromAccount SignInView.SigningOut -> handleAction SigningOut
       FromAccount (SignInView.AccountChanged s) -> do
+        forgetFormer s
+        -- A sign-in completed: a tab about to let go of every user's keys
+        -- lets go of none.
+        when (isJust s.user) (H.liftEffect (liftIO announceSignIn))
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
         restartFeed
         reload Nothing
@@ -1569,11 +1630,20 @@ component =
     -- in again is shown, saying why.
     sessionEnded :: Session -> H.HalogenM (State m) Action Slots output m ()
     sessionEnded s = do
+      sealScreen
+      forgetFormer s
       modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
       restartFeed
       reload Nothing
       when (isNothing s.user) $
         H.tell "signIn" () (SignInView.Prompt "Your session has ended. Sign in again to go on.")
+
+    -- The user who was signed in is no longer: their vault key and private
+    -- key leave this device, in every tab ('Wiki.App.Vault.forgetUserKeys').
+    forgetFormer :: Session -> H.HalogenM (State m) Action Slots output m ()
+    forgetFormer s = do
+      before <- gets (\st -> st.session.user)
+      for_ before $ \u -> when (((\x -> x.id) <$> s.user) /= Just u.id) (lift (forgetUserKeys u.id))
 
     -- Open the live channel again, as the current user.
     restartFeed :: H.HalogenM (State m) Action Slots output m ()
@@ -1618,10 +1688,60 @@ component =
       -- The questions and results about the wiki's data are not shown
       -- again on coming back to the administration.
       shut <- (.) <$> shutMenu <*> shutSwitcher
+      -- A gate closed: the views' revision moves on, so that the header's
+      -- bell and stars forget the titles they show decrypted of the space.
+      closed <- gatesAt (settledRoute r)
+      -- A gate left: the space behind it goes from the screen at once, as
+      -- its keys do ('sealScreen').
+      when closed sealScreen
       modify (shut . \st -> st {route = settledRoute r, settled = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
+      -- The route left keeps no title of its own in the tab, nor in the
+      -- history's entry, until the route arrived at sets its title
+      -- ('announce').
+      H.liftEffect (setDocumentTitle bareTitle)
       canonicalAdmin
       whatsNewSeen
       loadHere False
+
+    -- Tell the backend where the reader is now, before the route reads
+    -- anything: a space that asks for a passkey or the password each time
+    -- it is opened asks again once the reader has left it
+    -- ('Wiki.App.Backend.Encrypted.readerAt'). Only the backend's memory
+    -- changes, so nothing waits. A path not in the list of spaces yet (a
+    -- space made just now) counts as its nearest space listed.
+    gatesAt :: Route -> H.HalogenM (State m) Action Slots output m Bool
+    gatesAt r = case routeSpace r of
+      Nothing -> pure False
+      Just path -> do
+        spaces <- gets (\st -> st.spaces)
+        let nearest p = listToMaybe [x.id | n <- reverse [1 .. length p], Just chain <- [findSpace spaces (take n p)], Just x <- [lastMay chain]]
+        lift (readerAt spaces (path >>= nearest))
+
+    -- Take what is shown of an encrypted space off the screen, at once,
+    -- before anything waits: the keys were let go (a sign-out, here or in
+    -- another tab, the session ended or changed user). The space shown, if
+    -- it is encrypted, is unmounted with every view in it (the page, the
+    -- editor and its preview, the history, the source, the slides, the
+    -- comments, a dialog over them), changes not saved with it: they are
+    -- dropped, and said so once ('droppedUnsaved'). The bell, the stars
+    -- and the search's results see a new revision, which names encrypted
+    -- pages as the server does and searches again. Nothing here waits on
+    -- the network, so nothing decrypted stays on the screen when a request
+    -- then fails.
+    sealScreen :: H.HalogenM (State m) Action Slots output m ()
+    sealScreen = do
+      st <- get
+      let encrypted path = maybe False (any (\x -> isJust x.encryption)) (findSpace st.spaces path)
+      case st.here of
+        InSpace path _ _ | encrypted path -> do
+          dirty <- isJust <$> unsavedShown
+          modify (\s -> s {here = LoadingSpace path, shown = Nothing, stale = Nothing, leaving = Nothing, droppedUnsaved = s.droppedUnsaved || dirty})
+        _ -> pass
+      modify (\s -> s {generation = s.generation + 1})
+      -- The tab's title, and the history's entry, named what was shown
+      -- (a page's title, decrypted): the wiki's bare name until the
+      -- reload sets the title again ('announce').
+      H.liftEffect (setDocumentTitle bareTitle)
 
     -- After a change: reload everything, and every view's own data too.
     reload :: Maybe Route -> H.HalogenM (State m) Action Slots output m ()
@@ -1630,6 +1750,7 @@ component =
       -- 'arrive' does.
       when (isJust next) (lift endPreload)
       loadWorld
+      void (gatesAt =<< maybe (gets (\st -> st.route)) (pure . settledRoute) next)
       modify (\st -> st {generation = st.generation + 1})
       for_ next $ \r -> modify (\st -> st {route = settledRoute r, settled = False, leaving = Nothing})
       loadHere True
@@ -1652,6 +1773,21 @@ component =
       lift (attempt (fetchWorld demo)) >>= \case
         Right w -> do
           modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady, stale = Nothing})
+          -- The server says nobody is signed in in this browser: no user's
+          -- keys stay on the device, as after a sign-out, even when the
+          -- session ended with no tab open. Not from a copy kept offline,
+          -- which may be older than a sign-in since, nor in the demo, whose
+          -- users are its own.
+          copy <- gets (\st -> st.offlineCopy)
+          network <- gets overNetwork
+          looked <- gets (\st -> st.keysLooked)
+          modify (\st -> st {keysLooked = True})
+          -- Once a page start, and on a fork of its own, so that nothing
+          -- shown waits on it. The fork looks again: a session with a user
+          -- by then (signed in here meanwhile) lets go of nothing, and nor
+          -- does a sign-in in another tab ('announceSignIn').
+          when (not looked && isNothing w.asking.user && network && isNothing copy && inBrowser) . void . H.fork $
+            whenM (gets (\st -> isNothing st.session.user)) (lift forgetEveryUsersKeys)
           -- A session loaded now may name a newer entry than the page
           -- shown has marked seen.
           whatsNewSeen
@@ -2043,8 +2179,21 @@ crumbs st = case st.route of
         ]
       _ -> []
 
+-- | The tab's title while nothing of a route is shown yet: the wiki's bare
+-- name.
+bareTitle :: Text
+bareTitle = "Wiki"
+
 documentTitle :: State m -> Text
 documentTitle st | st.route == Home && not (isShut st) && st.session.homePage.title /= "Spaces" = st.session.homePage.title <> " · Wiki"
+-- A page of a space that asks for a passkey or the password each time it
+-- is opened is titled by its space alone: the browser keeps a page's
+-- title in its history and its tabs' lists after the reader has left the
+-- space, where nothing of the space is to stay decrypted.
+documentTitle st
+  | InSpace _ space _ <- st.here
+  , isJust (Space.gateOf st.spaces space.id) =
+      space.name <> " · Wiki"
 documentTitle st = case reverse (map fst (crumbs st)) of
   -- A space that cannot be shown has no name to show either: the content
   -- in its place says why.
@@ -2152,3 +2301,50 @@ archiveSummary a =
   where
     counted :: Int -> Text -> Text -> Text
     counted n singular plural = show n <> " " <> if n == 1 then singular else plural
+
+-- | The space a route is in, by its path, for the gates of encrypted spaces
+-- ('Wiki.App.Backend.Encrypted.readerAt'): 'Just' 'Nothing' for a route
+-- outside every space, and 'Nothing' for a page's permanent address, which
+-- leads on to the page's own route without leaving where the reader was.
+routeSpace :: Route -> Maybe (Maybe [Slug])
+routeSpace = \case
+  Space p -> inside p
+  Posts p _ -> inside p
+  SpacePages p -> inside p
+  Page p _ -> inside p
+  EditPage p _ -> inside p
+  PageSource p _ -> inside p
+  LivePreview p _ -> inside p
+  NewPage p _ -> inside p
+  PageHistory p _ _ _ -> inside p
+  PageSlides p _ _ _ -> inside p
+  PageAtVersion p _ _ -> inside p
+  NewSpace p -> Just p
+  Search _ p _ -> Just p
+  PermanentLink _ _ -> Nothing
+  Home -> outside
+  EditHome -> outside
+  HomeSource -> outside
+  HomeHistory _ _ -> outside
+  HomeSlides _ _ -> outside
+  Unknown -> outside
+  Admin _ -> outside
+  Invite _ -> outside
+  ResetPassword _ -> outside
+  VerifyEmail _ -> outside
+  Unsubscribe _ -> outside
+  AssistantSettings -> outside
+  WhatsNewPage -> outside
+  UserSpaces -> outside
+  where
+    inside = Just . Just
+    outside = Just Nothing
+
+-- | Why nothing can be written in the space shown, while a conversion of
+-- it runs ('Wiki.Core.Offered.refusalOf'): the views draw no control that
+-- writes then ("Wiki.App.View.Common"'s 'writable'), and this says why,
+-- above them.
+conversionNotice :: State m -> Maybe Text
+conversionNotice st = case st.here of
+  InSpace _ space _ -> Offered.refusalOf Offered.Write (chainOf (context st) space.id)
+  _ -> Nothing

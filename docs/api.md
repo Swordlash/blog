@@ -65,6 +65,7 @@ of the backend's `WikiError`, with its text where it has one:
 | 403 | `{"error": "Forbidden"}` | it names something the user may see, but may not do this to |
 | 400 | `{"error": "Invalid", "message": "…"}` | the request cannot be carried out as it is |
 | 409 | `{"error": "Conflict", "message": "…"}` | the wiki has changed since the request was made |
+| 409 | `{"error": "Stale", "state": "…", "message": "…"}` | the request was made for a space, or a page of it, in another state than the one it is in now, which `state` names: `space-plain` (its encryption is off), `space-encrypted` (it is encrypted, or being encrypted: the plain routes refuse), `page-plain` and `page-encrypted` (during a conversion, the page reads by the other routes), `converting` (a conversion runs: nothing else is written), `not-converting`, `key-renewed` (the space's or the page's key changed since), `renewal-due` (the space's key must be renewed first), `lease-lost` (another browser holds the conversion's lease). The browser tells these apart by `state`, never by the text |
 | 401 | `{"error": "Unauthenticated"}` | signing in failed: no account has that login and password, or it cannot sign in |
 | 429 | `{"error": "TooManyRequests", "message": "…"}` | signing in was tried too often; `Retry-After` says how many seconds to wait |
 | 401 | `{"error": "SecondFactorRequired"}` | the login and password are right, and the account has a second factor: the code is to come (below) |
@@ -1121,6 +1122,20 @@ theirs) answer 409 until a rotation.
 | POST | `api/v1/encrypted/pages/<page>/threads/<thread>/comments` | `NewSealedComment` `{"id", "content"}` | 201 `SealedCommentInfo` | 404, 403, 400, 409 |
 | PUT | `api/v1/encrypted/pages/<page>/threads/<thread>/comments/<comment>` | `SealedCommentEdit` `{"content"}` | `SealedCommentInfo` | 404, 403, 400, 409 |
 | POST | `api/v1/encrypted/pages/<page>/attachments` | multipart: `sealed` `{"id", "meta": {"keyId", "meta", "bytesNonce"}, "replaces"}` and `file`, the bytes encrypted, at most the largest attachment and 16 bytes | 201 `SealedAttachment` `{"id", "size", "meta"}` | 404, 403, 400, 409 |
+| GET | `api/v1/encrypted/spaces/<space>/conversion` | | `ConversionInfo` `{"running": "encrypting", "decrypting" or null, "root", "spaces", "left": [{"page", "space"}], "cannotEncrypt": [reason], "cannotDecrypt": [reason], "nothingWritten": whether the space is as it was made, which `POST api/v1/encrypted/spaces/<space>` encrypts at once, "clearing", "converter": {"yours", "heldUntil"} while a browser's lease on the conversion runs, or null}`; spaces the caller may not view are left out, and not named | 404 |
+| POST | `api/v1/encrypted/spaces/<space>/conversion/encrypt` | `StartEncrypting` `{"keys": [{"space", "keyId", "grant": NewGrant}]}`, a key for the space and each plain space below it, sealed to the caller | `ConversionInfo` | 404, 403, 400, 409 (a reason it cannot be converted, the spaces changed) |
+| POST | `api/v1/encrypted/spaces/<space>/conversion/decrypt` | | `ConversionInfo` | 404, 403, 409 |
+| GET | `api/v1/encrypted/spaces/<space>/readers` | | `[User]`: the users who read the encrypted space, for one of its readers; what a mention in its pages and comments is named from, so that no login found in or typed into its decrypted text is sent | 404, 409 (a plain space) |
+| POST | `api/v1/encrypted/headings` | `HeadingsQuery` `{"pages": [page id]}`, at most 100 | `[PageHeading]` `{"page", "space", "pageKeys", "heading"}`: the encrypted title of each page asked for that the caller may view and whose title is encrypted; the others are left out, unnamed. The bell and the stars decrypt them in the browser | 400 (more than 100) |
+| PUT | `api/v1/encrypted/spaces/<space>/entry` | `SpaceEntry` `{"entry": "at-once" or "confirm-each-time"}` | `Space`: whether its readers' browsers ask for a passkey or the password each time it is opened, it and the spaces below it; for its administrators, on an encrypted space only. The server keeps the setting only: a space's `entry` is in every `Space` (absent means `"at-once"`) | 404, 403, 409 (a plain space) |
+| POST | `api/v1/encrypted/spaces/<space>/conversion/reverse` | | `ConversionInfo`: the conversion turned round, going the other way over the pages converted so far (the staged rows of the others dropped), or ended at once when none was | 404, 403, 409 (none runs, a key not held) |
+| POST | `api/v1/encrypted/spaces/<space>/conversion/lease` | `LeaseRequest` `{"takeOver"}` | `ConversionLease` `{"token", "expiresAt"}`: the right to stage and commit the conversion's pages, for this browser; a new token each time | 404, 403, 409 (none runs; another browser holds it and it has not run out, unless the caller holds it and asks to take it over) |
+| POST | `api/v1/encrypted/conversion/pages/<page>/sealed` | `StagedSealed` `{"pageKey": PageKey or null, "versions": [{"updatedAt", "content"}], "threads": [{"id", "anchor"}], "comments": [{"id", "content"}], "attachments": [{"id", "meta"}]}`; a key starts the page anew and comes with its latest version | 204 | 404, 403, 400, 409 (not being encrypted, converted already, a renewal due) |
+| POST | `api/v1/encrypted/conversion/pages/<page>/plain` | `StagedPlain` `{"versions": [{"updatedAt", "title", "body"}], "threads": [{"id", "anchor"}], "comments": [{"id", "body"}], "attachments": [{"id", "name", "mediaType"}]}` | 204 | 404, 403, 400, 409 |
+| POST | `api/v1/encrypted/conversion/pages/<page>/attachments/<attachment>` | multipart: `file`, the bytes as the page will hold them | 204 | 404, 403, 400, 409 |
+| GET | `api/v1/encrypted/conversion/pages/<page>` | | `StagedPage` `{"digest", "pageKeys", "sealed": StagedSealed, "plain": StagedPlain, "blobs": [{"id", "blob", "size"}]}`: each attachment's bytes by their SHA-256 (the blob) and size, which the digest names | 404, 403, 409 |
+| GET | `api/v1/encrypted/conversion/pages/<page>/attachments/<attachment>` | | the bytes staged for the attachment, `application/octet-stream`, which the browser reads back and opens before the commit | 404, 403, 409 |
+| POST | `api/v1/encrypted/conversion/pages/<page>/commit` | `ConversionCommit` `{"digest"}`, the digest read back | `ConversionProgress` `{"left"}` | 404, 403, 400, 409 (staged changed since, not all staged) |
 
 A grant (`KeyGrant` `{"keyId", "recipient", "recipientKeyId", "enc",
 "sealed"}`) is the space's key sealed with HPKE (base mode, X25519,
@@ -1134,6 +1149,22 @@ rotation keeps every older page key, wrapped again, so what was written
 before a rotation is read with the key it names. The live channel tells a
 page's subscribers only that an encrypted page's threads changed
 (`threads-changed`), and answers a subscription to one with no threads.
+
+A conversion encrypts a space that has pages, or turns a space's
+encryption off, one page at a time in the browser of an administrator of
+the space who holds its key; every route of it asks that of the caller.
+The space and the spaces below it carry `"conversion"` while it runs, and
+every other write in them answers 409. One browser converts at a time:
+the routes under `api/v1/encrypted/conversion/pages/` carry the token of
+the conversion's lease in the header `Wiki-Conversion-Lease`, and answer
+409 with a reason that starts `Another browser is converting this space`
+to any other token, whether the lease ran out or another was given. A page
+staged or committed renews the lease for two minutes; once it has run
+out, another browser may take it. The commit and turning the conversion
+back end it. A page reads by the plain routes
+until the conversion encrypts it, or from when it decrypts it; read by
+the other routes meanwhile, it answers 409 with a reason that starts
+`This page is read as plain text while its space is converted`.
 
 ### Administration
 

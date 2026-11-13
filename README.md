@@ -768,11 +768,104 @@ quotes) and their attachments (names, types and bytes) are encrypted in
 its members' browsers, and the server keeps only ciphertext it cannot
 read. In the
 space's settings, under **Permissions**, **Encrypt this space…** turns a
-space encrypted. Only a space with nothing written in it yet can be, and an
-encrypted space stays encrypted. Its untouched home page is replaced by
-one your browser writes and encrypts, with the same starter text: an
-encrypted space has a home page, as every space does, and its address
-shows it.
+space encrypted. A space with nothing written in it yet is encrypted at
+once: its untouched home page is replaced by one your browser writes and
+encrypts, with the same starter text (an encrypted space has a home page,
+as every space does, and its address shows it). **Turn encryption off…**
+makes an encrypted space plain again.
+
+A space that has pages is encrypted page by page in the browser of the
+administrator who asks, with the plain spaces below it, each with a key
+of its own: every version of each page, its comments with the text they
+quote, and its attachments, encrypted in that browser, sent, read back
+from the server and opened again before the page is committed, all of it
+in one step. Turning encryption off is the same, the other way, and
+deletes the spaces' keys at the end. Meanwhile each page reads the way it
+did until its turn, and nothing else can be written in these spaces; a
+conversion that stops (the tab closed, a refusal) is continued from the
+space's permissions by an administrator of the space who holds its key
+("Continue", with the pages left), or turned back ("Stop and turn
+back"): the pages converted so far are converted back, the others stay as
+they are, and the space ends as it began. A page that stops a conversion
+is named, with why, so that it can be mended (shortened, an attachment
+deleted) before it continues. While a conversion is paused halfway, the
+space's tree holds pages of both kinds: a browser holding the key shows
+every title, decrypted or plain; one without it shows the plain pages and,
+in their places, the encrypted ones as "an encrypted page" (the server
+lists them to any reader, with their places but no title), so that a plain
+page under an encrypted one keeps its address. A search finds the encrypted
+pages, decrypted in the browser, and not the plain ones until the
+conversion ends: the server's search leaves out a space with a key. One browser converts at a time: the one
+that holds the conversion's lease, which each page staged or committed
+renews for two minutes. Another administrator's browser can continue
+only once it has stopped that long; the same user can take it over from
+another of their browsers at once ("Take over here"), and the browser it
+was taken from writes nothing more, not even a request it had already
+sent. A tab left open while another browser started, ended or turned
+back a conversion learns of it at its next request the server refuses
+for that reason (each such refusal carries a code, `Stale` in
+`docs/api.md`): it reads the spaces again, lets go of the keys and pages
+of a space plain now, and sends a read once more by the route the space
+now takes; a write is not sent again, and the author is told to reload
+the page. A read of a page by its id (its history, a version, its
+comments) refused because the page now reads encrypted first reads the
+page as opening it does, through its space's gate and key, and then goes
+by the encrypted route; without the key it ends as a locked page does. A tab that believed the space encrypted lists its pages after
+asking the server whether it is being converted, so the pages a
+conversion made plain since are in its list; one that believed it plain
+lists the plain pages until a request of it is refused, or the spaces are
+read again. Before a page is committed, its attachments' bytes as the server
+staged them are compared, by hash and size, with what the browser sent,
+read back, and opened with the page's key as stored. A page encrypted gets a new address
+made of random letters, since its old one spelled its title; its link by
+id (`/l/<id>`) keeps working, and it keeps that address if the
+encryption is turned back. What cannot be converted is said before
+anything starts: templates, a blog, a public space, the wiki's front page,
+an attachment on the web, someone else's draft of a page, a version whose
+title is longer than 6,128 bytes or whose text is longer than 6,291,440
+bytes (what an encrypted page's ciphertext holds; a plain page has no such
+limit), and, to turn it off, a parent space that is encrypted too. Afterwards the plain text is
+gone from the wiki's database: SQLite's files are written over where it
+was, and its log emptied; on PostgreSQL old rows stay in the database's
+files until it is vacuumed (the wiki does not vacuum it: its
+administrator's maintenance does). SQLite's log is emptied by a
+checkpoint after the conversion's last commit, which a reader of the
+database (a backup being taken, a tool with the file open) can hold
+back: the space's permissions then say that the old text is still being
+cleared, and the checkpoint runs again after each write to the wiki, and
+at the server's start, until it has run. **Backups made before keep the plain text**,
+and the attachments' plain files they name stay in the data directory,
+until those backups are pruned: nothing deletes a backup.
+
+What can be done, and what cannot, in one place:
+
+- Added in the second part (#213): an export decrypted in your browser;
+  encrypting a space that has pages, and turning encryption off, page by
+  page, which can be stopped and turned back; asking for a passkey or your
+  password each time a space is opened; your keys deleted from the device
+  at a sign-out; titles of encrypted pages under the bell and in your
+  stars, decrypted in your browser; and the controls the server refuses in
+  an encrypted space, or while a space is converted, not offered. One rule
+  in `wiki-core` (`Wiki.Core.Offered`) decides both what the server takes
+  and what the interface draws.
+- Not possible in an encrypted space: templates, a blog and its feeds,
+  making it public, moving a page to or from another space, drafts kept on
+  the server, restoring a version on the server (your browser restores it
+  by saving it again), the server's exports (PDF, Markdown, the whole
+  wiki's, which leaves encrypted spaces out), importing into it, and the
+  server's search (your browser searches it).
+- Limits: the gate of a space that asks each time is the page's own, not
+  the encryption's (see above); the writing assistant sends the text you
+  ask it about, decrypted, to the provider you chose, as in any space, and
+  its panel says so in an encrypted space; a version older than one your
+  browser read is caught only in a browser that read the newer one.
+- A mention in an encrypted page or comment is named from the space's
+  readers, which the browser asks for by the space alone: no login found
+  in the decrypted text, nor letters typed after an @, reach the server.
+  A login that is not a reader's is shown as written.
+- The whole wiki's export leaves encrypted spaces out, and says which,
+  next to its button. "Export, decrypted here" is not offered while a
+  space is being converted, which would miss pages.
 
 How it works:
 
@@ -809,6 +902,46 @@ How it works:
   it: its pages go under it, and keep their addresses.
 - On a device that does not hold your keys, the space shows as locked and
   offers to unlock them there, with a passkey or your password.
+- **Ask for a passkey or your password each time this space is opened**,
+  a switch in the space's permissions for its administrators, guards
+  against someone using your unlocked computer: nothing of the space, or
+  of the spaces below it, is decrypted until you open it with a passkey
+  (where your vault has one and the browser can use it) or your password.
+  Leaving it, for a page outside it or the front page, forgets its key,
+  its pages decrypted for the search, its attachments' addresses and your
+  confirmation in that tab; a reload asks again too. Outside it, its
+  starred pages and its pages under the bell are named "an encrypted
+  page", a search finds nothing of it, and its pages' tabs and history
+  entries are titled by the space alone. While its encryption is being
+  turned off, the pages made plain already are behind the gate too, by
+  every route (the page, its link by id, the list of pages, its history
+  and comments): once you open the space, you read the pages not
+  converted yet decrypted and the others plain; the setting goes with the
+  encryption at the end. It is a gate in the wiki's own
+  page, not in its encryption: someone who opens the browser's developer
+  tools on a device where your keys are unlocked gets past it. Someone
+  who signs in only with a provider, and has no passkey on the device,
+  cannot open such a space there.
+- Signing out, or a tab finding that your session ended or is someone
+  else's now, deletes your vault's key and your private key from the
+  device, in every tab of the wiki and in the browser's storage; the
+  assistant's own key stays, unless it is the vault's key. The other tabs
+  let go at once of every encrypted space they hold open (its keys, its
+  pages, its attachments' addresses) and ask the server who is signed in.
+  What a tab shows of an encrypted space leaves the screen at that moment,
+  before any request, even offline (the same when you leave a space that
+  asks each time): an editor's changes not saved to an encrypted page go
+  with it, and the tab says so once; drafts of encrypted pages are never
+  kept. A plain page's editor keeps its changes as before.
+  A page that opens and hears from the server that nobody is signed in
+  deletes every user's keys on the device the same way, so that a session
+  that ended with no tab open (expired, or signed out from another
+  device) leaves no key behind either. The preview of a page detached
+  from its editor keeps nothing of a page of an encrypted space once its
+  editor closes. Signing in with
+  your password unlocks them again by itself. Signing in with a provider
+  does not: your keys are then locked, and a passkey unlocks them before
+  you read an encrypted space.
 - Slugs in an encrypted space are random, since a title's slug would show
   the title.
 - Each version of a page names its number and the version before it, in
@@ -818,17 +951,39 @@ How it works:
   one under the same number, a later one that its history does not join,
   version by version, to the one your browser read, or a history with a
   version missing or out of order (within a page of the history or
-  between two pages of it), the page is shown under a banner that says
-  so, and cannot be edited in that tab until it is reloaded. What this
+  between two pages of it), or a whole history that does not begin with
+  the chain's first version (its oldest versions left out), the page is
+  shown under a banner that says so, and cannot be edited in that tab
+  until it is reloaded. Turning a space's encryption off checks each
+  page's whole history so before it makes it plain. What this
   does not catch: an older version sent to a browser that never read the
-  page; a page the server hides or deletes altogether; and comments or
-  attachments the server leaves out or sends as they were before (each
-  one opens only as itself, on its own page, but has no version number). What your browser remembers is
+  page; versions from before versions were numbered left out below the
+  first numbered one; a page the server hides or deletes altogether, or
+  leaves out of a list of pages (a space's pages, the pages a conversion
+  has left, which the server alone counts, so a page left out of a
+  decryption is not made plain, and its key goes with the space's at the
+  end; the pages and spaces of an export decrypted here); and comments or
+  attachments the server leaves out, reorders or sends as they were
+  before (each one opens only as itself, on its own page, but has no
+  version number). What your browser remembers is
   in its storage for this site, and nothing in it is secret: clearing the
   browser's data for the wiki forgets it, and with it the protection
   against an older version on that device. Versions written before this
   check came (WP5.74b3) are not numbered; their order is the server's
   word.
+- A page encrypted again, after its space's encryption was turned off,
+  starts a new chain of versions under the same page: each chain has an
+  origin, a random id the browser that starts it picks and every version
+  of it binds in its encryption. Your browser keeps what it read of each
+  chain of a page; a new chain it takes as the page encrypted again, and
+  a chain it read before the latest one, shown again, as the page as it
+  was (the banner says so). What this rests on: only a browser that holds
+  the space's key can start a chain. Nothing proves who sealed a grant of
+  the key to you, so a server that seals a key of its own making to your
+  public key could show you a space, and chains, of its own: the checks
+  hold for the keys the space's members made, as everything here does
+  (see "Your keys": the server is trusted to say which public key is
+  whose).
 - Search runs in your browser: the first search after the page opens
   fetches every page of each encrypted space whose key you hold and
   decrypts it in memory, until a change: one you make, a save the page
@@ -839,7 +994,10 @@ How it works:
 - Comments and attachments are encrypted with the page's key, each bound
   to its page and its own id, which the browser chooses. A comment shows
   for the people it is shown to on any page; those told of it under the
-  bell are told by the page's id, with no title and no excerpt, and a
+  bell are told by the page's id, with no title and no excerpt (the bell
+  shows the title, decrypted in your browser where it holds the space's
+  key and the space does not ask first; the mail and the feed say "an
+  encrypted page"), and a
   mention in it notifies nobody, since the server cannot read it. Editing
   a comment tells nobody. An attachment's bytes are fetched encrypted
   and decrypted in your browser into an address of its own, which the
@@ -871,6 +1029,22 @@ to go on editing. A whole-wiki export leaves encrypted spaces out, and a
 whole-wiki archive is imported with every space plain. Notifications of
 a change in an encrypted space carry no title and no excerpt.
 
+**Export, decrypted here**, in an encrypted space's list of pages, is the
+export your browser makes, for anyone who holds the space's key: it reads
+the space and each of its subspaces whose key it holds, decrypts them, and
+saves one file in the wiki's own archive format, with the latest title and
+text of each page, their attachments, and their comments with their
+authors' names. The file holds no older versions, drafts, users, groups or
+grants; a subspace whose key the browser does not hold is left out, with
+the subspaces under it, and the export says which. Anything else that does
+not decrypt refuses the whole export, naming the page, so that the file
+never lacks something silently, and the browser reads the file back before
+it saves it. The plain text exists only in your browser and in the file:
+nothing of it is sent to the server. A wiki imports the file as plain
+spaces, through its administration's import (not into the encrypted space
+it came from, which the import refuses). Make one before a password reset
+that would delete your keys.
+
 What the server still sees: the space's name (shown in the list of
 spaces), the shape of its tree of pages, how large each page is, when and
 by whom pages are saved and commented on, how many comments and
@@ -880,12 +1054,10 @@ The words searched for reach the server too: the search page's address
 carries them, and the server searches the plain spaces with them. It
 never sees the encrypted pages, nor which of them matched.
 
-Not there yet, and to come: an export of an encrypted space decrypted in
-your browser; encrypting a space that already has pages, and turning
-encryption off; an option of an encrypted space to ask for a passkey or
-the password before each opening, with signing out removing your keys from
-the device; and the titles of encrypted pages under the bell (they show as
-"an encrypted page" there for now).
+Not there yet, and to come: an option of an encrypted space to ask for a
+passkey or the password before each opening, with signing out removing
+your keys from the device; and the titles of encrypted pages under the
+bell (they show as "an encrypted page" there for now).
 
 Removing a reader gives the space a new key (WP5.74b3). A reader stops
 being one when their grant, their group's grant or their membership of the

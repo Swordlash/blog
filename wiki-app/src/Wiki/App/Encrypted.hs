@@ -47,6 +47,9 @@ module Wiki.App.Encrypted
   , sealBytes
   , Opened
   , openAttachmentBytes
+  , openedBytes
+  , openBytes
+  , sha256Hex
   , objectUrls
   , revokeUrl
 
@@ -92,8 +95,11 @@ $( browserJS
      , ("js_open_attachmentPromise", "wiki_enc_open_attachment", Safe, [t|Int -> JSText -> JSText -> JSText -> IO (Promise JSVal)|])
      , ("js_opened_error", "wiki_enc_opened_error", Safe, [t|JSVal -> IO JSText|])
      , ("js_object_urls", "wiki_enc_object_urls", Safe, [t|JSVal -> JSText -> JSText -> IO JSText|])
+     , ("js_opened_bytes", "wiki_enc_opened_bytes", Safe, [t|JSVal -> IO JSVal|])
+     , ("js_open_bytesPromise", "wiki_enc_open_bytes", Safe, [t|Int -> JSText -> JSVal -> JSText -> IO (Promise JSVal)|])
      , ("js_revoke", "wiki_enc_revoke", Safe, [t|JSText -> IO ()|])
      , ("js_keep_seen", "wiki_enc_keep_seen", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
+     , ("js_sha256Promise", "wiki_enc_sha256", Safe, [t|JSVal -> IO (Promise JSText)|])
      ]
  )
 
@@ -115,6 +121,9 @@ js_space_key_rotate a1 a2 a3 a4 a5 a6 = if inBrowser then wait =<< js_space_key_
 js_seal_bytes :: Int -> JSVal -> JSText -> IO JSVal
 js_seal_bytes a1 a2 a3 = if inBrowser then wait =<< js_seal_bytesPromise a1 a2 a3 else pure inert
 
+js_open_bytes :: Int -> JSText -> JSVal -> JSText -> IO JSVal
+js_open_bytes a1 a2 a3 a4 = if inBrowser then wait =<< js_open_bytesPromise a1 a2 a3 a4 else pure inert
+
 js_open_attachment :: Int -> JSText -> JSText -> JSText -> IO JSVal
 js_open_attachment a1 a2 a3 a4 = if inBrowser then wait =<< js_open_attachmentPromise a1 a2 a3 a4 else pure inert
 
@@ -132,6 +141,9 @@ js_open a1 a2 a3 a4 = if inBrowser then wait =<< js_openPromise a1 a2 a3 a4 else
 
 js_open_many :: Int -> JSText -> IO JSText
 js_open_many a1 a2 = if inBrowser then wait =<< js_open_manyPromise a1 a2 else pure inert
+
+js_sha256 :: JSVal -> IO JSText
+js_sha256 a1 = if inBrowser then wait =<< js_sha256Promise a1 else pure inert
 
 --------------------------------------------------------------------------------
 -- Where encryption works
@@ -417,6 +429,32 @@ openAttachmentBytes (PageKeyRef k) address nonce data' = whenHere $ do
   why <- fromJSText <$> js_opened_error opened
   pure (if why == "" then Right (Opened opened) else Left why)
 
+-- | An attachment's decrypted bytes, copied into the program: what the
+-- export decrypted in the browser writes into its file
+-- ("Wiki.App.DecryptedExport"). Natively, none.
+openedBytes :: Opened -> IO ByteString
+openedBytes (Opened o)
+  | inBrowser = fromJSBytes =<< js_opened_bytes o
+  | otherwise = pure mempty
+
+-- | Bytes encrypted here ('sealBytes'), decrypted again with a page key and
+-- the additional data they were encrypted with: what a conversion of a
+-- space checks of the bytes it is about to stage.
+openBytes :: PageKeyRef -> Nonce -> ByteString -> Text -> IO (Either Text ByteString)
+openBytes (PageKeyRef k) nonce bytes data' = whenHere $ do
+  sealed <- toJSBytes bytes
+  opened <- evaluate =<< js_open_bytes k (toJSText nonce.text) sealed (toJSText data')
+  why <- fromJSText <$> js_opened_error opened
+  if why == "" then Right <$> openedBytes (Opened opened) else pure (Left why)
+
+-- | The SHA-256 of bytes, in lowercase hexadecimal, by WebCrypto: how the
+-- server names the blob it stores them as ("Wiki.Core.Id"'s 'BlobId'). A
+-- conversion compares it with the blob the server says it staged.
+sha256Hex :: ByteString -> IO (Either Text Text)
+sha256Hex bytes = whenHere $ do
+  hex <- evaluate . fromJSText =<< js_sha256 =<< toJSBytes bytes
+  pure (if hex == "" then Left "This browser could not hash the bytes." else Right hex)
+
 -- | Two object URLs of an attachment's decrypted bytes, which 'revokeUrl'
 -- lets go: one of the media type given, which the page shows, and one of
 -- the type given for a link to it (the same URL when the two types are
@@ -436,10 +474,10 @@ revokeUrl url = when inBrowser (js_revoke (toJSText url))
 -- | The latest version of a page that this browser has read and checked
 -- for the user ("Wiki.Core.Encrypted"'s 'Seen'), if it remembers one.
 -- Natively, none.
-seenOf :: UserId -> PageId -> IO (Maybe Seen)
+seenOf :: UserId -> PageId -> IO [Seen]
 seenOf u pid
-  | inBrowser = rightToMaybe . eitherDecodeStrict . encodeUtf8 . fromJSText <$> js_seen (toJSText u.text) (toJSText pid.text)
-  | otherwise = pure Nothing
+  | inBrowser = fromMaybe [] . rightToMaybe . eitherDecodeStrict . encodeUtf8 . fromJSText <$> js_seen (toJSText u.text) (toJSText pid.text)
+  | otherwise = pure []
 
 -- | Remember the latest version of a page this browser has read and
 -- checked for the user, only forward ("Wiki.Core.Encrypted"'s 'keepIn'),

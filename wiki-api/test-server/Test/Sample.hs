@@ -97,7 +97,7 @@ import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Entry (..), Icon (..), Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Core.Vault (CredentialId (..), Item (..), ItemName (..), KeyId (..), PublicKey (..), Sealed (..), Unlock (..), Vault (..), VaultTag (..), WrappedKey (..), vaultFormat)
@@ -124,6 +124,8 @@ space =
     , public = True
     , sealed = False
     , encryption = Nothing
+    , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False
@@ -150,6 +152,8 @@ personalSpace =
     , public = True
     , sealed = False
     , encryption = Nothing
+    , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Just (UserId "u1")
     , active = True
     , personalContainer = False

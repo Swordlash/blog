@@ -379,7 +379,7 @@ apiOver providers seed = do
         watch <- watching (WatchPage p.id)
         linking <- pageBacklinks p.id
         let logins = Body.unasked Body.noPeople (p.body : [c.body | t <- threads, c <- t.comments])
-        named <- Body.askPeople logins
+        named <- Body.askPeople s logins
         pure
           ( [(endpointUrl (\e -> e.spaces.pageAt s.id (pagePath p.id)), answerOf page), (endpointUrl (\e -> e.pages.draft p.id), answerOf draft), (endpointUrl (\e -> e.pages.versions p.id Nothing Nothing), answerOf versions)]
               <> [(endpointUrl (\e -> e.notifications.pageWatch p.id), answerOf watch), (endpointUrl (\e -> e.pages.backlinks p.id), answerOf linking)]
@@ -459,6 +459,7 @@ apiOver providers seed = do
       NotFound -> ApiError.NotFound
       Forbidden -> ApiError.Forbidden
       Conflict t -> ApiError.Conflict t
+      Stale st t -> ApiError.Stale st t
       Invalid t -> ApiError.Invalid t
       Unreachable t -> ApiError.Invalid t
     -- A search's address, read back into its query.

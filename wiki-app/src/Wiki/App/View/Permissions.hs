@@ -27,6 +27,14 @@
 -- intended; another administrator of the space, or of the wiki, can do it.
 -- The wiki's administrators, who may administer every space whatever its
 -- grants, may revoke every grant.
+--
+-- It also encrypts a space, and turns an encrypted space's encryption off
+-- ("Wiki.Core.Space"'s 'Conversion'): a space with nothing written in it
+-- at once, a space that has pages page by page in this browser
+-- ('convertNext'), showing how many pages are left. A conversion that
+-- stopped (the tab closed, a refusal) is continued from here, by an
+-- administrator of the space who holds its key. What cannot be converted
+-- is said before anything starts ('conversionOf').
 module Wiki.App.View.Permissions
   ( Input (..)
   , component
@@ -35,6 +43,7 @@ where
 
 import Data.Map.Strict qualified as Map
 import Data.Row (Empty)
+import Data.Time (defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -42,13 +51,14 @@ import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
+import Wiki.Api.Encrypted (ConversionInfo (..), Converter (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
 import Wiki.App.Backend.Encrypted (MonadEncryption (..))
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.Core.Id (GroupId (..), UserId (..))
 import Wiki.Core.Permission (SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..), keepsAdministering, sealedChain)
-import Wiki.Core.Space (Space (encryption, id, name, parent, public, sealed))
+import Wiki.Core.Space (Conversion (..), Entry (..), Space (conversion, encryption, entry, id, name, parent, public, sealed), gateOf)
 import Wiki.Core.User (Group (..), Login (..), User (..))
 
 -- | The permissions view's input: the space, as the space's view has it.
@@ -76,6 +86,15 @@ data State = State
   , problem :: Maybe WikiError
   , confirming :: Bool
   -- ^ "Encrypt this space…" was pressed, and waits for its confirmation.
+  , stopping :: Bool
+  -- ^ "Stop" was pressed while this browser converts the space's pages:
+  -- it stops once the page it is on is done.
+  , confirmingOff :: Bool
+  -- ^ "Turn encryption off…" was pressed, and waits for its confirmation.
+  , conversionInfo :: Maybe ConversionInfo
+  -- ^ The space's conversion, or what keeps one from starting.
+  , converting :: Maybe Int
+  -- ^ While this browser converts the space's pages, how many are left.
   }
 
 data Action
@@ -85,8 +104,15 @@ data Action
   | Followed (Follow Route)
   | TogglePublic
   | ToggleSealed
+  | ToggleEntry
   | AskEncrypt Bool
   | Encrypt
+  | AskDecrypt Bool
+  | Decrypt
+  | Continue
+  | TakeOver
+  | Stop
+  | TurnBack
   | ChooseWho Int
   | ChooseWhat Int
   | Grant
@@ -100,7 +126,7 @@ component =
           -- Read here when the backend answers at once, as the other views
           -- read their data; otherwise in 'Initialize'.
           loaded <- maybe Loading (either Failed Ready) <$> atOnce (spaceAccess input.space.id)
-          pure State {input, loaded, who = 0, what = View, busy = False, problem = Nothing, confirming = False}
+          pure State {input, loaded, who = 0, what = View, busy = False, problem = Nothing, confirming = False, stopping = False, confirmingOff = False, conversionInfo = Nothing, converting = Nothing}
       , render
       , eval =
           H.mkEval
@@ -116,6 +142,7 @@ component =
       [hh|
         <section class="space-permissions" aria-label="Permissions">
           <h2>Permissions</h2>
+          {% if isNothing space.encryption %}
           <div class="permissions-public">
             <button
               type="button"
@@ -130,6 +157,7 @@ component =
             </button>
             <p class="permissions-intro">{{ publicText }}</p>
           </div>
+          {% end %}
           {% if isJust space.parent %}
             <div class="permissions-sealed">
               <button
@@ -146,21 +174,71 @@ component =
               <p class="permissions-intro">{{ sealedText }}</p>
             </div>
           {% end %}
-          {% if isJust space.encryption %}
+          {% if maybe False (\i -> i.clearing) st.conversionInfo %}
+            <p class="permissions-intro conversion-clearing" role="status">The plain text this conversion deleted is still in the database's files: a reader of the database holds them back. It is cleared at the next write to the wiki.</p>
+          {% end %}
+          {% if isJust running %}
+            <div class="permissions-conversion">
+              {% for n in toList st.converting %}
+                <p class="permissions-intro conversion-progress" role="status">{{ conversionWord }}: {{ pagesLeft n }} left. Keep this page open until it is done.</p>
+                <button type="button" class="conversion-stop" disabled={{ st.stopping }} onClick={{ const Stop }}>Stop</button>
+              {% end %}
+              {% if isNothing st.converting %}
+                <p class="permissions-intro conversion-stopped">{{ conversionWord }} stopped, with {{ pagesLeft leftNow }} left: nothing else can be written in this space until it is done. An administrator of the space who holds its key continues it here, or turns it back.</p>
+                <p class="permissions-intro conversion-back-explained">Turning it back converts the pages done so far back, and leaves the others as they are: the space ends as it began. Pages encrypted so far keep the new addresses they got; their links by id keep working.</p>
+                <button type="button" class="primary conversion-continue" disabled={{ st.busy }} onClick={{ const Continue }}>Continue</button>
+                <button type="button" class="conversion-reverse" disabled={{ st.busy }} onClick={{ const TurnBack }}>Stop and turn back</button>
+                {% for c in toList (st.conversionInfo >>= \i -> i.converter) %}
+                  <p class="permissions-intro conversion-converter" role="status">{{ converterText c }}</p>
+                  {% if c.yours %}
+                    <button type="button" class="conversion-take-over" disabled={{ st.busy }} onClick={{ const TakeOver }}>Take over here</button>
+                  {% end %}
+                {% end %}
+              {% end %}
+            </div>
+          {% end %}
+          {% if isJust space.encryption && isNothing running %}
             <div class="permissions-encrypted">
               <p class="permissions-intro encrypted-note">Encrypted: the titles and texts of this space's pages, and their histories, are encrypted in its members' browsers, and the server cannot read them. Its name stays readable, to whoever sees it in the list of spaces. Each reader granted here gets the space's key from a member's browser, the next time a member opens the space.</p>
               <p class="permissions-intro encrypted-removal">Removing someone here gives the space a new key: your browser makes it at once if you hold the key, or another administrator's does when they next open the space, and until then nothing more can be written in it. Whoever was removed and kept the old key can still read what was written before, with a copy of what the server stores, but nothing written after.</p>
+              <div class="permissions-entry">
+                <button
+                  type="button"
+                  role="switch"
+                  class="switch entry-switch"
+                  aria-checked={{ ariaBool (space.entry == ConfirmEach) }}
+                  aria-label={{ space.name <> " asks for a passkey or your password each time it is opened" }}
+                  disabled={{ st.busy }}
+                  onClick={{ const ToggleEntry }}
+                >
+                  Ask for a passkey or your password each time this space is opened.
+                </button>
+                <p class="permissions-intro entry-explained">This guards against someone using your unlocked computer. It does not stop someone who opens the browser's developer tools on a device where your keys are unlocked. It covers the spaces below this one too.</p>
+                {% if askedAbove %}
+                  <p class="permissions-intro entry-above">A space above this one asks already, for this one too.</p>
+                {% end %}
+              </div>
+              {% if st.confirmingOff %}
+                <p class="permissions-intro decrypt-explained">Turning encryption off decrypts this space's pages and those of the spaces below it in your browser, one by one, with their histories, comments and attachments, and gives them to the server as plain text: it can then read, search and export them, as any space's. Until it is done nothing else can be written in these spaces; if it stops, an administrator who holds the key continues it here. At the end the spaces' keys are deleted.</p>
+                {{ refusalsView cannotDecrypt }}
+                <button type="button" class="primary decrypt-confirm" disabled={{ st.busy || not (null cannotDecrypt) }} onClick={{ const Decrypt }}>Turn encryption off</button>
+                <button type="button" class="decrypt-cancel" disabled={{ st.busy }} onClick={{ const (AskDecrypt False) }}>Cancel</button>
+              {% else %}
+                <button type="button" class="decrypt-space" disabled={{ st.busy }} onClick={{ const (AskDecrypt True) }}>Turn encryption off…</button>
+              {% end %}
             </div>
           {% end %}
           {% if encryptable %}
             <div class="permissions-encrypt">
               {% if st.confirming %}
-                <p class="permissions-intro encrypt-explained">Encrypting this space encrypts the titles and texts of its pages, and their histories, in its members' browsers: the server cannot read them, search them, export them, or show them in feeds or previews. Their comments and attachments are encrypted too. The space's name stays readable. Its members need the wiki's HTTPS address and their keys (your account's security) to read it. It cannot be undone.</p>
-                <button type="button" class="primary encrypt-confirm" disabled={{ st.busy }} onClick={{ const Encrypt }}>Encrypt</button>
+                <p class="permissions-intro encrypt-explained">Encrypting this space encrypts the titles and texts of its pages, and their histories, in its members' browsers: the server cannot read them, search them, export them, or show them in feeds or previews. Their comments and attachments are encrypted too, and so are the spaces below it, each with a key of its own. The space's name stays readable. Its members need the wiki's HTTPS address and their keys (your account's security) to read it. Its encryption can be turned off again here.</p>
+                <p class="permissions-intro encrypt-pages">A space that has pages is encrypted in your browser, page by page: until it is done nothing else can be written in it, and if it stops, an administrator who holds the key continues it here. Each page gets a new address (its link by id keeps working). What was plain is then gone from the wiki's database (on SQLite once nothing reading its files holds them back, which this page says; on PostgreSQL only once the database is vacuumed), but not from the backups made before: they keep the plain text, and the files of the attachments they name, until they are pruned. Nothing deletes a backup.</p>
+                {{ refusalsView cannotEncrypt }}
+                <button type="button" class="primary encrypt-confirm" disabled={{ st.busy || not (null cannotEncrypt) }} onClick={{ const Encrypt }}>Encrypt</button>
                 <button type="button" class="encrypt-cancel" disabled={{ st.busy }} onClick={{ const (AskEncrypt False) }}>Cancel</button>
               {% else %}
                 <button type="button" class="encrypt-space" disabled={{ st.busy }} onClick={{ const (AskEncrypt True) }}>Encrypt this space…</button>
-                <p class="permissions-intro">Only a private space with nothing written in it yet can be encrypted.</p>
+                <p class="permissions-intro">Only a private space can be encrypted.</p>
               {% end %}
             </div>
           {% end %}
@@ -173,7 +251,22 @@ component =
         -- A private space that is not public may be encrypted: a top-level
         -- space, or a subspace made private from its parent. The server
         -- says why one with pages written in it may not.
-        encryptable = isNothing space.encryption && not space.public && (space.sealed || isNothing space.parent)
+        encryptable = isNothing space.encryption && isNothing running && not space.public && (space.sealed || isNothing space.parent)
+        -- Whether a space above this one asks each time, which covers it.
+        askedAbove = maybe False (/= space.id) (gateOf st.input.context.spaces space.id)
+        -- The conversion running: the one this view started, turned
+        -- round or continues (its answer), before the shell has read the
+        -- space again, else the space's.
+        running = (st.conversionInfo >>= \i -> i.running) <|> space.conversion
+        cannotEncrypt = maybe [] (\i -> i.cannotEncrypt) st.conversionInfo
+        cannotDecrypt = maybe [] (\i -> i.cannotDecrypt) st.conversionInfo
+        leftNow = maybe 0 (\i -> length i.left) st.conversionInfo
+        conversionWord :: Text
+        conversionWord = case running of
+          Just Decrypting -> "Turning its encryption off"
+          _ -> "Encrypting its pages"
+        pagesLeft :: Int -> Text
+        pagesLeft n = show n <> (if n == 1 then " page" else " pages")
         publicText :: Text
         publicText
           | space.public = "Anyone may read this space and its subspaces, signed in or not. The grants below say who may do more."
@@ -186,6 +279,12 @@ component =
           Loading -> [hh|<p class="loading">Loading…</p>|]
           Failed e -> failureView e Retry
           Ready access -> accessView st access
+
+    -- Why a conversion cannot start now, as the server says.
+    refusalsView :: [Text] -> H.ComponentHTML Action Empty m
+    refusalsView = \case
+      [] -> HH.text ""
+      why -> [hh|<ul class="conversion-refusals" role="alert">{% for w in why %}<li>{{ w }}</li>{% end %}</ul>|]
 
     accessView :: State -> SpaceAccess -> H.ComponentHTML Action Empty m
     accessView st access =
@@ -303,11 +402,57 @@ component =
       ToggleSealed -> do
         space <- gets (\st -> st.input.space)
         change (void <$> setSpaceSealed space.id (not space.sealed))
+      ToggleEntry -> do
+        space <- gets (\st -> st.input.space)
+        change (void <$> setEntry space.id (if space.entry == ConfirmEach then EnterAtOnce else ConfirmEach))
       AskEncrypt asking -> modify (\st -> st {confirming = asking})
+      -- A space with nothing written in it is encrypted at once; one that
+      -- has pages, page by page. The server says which it is
+      -- ('ConversionInfo''s @nothingWritten@).
       Encrypt -> do
         space <- gets (\st -> st.input.space)
-        modify (\st -> st {confirming = False})
-        change (void <$> encryptSpace space.id)
+        untouched <- gets (\st -> maybe False (\i -> i.nothingWritten) st.conversionInfo)
+        modify (\st -> st {busy = True, problem = Nothing})
+        if untouched
+          then
+            encryptSpace space.id >>= \case
+              Right _ -> modify (\st -> st {confirming = False}) >> H.raise (Changed Nothing)
+              Left e -> modify (\st -> st {busy = False, problem = Just e})
+          else
+            startConversion space.id Encrypting >>= \case
+              Left e -> modify (\st -> st {busy = False, problem = Just e})
+              -- Nothing to convert: ended at its start.
+              Right info | isNothing info.running -> modify (\st -> st {confirming = False}) >> H.raise (Changed Nothing)
+              Right info -> modify (\st -> st {confirming = False, conversionInfo = Just info}) >> convertAll (length info.left)
+      AskDecrypt asking -> modify (\st -> st {confirmingOff = asking})
+      Decrypt -> do
+        space <- gets (\st -> st.input.space)
+        modify (\st -> st {busy = True, problem = Nothing})
+        startConversion space.id Decrypting >>= \case
+          Left e -> modify (\st -> st {busy = False, problem = Just e})
+          Right info | isNothing info.running -> modify (\st -> st {confirmingOff = False}) >> H.raise (Changed Nothing)
+          Right info -> modify (\st -> st {confirmingOff = False, conversionInfo = Just info}) >> convertAll (length info.left)
+      Continue -> do
+        modify (\st -> st {busy = True, problem = Nothing})
+        convertAll =<< gets (\st -> maybe 0 (\i -> length i.left) st.conversionInfo)
+      -- The conversion goes on here, and the other browser of the user's
+      -- that held it is refused from now on.
+      TakeOver -> do
+        sid <- gets (\st -> st.input.space.id)
+        modify (\st -> st {busy = True, problem = Nothing})
+        takeOverConversion sid >>= \case
+          Left e -> modify (\st -> st {busy = False, problem = Just e})
+          Right () -> convertAll =<< gets (\st -> maybe 0 (\i -> length i.left) st.conversionInfo)
+      Stop -> modify (\st -> st {stopping = True})
+      -- The conversion goes the other way over the pages done so far.
+      TurnBack -> do
+        space <- gets (\st -> st.input.space)
+        modify (\st -> st {busy = True, problem = Nothing})
+        reverseConversion space.id >>= \case
+          Left e -> modify (\st -> st {busy = False, problem = Just e})
+          Right info
+            | isNothing info.running -> H.raise (Changed Nothing)
+            | otherwise -> modify (\st -> st {conversionInfo = Just info}) >> convertAll (length info.left)
       ChooseWho n -> modify (\st -> st {who = n})
       ChooseWhat n -> for_ (atMay permissions n) $ \p -> modify (\st -> st {what = p})
       Grant ->
@@ -328,11 +473,38 @@ component =
         Left e -> modify (\st -> st {busy = False, problem = Just e})
         Right () -> H.raise (Changed Nothing)
 
+    -- Convert the space's pages one by one, saying how many are left, until
+    -- none is or one is refused; then the shell reads the space again.
+    convertAll :: Int -> H.HalogenM State Action Empty ViewOutput m ()
+    convertAll left = do
+      modify (\st -> st {converting = Just left})
+      sid <- gets (\st -> st.input.space.id)
+      convertNext sid >>= \case
+        Right 0 -> modify (\st -> st {converting = Nothing}) >> H.raise (Changed Nothing)
+        Right n ->
+          gets (\st -> st.stopping) >>= \case
+            True -> modify (\st -> st {converting = Nothing, stopping = False}) >> H.raise (Changed Nothing)
+            False -> convertAll n
+        Left e -> do
+          modify (\st -> st {converting = Nothing, busy = False, problem = Just e})
+          H.raise (Changed Nothing)
+
     load :: H.HalogenM State Action Empty ViewOutput m ()
     load = do
       sid <- gets (\st -> st.input.space.id)
       result <- spaceAccess sid
-      modify (\st -> st {loaded = either Failed Ready result, busy = False})
+      info <- rightToMaybe <$> conversionOf sid
+      modify (\st -> st {loaded = either Failed Ready result, busy = isJust st.converting, conversionInfo = info})
+
+-- | Who converts the space now, while their lease on it runs: one browser
+-- at a time does, and the others are refused until it stops for long
+-- enough, or the same user takes it over.
+converterText :: Converter -> Text
+converterText c
+  | c.yours = "Another tab or browser of yours is converting this space, until " <> clock <> " UTC unless it goes on. Take it over to go on here: the other is stopped."
+  | otherwise = "Another administrator's browser is converting this space, until " <> clock <> " UTC unless it goes on. It can be continued here once it has stopped for two minutes."
+  where
+    clock = toS (formatTime defaultTimeLocale "%H:%M" c.heldUntil)
 
 -- | Who a permission may be granted to: every user, then every group.
 candidates :: SpaceAccess -> [Subject]

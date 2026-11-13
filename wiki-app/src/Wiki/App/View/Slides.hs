@@ -539,7 +539,7 @@ fetch owner input =
       | not (isPresentation page.kind) -> pure (NotPresentation page)
     Right page -> do
       addresses <- Body.attachmentAddresses owner page.attachments
-      people <- Body.askPeople (Body.unasked Body.noPeople [page.body])
+      people <- Body.askPeople input.space (Body.unasked Body.noPeople [page.body])
       pure (Ready page addresses (either unreadable deckOf (parseMarkdown page.body)) people)
   where
     unreadable _ = deckOf []

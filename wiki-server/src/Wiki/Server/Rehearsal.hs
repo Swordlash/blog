@@ -637,8 +637,12 @@ pagesCheck = simpleCheck "pages" readPages (\was manager server -> readPages man
 -- read, administrators included (the container of personal spaces, and a
 -- personal space its owner hid; "Wiki.Core.Permission"). So is a space
 -- whose pages answer 409: an encrypted space, whose pages the server keeps
--- only as ciphertext and does not list as plain text. A space read before
--- the migration and not after still shows: its pages are then gone.
+-- only as ciphertext and does not list as plain text. So is a space in the
+-- middle of a conversion ("Wiki.Core.Space"'s 'Wiki.Core.Space.Conversion'),
+-- whose pages read one way or the other one by one: its list names those
+-- that read plain, without the pages above them that read encrypted, so
+-- that their paths cannot be built. A space read before the migration and
+-- not after still shows: its pages are then gone.
 readPages :: Manager -> Server -> IO (Either Text PagesRead)
 readPages manager server = runExceptT $ do
   rooted <- ExceptT (rootedPaths manager server)
@@ -648,7 +652,8 @@ readPages manager server = runExceptT $ do
         (Nothing, Just slug) -> slug == slugText guideSlug
         (Just p, _) -> maybe False inGuide (Map.lookup p byId)
         _ -> False
-  read' <- for [(i, s) | (i, s) <- Map.toList byId, not (inGuide s)] $ \(i, s) ->
+      converting s = isJust (field "conversion" s :: Maybe Text)
+  read' <- for [(i, s) | (i, s) <- Map.toList byId, not (inGuide s), not (converting s)] $ \(i, s) ->
     fmap (\ps -> (i, field "homePage" s, ps)) <$> pagesOf rooted i (field "homePage" s)
   pure PagesRead {pages = concat [ps | Just (_, _, ps) <- read'], homes = Map.fromList [(i, h) | Just (i, h, _) <- read']}
   where

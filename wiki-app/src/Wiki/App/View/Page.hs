@@ -177,6 +177,7 @@ import Wiki.Core.Id
   )
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Notification (WatchTarget (..))
+import Wiki.Core.Offered qualified as Offered
 import Wiki.Core.Page (Page (attachments, body, createdAt, createdBy, id, kind, parent, slug, space, template, title, updatedAt, updatedBy), PageSummary (id, parent, slug, title), retitled)
 import Wiki.Core.PageKind (PageKind (..), isPresentation)
 import Wiki.Core.Permission (mayMovePage)
@@ -355,7 +356,7 @@ component =
             Ready page _ _ _ | commentsHere input -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
             _ -> pure ThreadsLoading
           let logins = Body.unasked Body.noPeople (bodiesOf loaded threads)
-          people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople logins)
+          people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople input.space logins)
           avatars <- fromMaybe mempty <$> atOnce (avatarUrls (peopleOf loaded threads noReaders))
           text <- H.newRefLabel "page-text"
           copiedText <- H.newRefLabel "page-copied-address"
@@ -520,8 +521,12 @@ component =
         -- Make it one of the space's templates, which "New page" offers,
         -- or an ordinary page again: for someone who may edit it, on every
         -- page except the space's home page.
+        -- Not in an encrypted space, whose server cannot copy a page
+        -- ('Wiki.Core.Offered.MakeTemplate').
         useAsTemplate =
-          [[hh|<button type="button" class="use-as-template" aria-pressed={{ ariaBool page.template }} onClick={{ const (SetTemplate (not page.template)) }}>Use as template</button>|]]
+          [ [hh|<button type="button" class="use-as-template" aria-pressed={{ ariaBool page.template }} onClick={{ const (SetTemplate (not page.template)) }}>Use as template</button>|]
+          | offered input.context input.space.id Offered.MakeTemplate == Offered.Offered
+          ]
         -- Make it a presentation, which is presented as slides, or a
         -- document again ("Wiki.Core.PageKind"): for someone who may edit
         -- it, on every page except the space's home page, which is a
@@ -1139,7 +1144,7 @@ component =
       st <- get
       let logins = Body.unasked st.people (bodiesOf st.loaded st.threads)
       unless (null logins) $
-        lift (attempt (Body.askPeople logins)) >>= \case
+        lift (attempt (Body.askPeople st.input.space logins)) >>= \case
           Right found -> modify (\s -> s {people = Body.answered logins found s.people})
           Left _ -> pass
       resolveAvatars
@@ -1390,6 +1395,9 @@ targetSpaces ctx page =
   [ s
   | s <- ctx.spaces
   , mayMovePage (principalOf ctx) (grantsOf ctx) (chainOf ctx page.space) (chainOf ctx s.id)
+  , -- Into or out of an encrypted space only within the space
+  -- ('Wiki.Core.Offered.MovePageAcross').
+  s.id == page.space || all (\x -> offered ctx x Offered.MovePageAcross == Offered.Offered) [page.space, s.id]
   ]
 
 -- | The pages of the target space a page may be put under, besides its
@@ -1663,7 +1671,7 @@ commentsHere :: Input -> Bool
 commentsHere input = not (homeSpace input.context input.space.id) && isNothing input.version
 
 mayCommentHere :: State -> Bool
-mayCommentHere st = commentsHere st.input && mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space.id)
+mayCommentHere st = commentsHere st.input && mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space.id) && writable st.input.context st.input.space.id
 
 -- | Where each inline thread's quote is in the page's text.
 locatedIn :: Text -> [Thread] -> [(Thread, Located)]

@@ -145,6 +145,7 @@ library
         Wiki.Server.Storage.Schema
         Wiki.Server.Storage.Renewal
         Wiki.Server.Storage.Sealed
+        Wiki.Server.Storage.Conversion
         Wiki.Server.Storage.Sqlite
         Wiki.Server.Storage.SqliteLibrary
         Wiki.Server.Storage.Stars

@@ -98,6 +98,7 @@ library
       Wiki.App.Demo.WhatsNew
       Wiki.App.Guide
       Wiki.App.DemoUsers
+      Wiki.App.DecryptedExport
       Wiki.App.Encrypted
       Wiki.App.Favicon
       Wiki.App.Head
@@ -334,6 +335,7 @@ test-suite wiki-app-test
         Test.Entries
         Test.Guide
         Test.Help
+        Test.DecryptedExport
         Test.Export
         Test.Favicon
         Test.Hydrate
@@ -368,7 +370,9 @@ test-suite wiki-app-test
         http-types,
         opaque-hs,
         protolude,
+        servant,
         servant-client-core,
+        servant-multipart-api,
         text,
         time,
         unliftio-core,

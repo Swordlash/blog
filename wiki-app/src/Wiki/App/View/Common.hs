@@ -17,6 +17,8 @@ module Wiki.App.View.Common
   , mayView
   , mayEdit
   , mayEditPage
+  , writable
+  , offered
   , mayAdminister
   , notified
   , homeSpace
@@ -74,6 +76,7 @@ import Wiki.Core.HomePage (HomePage (showAnonymous))
 import Wiki.Core.HomePage qualified as Home
 import Wiki.Core.Id (PageId, SpaceId, UserId)
 import Wiki.Core.Math (Macros (..), wikiMacros)
+import Wiki.Core.Offered qualified as Offered
 import Wiki.Core.Order (Shift (..))
 import Wiki.Core.Page (Page, PageSummary (id, title), childPages)
 import Wiki.Core.Path (TreeNode (..), childrenOf, findChild, resolvePath)
@@ -158,7 +161,7 @@ mayView, mayEdit, mayAdminister :: Context -> SpaceId -> Bool
 mayView ctx sid | homeSpace ctx sid, ctx.session.homePage.showAnonymous = True
 mayView ctx sid = canView (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
 mayEdit ctx sid | homeSpace ctx sid = hasGlobalPermission (principalOf ctx) (grantsOf ctx) Administer
-mayEdit ctx sid = canEdit (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
+mayEdit ctx sid = canEdit (principalOf ctx) (grantsOf ctx) (chainOf ctx sid) && writable ctx sid
 mayAdminister ctx sid = canAdministerSpace (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
 
 -- | Whether the user may change this page of the space: save it, rename
@@ -168,7 +171,21 @@ mayAdminister ctx sid = canAdministerSpace (principalOf ctx) (grantsOf ctx) (cha
 -- wiki administrator.
 mayEditPage :: Context -> SpaceId -> PageId -> Bool
 mayEditPage ctx sid _ | homeSpace ctx sid = mayEdit ctx sid
-mayEditPage ctx sid pid = canEditPage (principalOf ctx) (grantsOf ctx) (chainOf ctx sid) pid
+mayEditPage ctx sid pid = canEditPage (principalOf ctx) (grantsOf ctx) (chainOf ctx sid) pid && writable ctx sid
+
+-- | Whether the space's state takes writes now: not while a conversion of
+-- it, or of a space above it, runs ('Wiki.Core.Offered.refusalOf' of
+-- 'Offered.Write', the rule the server's checks call). The controls that
+-- write are then not drawn, and the shell says why above the view
+-- ('Wiki.App.Shell'). Administering the space is not a write: its
+-- permissions are where the conversion is continued or turned back.
+writable :: Context -> SpaceId -> Bool
+writable ctx sid = isNothing (Offered.refusalOf Offered.Write (chainOf ctx sid))
+
+-- | How a control of an action is drawn in a space
+-- ('Wiki.Core.Offered.offerOf').
+offered :: Context -> SpaceId -> Offered.Action -> Offered.Offer
+offered ctx sid a = Offered.offerOf a (chainOf ctx sid)
 
 -- | Whether this is the real backing space of the wiki root.
 homeSpace :: Context -> SpaceId -> Bool
@@ -226,6 +243,7 @@ errorView e = [hh|<div class="error {{ errorClass e }}" role="alert">{{ errorMes
       NotFound -> "error-not-found"
       Forbidden -> "error-forbidden"
       Conflict _ -> "error-conflict"
+      Stale _ _ -> "error-conflict"
       Invalid _ -> "error-invalid"
       Unreachable _ -> "error-unreachable"
 
@@ -262,6 +280,7 @@ errorMessage = \case
   NotFound -> "There is nothing here: it may have been moved or deleted."
   Forbidden -> "You do not have permission for this. Switch to someone who has, at the top right."
   Conflict why -> why
+  Stale _ why -> why
   Invalid why -> why
   Unreachable why -> "The wiki's server could not be reached (" <> why <> "). Check the connection, and try again."
 

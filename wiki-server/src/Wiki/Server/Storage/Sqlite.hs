@@ -27,6 +27,9 @@ module Wiki.Server.Storage.Sqlite
   , runSqliteScript
   , sqliteObjects
 
+    -- * The log
+  , checkpointSqlite
+
     -- * Backups
   , vacuumInto
   , integrityProblems
@@ -59,7 +62,11 @@ data Access = ReadWrite | ReadOnly
 -- is in WAL mode, which lets a reader read the last committed state while
 -- the writer writes, with @synchronous = NORMAL@, which is safe in WAL
 -- mode. A SQLite library the server cannot run on is refused first
--- ('refuseOldSqlite'), before the file is opened.
+-- ('refuseOldSqlite'), before the file is opened. What a write deletes or
+-- overwrites is overwritten with zeros in the file (@secure_delete@, set
+-- here whatever the library's own default), so that the plain text a
+-- conversion of an encrypted space takes out of the database is not left
+-- in its free pages ('Wiki.Core.Space.Conversion').
 openSqlite :: Access -> FilePath -> IO Connection
 openSqlite access file = do
   refuseOldSqlite
@@ -67,6 +74,9 @@ openSqlite access file = do
   flip onException (close c) $ do
     execute_ c "PRAGMA busy_timeout = 10000"
     execute_ c "PRAGMA foreign_keys = ON"
+    -- This pragma returns a row, and execute_ refuses a statement that
+    -- returns rows.
+    _ <- query_ c "PRAGMA secure_delete = ON" :: IO [Only Int]
     case access of
       ReadWrite -> do
         -- This pragma returns a row, and execute_ refuses a statement
@@ -78,6 +88,26 @@ openSqlite access file = do
 
 closeSqlite :: Connection -> IO ()
 closeSqlite = close
+
+-- | Copy what the write-ahead log holds into the database file and empty
+-- the log (@PRAGMA wal_checkpoint(TRUNCATE)@), outside any transaction:
+-- whether it went through. It does not while a reader still reads a state
+-- the log holds; the next one, or SQLite's own, then finishes it.
+--
+-- It does not wait. A truncating checkpoint waits, through the
+-- connection's busy handler, for every reader to leave the log; with the
+-- handler's 10 seconds a reader holding a snapshot (a backup being taken)
+-- would hold the only writer that long at each attempt. So the busy
+-- handler is off for the checkpoint (@busy_timeout = 0@), and put back
+-- after it, however it ends: the checkpoint copies what it can and says
+-- at once whether it could empty the log. Who needs it to run tries again
+-- under a deadline of its own.
+checkpointSqlite :: Connection -> IO Bool
+checkpointSqlite c =
+  bracket_ (execute_ c "PRAGMA busy_timeout = 0") (execute_ c "PRAGMA busy_timeout = 10000") $
+    (query_ c "PRAGMA wal_checkpoint(TRUNCATE)" :: IO [(Int, Int, Int)]) <&> \case
+      [(busy, _, _)] -> busy == 0
+      _ -> False
 
 -- | Begin a transaction: one that writes takes the database's write lock
 -- at once (@BEGIN IMMEDIATE@), so that what it reads is still true when it

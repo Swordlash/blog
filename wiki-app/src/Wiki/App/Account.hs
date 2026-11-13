@@ -98,6 +98,7 @@ signInErrorText = \case
   SignInFailed (Unreachable why) -> "The wiki could not be reached: " <> why
   SignInFailed (Invalid why) -> why
   SignInFailed (Conflict why) -> why
+  SignInFailed (Stale _ why) -> why
   SignInFailed Forbidden -> "The server refused to sign you in from this page. Reload it and try again."
   SignInFailed NotFound -> "This server does not sign anyone in."
 

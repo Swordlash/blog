@@ -267,6 +267,26 @@ copySpec backing = describe "the upgrade's rehearsal, its copy of the wiki" $ do
       [p | p <- read'.pages, p.space `elem` team] `shouldBe` []
       [p | p <- read'.pages, p.space `elem` blog] `shouldNotBe` []
       (\s -> s.withoutHome) <$> find (\s -> s.name == "Team") spaces `shouldBe` Just True
+  -- A space in the middle of a conversion (item 4 of #213), whose pages
+  -- read one way or the other one by one, is left out as an encrypted
+  -- space is, and the rest is read; the pages check passes.
+  it "leaves out a space in the middle of a conversion, and reads the rest" $ withDemoPlace backing $ \at serve -> do
+    withConnectionTo at $ \c -> do
+      begin True c
+      runScript c "UPDATE spaces SET key_id = 'k1', conversion = 'encrypting' WHERE slug = 'team'; UPDATE pages SET converted = TRUE WHERE id IN (SELECT home_page FROM spaces WHERE slug = 'team');"
+      commitTransaction c
+    manager <- newManager defaultManagerSettings
+    serve $ \r -> do
+      let server = Server {adminApi = r.admin <> "/admin/api/v1", public = r.public, console = consoleOn r.place}
+      read' <- readPages manager server >>= either (\why -> panic ("not read: " <> why)) pure
+      spaces <- readSpaces manager server >>= either (\why -> panic ("not read: " <> why)) pure
+      let team = [s.space | s <- spaces, s.name == "Team"]
+          blog = [s.space | s <- spaces, s.name == "Blog"]
+      length team `shouldBe` 1
+      [p | p <- read'.pages, p.space `elem` team] `shouldBe` []
+      [p | p <- read'.pages, p.space `elem` blog] `shouldNotBe` []
+    rehearseCheck "pages" at serve pass `shouldReturn` Right ()
+
   it "loses its backup and mail settings, and keeps the rest" $
     withSystemTempDirectory "wiki-rehearsal" $ \dir -> withEmptyPlace backing dir $ \place -> do
       _ <- migrateDatabase place

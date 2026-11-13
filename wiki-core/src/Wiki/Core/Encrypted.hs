@@ -53,11 +53,13 @@
 module Wiki.Core.Encrypted
   ( -- * Bytes as the browser writes them
     Encapsulated (..)
+  , encryptedPageTitle
   , VersionTag (..)
 
     -- * The chain of versions
   , Chain (..)
   , firstChain
+  , isFirstChain
   , chainAfter
   , Seen (..)
   , ChainProblem (..)
@@ -66,6 +68,7 @@ module Wiki.Core.Encrypted
   , judgeHead
   , linkedFrom
   , gapIn
+  , historyStart
   , Kept (..)
   , keepIn
 
@@ -129,6 +132,14 @@ newtype VersionTag = VersionTag {text :: Text}
   deriving stock (Eq, Ord, Show)
   deriving newtype (FromJSON, ToJSON, IsString)
 
+-- | What a page of an encrypted space is named by where its title is not
+-- decrypted: in a notification, which the server writes without being
+-- able to read the title, and, in the browser, outside a space that asks
+-- for a passkey or the password each time ('Wiki.Core.Space.ConfirmEach')
+-- until the reader has confirmed.
+encryptedPageTitle :: Text
+encryptedPageTitle = "an encrypted page"
+
 --------------------------------------------------------------------------------
 -- The chain of versions
 
@@ -140,25 +151,40 @@ newtype VersionTag = VersionTag {text :: Text}
 data Chain = Chain
   { number :: Int
   , previous :: Maybe VersionTag
+  , origin :: Maybe VersionTag
+  -- ^ Which chain this is: a random id the browser that starts the chain
+  -- picks (a new page, or each page of a space encrypted page by page,
+  -- again after its encryption was turned off), carried by every version
+  -- after it and bound by each one's encryption ('contentData'), so that
+  -- the server, which holds no page key, cannot make a chain of its own.
+  -- A page encrypted again starts a new chain under the same page id,
+  -- which a reader who read the old one tells from a fork by its origin
+  -- ('judgeHead'). 'Nothing' for a chain started before origins.
   }
   deriving stock (Eq, Show, Generic)
 
 instance ToJSON Chain where
-  toJSON c = object ["number" .= c.number, "previous" .= c.previous]
+  toJSON c = object (["number" .= c.number, "previous" .= c.previous] <> ["origin" .= o | Just o <- [c.origin]])
 
 instance FromJSON Chain where
-  parseJSON = withObject "Chain" $ \o -> Chain <$> o .: "number" <*> o .:? "previous"
+  parseJSON = withObject "Chain" $ \o -> Chain <$> o .: "number" <*> o .:? "previous" <*> o .:? "origin"
 
--- | The chain of a new page's first version.
-firstChain :: Chain
-firstChain = Chain {number = 1, previous = Nothing}
+-- | The chain of a new page's first version, with the origin the browser
+-- picked for it (a random id, as a tag is).
+firstChain :: VersionTag -> Chain
+firstChain origin = Chain {number = 1, previous = Nothing, origin = Just origin}
+
+-- | Whether a chain is a chain's first version: number 1, after nothing,
+-- with an origin.
+isFirstChain :: Chain -> Bool
+isFirstChain c = c.number == 1 && isNothing c.previous && isJust c.origin
 
 -- | The chain of the version saved on top of a version with this tag and
 -- this chain ('Nothing' for one of format 1).
 chainAfter :: VersionTag -> Maybe Chain -> Chain
 chainAfter tag = \case
-  Just c -> Chain {number = c.number + 1, previous = Just tag}
-  Nothing -> Chain {number = 1, previous = Just tag}
+  Just c -> Chain {number = c.number + 1, previous = Just tag, origin = c.origin}
+  Nothing -> Chain {number = 1, previous = Just tag, origin = Nothing}
 
 -- | 'Seen': the latest version of a page that a browser has read and
 -- checked: its number in the chain and its tag. The browser keeps one for
@@ -166,14 +192,21 @@ chainAfter tag = \case
 data Seen = Seen
   { number :: Int
   , tag :: VersionTag
+  , origin :: Maybe VersionTag
+  -- ^ The chain it is of ('Chain''s @origin@). A browser keeps one 'Seen'
+  -- for each chain of a page it read, in the order it first read them:
+  -- the latest is the page's chain now, and an earlier one shown again is
+  -- a page shown as it was before it was encrypted again.
   }
   deriving stock (Eq, Show, Generic)
 
 instance ToJSON Seen where
-  toJSON s = object ["number" .= s.number, "tag" .= s.tag]
+  toJSON s = object ["number" .= s.number, "tag" .= s.tag, "origin" .= s.origin]
 
+-- | A record without an origin (written before origins) is of the chain
+-- without one.
 instance FromJSON Seen where
-  parseJSON = withObject "Seen" $ \o -> Seen <$> o .: "number" <*> o .: "tag"
+  parseJSON = withObject "Seen" $ \o -> Seen <$> o .: "number" <*> o .: "tag" <*> o .:? "origin"
 
 -- | 'ChainProblem': what a browser found wrong with the versions the
 -- server sent, against the chain and what the browser saw before.
@@ -193,6 +226,15 @@ data ChainProblem
     -- history the server sent does not hold it, or stops before the
     -- version read.
     Unlinked {seen :: Int, served :: Int}
+  | -- | The version sent is of a chain this browser read the page under
+    -- before the one it read last: the page as it was before it was
+    -- encrypted again.
+    Superseded
+  | -- | A page's whole history, as the server sent it, does not begin
+    -- where its chain begins: its oldest version is numbered so, and is
+    -- not a chain's first ('historyStart'). The server left the oldest
+    -- versions out.
+    Truncated {oldest :: Int}
   deriving stock (Eq, Show)
 
 -- | What a reader is told of a problem, in a banner over the page.
@@ -216,6 +258,12 @@ chainProblemText = \case
       <> " of this page that its history does not join to the version "
       <> show seen
       <> " this browser has read before: its history may have been changed. The page cannot be edited here until it is reloaded."
+  Superseded ->
+    "The server sent this page as it was before it was encrypted again, which this browser has read since: what is shown is not the latest, so the page cannot be edited here until it is reloaded."
+  Truncated oldest ->
+    "This page's history as the server sent it begins at version "
+      <> show oldest
+      <> ", not at the page's first: the server may have left the oldest versions out. The page cannot be edited here until it is reloaded."
 
 -- | 'Judged': how the latest version the server sent stands against the
 -- latest this browser saw, when nothing is wrong with it: the same one, or
@@ -227,14 +275,29 @@ data Judged = Agrees | Advanced Int
 -- | The latest version of a page, as the server sent it (its tag and its
 -- chain, both checked by the decryption of its title), against the latest
 -- version this browser saw of it.
-judgeHead :: Maybe Seen -> VersionTag -> Maybe Chain -> Either ChainProblem Judged
-judgeHead seen tag chain = case (seen, chain) of
-  (Nothing, _) -> Right Agrees
-  (Just s, Nothing) -> Left (Older s.number 0)
-  (Just s, Just c)
-    | c.number < s.number -> Left (Older s.number c.number)
-    | c.number == s.number -> if tag == s.tag then Right Agrees else Left (Forked c.number)
-    | otherwise -> Right (Advanced (c.number - s.number))
+--
+-- What the browser saw is a 'Seen' for each chain of the page it read, in
+-- the order it first read them ('keepIn'). The version is judged against
+-- the latest of its own chain: a chain this browser has not read is a
+-- page encrypted again since (its origin made by a browser that held the
+-- page's key), and agrees; the chain read last is judged as always; an
+-- earlier chain, or a version of no chain after one with an origin, is
+-- the page as it was before ('Superseded').
+judgeHead :: [Seen] -> VersionTag -> Maybe Chain -> Either ChainProblem Judged
+judgeHead seens tag chain = case lastMay seens of
+  Nothing -> Right Agrees
+  Just latest
+    | latest.origin == origin -> judgeIn latest
+    | isNothing origin || any (\s -> s.origin == origin) seens -> Left Superseded
+    | otherwise -> Right Agrees
+  where
+    origin = chain >>= (\c -> c.origin)
+    judgeIn s = case chain of
+      Nothing -> Left (Older s.number 0)
+      Just c
+        | c.number < s.number -> Left (Older s.number c.number)
+        | c.number == s.number -> if tag == s.tag then Right Agrees else Left (Forked c.number)
+        | otherwise -> Right (Advanced (c.number - s.number))
 
 -- | Whether a version (its tag and chain) follows directly on another, in
 -- the chain: it names the other's tag, and its number is one more; a
@@ -242,7 +305,7 @@ judgeHead seen tag chain = case (seen, chain) of
 -- chain cannot check.
 follows :: (VersionTag, Maybe Chain) -> (VersionTag, Maybe Chain) -> Bool
 follows (_, newer) (olderTag, older) = case (newer, older) of
-  (Just n, Just o) -> n.previous == Just olderTag && n.number == o.number + 1
+  (Just n, Just o) -> n.previous == Just olderTag && n.number == o.number + 1 && n.origin == o.origin
   (Just n, Nothing) -> n.previous == Just olderTag && n.number == 1
   (Nothing, Nothing) -> True
   (Nothing, Just _) -> False
@@ -292,13 +355,37 @@ data Kept
   deriving stock (Eq, Show)
 
 -- | Remember a version seen over what is remembered, only forward: the
--- outcome, and what is remembered after.
-keepIn :: Maybe Seen -> Seen -> (Kept, Seen)
-keepIn remembered new = case remembered of
-  Just r
-    | r.number > new.number -> (KeptLater, r)
-    | r.number == new.number -> if r.tag == new.tag then (KeptNow, r) else (KeptFork, r)
-  _ -> (KeptNow, new)
+-- outcome, and what is remembered after. A chain not remembered yet is
+-- added as the latest (a page encrypted again); one remembered before the
+-- latest stays as it is, as a version of the chain without origin does
+-- after one with an origin ('KeptLater'); in the latest chain, only a
+-- later version moves it on.
+keepIn :: [Seen] -> Seen -> (Kept, [Seen])
+keepIn remembered new = case break (\s -> s.origin == new.origin) remembered of
+  (_, []) | isNothing new.origin && not (null remembered) -> (KeptLater, remembered)
+  (_, []) -> (KeptNow, remembered <> [new])
+  (before, r : after)
+    | not (null after) -> (KeptLater, remembered)
+    | r.number > new.number -> (KeptLater, remembered)
+    | r.number == new.number -> if r.tag == new.tag then (KeptNow, remembered) else (KeptFork, remembered)
+    | otherwise -> (KeptNow, before <> [new])
+
+-- | Whether a page's whole history, the latest first, begins where its
+-- chain begins. 'gapIn' checks each version against the next; this checks
+-- the end, which no neighbour vouches for. The oldest version must be a
+-- chain's first: numbered 1 and after nothing ('firstChain', and the
+-- first version of a page written before chains had origins). A version
+-- numbered 1 that names a version before it (the first of a chain begun
+-- on a page written before versions were chained, 'chainAfter') needs that
+-- version below it, which 'follows' checks: as the oldest it is a
+-- problem. A version of format 1 (before chains) as the oldest is taken
+-- as it is: nothing tells whether versions of format 1 before it are
+-- missing. With the links checked, a history that begins at 1 holds as
+-- many chained versions as its latest one's number says.
+historyStart :: [(VersionTag, Maybe Chain)] -> Maybe ChainProblem
+historyStart versions = case lastMay versions of
+  Just (_, Just c) | c.number /= 1 || isJust c.previous -> Just (Truncated c.number)
+  _ -> Nothing
 
 -- | The first break in a run of a page's versions, the latest first: a
 -- version that does not follow on the next one.
@@ -488,6 +575,8 @@ fieldData sid pid k tag field = "wiki-page/1 " <> sid.text <> " " <> pid.text <>
 contentData :: SpaceId -> PageId -> KeyId -> VersionTag -> Maybe Chain -> Field -> Text
 contentData sid pid k tag chain field = case chain of
   Nothing -> fieldData sid pid k tag field
+  Just c@Chain {origin = Just o} ->
+    T.unwords ["wiki-page/3", sid.text, pid.text, k.text, tag.text, show c.number, maybe "-" (\t -> t.text) c.previous, o.text, fieldName field]
   Just c ->
     "wiki-page/2 "
       <> sid.text

@@ -34,6 +34,7 @@ module Test.Browser.Http
   , tellServer
   , holdAt
   , release
+  , hangUp
   )
 where
 
@@ -151,6 +152,12 @@ holdAt method url = unsafeIOToPageM (js_server_hold_at (toJSText method) (toJSTe
 -- | Answer the requests held.
 release :: PageM s ()
 release = unsafeIOToPageM js_server_release
+
+-- | Close the live channel's sockets as a network that drops them does:
+-- the program opens one again, and is told it missed what was sent
+-- meanwhile ("Wiki.App.Live"'s 'Reopened').
+hangUp :: PageM s ()
+hangUp = unsafeIOToPageM js_server_hang_up
 
 -- | The server in fetch's place, with nothing to answer yet, for the length
 -- of the test.

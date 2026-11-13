@@ -433,6 +433,10 @@ instance Copyable SealedComments
 
 instance Copyable SealedAttachments
 
+instance Copyable StagedPlain
+
+instance Copyable ConversionLeases
+
 instance Copyable Spaces
 
 instance Copyable Pages
@@ -536,6 +540,8 @@ copiedTables =
   , plain wikiDb.sealed_threads
   , plain wikiDb.sealed_comments
   , plain wikiDb.sealed_attachments
+  , plain wikiDb.staged_plain
+  , plain wikiDb.conversion_leases
   , plain wikiDb.settings
   , plain wikiDb.sign_in_providers
   , plain wikiDb.audit_log

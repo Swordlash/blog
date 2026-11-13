@@ -2,9 +2,11 @@
   "active": true,
   "blog": false,
   "boxNumbering": "in-page",
+  "conversion": null,
   "createdAt": "2026-10-24T09:30:12.345678Z",
   "description": "How to write here.",
   "encryption": null,
+  "entry": "at-once",
   "homePage": "p1",
   "icon": {
     "emoji": "📘"

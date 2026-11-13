@@ -97,6 +97,7 @@ import Wiki.Api.Activity (ActivityQuery (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), WikiSettings (..), userQueryOf)
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.ContentPolicy (interactiveSvgPolicy)
+import Wiki.Api.Encrypted (HeadingsQuery (..), LeaseToken, SpaceEntry (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Export (documentDisposition, formatMediaType)
@@ -366,6 +367,7 @@ toApiError = \case
   NotFound -> Just ApiError.NotFound
   Forbidden -> Just ApiError.Forbidden
   Conflict t -> Just (ApiError.Conflict t)
+  Stale st t -> Just (ApiError.Stale st t)
   Invalid t -> Just (ApiError.Invalid t)
   Unreachable _ -> Nothing
 
@@ -832,6 +834,8 @@ handlers env caller =
           , rotate = \s body -> wiki (rotateSpaceKey s body) $> NoContent
           , pages = wiki . sealedPages
           , contents = wiki . sealedContents
+          , headings = \q -> wiki (sealedHeadings q.pages)
+          , readers = wiki . spaceReaders
           , pageAt = \s path -> versionedSealed <$> wiki (sealedPageAt s path)
           , createPage = \s new -> versionedSealed <$> wiki (createSealedPage s new)
           , save = \p version edit -> versionedSealed <$> wiki (saveSealedPage p version.time edit)
@@ -842,6 +846,18 @@ handlers env caller =
           , reply = \p t new -> wiki (sealedReply p t new)
           , editComment = \p t c edit -> wiki (sealedEditComment p t c edit)
           , upload = \p u -> wiki (uploadSealedAttachmentFile p u.sealed u.payload)
+          , conversion = wiki . conversionInfo
+          , startEncrypting = \s body -> wiki (startEncrypting s body)
+          , startDecrypting = wiki . startDecrypting
+          , reverseConversion = wiki . reverseConversion
+          , setEntry = \s body -> wiki (setSpaceEntry s body.entry)
+          , lease = \s body -> wiki (takeConversionLease s body)
+          , stageSealed = \p t body -> wiki (stageSealed p t body) $> NoContent
+          , stagePlain = \p t body -> wiki (stagePlain p t body) $> NoContent
+          , stageBytes = \p a t u -> wiki (stageBytesFile p a t u.payload) $> NoContent
+          , staged = \p t -> wiki (stagedPage p t)
+          , stagedBytes = \p a t _ respond -> liftIO (stagedBytesContent env caller.who p a t respond)
+          , commit = \p t body -> wiki (commitConverted p t body)
           }
     , attachments =
         AttachmentsApi
@@ -1569,6 +1585,19 @@ attachmentContent env who aid name request respond
                 then respond (responseLBS status304 headers "")
                 else respond (responseFile status200 headers file Nothing)
         Right _ -> respond (refusal ApiError.NotFound)
+
+-- | The bytes a conversion staged for an attachment of a page, for the
+-- browser converting it to read back ('stagedBytesFile'): as they are, of
+-- no media type a browser would show, and kept by no cache.
+stagedBytesContent :: Env -> Who -> PageId -> AttachmentId -> LeaseToken -> (Response -> IO a) -> IO a
+stagedBytesContent env who pid aid t respond =
+  runStoredWiki env.storage who (stagedBytesFile pid aid t) >>= \case
+    Left e -> respond (maybe (responseLBS status503 [] "The wiki could not be reached.") refusal (toApiError e))
+    Right file ->
+      ifM
+        (doesFileExist file)
+        (respond (responseFile status200 [(hContentType, "application/octet-stream"), ("X-Content-Type-Options", "nosniff"), (hCacheControl, "no-store")] file Nothing))
+        (respond (refusal ApiError.NotFound))
 
 -- | Whether a request is a frame loading its document, as the browser says
 -- in @Sec-Fetch-Dest@: the only request an SVG's interactive form is given

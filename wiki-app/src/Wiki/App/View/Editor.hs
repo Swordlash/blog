@@ -265,13 +265,14 @@ import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
 import Wiki.Api.Events (PageEvent (PageChanged))
 import Wiki.Api.Events qualified as Event
+import Wiki.Api.Notifications (maxPeopleFound)
 import Wiki.Api.ServerSettings (HomePage (showAnonymous, showRecent, showSpaces))
 import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Assistant.Keys (Keys (..), changeKeys, loadFollowedKeys)
 import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), UrlOwner, WikiError (..), maxAttachmentSize, noUrlOwner)
 import Wiki.App.Backend.Admin (MonadAdmin (setHomePage))
-import Wiki.App.Backend.Notifications (MonadNotifications (mentionCandidates))
+import Wiki.App.Backend.Notifications (MonadNotifications (mentionCandidates, spaceReaders))
 import Wiki.App.Browser (replacingEntry)
 import Wiki.App.Editor.Browser
   ( EditorKey (..)
@@ -400,7 +401,7 @@ import Wiki.Core.Permission (GlobalPermission (Administer), Grants (access), has
 import Wiki.Core.Slides qualified as Slides
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (encryption, id))
-import Wiki.Core.User (User (id))
+import Wiki.Core.User (Login (..), User (displayName, id, login))
 import Wiki.Core.Version (Author (..), Version (author))
 
 -- | The editor's input: the space the shell has loaded, with its pages,
@@ -1364,6 +1365,7 @@ component =
         , selection = st.selection
         , pending = st.pendingChanges
         , decisions = st.decisions
+        , encrypted = isJust st.input.space.encryption
         }
 
     previewPane :: State -> Work -> Maybe (H.ComponentHTML Action Slots m)
@@ -1989,8 +1991,14 @@ component =
       -- CodeMirror asks which users a mention may name, as an @ and
       -- letters are typed: the backend's answer, or none when the backend
       -- could not answer, which CodeMirror then asks for again.
+      -- In an encrypted space, from its readers, asked for by the space
+      -- alone: the letters typed are its text, and stay here.
       MentionAsked i letters -> do
-        found <- mentionCandidates letters
+        space <- gets (\st -> st.input.space)
+        found <-
+          if isJust space.encryption
+            then fmap (take maxPeopleFound . filter (startsWith letters)) <$> spaceReaders space.id
+            else mentionCandidates letters
         host <- gets (\st -> st.hostElement)
         for_ host $ \h -> H.liftEffect (answerMention h i (rightToMaybe found))
       -- CodeMirror asks which emoji a name may be, as a colon and letters
@@ -2987,3 +2995,8 @@ providerName = providerKey
 -- | An icon: one SVG path, drawn by the stylesheet.
 icon :: Text -> HH.HTML w i
 icon d = [hh|<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path {{ attr "d" d }}></path></svg>|]
+
+-- | Whether a user's login or name starts with the letters typed after an
+-- @, as the server's completion matches them.
+startsWith :: Text -> User -> Bool
+startsWith letters u = any (T.isPrefixOf (T.toCaseFold letters) . T.toCaseFold) [u.login.text, u.displayName]

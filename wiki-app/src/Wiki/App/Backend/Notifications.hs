@@ -37,6 +37,7 @@ import Protolude
 import Wiki.Api.Notifications (FeedAddress, NotificationSettings, NotificationSettingsChange, Notifications, ReadMark)
 import Wiki.Api.Security (UnsubscribeToken)
 import Wiki.App.Backend (WikiError (..))
+import Wiki.Core.Id (SpaceId)
 import Wiki.Core.Notification (Watch, WatchTarget)
 import Wiki.Core.User (User)
 import Wiki.Core.Version (Author)
@@ -79,6 +80,15 @@ class (Monad m) => MonadNotifications m where
   mentionCandidates :: Text -> m (Either WikiError [User])
   default mentionCandidates :: (MonadTrans t, m ~ t n, MonadNotifications n) => Text -> m (Either WikiError [User])
   mentionCandidates = lift . mentionCandidates
+
+  -- | The users who read an encrypted space, whom a mention in its pages
+  -- and comments can name: asked for by the space alone, so that neither
+  -- a login found in its decrypted text nor letters typed into it reach
+  -- the server ('mentionable' and 'mentionCandidates' are for plain
+  -- spaces). The HTTP backend keeps the list as long as the space's key.
+  spaceReaders :: SpaceId -> m (Either WikiError [User])
+  default spaceReaders :: (MonadTrans t, m ~ t n, MonadNotifications n) => SpaceId -> m (Either WikiError [User])
+  spaceReaders = lift . spaceReaders
 
   -- | The latest notifications about pages the user may read, the newest
   -- first, each with where its page is now, and how many are unread.

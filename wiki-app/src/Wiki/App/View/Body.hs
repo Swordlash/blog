@@ -101,9 +101,9 @@ import Wiki.Core.Notification (mentionedIn)
 import Wiki.Core.Page (PageSummary, pageNumber)
 import Wiki.Core.Slides qualified as Slides
 import Wiki.Core.Slug (Slug, slugText)
-import Wiki.Core.Space (Space (boxNumbering, id, pageOrder), rootPage)
-import Wiki.Core.User (User (..))
-import Wiki.Core.Version (Author (..))
+import Wiki.Core.Space (Space (boxNumbering, encryption, id, pageOrder), rootPage)
+import Wiki.Core.User (Login (..), User (..))
+import Wiki.Core.Version (Author (..), authorOf)
 
 -- | The place a page's Markdown is read in: what its links and
 -- attachments are resolved against.
@@ -246,15 +246,24 @@ noPeople = People {found = mempty, asked = mempty}
 unasked :: People -> [Text] -> [Text]
 unasked p bodies = Set.toList (foldMap mentionedIn bodies `Set.difference` p.asked)
 
--- | Look up which users these logins belong to, for someone signed in.
--- Nothing is requested for no logins, or for someone not signed in.
-askPeople :: (MonadWiki n, MonadNotifications n) => [Text] -> n (Map Text Author)
-askPeople = \case
+-- | Look up which users these logins, mentioned in a text of the space,
+-- belong to, for someone signed in. Nothing is requested for no logins,
+-- or for someone not signed in. In an encrypted space the logins are
+-- looked for among its readers, asked for by the space alone
+-- ('spaceReaders'): a login found in decrypted text never reaches the
+-- server, and one not among them is shown as it is written.
+askPeople :: (MonadWiki n, MonadNotifications n) => Space -> [Text] -> n (Map Text Author)
+askPeople space = \case
   [] -> pure mempty
   logins ->
     session >>= \s -> case s.user of
       Nothing -> pure mempty
-      Just _ -> mentionable logins
+      Just _
+        | isJust space.encryption ->
+            spaceReaders space.id <&> \case
+              Right users -> Map.fromList [(u.login.text, authorOf u) | u <- users, u.login.text `elem` logins]
+              Left _ -> mempty
+        | otherwise -> mentionable logins
 
 -- | A place where these people are also known.
 withPeople :: Map Text Author -> Place -> Place

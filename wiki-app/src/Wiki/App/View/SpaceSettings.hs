@@ -42,6 +42,7 @@ import Wiki.App.View.Common
 import Wiki.App.View.Permissions qualified as Permissions
 import Wiki.Core.Attachment (MimeType (..))
 import Wiki.Core.Markdown.Box (numberingLabel, numberings)
+import Wiki.Core.Offered qualified as Offered
 import Wiki.Core.Space
   ( BoxNumbering (..)
   , Icon (..)
@@ -161,10 +162,12 @@ component =
               </label>
               <p class="field-hint">A PNG, JPEG, GIF, WebP or AVIF image of at most 1 MB, shown small and square. It is used as soon as it is uploaded.</p>
             </fieldset>
+            {% if offered st.input.context st.input.space.id Offered.MakeBlog /= Offered.Hidden %}
             <label class="check space-blog-field">
               <input type="checkbox" class="space-blog" checked={{ f.blog }} onChecked={{ ShowAsBlog }}>
               <span>Show as a blog</span>
             </label>
+            {% end %}
             <p class="field-hint">
               The space then opens at its posts, its top-level pages, the newest first, under its home page;
               each post shows its date and links to the posts before and after it. A public blog has feeds.

@@ -116,6 +116,11 @@ component =
       Receive input -> do
         before <- gets (\st -> st.input)
         modify (\st -> st {input})
+        -- Another revision or user: the results found before (titles of
+        -- encrypted pages decrypted here among them) go at once, before
+        -- the search is made again.
+        when (before.context.revision /= input.context.revision || before.context.session /= input.context.session) $
+          modify (\st -> st {results = Searching})
         when (differs before input) load
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
 

@@ -42,7 +42,7 @@ import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), isHomeBody, withHome, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Entry (..), Icon (..), Space (..), SpaceProfile (..), isHomeBody, withHome, withProfile)
 import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Storage.Blobs (blobOf)
@@ -85,6 +85,8 @@ spaceWith i parent s public mathMacros subspaceOrder pageOrder =
     , public
     , sealed = False
     , encryption = Nothing
+    , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False

@@ -5,7 +5,8 @@
 -- the space's icon, name and description, its pages as a tree, its
 -- templates ('Wiki.Core.Page.template') apart from the tree, its
 -- subspaces, the math macros its pages are typeset with, and its export as
--- one document ("Wiki.App.View.Export"). It also offers the actions the
+-- one document ("Wiki.App.View.Export"), or, for an encrypted space, its
+-- export decrypted in this browser ("Wiki.App.DecryptedExport"). It also offers the actions the
 -- current user may take on it: a new page, in the editor; a new subspace;
 -- its settings ("Wiki.App.View.SpaceSettings": its name, description,
 -- icon and home page, and its permissions, including public or private);
@@ -53,8 +54,10 @@ import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Wiki.Api.Export (ExportFormat, spaceFormats)
 import Wiki.App.Backend (ExportTarget (..), MonadLoad, MonadWiki (..), Session (exports), WikiError)
-import Wiki.App.Backend.Encrypted (MonadEncryption)
+import Wiki.App.Backend.Encrypted (MonadEncryption (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
+import Wiki.App.Browser (download)
+import Wiki.App.DecryptedExport (DecryptedExport (..), LeftOut (..), leftOutOfExport)
 import Wiki.App.Islands (Island (..), MonadIslands (..))
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Route (..))
@@ -62,6 +65,7 @@ import Wiki.App.View.Common
 import Wiki.App.View.Export qualified as ExportView
 import Wiki.App.View.SpaceSettings qualified as SpaceSettings
 import Wiki.App.View.Watch qualified as WatchView
+import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Math (Macros (..), spaceMacros)
 import Wiki.Core.Notification (WatchTarget (..))
@@ -91,12 +95,19 @@ data Mode
     Ordering ChildOrder ChildOrder
   | -- | Its settings: its profile, and its permissions.
     ManagingSettings
+  | -- | Asking before an export decrypted in this browser, which says
+    -- what the file holds and what it leaves out.
+    ConfirmingExport
   deriving stock (Eq)
 
 data State = State
   { input :: Input
   , mode :: Mode
   , problem :: Maybe WikiError
+  , exporting :: Bool
+  -- ^ Whether the export decrypted in this browser is being made.
+  , exported :: Maybe Text
+  -- ^ What the last export decrypted here saved, and what it left out.
   }
 
 -- | The formula the macros are tried on, typeset as the space's pages
@@ -119,18 +130,19 @@ data Action
   | ChoseOrder Children Int
   | ShiftPage PageId Shift
   | ShiftSpace SpaceId Shift
+  | ExportDecrypted
 
 component :: forall query m. (MonadLoad m, MonadEncryption m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \input -> pure State {input, mode = Viewing, problem = Nothing}
+      { initialState = \input -> pure State {input, mode = Viewing, problem = Nothing, exporting = False, exported = Nothing}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.receive = Just . Receive}
       }
   where
     render :: State -> H.ComponentHTML Action Slots m
-    render State {input = Input {context = ctx, space, pages}, mode, problem} =
+    render State {input = Input {context = ctx, space, pages}, mode, problem, exporting, exported} =
       [hh|
         <section class="space-view">
           <header class="view-header space-header">
@@ -139,7 +151,7 @@ component =
           </header>
           {% if not (T.null space.description) %}<p class="space-description">{{ space.description }}</p>{% end %}
           <div class="actions">{{ actions ctx space mode }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = ctx, target = WatchSpace space.id} | notified ctx] }}</div>
-          {{ form ctx space mode }}{{ errorView <$> problem }}{{ macrosView ctx space }}
+          {{ form ctx space mode exporting }}{{ errorView <$> problem }}{{ exportedNote <$> exported }}{{ macrosView ctx space }}
           <h2>Pages</h2>
           {{ pageList }}{{ templateList }}{{ subspaces ctx space }}
         </section>
@@ -174,7 +186,7 @@ component =
     actions ctx space mode =
       [Router.link ctx.router Followed (NewPage path Nothing) [HP.class_ "button"] [HH.text "New page"] | mayEdit ctx space.id]
         <> [ Router.link ctx.router Followed (NewSpace (Just path)) [HP.class_ "button"] [HH.text "New subspace"]
-           | mayCreateSpace (principalOf ctx) (grantsOf ctx) (Just (chainOf ctx space.id))
+           | mayCreateSpace (principalOf ctx) (grantsOf ctx) (Just (chainOf ctx space.id)) && writable ctx space.id
            ]
         <> [ [hh|<button type="button" class="space-settings-toggle" aria-expanded={{ ariaBool managing }} onClick={{ const ToggleSettings }}>Space settings</button>|]
            | admin
@@ -187,14 +199,39 @@ component =
         -- page.
         -- The server cannot export a space whose pages it cannot read.
         <> (if isJust space.encryption then [] else exportMenu (spaceFormats ctx.session.exports) (ExportSpace space.id))
+        -- An encrypted space is exported by the browser, which holds its
+        -- key, for anyone who may read it: decrypted here into a file
+        -- the server never sees. Not while a conversion runs, which some
+        -- pages would be missed by; the notice above the view says why.
+        <> [ [hh|<button type="button" class="export-decrypted" onClick={{ const (Open ConfirmingExport) }}>Export, decrypted here</button>|]
+           | isJust space.encryption
+           , writable ctx space.id
+           ]
       where
         admin = mayAdminister ctx space.id
         path = spacePathOf ctx.spaces space.id
         managing = mode == ManagingSettings
 
-    form :: Context -> Space -> Mode -> Maybe (H.ComponentHTML Action Slots m)
-    form ctx space = \case
+    form :: Context -> Space -> Mode -> Bool -> Maybe (H.ComponentHTML Action Slots m)
+    form ctx space mode exporting = case mode of
       Viewing -> Nothing
+      ConfirmingExport ->
+        Just
+          [hh|
+            <div class="confirm export-decrypted-panel" role="alertdialog">
+              <p>
+                Save {{ space.name }} as a file, decrypted in this browser: the latest title and text of each of its pages,
+                their attachments, and their comments with their authors' names, and the same of each subspace whose key this browser holds.
+                The file leaves out {{ leftOutOfExport }}.
+              </p>
+              <p>
+                The server never sees the file, but anyone who has it can read it: keep it as safe as the pages.
+                A wiki imports it as a plain space, in its administration's "The wiki as one file".
+              </p>
+              <button type="button" class="primary export-decrypted-confirm" disabled={{ exporting }} onClick={{ const ExportDecrypted }}>{{ if exporting then "Decrypting…" else "Export" :: Text }}</button>
+              {{ button "Cancel" (Open Viewing) }}
+            </div>
+          |]
       ManagingSettings -> Just (HH.slot "settings" () SpaceSettings.component SpaceSettings.Input {context = ctx, space} FromSettings)
       Moving chosen ->
         Just $
@@ -227,6 +264,10 @@ component =
               {{ button "Cancel" (Open Viewing) }}
             </div>
           |]
+
+    -- What the last export decrypted here saved.
+    exportedNote :: Text -> H.ComponentHTML Action Slots m
+    exportedNote text = [hh|<p class="export-decrypted-done" role="status">{{ text }}</p>|]
 
     -- The textarea is controlled, like the other fields: what it shows is
     -- what was typed, so the value the render sets is the one it has.
@@ -322,10 +363,10 @@ component =
         mode <- gets (\st -> st.mode)
         let staying = mode == ManagingSettings && old.space.id == input.space.id && mayAdminister input.context input.space.id
         if old.space.id /= input.space.id || old.context.revision /= input.context.revision
-          then put State {input, mode = if staying then ManagingSettings else Viewing, problem = Nothing}
+          then put State {input, mode = if staying then ManagingSettings else Viewing, problem = Nothing, exporting = False, exported = Nothing}
           else modify (\st -> st {input})
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
-      Open mode -> modify (\st -> st {mode, problem = Nothing})
+      Open mode -> modify (\st -> st {mode, problem = Nothing, exported = Nothing})
       Chose n -> modify (\st -> st {mode = Moving n})
       EditOrder -> do
         space <- gets (\st -> st.input.space)
@@ -374,6 +415,31 @@ component =
       ToggleSettings -> modify $ \st ->
         st {mode = if st.mode == ManagingSettings then Viewing else ManagingSettings, problem = Nothing}
       FromSettings out -> H.raise out
+      -- The file is made and checked by the backend; nothing of it is sent
+      -- anywhere. It is saved only once it has been read back whole.
+      ExportDecrypted -> unlessM (gets (\st -> st.exporting)) $ do
+        space <- gets (\st -> st.input.space)
+        modify (\st -> st {exporting = True, problem = Nothing})
+        result <- exportDecrypted space.id
+        case result of
+          Left e -> modify (\st -> st {exporting = False, problem = Just e})
+          Right made -> do
+            download made.fileName "application/zip" made.bytes
+            let pages = length made.archive.pages
+                spaces = length made.archive.spaces
+                said =
+                  "Saved "
+                    <> made.fileName
+                    <> ": "
+                    <> show pages
+                    <> (if pages == 1 then " page" else " pages")
+                    <> " of "
+                    <> show spaces
+                    <> (if spaces == 1 then " space" else " spaces")
+                    <> ", decrypted."
+                    <> mconcat [" Left out: " <> l.name <> ". " <> l.why | l <- made.leftOut]
+                    <> (if null made.renamed then "" else " Two attachments of one name on a page are told apart: " <> T.intercalate "; " made.renamed <> ".")
+            modify (\st -> st {exporting = False, mode = Viewing, exported = Just said})
       Delete -> do
         Input {context = ctx, space} <- gets (\st -> st.input)
         let parentRoute = maybe Home (Space . spacePathOf ctx.spaces) space.parent

@@ -69,6 +69,8 @@ module Wiki.Server.Storage.Schema
   , SealedThreads (..)
   , SealedComments (..)
   , SealedAttachments (..)
+  , StagedPlain (..)
+  , ConversionLeases (..)
 
     -- * Settings and the log
   , Settings (..)
@@ -424,6 +426,12 @@ data Spaces f = SpaceRow
   , key_id :: Columnar f (Maybe Text)
   -- ^ The id of an encrypted space's current key (migration
   -- @0011-encrypted-spaces@), none for a space of plain pages.
+  , conversion :: Columnar f (Maybe Text)
+  -- ^ The conversion of its pages under way, by
+  -- 'Wiki.Core.Space.conversionName' (step 20), none when none runs.
+  , confirm_entry :: Columnar f Bool
+  -- ^ Whether a reader confirms with a passkey or the password each time
+  -- the space is opened ('Wiki.Core.Space.ConfirmEach', step 21).
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)
@@ -453,6 +461,9 @@ data Pages f = PageRow
   , search_fold :: Columnar f Text
   , kind :: Columnar f Text
   -- ^ The page's kind by its name ("Wiki.Core.PageKind"), step 19.
+  , converted :: Columnar f Bool
+  -- ^ Whether the conversion of its space under way has converted it
+  -- (step 20): false when none runs.
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)
@@ -835,6 +846,14 @@ deriving stock instance Eq (SealedAttachments Identity)
 
 deriving stock instance Show (SealedAttachments Identity)
 
+deriving stock instance Eq (StagedPlain Identity)
+
+deriving stock instance Show (StagedPlain Identity)
+
+deriving stock instance Eq (ConversionLeases Identity)
+
+deriving stock instance Show (ConversionLeases Identity)
+
 deriving stock instance Eq (EmailVerifications Identity)
 
 deriving stock instance Show (EmailVerifications Identity)
@@ -966,6 +985,9 @@ data SealedVersions f = SealedVersionRow
   , body :: Columnar f Text
   , chain_number :: Columnar f (Maybe Int64)
   , previous_tag :: Columnar f (Maybe Text)
+  , origin_tag :: Columnar f (Maybe Text)
+  -- ^ Which chain it is of ('Wiki.Core.Encrypted.Chain''s @origin@, step
+  -- 22), none for a version written before origins.
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)
@@ -1035,6 +1057,57 @@ instance Table SealedAttachments where
     deriving anyclass (Beamable)
   primaryKey r = SealedAttachmentKey r.attachment_id
 
+-- | What a browser turning a space's encryption off staged of a page,
+-- decrypted (@staged_plain@, step 20), before the page's commit puts it in
+-- place of the ciphertexts: one row for each version (@kind@ "version",
+-- @item@ its time, which @updated_at@ holds, with its @title@ and
+-- @body@), thread ("thread", its id, with its @quote@, @prefix@ and
+-- @suffix@, the quote none for a thread about the whole page), comment
+-- ("comment", its id, its @body@) and attachment ("attachment", its id,
+-- its @name@, @media_type@ and @blob@).
+data StagedPlain f = StagedPlainRow
+  { page_id :: Columnar f Text
+  , kind :: Columnar f Text
+  , item :: Columnar f Text
+  , updated_at :: Columnar f (Maybe UTCTime)
+  , title :: Columnar f (Maybe Text)
+  , body :: Columnar f (Maybe Text)
+  , quote :: Columnar f (Maybe Text)
+  , prefix :: Columnar f (Maybe Text)
+  , suffix :: Columnar f (Maybe Text)
+  , name :: Columnar f (Maybe Text)
+  , media_type :: Columnar f (Maybe Text)
+  , blob :: Columnar f (Maybe Text)
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table StagedPlain where
+  data PrimaryKey StagedPlain f = StagedPlainKey (Columnar f Text) (Columnar f Text) (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = StagedPlainKey r.page_id r.kind r.item
+
+-- | The lease on a running conversion (@conversion_leases@, step 23), on
+-- the space it started from: the user whose browser converts it now, the
+-- token that browser's requests carry, and when the lease runs out unless
+-- a page staged or committed renews it
+-- ("Wiki.Api.Encrypted"'s 'ConversionLease').
+data ConversionLeases f = ConversionLeaseRow
+  { space_id :: Columnar f Text
+  , holder :: Columnar f Text
+  , token :: Columnar f Text
+  , expires_at :: Columnar f UTCTime
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table ConversionLeases where
+  newtype PrimaryKey ConversionLeases f = ConversionLeaseKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = ConversionLeaseKey r.space_id
+
 --------------------------------------------------------------------------------
 -- The database
 
@@ -1077,6 +1150,8 @@ data WikiDb f = WikiDb
   , sealed_threads :: f (TableEntity SealedThreads)
   , sealed_comments :: f (TableEntity SealedComments)
   , sealed_attachments :: f (TableEntity SealedAttachments)
+  , staged_plain :: f (TableEntity StagedPlain)
+  , conversion_leases :: f (TableEntity ConversionLeases)
   }
   deriving stock (Generic)
   deriving anyclass (Database be)

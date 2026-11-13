@@ -442,6 +442,9 @@ instance (MonadIO m) => MonadComments (MemWiki m) where
 instance (MonadIO m) => MonadNotifications (MemWiki m) where
   mentionable = query . mentionableIn
   mentionCandidates letters = Right <$> query (mentionCandidatesIn letters)
+
+  -- Nothing is encrypted in the demo.
+  spaceReaders _ = pure (Right [])
   notifications = query notificationsIn
   markRead = write . markReadIn
   watching target = needWatched target >> query (watchingIn target)
@@ -463,6 +466,18 @@ instance (Monad m) => MonadEncryption (MemWiki m) where
   encryptSpace _ = pure (Left noServer)
   spaceEncryption _ = pure (Left noServer)
   chainProblem _ = pure Nothing
+  exportDecrypted _ = pure (Left noServer)
+  conversionOf _ = pure (Left noServer)
+  startConversion _ _ = pure (Left noServer)
+  convertNext _ = pure (Left noServer)
+  takeOverConversion _ = pure (Left noServer)
+  reverseConversion _ = pure (Left noServer)
+  setEntry _ _ = pure (Left noServer)
+
+  -- Nothing here is encrypted, so no space asks and no gate opens.
+  confirmedEntry _ = pass
+  readerAt _ _ = pure False
+  forgetEncrypted = pass
 
 instance (MonadIO m) => MonadStars (MemWiki m) where
   starred = query starredIn

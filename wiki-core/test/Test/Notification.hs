@@ -18,7 +18,7 @@ import Wiki.Core.Notification
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Permission
 import Wiki.Core.Slug (mkSlug)
-import Wiki.Core.Space (BoxNumbering (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Entry (..), Space (..))
 import Wiki.Core.Version (Author (..))
 
 --------------------------------------------------------------------------------
@@ -35,6 +35,8 @@ space i parent =
     , public = False
     , sealed = False
     , encryption = Nothing
+    , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False

@@ -243,7 +243,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, defaultHomePage, hasHome, homeDeleteRefusal, homeMoveRefusal, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Entry (..), Icon (..), Space (..), SpaceProfile (..), checkAvatarUpload, checkIconUpload, checkProfile, containerName, containerSlug, defaultHomePage, hasHome, homeDeleteRefusal, homeMoveRefusal, isPersonal, ownProfile, personalName, positionSpace, spaceTreeOrder, withHome, withMathMacros, withName, withOwnerAvatar, withProfile)
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Avatar (..), Email (..), Group (..), Login (..), Membership, Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
@@ -563,6 +563,8 @@ insertSpace parent name public now st0 =
           , public
           , sealed = False
           , encryption = Nothing
+          , conversion = Nothing
+          , entry = EnterAtOnce
           , owner = Nothing
           , active = True
           , personalContainer = False
@@ -845,6 +847,8 @@ respace parent slug position s =
     , public = s.public
     , sealed = s.sealed
     , encryption = s.encryption
+    , conversion = s.conversion
+    , entry = s.entry
     , owner = s.owner
     , active = s.active
     , personalContainer = s.personalContainer
@@ -1107,6 +1111,8 @@ renameSpaceIn sid name = adjustSpace sid $ \s -> do
       , public = s.public
       , sealed = s.sealed
       , encryption = s.encryption
+      , conversion = s.conversion
+      , entry = s.entry
       , owner = s.owner
       , active = s.active
       , personalContainer = s.personalContainer

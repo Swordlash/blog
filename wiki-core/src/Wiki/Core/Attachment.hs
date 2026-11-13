@@ -20,10 +20,13 @@ module Wiki.Core.Attachment
   , mediaKind
   , attachmentKind
   , findAttachment
+  , distinctNamesBy
+  , distinctAttachments
   )
 where
 
 import Data.Aeson (FromJSON, ToJSON)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Numeric.Natural (Natural)
 import Protolude
@@ -144,3 +147,37 @@ attachmentKind a = mediaKind a.mediaType
 -- | The attachment with this name, the name a page's Markdown refers to it by.
 findAttachment :: Text -> [Attachment] -> Maybe Attachment
 findAttachment n = find (\a -> a.name.text == n)
+
+-- | 'distinctNamesBy' over a page's attachments: the attachments, renamed
+-- where they must be, and each renaming.
+distinctAttachments :: [Attachment] -> ([Attachment], [(Text, Text)])
+distinctAttachments = distinctNamesBy (\a -> a.name.text) (\new a -> a {name = FileName new})
+
+-- | Attachments of one page with names made distinct, in the order the
+-- page lists them, by their names ('name') and a way to rename one: the
+-- first of a name keeps it, as a page's text shows the first
+-- ('findAttachment'), and each later one is renamed (@plans (2).png@, or
+-- the next number that no attachment's name is),
+-- with each renaming as (old name, new name). An encrypted page can hold
+-- two of one name (two tabs that uploaded it at once each added theirs,
+-- since the server cannot read the names); an archive, and a plain page,
+-- take one name once. The page's text names the first by that name before
+-- and after, and the later ones, which no name reached, by their new ones.
+distinctNamesBy :: (a -> Text) -> (Text -> a -> a) -> [a] -> ([a], [(Text, Text)])
+distinctNamesBy name rename xs = (reverse kept, reverse said)
+  where
+    -- A new name is none of the names given, those met later included:
+    -- the first holder of each keeps it. Names are compared as they are,
+    -- as both databases' UNIQUE (page_id, name) compares them: SQLite's
+    -- text byte for byte, and PostgreSQL's by its deterministic collation,
+    -- which takes two strings as equal only when their bytes are.
+    given = Set.fromList (map name xs)
+    (kept, said, _) = foldl' step ([], [], Set.empty) xs
+    step (done, notes, taken) x
+      | Set.member (name x) taken =
+          let new = fromMaybe (name x) (find (\c -> Set.notMember c taken && Set.notMember c given) [numbered n (name x) | n <- [2 :: Int ..]])
+           in (rename new x : done, (name x, new) : notes, Set.insert new taken)
+      | otherwise = (x : done, notes, Set.insert (name x) taken)
+    numbered n old = case T.breakOnEnd "." old of
+      (stem, ext) | T.length stem > 1 -> T.dropEnd 1 stem <> " (" <> show n <> ")." <> ext
+      _ -> old <> " (" <> show n <> ")"

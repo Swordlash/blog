@@ -42,6 +42,7 @@ module Wiki.Core.Notification
   , Kind (..)
   , PageLocation (..)
   , withLocation
+  , withTitle
   , notificationText
 
     -- * Watching
@@ -162,6 +163,12 @@ data Notification = Notification
 -- | A notification with where its page is now.
 withLocation :: Maybe PageLocation -> Notification -> Notification
 withLocation location n = Notification {id = n.id, kind = n.kind, page = n.page, thread = n.thread, actor = n.actor, title = n.title, excerpt = n.excerpt, createdAt = n.createdAt, read = n.read, location}
+
+-- | A notification with another title for its page: one decrypted in the
+-- browser, for a page of an encrypted space, which the server names by
+-- what it is.
+withTitle :: Text -> Notification -> Notification
+withTitle title n = Notification {id = n.id, kind = n.kind, page = n.page, thread = n.thread, actor = n.actor, title, excerpt = n.excerpt, createdAt = n.createdAt, read = n.read, location = n.location}
 
 -- | What a notification says, in words for a person to read: "Ada
 -- mentioned you".

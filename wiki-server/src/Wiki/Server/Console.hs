@@ -217,6 +217,7 @@ runUsers askPassword u = (`onPlace` u.place) $ \at -> withStorageAside at $ \st 
       NotFound -> "There is no such user."
       Forbidden -> "That is not allowed."
       Conflict why -> why
+      Stale _ why -> why
       Invalid why -> why
       Unreachable why -> why
 

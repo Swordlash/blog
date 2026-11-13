@@ -41,8 +41,9 @@ import Wiki.App.Backend.Stars (MonadStars (..))
 import Wiki.App.Route (Route (..), pageRoute)
 import Wiki.App.View.Common
 import Wiki.App.View.Popup (watchPopup)
+import Wiki.Core.Encrypted (encryptedPageTitle)
 import Wiki.Core.Notification (PageLocation (..))
-import Wiki.Core.Space (Space (id, name))
+import Wiki.Core.Space (Space (encryption, id, name))
 
 newtype Input = Input {context :: Context}
 
@@ -149,6 +150,12 @@ component =
       Receive input -> do
         old <- gets (\st -> st.input)
         modify (\st -> st {input})
+        -- Another revision: the reader may have left a space that asks
+        -- each time it is opened, or another tab signed out. The titles
+        -- of pages of encrypted spaces go at once, as the server lists
+        -- them, until the list is read again.
+        when (old.context.revision /= input.context.revision) $
+          modify (\st -> st {stars = fmap (map (sealedAgain input.context)) <$> st.stars})
         isOpen <- gets (\st -> st.open)
         when (isOpen && old.context.revision /= input.context.revision) reload
       Toggle -> do
@@ -172,7 +179,19 @@ component =
       traverse_ H.unsubscribe st.listWatch
       when st.open $ modify (\s -> s {open = False, listWatch = Nothing})
 
+    -- A list read under another revision of the wiki than the one now (the
+    -- reader left a space that asks each time it is opened while titles
+    -- were decrypted for it) is dropped: the list stays as the server
+    -- names its pages until it is read again.
     reload :: H.HalogenM State Action Empty output m ()
     reload = do
+      asked <- gets (\st -> st.input.context.revision)
       stars <- lift starred
-      modify (\st -> st {stars = Just stars})
+      modify (\st -> if st.input.context.revision /= asked then st else st {stars = Just stars})
+
+-- | A starred page as the server lists it, when it is in an encrypted
+-- space: named as a notification names it, not by its title decrypted.
+sealedAgain :: Context -> StarredPage -> StarredPage
+sealedAgain ctx s
+  | any (\sp -> sp.id == s.space && isJust sp.encryption) ctx.spaces = StarredPage {page = s.page, space = s.space, title = encryptedPageTitle, location = s.location}
+  | otherwise = s

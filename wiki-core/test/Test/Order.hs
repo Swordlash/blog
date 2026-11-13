@@ -15,7 +15,7 @@ import Wiki.Core.Order
 import Wiki.Core.Page (Page (..), childPages, pageTreeOrder, positionPage)
 import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (BoxNumbering (..), Space (..), spaceTreeOrder, subspaceOrderOf, subspacesOf)
+import Wiki.Core.Space (BoxNumbering (..), Entry (..), Space (..), spaceTreeOrder, subspaceOrderOf, subspacesOf)
 
 slug :: Text -> Slug
 slug t = either (panic . show) identity (mkSlug t)
@@ -56,6 +56,8 @@ space i name parent made position subspaceOrder =
     , public = False
     , sealed = False
     , encryption = Nothing
+    , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False

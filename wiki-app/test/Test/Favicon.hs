@@ -23,7 +23,7 @@ import Wiki.Core.HomePage (HomeDocument (..), HomePage (..))
 import Wiki.Core.Id (BlobId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (BoxNumbering (..), Icon (..), Space (..), SpaceProfile (..), defaultColour, withProfile)
+import Wiki.Core.Space (BoxNumbering (..), Entry (..), Icon (..), Space (..), SpaceProfile (..), defaultColour, withProfile)
 
 slug :: Text -> Slug
 slug = either (panic . show) identity . mkSlug
@@ -39,6 +39,8 @@ notes icon =
     , public = True
     , sealed = False
     , encryption = Nothing
+    , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False

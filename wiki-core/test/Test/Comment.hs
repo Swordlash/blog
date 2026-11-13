@@ -14,7 +14,7 @@ import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Permission
 import Wiki.Core.Slug (mkSlug)
-import Wiki.Core.Space (BoxNumbering (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Entry (..), Space (..))
 import Wiki.Core.Version (Author (..))
 
 time :: UTCTime
@@ -30,6 +30,8 @@ blog =
     , public = True
     , sealed = False
     , encryption = Nothing
+    , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False

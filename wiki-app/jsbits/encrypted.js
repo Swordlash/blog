@@ -336,10 +336,19 @@ function wikiEncSeenAll(user) {
   }
 }
 
-// The version seen of a page, as JSON {number, tag}, or "" for none.
+// What is remembered of a page: one {number, tag, origin} for each chain
+// of it read (Wiki.Core.Encrypted's Seen), in the order they were first
+// read, the latest last. A record from before origins, {number, tag}, is
+// the chain without one.
+function wikiEncChains(record) {
+  if (record === undefined || record === null) return [];
+  if (Array.isArray(record.chains)) return record.chains;
+  return [{ number: record.number, tag: record.tag, origin: null }];
+}
+
+// The versions seen of a page, as a JSON list, "[]" for none.
 function wiki_enc_seen(user, page) {
-  const seen = wikiEncSeenAll(user)[page];
-  return seen === undefined ? "" : JSON.stringify(seen);
+  return JSON.stringify(wikiEncChains(wikiEncSeenAll(user)[page]));
 }
 
 // Remember the version seen of a page (JSON {number, tag}), only forward,
@@ -348,14 +357,28 @@ function wiki_enc_seen(user, page) {
 // another tab cannot write between the two). "now" when it is remembered,
 // "later" when a later version was remembered already and stays, "fork"
 // when another version under the same number was, which stays too.
+// A chain not remembered yet is added as the latest (a page encrypted
+// again); a version of one remembered before the latest, or of no chain
+// after one with an origin, stays as it is ("later"); in the latest chain,
+// as before.
 function wiki_enc_keep_seen(user, page, seen) {
   try {
     const all = wikiEncSeenAll(user);
     const next = JSON.parse(seen);
-    const before = all[page];
-    if (before !== undefined && before.number > next.number) return "later";
-    if (before !== undefined && before.number === next.number) return before.tag === next.tag ? "now" : "fork";
-    all[page] = next;
+    const origin = next.origin ?? null;
+    const chains = wikiEncChains(all[page]);
+    const at = chains.findIndex((c) => (c.origin ?? null) === origin);
+    if (at === -1) {
+      if (origin === null && chains.length > 0) return "later";
+      chains.push({ number: next.number, tag: next.tag, origin });
+    } else {
+      if (at !== chains.length - 1) return "later";
+      const before = chains[at];
+      if (before.number > next.number) return "later";
+      if (before.number === next.number) return before.tag === next.tag ? "now" : "fork";
+      chains[at] = { number: next.number, tag: next.tag, origin };
+    }
+    all[page] = { chains };
     localStorage.setItem("wiki-chain:" + user, JSON.stringify(all));
     return "now";
   } catch {
@@ -400,7 +423,10 @@ function wiki_enc_sealed_error(sealed) {
 // nothing behind but bytes the garbage collector takes.
 async function wiki_enc_open_attachment(handle, address, nonce, data) {
   try {
-    const answer = await fetch(address, { credentials: "same-origin" });
+    // Asked of the server each time (no-cache): a page encrypted again
+    // keeps its attachments' ids, and so their addresses, with other bytes
+    // under another key, which a copy the browser kept would not open.
+    const answer = await fetch(address, { credentials: "same-origin", cache: "no-cache" });
     if (!answer.ok) throw new Error(`The attachment could not be read: ${answer.status}.`);
     const opened = await crypto.subtle.decrypt({ name: "AES-GCM", iv: wikiEncFromBase64(nonce), additionalData: wikiEncText(data) }, wikiEncKey(handle), await answer.arrayBuffer());
     return { opened };
@@ -412,6 +438,36 @@ async function wiki_enc_open_attachment(handle, address, nonce, data) {
 // Why an attachment did not open ("" when it did).
 function wiki_enc_opened_error(o) {
   return o.error ?? "";
+}
+
+// Bytes given, decrypted with a page key, the nonce and the additional
+// data they were encrypted with: an object {opened} holding them, or
+// {error}. What a conversion of a space checks of the bytes it is about to
+// stage, before it sends them.
+async function wiki_enc_open_bytes(handle, nonce, bytes, data) {
+  try {
+    const opened = await crypto.subtle.decrypt({ name: "AES-GCM", iv: wikiEncFromBase64(nonce), additionalData: wikiEncText(data) }, wikiEncKey(handle), bytes);
+    return { opened };
+  } catch (error) {
+    return { error: error?.name === "OperationError" ? "These bytes do not open with the page's key." : String(error?.message ?? error) };
+  }
+}
+
+// The SHA-256 of bytes, in lowercase hexadecimal, as the server names the
+// blob it stores them as; "" when it cannot be had.
+async function wiki_enc_sha256(bytes) {
+  try {
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return "";
+  }
+}
+
+// An attachment's decrypted bytes, for the program to copy (the export
+// decrypted in the browser).
+function wiki_enc_opened_bytes(o) {
+  return new Uint8Array(o.opened ?? new ArrayBuffer(0));
 }
 
 // Object URLs of an attachment's decrypted bytes: one of this media type,

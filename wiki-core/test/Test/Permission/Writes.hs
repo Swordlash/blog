@@ -10,7 +10,7 @@ import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Permission
 import Wiki.Core.Slug (mkSlug)
-import Wiki.Core.Space (BoxNumbering (..), Space (..))
+import Wiki.Core.Space (BoxNumbering (..), Entry (..), Space (..))
 
 space :: Text -> Maybe Space -> Space
 space s parent =
@@ -22,6 +22,8 @@ space s parent =
     , public = False
     , sealed = False
     , encryption = Nothing
+    , conversion = Nothing
+    , entry = EnterAtOnce
     , owner = Nothing
     , active = True
     , personalContainer = False

@@ -41,7 +41,7 @@ import Database.SQLite.Simple qualified as Sqlite
 import Protolude
 import Wiki.Api.Info (Capabilities (..), SearchKind (..))
 import Wiki.Server.Storage.Schema (PageNodes)
-import Wiki.Server.Storage.Sqlite (beginSqlite, closeSqlite, commitSqlite, rollbackSqlite, runSqliteScript, sqliteObjects, sqliteSearch)
+import Wiki.Server.Storage.Sqlite (beginSqlite, checkpointSqlite, closeSqlite, commitSqlite, rollbackSqlite, runSqliteScript, sqliteObjects, sqliteSearch)
 #ifdef WIKI_POSTGRES
 import Database.Beam.Postgres (Pg, Postgres, runBeamPostgres, runBeamPostgresDebug)
 import Database.PostgreSQL.Simple qualified as Pg
@@ -150,6 +150,16 @@ class
   -- collation @C@.
   byCodePoints :: QExpr be s Text -> QExpr be s Text
 
+  -- | Move what the database's log holds into the database itself and
+  -- empty the log, outside any transaction, so that text a write took
+  -- out of the database is not left in a file beside it: what a
+  -- conversion of an encrypted space does after each page
+  -- ("Wiki.Server.Storage", 'Wiki.Core.Space.Conversion'). On SQLite this
+  -- is a truncating checkpoint of the write-ahead log, which says whether
+  -- it went through ('False' when a reader kept it from finishing); on
+  -- PostgreSQL, whose dead rows only a vacuum removes, it does nothing.
+  checkpoint :: Connection be -> IO Bool
+
 -- | 'withTransaction' runs an action in a transaction on a connection: it
 -- begins a transaction (one that writes, for @True@), runs the action, and
 -- commits. If the action throws, or the commit throws, the transaction is
@@ -211,6 +221,7 @@ instance Backend Sqlite where
   capabilities _ = Capabilities {database = "sqlite", search = FoldedText}
   searchMatches spaces templates ws _ _ = map (\(n, t) -> (n, t, Nothing)) <$> sqliteSearch spaces templates ws
   byCodePoints = identity
+  checkpoint = checkpointSqlite
 
 #ifdef WIKI_POSTGRES
 instance Backend Postgres where
@@ -232,4 +243,5 @@ instance Backend Postgres where
   capabilities _ = Capabilities {database = "postgres", search = FullText}
   searchMatches spaces templates _ folded most = map (\(n, t, r) -> (n, t, Just r)) <$> postgresSearch spaces templates folded most
   byCodePoints = postgresCodePoints
+  checkpoint _ = pure True
 #endif
