@@ -1856,6 +1856,32 @@ which the wiki pins since #227.
   (the page's main thread, by a profile in the browser on that deck),
   then fix the cause; a test holds the cost (the longest hold of the
   page for a jump across the deck under a bound).
+- **WP5.108 The pause after typing in a long presentation (found by
+  WP5.105's measures, #269).** On the deck of 60 slides of 100 lines,
+  the pause after a keystroke holds the page 7 to 11 seconds at its
+  longest and 12 to 18 in all; the 4.6, 11.5 and 23.6 seconds WP5.105
+  began from were jumps that fell into it. Measured, each alone: the
+  check (`Problems.checkText`) about 4.5 s; `publishProblems` run
+  three times in one pause (after the slides' measures, after the
+  re-cut, after the check), each time `problemsOf` 1.8 to 3.4 s and
+  `headsOf` 4.6 to 6.4 s. A lead, not timed: `Wiki.Core.Slides
+  .slideLines` splits the whole text once for each slide, and
+  `fitsNow` and `measuresFor` call it for every slide, so they cost
+  slides times text. Publish once for a pause, split the text once,
+  then measure again and take what is next; a test holds the pause's
+  longest hold on that deck. Stacked on #269.
+- **WP5.109 A resource made on a worker and kept a step later (found
+  by #268).** #268 fixed the owners of addresses and the embedded
+  deck's watch: a view's program made a resource through `lift` or
+  `liftIO` (which run on a worker thread) and wrote it into its state
+  in the next step, so a view closed between the two left it behind.
+  The same shape is still in `Preview.startWatch` (`watchFits` makes
+  the callback and the measuring, the `modify` after keeps them), and
+  nobody has read the other views for it: every callback
+  (`mkSyncCallback`), observer, listener and timer a view keeps in its
+  state to stop in `Finalize`. Read them all, make each in the step
+  that keeps it (`H.liftEffect`), and say the rule in AGENTS.md's
+  conventions. After #268 and #269, which it shares files with.
 - **WP5.98 The smoke tests wait on the program, and run slowed down
   (the owner, 2026-11-12: "mamy bardzo dużo timing issues w testach
   dymnych"; after #251 and #253).** Two days of red runs fell into two
