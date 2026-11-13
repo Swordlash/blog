@@ -88,9 +88,12 @@ spec site =
     click (locator page "#app .assistant-send")
     -- While the model works: "Thinking" with its summary, then the status
     -- of the edit it is writing, each when the provider's script gets to
-    -- it.
+    -- it. Send reads the clock (in a liftIO) before it shows "Thinking",
+    -- and the driver's settle does not wait for a liftIO; waitQuiet would,
+    -- but it waits for the whole turn too, which is counted as the
+    -- program's work. So the line itself is waited for.
     let fromModel = locator page "#app .assistant-message.from-model"
-    count (withText "Thinking" (locator fromModel ".assistant-thinking")) `shouldReturn` 1
+    waitFor (withText "Thinking" (locator fromModel ".assistant-thinking")) Attached
     waitFor (withText "Weighing the heading." (locator fromModel ".assistant-thinking-text")) Attached
     waitFor (withText "Editing the page" (locator fromModel ".assistant-status")) Visible
     -- The answer, once it has ended.
