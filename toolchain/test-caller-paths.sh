@@ -66,7 +66,7 @@ for timing in 0 1; do
   (
     cd "$work/caller"
     CALLER_PATHS_OUT="$work/out" PATH="$work/bin:$PATH" WIKI_TOOLCHAIN_HOME="$work/home" \
-      WIKI_SMOKE_PROGRAM=build/suite WIKI_SUITE_TIMES=$timing GITHUB_STEP_SUMMARY= \
+      WIKI_SMOKE_PROGRAM=build/suite WIKI_SUITE_TIMES=$timing GITHUB_STEP_SUMMARY='' \
       sh "$root/toolchain/smoke-suite.sh" demo --match x > "$work/suite-out" 2>&1
   )
   check "smoke-suite.sh's program, timed $timing, run from wiki-smoke/" "$(sed -n 's/^PWD=//p' "$work/out")" "$root/wiki-smoke"

@@ -35,24 +35,33 @@ shift
 # without one.
 budget_of() {
   case $1 in
-    # wiki-core-test on wasm, under Node: 790 s on 2026-11-13 (run
-    # 43504709479), before WP5.110 cut its slowest cases.
+    # Set on 2026-11-14 (WP5.110), to be set again from the first hosted
+    # run that has them, which measures each suite as CI runs it.
+    #
+    # wiki-core-test on wasm, under Node, beside the browser suite: 790 s
+    # on 2026-11-13 (run 43504709479) before WP5.110 cut its cases on wasm;
+    # after the cut, 326 s on a loaded 16-core machine where the same
+    # suite had taken 1070 s, so about 240 s expected on a hosted runner.
+    # The 265 s that one day added would cross the budget.
     wiki-core-test) echo 420 ;;
     # wiki-api-test on wasm: 2.3 to 2.8 s from 2026-11-11 to 13.
     wiki-api-test) echo 60 ;;
     # The browser suite, its two shards side by side: 352 and 378 s on
     # 2026-11-13 (run 43504709479), 183 and 162 s two days before.
     wiki-app-browser-test) echo 600 ;;
-    # The smoke suites, each alone, one after another (run 43504709479):
-    # waits 17 s, screenshots 10 s, demo 106 s, passkeys 5 s, the server
-    # 109 s on SQLite and 114 s on PostgreSQL. Side by side each takes
-    # longer.
-    smoke-waits) echo 90 ;;
-    smoke-screenshots) echo 90 ;;
-    smoke-demo) echo 300 ;;
-    smoke-passkeys) echo 90 ;;
-    smoke-server) echo 300 ;;
-    smoke-server-postgres) echo 300 ;;
+    # The smoke suites, side by side in the smoke job. One after another
+    # on 2026-11-13 (run 43504709479) they took: waits 17 s, screenshots
+    # 10 s, demo 106 s, passkeys 5 s, the server 109 s on SQLite and 114 s
+    # on PostgreSQL. Side by side on four cores of a loaded machine, where
+    # one after another the demo took 161 s and the server 189 s: waits 35
+    # s, screenshots 48 s, demo 352 s, passkeys 40 s, the server 373 s and
+    # 388 s.
+    smoke-waits) echo 120 ;;
+    smoke-screenshots) echo 120 ;;
+    smoke-demo) echo 420 ;;
+    smoke-passkeys) echo 120 ;;
+    smoke-server) echo 420 ;;
+    smoke-server-postgres) echo 420 ;;
     *) echo "" ;;
   esac
 }

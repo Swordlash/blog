@@ -49,12 +49,12 @@ on:
       - 'docs/markdown.md'
   workflow_dispatch:
     inputs:
-      # Which runner wasm takes on a run by hand: the owner's (the default)
+      # Which runner wasm and smoke take on a run by hand: the owner's (the default)
       # when it is free, as for a push, or GitHub's hosted ones whatever the owner's
       # machine is doing, to exercise the hosted path, or to get a run going
       # while the machine is off.
       runner:
-        description: "Where to run wasm: self-hosted (the owner's machine, when it is free) or hosted (ubuntu-latest)"
+        description: "Where to run wasm and the smoke test: self-hosted (the owner's machine, when it is free) or hosted (ubuntu-latest)"
         type: choice
         options:
           - self-hosted
@@ -92,11 +92,12 @@ concurrency:
 permissions:
   contents: read
 
-# Only wasm may use the owner's runner. native, format and deploy always
-# run on ubuntu-latest; the native groups, wasm and format run in parallel after plan.
-# The first job, `plan`, runs on GitHub's hosted runners for every run
-# (seconds, and free on a public repository) and hands its runner choice
-# only to wasm's `runs-on`. It goes by trust first, by one expression
+# Only wasm and smoke may use the owner's runner. native, format and
+# deploy always run on ubuntu-latest; the native groups, wasm, smoke and
+# format run in parallel after plan. The first job, `plan`, runs on
+# GitHub's hosted runners for every run (seconds, and free on a public
+# repository) and hands its runner choice only to the `runs-on` of wasm
+# and smoke, which build the same page and go to the same runner. It goes by trust first, by one expression
 # (`plan`'s TRUSTED). The
 # self-hosted runner registered for this repository is the owner's machine,
 # and a job there runs whatever the checked-out tree builds (Template
@@ -119,8 +120,8 @@ permissions:
 # a runner that carries them all). Whether the machine is on, the token
 # cannot see, so a run sent to it while it is off waits until it is back
 # (or is cancelled, and run by hand with `runner: hosted`).
-# The owner can also send every push's and pull request's wasm job to the
-# hosted runners without a commit, by setting the repository variable
+# The owner can also send every push's and pull request's wasm and smoke
+# jobs to the hosted runners without a commit, by setting the repository variable
 # WASM_RUNNER to `hosted` (Settings, Secrets and variables, Actions,
 # Variables, or `gh variable set WASM_RUNNER --body hosted`): for the times
 # when Claude sessions build on the owner's machine and slow the wasm job
@@ -256,7 +257,7 @@ jobs:
         REQUIRE_ARTIFACT: ${{ github.event.repository.private == false && 'app' || '' }}
       run: sh toolchain/ci-already-tested.sh "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
-    # For every event, pick only wasm's runner. TRUSTED is the trust rule
+    # For every event, pick only the runner of wasm and smoke. TRUSTED is the trust rule
     # (see the top): false for a pull request from a fork, anything a bot
     # started, and a run by hand asking for the hosted runners. The weekly
     # run asks for them too:
@@ -671,6 +672,12 @@ jobs:
       if: matrix.group == 'deploy'
       run: sh toolchain/test-ci-prune-caches.sh
 
+    # The wasm and smoke jobs' timing of each suite against its budget,
+    # against fake suites: a few seconds.
+    - name: Test ci-suite-time.sh
+      if: matrix.group == 'deploy'
+      run: sh toolchain/test-ci-suite-time.sh
+
     # The browser suite's kept bundle (wiki-app/test/web/bundle.sh), against
     # a fake islands bundle: reused while its inputs are unchanged, built
     # again when one changes, and never reused half built. A few seconds.
@@ -794,10 +801,22 @@ jobs:
     - name: Build the maker
       run: cd maker && cabal build all --enable-tests --builddir=dist-newstyle/floor
 
-  # The page, built and tested on the runner plan picked (see the top). Its
-  # steps are shared with wasm-warm and smoke-throttled below (the anchor
-  # wasm-steps); the steps that test the page, or keep it, run only here
-  # (github.job is wasm), but for smoke-throttled's own.
+  # The page, built and tested on the runner plan picked (see the top): the
+  # wasm test suites, wiki-core's and wiki-api's under Node and the browser
+  # suite in Chromium. Its steps are shared with smoke, wasm-warm and
+  # smoke-throttled below (the anchor wasm-steps); the steps that test the
+  # page, or keep it, run only here (github.job is wasm), but for the smoke
+  # suites, which run in the smoke job, and smoke-throttled's own.
+  #
+  # The smoke suites have a job of their own beside this one, rather than
+  # steps after its tests (WP5.110 of docs/PLAN.md, 2026-11-14): after the
+  # tests they made this job 24 to 27 minutes long, and the run with it.
+  # Each job builds the page from the same restored caches, about three and
+  # a half minutes on a hosted runner; the build is not handed from one job
+  # to the other as an artifact, since the account's artifact storage quota
+  # refused uploads while the repository is private (see the page's upload
+  # below), and a job waiting for another's build would add its time to the
+  # run's.
   wasm:
     needs: plan
     if: needs.plan.outputs.tested != 'true'
@@ -1042,8 +1061,9 @@ jobs:
             --with-hsc2hs="$(command -v wasm32-wasi-hsc2hs)"
         )
 
+    # One writer: smoke and smoke-throttled only read the caches.
     - name: Save cached dependencies
-      if: runner.environment == 'github-hosted' && github.job != 'smoke-throttled'
+      if: runner.environment == 'github-hosted' && (github.job == 'wasm' || github.job == 'wasm-warm')
       uses: actions/cache/save@v5
       with:
         path: ${{ env.CABAL_DIR }}/store
@@ -1080,30 +1100,18 @@ jobs:
       if: runner.environment == 'self-hosted'
       run: npx playwright install --only-shell chromium
 
+    # Each suite timed against its budget, its slowest examples in the
+    # run's summary (toolchain/ci-suite-time.sh, through the suites'
+    # wrapper toolchain/wasm-test-wrapper.sh). wiki-core-test and
+    # wiki-api-test run under Node beside the browser suite's two shards.
     - name: Test
       if: github.job == 'wasm'
       env:
         HSPEC_HALOGEN_JOBS: '2'
-      run: npm run test-wasm
-
-    # The smoke suites in Haskell (wiki-smoke; WP5.98 of docs/PLAN.md):
-    # native programs, built here with the host GHC into
-    # dist-newstyle/native-fast, that drive the demo just built in Chromium
-    # through haskell-halogen-playwright, which waits after every action
-    # until the page's program says it is idle. toolchain/smoke-suite.sh
-    # requires the build, so a missing demo fails rather than passes as
-    # pending. The first checks that those waits hold on the wiki's own
-    # pages; the second takes the README's screenshots (into a directory of
-    # the runner's, not docs/screenshots) and checks each is under 300 KB.
-    - name: Check the smoke tests' waits on the demo
-      if: github.job == 'wasm'
-      run: sh toolchain/smoke-suite.sh waits
-
-    - name: Take the README's screenshots from the demo
-      if: github.job == 'wasm'
-      env:
-        WIKI_SCREENSHOTS_DIR: ${{ runner.temp }}/screenshots
-      run: sh toolchain/smoke-suite.sh screenshots
+        WIKI_SUITE_TIMES: '1'
+      run: |
+        echo '### The wasm test suites: wall time, budget, slowest examples' >> "$GITHUB_STEP_SUMMARY"
+        npm run test-wasm
 
     # The demo's smoke test with every page's processor four times slower,
     # in smoke-throttled's run of these steps only (see that job). Each call
@@ -1130,12 +1138,12 @@ jobs:
         sh toolchain/smoke-suite.sh server || status=1
         exit "$status"
 
-    # The server's smoke suite runs on SQLite, then on PostgreSQL, which
+    # The server's smoke suite runs on SQLite and on PostgreSQL, which
     # uses the container toolchain/ci-postgres.sh starts, as the native job's
     # tests do; without Docker (a self-hosted runner) only on SQLite, and
     # it says so.
     - name: Start PostgreSQL for the smoke test
-      if: github.job == 'wasm'
+      if: github.job == 'smoke'
       run: |
         if vars=$(sh toolchain/ci-postgres.sh start "$RUNNER_TEMP/postgres-bin"); then
           printf '%s\n' "$vars" >> "$GITHUB_ENV"
@@ -1145,27 +1153,56 @@ jobs:
           echo "::warning::Docker does not answer on this runner: the smoke test's server runs on SQLite only."
         fi
 
-    # The smoke suites in Haskell (toolchain/smoke-test.sh): the demo's
-    # (wiki-smoke-demo), the passkeys' (wiki-smoke-passkeys), and the
-    # server's build against a real wiki-server (wiki-smoke-server) on SQLite
-    # and on the PostgreSQL started above; then the node programs that test
-    # JavaScript modules without a browser.
+    # The smoke suites in Haskell (wiki-smoke; WP5.98 of docs/PLAN.md):
+    # native programs, built with the host GHC into
+    # dist-newstyle/native-fast, that drive the demo just built in Chromium
+    # through haskell-halogen-playwright, which waits after every action
+    # until the page's program says it is idle. toolchain/smoke-test.sh
+    # builds them all at once, then runs them side by side: the waits'
+    # check on the wiki's own pages, the README's screenshots (into a
+    # directory of the runner's, not docs/screenshots, each checked to be
+    # under 300 KB), the demo's (wiki-smoke-demo), the passkeys'
+    # (wiki-smoke-passkeys), and the server's build against a real
+    # wiki-server (wiki-smoke-server) on SQLite and on the PostgreSQL
+    # started above; and beside them the node programs that test
+    # JavaScript modules without a browser. Each suite's log is printed when
+    # it ends, a failing one outside a group, and each is timed against its
+    # budget (toolchain/ci-suite-time.sh). The suites require the build
+    # (toolchain/smoke-suite.sh), so a missing demo fails rather than passes
+    # as pending.
     - name: Smoke-test the page in a browser
-      if: github.job == 'wasm'
-      run: npm run smoke-test
+      if: github.job == 'smoke'
+      env:
+        WIKI_SMOKE_EXTRA: waits screenshots
+        WIKI_SCREENSHOTS_DIR: ${{ runner.temp }}/screenshots
+        WIKI_SUITE_TIMES: '1'
+      run: |
+        echo '### The smoke suites, side by side: wall time, budget, slowest examples' >> "$GITHUB_STEP_SUMMARY"
+        npm run smoke-test
 
     - name: Stop PostgreSQL
-      if: always() && github.job == 'wasm'
+      if: always() && github.job == 'smoke'
       run: sh toolchain/ci-postgres.sh stop
+
+    # The smoke suites' programs and the wiki-server they drive, built into
+    # dist-newstyle/native-fast here too, after the tests, so that the copy
+    # of the build directories this job saves carries them: the smoke job
+    # of the next run restores that copy and compiles only what changed. A
+    # second or so when nothing did.
+    - name: Build the smoke suites, for the next run's smoke job
+      if: github.job == 'wasm' || github.job == 'wasm-warm'
+      run: |
+        sh toolchain/changelog-stamp.sh
+        cabal build -v1 --project-file=cabal-native-fast.project --builddir=dist-newstyle/native-fast wiki-server:exe:wiki-server wiki-smoke:tests
 
     - name: Report incremental build sizes
       run: |
         du -sh dist-newstyle/native-fast | tee -a "$GITHUB_STEP_SUMMARY"
         du -sh --exclude=public dist-newstyle/wasm | tee -a "$GITHUB_STEP_SUMMARY"
 
-    # The paths are the restore step's.
+    # The paths are the restore step's. One writer, as for the store.
     - name: Save wasm and native build directories
-      if: runner.environment == 'github-hosted' && github.job != 'smoke-throttled'
+      if: runner.environment == 'github-hosted' && (github.job == 'wasm' || github.job == 'wasm-warm')
       uses: actions/cache/save@v5
       with:
         path: |
@@ -1192,6 +1229,23 @@ jobs:
         path: dist-newstyle/wasm/public/app/
         if-no-files-found: error
         retention-days: 3
+
+  # The smoke suites, side by side, on the page this job builds itself, on
+  # the runner plan picked for wasm (see the top and the wasm job). It runs
+  # the wasm job's steps (the anchor wasm-steps): the steps for the smoke
+  # suites only here (github.job is smoke). It restores the caches the wasm
+  # job saves and saves none. On the owner's machine, one runner, it runs
+  # before or after the wasm job, in the same workspace.
+  smoke:
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
+    name: smoke test
+    runs-on: ${{ needs.plan.outputs.runner }}
+    permissions:
+      contents: read
+    env:
+      HALOGEN_BASE_PATH: /${{ github.event.repository.name }}/
+    steps: *wasm-steps
 
   # The wasm job's steps on a hosted runner, on a push to main whose page was
   # not built on one (the owner's machine took it, or the plan skipped it as
@@ -1221,8 +1275,8 @@ jobs:
   # that passes only because the page is quick enough fails here, so races
   # between the test and the page, or within the page, are found on purpose
   # rather than on someone's pull request. It runs the wasm job's steps on
-  # the same runner, after it, so the build is the one wasm saved or left
-  # there, and its own steps are the only tests it runs. Weekly (the schedule
+  # the same runner, after wasm and smoke, so the build is the one wasm
+  # saved or left there, and its own steps are the only tests it runs. Weekly (the schedule
   # above) and by hand only, and never for a pull request, which does not
   # wait for it: on a push to main the plan usually skips wasm, as the pull
   # request's run tested the tree, and a throttled run for every merge would
@@ -1230,9 +1284,9 @@ jobs:
   # which the weekly run makes. A failure fails the run it is in; deploy does
   # not wait for it.
   smoke-throttled:
-    needs: [plan, wasm]
+    needs: [plan, wasm, smoke]
     if: >-
-      ${{ !cancelled() && needs.wasm.result == 'success' &&
+      ${{ !cancelled() && needs.wasm.result == 'success' && needs.smoke.result == 'success' &&
       (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: smoke test, throttled
     runs-on: ${{ needs.plan.outputs.runner }}
@@ -1303,9 +1357,9 @@ jobs:
   # run's id, since a cache key cannot be overwritten; this job then deletes
   # the ref's older copies, so that each ref keeps one copy of each cache
   # (the repository's 10 GB limit otherwise evicted main's). It runs once
-  # every job that restores a cache has ended, never beside them: an older
-  # copy deleted while a job was still looking it up left that job with no
-  # store at all and every dependency to build again (native (sqlite) in
+  # every job that restores a cache has ended (smoke restores wasm's),
+  # never beside them: an older copy deleted while a job was still looking
+  # it up left that job with no store at all and every dependency to build again (native (sqlite) in
   # run 42228528344). The keys are the ones the saves used; a cache that
   # was not saved this run (the wasm job on the owner's machine, a job that
   # failed before its save or was skipped) is not listed, and the script then
@@ -1314,7 +1368,7 @@ jobs:
   # does.
   prune-caches:
     name: prune older cache copies
-    needs: [plan, native, native-floor, wasm, wasm-warm]
+    needs: [plan, native, native-floor, wasm, smoke, wasm-warm]
     if: ${{ !cancelled() && (needs.plan.outputs.tested != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
     runs-on: ubuntu-latest
     permissions:
@@ -1349,14 +1403,14 @@ jobs:
 
   deploy:
     name: deploy (to GitHub Pages, once the repository is public)
-    needs: [plan, native, wasm, format]
+    needs: [plan, native, wasm, smoke, format]
     if: >-
       ${{ !cancelled() &&
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.event.repository.private == false &&
       (needs.plan.outputs.tested == 'true' ||
-      (needs.native.result == 'success' && needs.wasm.result == 'success' && needs.format.result == 'success')) }}
+      (needs.native.result == 'success' && needs.wasm.result == 'success' && needs.smoke.result == 'success' && needs.format.result == 'success')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
