@@ -764,7 +764,10 @@ class (Monad m) => MonadWiki m where
   deleteAttachment = lift . deleteAttachment
 
   -- | A new 'UrlOwner', for a view to ask for attachments' addresses
-  -- under, and to let go of with 'releaseUrls'.
+  -- under, and to let go of with 'releaseUrls'. It must not wait: a view
+  -- runs it on its component's loop, in the same step that writes the
+  -- owner into its state ("Wiki.App.View.Body"'s 'Owners'). So must
+  -- 'releaseUrls'.
   newUrlOwner :: m UrlOwner
   default newUrlOwner :: (MonadTrans t, m ~ t n, MonadWiki n) => m UrlOwner
   newUrlOwner = lift newUrlOwner
