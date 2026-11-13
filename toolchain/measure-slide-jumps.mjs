@@ -206,9 +206,9 @@ async function open(page) {
     const ed = [...document.querySelectorAll(".editor-cm .cm-content")].find((c) => c.wikiEditor).wikiEditor;
     ed.replace(0, ed.text().length, text, 0, 0);
   }, text);
-  await page.waitForFunction((n) => document.querySelectorAll(".editor-slides > li").length >= n, slides + 1, { timeout: 180000 });
-  await page.waitForFunction(() => ![...document.querySelectorAll(".editor-slides .slide-row")].some((r) => r.dataset.fit === "unmeasured"), null, { timeout: 180000 });
-  await settle(page, 2500, 180000);
+  await page.waitForFunction((n) => document.querySelectorAll(".editor-slides > li").length >= n, slides + 1, { timeout: 600000 });
+  await page.waitForFunction(() => ![...document.querySelectorAll(".editor-slides .slide-row")].some((r) => r.dataset.fit === "unmeasured"), null, { timeout: 600000 });
+  await settle(page, 2500, 600000);
   return Date.now() - t0;
 }
 
@@ -237,8 +237,8 @@ async function jump(page, label, target, action) {
   }, target);
   const wall = Date.now();
   await action();
-  await page.waitForFunction((target) => !!document.querySelectorAll(".editor-slides > li")[target]?.querySelector(".cm-editor"), target, { timeout: 180000, polling: 50 });
-  await settle(page, quietMs, 180000);
+  await page.waitForFunction((target) => !!document.querySelectorAll(".editor-slides > li")[target]?.querySelector(".cm-editor"), target, { timeout: 600000, polling: 50 });
+  await settle(page, quietMs, 600000);
   const r = await page.evaluate(() => {
     clearInterval(globalThis.wpStallTimer);
     const t0 = globalThis.wpT0;
