@@ -250,6 +250,74 @@ requests = describe "its requests" $ do
     sent <- readIORef asked
     [(methodOf r, requestUrl r) | r <- sent, methodOf r /= "GET" || "api/v1/search" `T.isPrefixOf` requestUrl r] `shouldBe` []
 
+  -- #255's tenth review: a space that asks each time it is opened, in the
+  -- middle of turning its encryption off, after a write emptied the cache.
+  -- The list the page started with says it is gated, and that knowledge
+  -- outlives the cache: no plain read of its pages is sent, and nothing of
+  -- them is given. A plain space read the same way costs no request more.
+  it "routes by the list it last read once a write emptied the cache: nothing of a gated space mid-decryption, no request more for a plain one" $ do
+    let blog = fromMaybe (panic "no blog") (Map.lookup hello.space demo.spaces)
+        blogPages = [summaryOf p | p <- Map.elems demo.pages, p.space == hello.space]
+        others = [s | s <- Map.elems demo.spaces, s.id /= blog.id]
+        gated = blog {encryption = Just (KeyId "a-key"), entry = S.ConfirmEach, conversion = Just S.Decrypting}
+        server listed r =
+          if
+            | requestUrl r == "api/v1/spaces" -> ok listed
+            | methodOf r /= "GET" -> status 404 "{\"error\":\"NotFound\"}"
+            | "/pages/at/" `T.isInfixOf` requestUrl r -> ok hello
+            | "/pages" `T.isSuffixOf` requestUrl r -> ok blogPages
+            | otherwise -> status 404 "{\"error\":\"NotFound\"}"
+        plainReads rs = [requestUrl r | r <- rs, ("api/v1/spaces/" <> hello.space.text <> "/pages") `T.isPrefixOf` requestUrl r]
+    -- Gated: the plain routes are never asked, and both reads are refused.
+    (transport, asked) <- scripted (server (gated : others))
+    env <- newHttpEnvWith transport (withSpaces (gated : others) emptyCache)
+    _ <- runHttpWiki env (deletePage (PageId "nowhere"))
+    (\c -> c.spaces) <$> cacheOf env `shouldReturn` Nothing
+    runHttpWiki env (getPage hello.space (slugs "hello-world")) >>= (`shouldSatisfy` isLeft)
+    _ <- runHttpWiki env (deletePage (PageId "nowhere"))
+    runHttpWiki env (listPages hello.space) >>= (`shouldSatisfy` isLeft)
+    plainReads <$> readIORef asked `shouldReturn` []
+    -- Plain: the write, then the read, and nothing else.
+    (plainTransport, plainAsked) <- scripted (server (blog : others))
+    plainEnv <- newHttpEnvWith plainTransport (withSpaces (blog : others) emptyCache)
+    _ <- runHttpWiki plainEnv (deletePage (PageId "nowhere"))
+    runHttpWiki plainEnv (getPage hello.space (slugs "hello-world")) `shouldReturn` Right hello
+    runHttpWiki plainEnv (listPages hello.space) `shouldReturn` Right blogPages
+    map (\r -> (methodOf r, requestUrl r)) . reverse <$> readIORef plainAsked
+      `shouldReturn` [ ("DELETE", "api/v1/pages/nowhere")
+                     , ("GET", endpointUrl (\e -> e.spaces.pageAt hello.space (slugs "hello-world")))
+                     , ("GET", endpointUrl (\e -> e.spaces.listPages hello.space))
+                     ]
+
+  -- A space the list the tab knows does not name (made, or opened to the
+  -- reader, since): a plain read that succeeds is given only after the
+  -- list is read again. Gated and mid-decryption there, it gives nothing.
+  it "reads the list again before it gives a plain read of a space its list did not name, and gives nothing of one the list now shows gated" $ do
+    let blog = fromMaybe (panic "no blog") (Map.lookup hello.space demo.spaces)
+        others = [s | s <- Map.elems demo.spaces, s.id /= blog.id]
+        gated = blog {encryption = Just (KeyId "a-key"), entry = S.ConfirmEach, conversion = Just S.Decrypting}
+        pageAt = endpointUrl (\e -> e.spaces.pageAt hello.space (slugs "hello-world"))
+        server listed r =
+          if
+            | requestUrl r == "api/v1/spaces" -> ok listed
+            | requestUrl r == pageAt -> ok hello
+            | otherwise -> status 404 "{\"error\":\"NotFound\"}"
+        firstTwo env asked = do
+          result <- runHttpWiki env (getPage hello.space (slugs "hello-world"))
+          sent <- take 2 . map requestUrl . reverse <$> readIORef asked
+          pure (result, sent)
+    -- Gated now: refused, though the plain route answered.
+    (transport, asked) <- scripted (server (gated : others))
+    env <- newHttpEnvWith transport (withSpaces others emptyCache)
+    (result, sent) <- firstTwo env asked
+    result `shouldSatisfy` isLeft
+    sent `shouldBe` [pageAt, "api/v1/spaces"]
+    -- Plain now: given, for the one list read more.
+    (plainTransport, plainAsked) <- scripted (server (blog : others))
+    plainEnv <- newHttpEnvWith plainTransport (withSpaces others emptyCache)
+    firstTwo plainEnv plainAsked `shouldReturn` (Right hello, [pageAt, "api/v1/spaces"])
+    length <$> readIORef plainAsked `shouldReturn` 2
+
   it "keeps a draft with the version it started from in the body" $ do
     (env, asked) <- backend (const (ok Draft {page = hello.id, author = UserId "admin", title = "t", body = "b", base = hello.updatedAt, savedAt = hello.updatedAt}))
     _ <- runHttpWiki env (saveDraft hello.id hello.updatedAt "t" "b")

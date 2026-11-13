@@ -250,7 +250,11 @@ newHttpEnvWith :: (MonadIO n) => Transport -> Cache -> n HttpEnv
 newHttpEnvWith transport start = liftIO $ do
   cache <- newIORef start
   changes <- HS.create
-  held <- newIORef noneHeld
+  -- The list of spaces the page was rendered with is the first one the
+  -- tab knows ('heldListed'), and the spaces it read one by one the first
+  -- records ('heldRecords').
+  let records = [s | Right s <- Map.elems start.spaceAt] <> [s | Just (Right (s, _)) <- [start.homeDocument]]
+  held <- newIORef noneHeld {heldListed = start.spaces, heldRecords = Map.fromList [(s.id, s) | s <- records]}
   let change f = atomicModifyIORef' cache (\c -> (f c, ()))
       -- A page saved anywhere may be a page of an encrypted space, which the
       -- search holds decrypted ('heldFound'): those are fetched again.
@@ -640,31 +644,15 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   session =
     orThrow . fmap (fmap fromSessionInfo) $
       cachedAlways (fmap sessionInfo . (\c -> c.session)) endpoints.session (withSession . fromSessionInfo)
-  getHomeDocument = pageContent (\c -> c.homeDocument) endpoints.homeDocument (\a c -> c {Cache.homeDocument = Just a})
-  listSpaces = orThrow (cachedAlways (\c -> c.spaces) endpoints.spaces.list withSpaces)
+  getHomeDocument = do
+    result <- pageContent (\c -> c.homeDocument) endpoints.homeDocument (\a c -> c {Cache.homeDocument = Just a})
+    traverse_ (rememberRecord . fst) result
+    pure result
+  listSpaces = orThrow spacesNow
 
-  -- An encrypted space made before encrypted spaces had home pages gets
-  -- its home page here, when one of its administrators opens it, before
-  -- its pages are listed ('ensureHome'). Until it has one, its record is
-  -- not taken from the cache: another tab may have made its home page
-  -- since, which every page now hangs from, and a path read with the old
-  -- record would not be found.
-  getSpace path =
-    cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path) >>= \case
-      Right s
-        | isJust s.encryption
-        , isNothing s.homePage -> do
-            cacheOnly <- HttpWiki (asks (\env -> env.cacheOnly))
-            fresh <-
-              if cacheOnly
-                then pure (Right s)
-                else do
-                  modifyCache (\c -> c {Cache.spaceAt = Map.delete path c.spaceAt})
-                  cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path)
-            case fresh of
-              Right now | Just k <- now.encryption, isNothing now.homePage -> ensureHome path now k
-              other -> pure other
-      other -> pure other
+  -- The record read is remembered ('heldRecords'): the list of spaces
+  -- may not name the space yet.
+  getSpace path = getSpaceAt path >>= \result -> traverse_ rememberRecord result $> result
 
   -- A subspace of an encrypted space is made encrypted, with a key of its
   -- own and its home page made here ('sealedSubspace'); never by the plain
@@ -831,10 +819,12 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- words would tell the server what is looked for there, and the server
   -- finds nothing there anyway. The hits of the server and of the
   -- encrypted spaces are taken in turn, so that neither list pushes the
-  -- other out of the limit.
+  -- other out of the limit. Which spaces are encrypted is read from the
+  -- list the tab knows, cached or last read ('knownSpaces'), so that a
+  -- write between does not send the words.
   searchPages q = do
     limitedToEncrypted <- case q.space of
-      Just sid -> (\c -> isJust (c.spaces >>= encryptionIn sid)) <$> readCache
+      Just sid -> maybe False (isJust . encryptionIn sid) <$> knownSpaces
       Nothing -> pure False
     plain <-
       if limitedToEncrypted
@@ -1695,10 +1685,25 @@ data Held = Held
   -- ^ How many times this tab let go of everything for a change of user
   -- ('forgetHeldOf'): a key opened for the user before is not held after
   -- ('holdKeyIn').
+  , heldListed :: Maybe [Space]
+  -- ^ The last list of spaces this tab read, or started with
+  -- ('rememberListed'): which spaces are encrypted, which are converted,
+  -- and which ask for a passkey or the password each time they are opened
+  -- ('Wiki.Core.Space.gateOf'). A write empties the cache's list; this one
+  -- stays, so that a read after the write chooses its route, and checks
+  -- the space's gate, from what the tab knew before the write
+  -- ('knownSpaces'). Kept across a change of user: the state of a space is
+  -- the same for every user, and the shell lists the spaces again.
+  , heldRecords :: Map SpaceId Space
+  -- ^ The records of spaces read one by one ('rememberRecord'): a space
+  -- read at its path ('getSpace'), and the front page's space
+  -- ('getHomeDocument'), which the list of spaces never names. What the
+  -- tab knows of a space the list does not name ('knownSpaces'). Kept as
+  -- 'heldListed' is.
   }
 
 noneHeld :: Held
-noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldOwners = mempty, heldNextOwner = 1, heldLowest = mempty, heldReaders = mempty, heldConfirmed = mempty, heldLeases = mempty, heldClosings = mempty, heldWasSealed = mempty, heldSession = 0}
+noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldOwners = mempty, heldNextOwner = 1, heldLowest = mempty, heldReaders = mempty, heldConfirmed = mempty, heldLeases = mempty, heldClosings = mempty, heldWasSealed = mempty, heldSession = 0, heldListed = Nothing, heldRecords = mempty}
 
 -- | Where the bytes of an attachment of an encrypted page are, and what
 -- decrypts them: its space and page, the key of its page's that encrypts
@@ -1910,9 +1915,53 @@ keepingSpaces pagesOf result = do
   for_ result $ \a -> modifyHeld (\h -> h {heldSpaces = Map.union (Map.fromList (pagesOf a)) h.heldSpaces})
   pure result
 
--- | The spaces the user may see, as 'listSpaces' reads them.
+-- | The spaces the user may see, as 'listSpaces' reads them: the cached
+-- list, or the list read now and cached. Either is the latest list the
+-- tab has, and is remembered past a write ('rememberListed').
 spacesNow :: (MonadIO m) => HttpWiki m (Either WikiError [Space])
-spacesNow = cachedAlways (\c -> c.spaces) endpoints.spaces.list withSpaces
+spacesNow = do
+  result <- cachedAlways (\c -> c.spaces) endpoints.spaces.list withSpaces
+  traverse_ rememberListed result
+  pure result
+
+-- | Remember a list of spaces the tab read ('heldListed'). Every list put
+-- in the cache is remembered here ('spacesNow', 'freshSpaces'), and so is
+-- the one the page started with ('newHttpEnvWith').
+rememberListed :: (MonadIO m) => [Space] -> HttpWiki m ()
+rememberListed spaces = modifyHeld (\h -> h {heldListed = Just spaces})
+
+-- | Remember the record of a space read by itself ('heldRecords').
+rememberRecord :: (MonadIO m) => Space -> HttpWiki m ()
+rememberRecord s = modifyHeld (\h -> h {heldRecords = Map.insert s.id s h.heldRecords})
+
+-- | The spaces the tab knows: the list of spaces cached, or, when a write
+-- emptied the cache, the last one read ('heldListed'); with the records of
+-- spaces read by themselves that the list does not name ('heldRecords'),
+-- such as the front page's space. 'Nothing' before the tab has read any
+-- list or any space. What the tab decides from it (the route of a read,
+-- whether a space is behind a gate) does not depend on whether a write
+-- came between.
+knownSpaces :: (MonadIO m) => HttpWiki m (Maybe [Space])
+knownSpaces = do
+  cachedList <- (\c -> c.spaces) <$> readCache
+  h <- readHeld
+  pure $ case cachedList <|> h.heldListed of
+    Nothing | Map.null h.heldRecords -> Nothing
+    listed -> Just (withRecords (fromMaybe [] listed) h)
+
+-- | A list of spaces, with the records held of spaces it does not name
+-- ('heldRecords').
+withRecords :: [Space] -> Held -> [Space]
+withRecords spaces h = spaces <> [s | s <- Map.elems h.heldRecords, s.id `notElem` map (\x -> x.id) spaces]
+
+-- | Whether a space is behind a gate, in the list given, that the reader
+-- has not confirmed in this tab ('heldConfirmed').
+closedIn :: [Space] -> Held -> SpaceId -> Bool
+closedIn spaces h sid = maybe False (`Set.notMember` h.heldConfirmed) (Space.gateOf spaces sid)
+
+-- | Why a read of a space behind a gate not confirmed gives nothing.
+confirmFirst :: WikiError
+confirmFirst = Invalid (keyStateText ConfirmFirst)
 
 -- | The spaces the user may see, fetched now whatever the cache holds, and
 -- put in the cache. A space can be encrypted after the list was cached,
@@ -1927,6 +1976,7 @@ freshSpaces = do
     else do
       result <- send endpoints.spaces.list
       for_ result (modifyCache . withSpaces)
+      traverse_ rememberListed result
       -- A space plain now (its encryption turned off, here or elsewhere):
       -- its key and what was held of its pages are let go, and its pages
       -- are no longer taken for encrypted ones.
@@ -1943,17 +1993,70 @@ freshSpaces = do
 encryptionIn :: SpaceId -> [Space] -> Maybe KeyId
 encryptionIn sid spaces = find (\s -> s.id == sid) spaces >>= \s -> s.encryption
 
--- | A request about a space's pages: the plain one, or for an encrypted
--- space the encrypted one with the space's current key id. Which one is
--- decided from the list of spaces in the cache, which the shell always
--- holds; without one (a write emptied the cache), the plain read is tried
--- first, so that a read of a plain space costs no request more. When the
--- server says the space is not in that state ('send', 'stateChanged'), the
--- tab learns it again, and a read is sent once more by the route the
--- fresh list names ('afterStale'); a write is not ('writeOnce'). A read
--- sends no text of the page, so trying the plain read first is safe.
+-- | A read about a space's pages: the plain one, or for an encrypted space
+-- the encrypted one with the space's current key id. The route, and the
+-- space's gate, are decided from the spaces the tab knows ('knownSpaces'):
+-- the cached list, or the last one read when a write emptied the cache,
+-- and the records of spaces read by themselves. So the answer does not depend on whether a write came
+-- between.
+--
+-- * A space that list shows plain, behind no gate, is read by the plain
+--   route, and nothing more is asked: a read of a plain space costs no
+--   request more than before.
+-- * A space it shows encrypted, or behind a gate, is routed by the list as
+--   it is now: the cached one, or one read again. The encrypted route reads
+--   that list anyway, to check the gate ('closedGate'). A plain space
+--   behind a gate the reader has not confirmed is refused
+--   ('confirmFirst'): during a decryption, a page made plain already
+--   answers by the plain route, which does not ask what the space asks.
+-- * A space neither the list nor a record read names (made, or opened to
+--   the reader, since) is read by the plain route first. When that read
+--   succeeds, the list is read again before the answer is given: a space
+--   it now shows encrypted is read by its encrypted route instead, and one
+--   behind a gate not confirmed gives nothing. A refused read asks nothing
+--   more.
+-- * Before the tab has read any list or any space's record, the plain
+--   route is taken, with no check. The page the server renders carries
+--   the list, and the shell reads the list and the space's record before
+--   it reads a space's pages, and reads no page when the record cannot be
+--   read: only a caller that reads pages with neither gets here. Reading
+--   the list first would cost a request more there, for a plain space
+--   too.
+--
+-- When the server says the space is not in the state the list says
+-- ('send', 'stateChanged'), the tab learns it again, and a read is sent
+-- once more by the route the fresh list names ('afterStale'); a write is
+-- not ('writeOnce'). A read sends no text of the page, so trying the plain
+-- read first is safe.
 encryptedOr :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError a) -> (KeyId -> HttpWiki m (Either WikiError a)) -> HttpWiki m (Either WikiError a)
-encryptedOr sid plain sealed = (\c -> c.spaces >>= encryptionIn sid) <$> readCache >>= maybe plain sealed
+encryptedOr sid plain sealed =
+  knownSpaces >>= \case
+    Nothing -> plain
+    Just known -> case find (\s -> s.id == sid) known of
+      Just s
+        | isNothing s.encryption && isNothing (Space.gateOf known sid) -> plain
+        | otherwise -> spacesNow >>= either (pure . Left) routedBy
+      Nothing ->
+        plain >>= \case
+          Left e -> pure (Left e)
+          Right given ->
+            freshSpaces >>= \case
+              Left e -> pure (Left e)
+              Right spaces -> do
+                h <- readHeld
+                let now' = withRecords spaces h
+                if any (\x -> x.id == sid && isJust x.encryption) now' || closedIn now' h sid
+                  then routedBy spaces
+                  else pure (Right given)
+  where
+    -- The route the list given names, with the records held beside it,
+    -- the gate checked as they say.
+    routedBy spaces =
+      readHeld >>= \h ->
+        let now' = withRecords spaces h
+         in case encryptionIn sid now' of
+              Just k -> sealed k
+              Nothing -> if closedIn now' h sid then pure (Left confirmFirst) else plain
 
 -- | 'encryptedOr' for a page this tab read encrypted ('heldPages'): when
 -- no list of spaces is cached (a write emptied the cache), its space is
@@ -2229,6 +2332,30 @@ ensureHome path s current = do
         Right () -> do
           modifyCache (\c -> c {Cache.spaceAt = Map.delete path c.spaceAt, Cache.spaces = Nothing})
           cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path)
+
+-- | 'getSpace' over HTTP: the space at a path. An encrypted space made
+-- before encrypted spaces had home pages gets its home page here, when
+-- one of its administrators opens it, before its pages are listed
+-- ('ensureHome'). Until it has one, its record is not taken from the
+-- cache: another tab may have made its home page since, which every page
+-- now hangs from, and a path read with the old record would not be found.
+getSpaceAt :: (MonadIO m) => [Slug] -> HttpWiki m (Either WikiError Space)
+getSpaceAt path =
+  cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path) >>= \case
+    Right s
+      | isJust s.encryption
+      , isNothing s.homePage -> do
+          cacheOnly <- HttpWiki (asks (\env -> env.cacheOnly))
+          fresh <-
+            if cacheOnly
+              then pure (Right s)
+              else do
+                modifyCache (\c -> c {Cache.spaceAt = Map.delete path c.spaceAt})
+                cached (\c -> Map.lookup path c.spaceAt) (endpoints.spaces.atPath path) (withSpaceAt path)
+          case fresh of
+            Right now | Just k <- now.encryption, isNothing now.homePage -> ensureHome path now k
+            other -> pure other
+    other -> pure other
 
 -- | Whether the signed-in user may administer the space, by the session's
 -- grants and the list of spaces: the only ones who may renew its key.
@@ -2595,21 +2722,30 @@ gateClosed sid = either (const True) isJust <$> closedGate sid
 -- already answer by these routes, which would not ask what the space
 -- asks. The page's space is the one it was read in here, or else the
 -- server's location of it. Nothing more is asked of the server when no
--- gate is closed.
+-- gate is closed. The gates are those of the list of spaces as it is now
+-- (cached, or read again); when it cannot be read, those of the last list
+-- read ('knownSpaces'); with neither, or when a gate is closed and the
+-- page's location cannot be read, nothing is read by the plain route.
 plainPageRead :: (MonadIO m) => PageId -> HttpWiki m (Either WikiError a) -> HttpWiki m (Either WikiError a)
 plainPageRead pid plain =
   spacesNow >>= \case
-    Left _ -> plain
-    Right spaces -> do
+    Right spaces -> gatedBy spaces
+    Left e -> knownSpaces >>= maybe (pure (Left e)) gatedBy
+  where
+    gatedBy spaces = do
       h <- readHeld
-      let closed sid = maybe False (`Set.notMember` h.heldConfirmed) (Space.gateOf spaces sid)
+      let closed = closedIn spaces h
       if not (any (\s -> closed s.id) spaces)
         then plain
         else do
-          sid <- case Map.lookup pid h.heldSpaces of
-            Just known -> pure (Just known)
-            Nothing -> send (endpoints.pages.location pid) <&> either (const Nothing) (\l -> spaceAtPath spaces l.space)
-          if maybe False closed sid then pure (Left (Invalid (keyStateText ConfirmFirst))) else plain
+          at <- case Map.lookup pid h.heldSpaces of
+            Just known -> pure (Right (Just known))
+            Nothing -> fmap (\l -> spaceAtPath spaces l.space) <$> send (endpoints.pages.location pid)
+          case at of
+            Left e -> pure (Left e)
+            Right sid
+              | maybe False closed sid -> pure (Left confirmFirst)
+              | otherwise -> plain
 
 -- | The space at a path of slugs from the top, in a list of spaces.
 spaceAtPath :: [Space] -> [Slug] -> Maybe SpaceId
@@ -3024,14 +3160,14 @@ sealedComment sid pid tid editing body =
 -- at the first search that needs them, kept in this page's memory until
 -- they may have changed ('heldFound'), and matched as the demo's search
 -- matches ('searchPlain'). The
--- spaces searched are those of the list of spaces the cache holds (the
--- shell always holds it); a space whose key is not held here is not
--- searched. This reads every page of a
--- space at once, which suits small spaces, the kind encrypted spaces are
--- meant for.
+-- spaces searched are those of the list of spaces the tab knows, cached
+-- or last read ('knownSpaces'), each through its gate ('foundIn'); a
+-- space whose key is not held here is not searched. This reads every page
+-- of a space at once, which suits small spaces, the kind encrypted spaces
+-- are meant for.
 sealedSearch :: (MonadIO m) => SearchQuery -> HttpWiki m [SearchHit]
 sealedSearch q =
-  (\c -> c.spaces) <$> readCache >>= \case
+  knownSpaces >>= \case
     Nothing -> pure []
     Just spaces -> do
       let byId = Map.fromList [(s.id, s) | s <- spaces]

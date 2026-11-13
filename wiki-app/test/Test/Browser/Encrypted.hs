@@ -75,7 +75,8 @@ import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), keyStateText)
-import Wiki.App.Backend.Http (HeldNow (..), HttpEnv, HttpWiki, PageRead (..), browserTransport, heldNow, newHttpEnv, ownersHeld, runHttpWiki)
+import Wiki.App.Backend.Http (HeldNow (..), HttpEnv, HttpWiki, PageRead (..), browserTransport, cacheOf, heldNow, newHttpEnv, ownersHeld, runHttpWiki)
+import Wiki.App.Backend.Http.Cache (Cache (..))
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State qualified as M
@@ -1697,8 +1698,11 @@ spec m = do
   -- the middle of turning its encryption off, shows nothing of a page made
   -- plain already before the reader confirms, by any route: the page's
   -- own, its permanent link, the list, its history and comments, the
-  -- search. Confirmed, the reader reads it, plain.
-  it "shows nothing of a page a decryption made plain while the space's gate is not confirmed, by any route" $ runPage $ do
+  -- search. The same holds with the tab's cache emptied by a write, which
+  -- empties the cached list of spaces with everything else: the gate is
+  -- decided from what the tab last knew of the space, not from the cache.
+  -- Confirmed, the reader reads it, plain.
+  it "shows nothing of a page a decryption made plain while the space's gate is not confirmed, by any route, with the list of spaces cached or emptied by a write" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
     made <- ok =<< run env (createPage secret.id Nothing "Sealed title" "Sealed text.")
@@ -1712,17 +1716,36 @@ spec m = do
         shown = \case
           Right x -> "Plain" `T.isInfixOf` show x
           Left _ -> False
-    -- The page's route, and its permanent link: where it is, then there.
-    (shown <$> run tab (getPage secret.id [made.slug])) `shouldReturn` False
-    at <- ok =<< run tab (pageLocation made.id)
-    (shown <$> run tab (getPage secret.id at.page)) `shouldReturn` False
-    -- The list, its history and its comments.
-    (shown <$> run tab (listPages secret.id)) `shouldReturn` False
-    (shown <$> run tab (listVersions made.id (VersionsQuery Nothing 50))) `shouldReturn` False
-    run tab (listThreads made.id) >>= (`shouldSatisfy` isLeft)
-    -- The search.
-    hits <- run tab (searchPages (searchQuery "Plain"))
-    [h | h <- hits, h.page == made.id] `shouldBe` []
+        -- A write that fails, of a page that is not there: it empties the
+        -- tab's cache all the same, the list of spaces with it.
+        emptied = void (run tab (deletePage (PageId "nowhere")))
+        -- Each read below, with 'before' run first: some of them read the
+        -- list of spaces again into the cache.
+        nothingShown before = do
+          -- The page's route, and its permanent link: where it is, then
+          -- there.
+          before
+          (shown <$> run tab (getPage secret.id [made.slug])) `shouldReturn` False
+          before
+          at <- ok =<< run tab (pageLocation made.id)
+          before
+          (shown <$> run tab (getPage secret.id at.page)) `shouldReturn` False
+          -- The list, its history and its comments.
+          before
+          (shown <$> run tab (listPages secret.id)) `shouldReturn` False
+          before
+          (shown <$> run tab (listVersions made.id (VersionsQuery Nothing 50))) `shouldReturn` False
+          before
+          run tab (listThreads made.id) >>= (`shouldSatisfy` isLeft)
+          -- The search.
+          before
+          hits <- run tab (searchPages (searchQuery "Plain"))
+          [h | h <- hits, h.page == made.id] `shouldBe` []
+    -- The list of spaces cached, as the shell holds it.
+    nothingShown pass
+    (\c -> isJust c.spaces) <$> unsafeIOToPageM (cacheOf tab) `shouldReturn` True
+    -- The cache emptied before each read.
+    nothingShown emptied
     -- Confirmed: the page made plain reads plain.
     run tab (confirmedEntry secret.id)
     read' <- ok =<< run tab (getPage secret.id [made.slug])
