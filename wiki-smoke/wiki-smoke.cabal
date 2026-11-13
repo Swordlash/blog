@@ -189,3 +189,51 @@ test-suite wiki-smoke-adoption
         base,
         haskell-halogen-playwright,
         wiki-smoke
+
+-- The server's smoke test: the server's build of the page served by a real
+-- wiki-server, on SQLite or on PostgreSQL (WIKI_SMOKE_POSTGRES=1), driven
+-- end to end, with the encrypted spaces' walk and the canary (Main's
+-- haddock says what it checks). npm run smoke-test runs it.
+test-suite wiki-smoke-server
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   server
+  main-is:          Main.hs
+  other-modules:
+      Server.Canary
+      Server.Encrypted
+      Server.Health
+      Server.Migrate
+      Server.Offline
+      Server.Provider
+      Server.Site
+      Server.Svg
+      Server.Walk
+  ghc-options:      -threaded
+  if arch(wasm32) || arch(javascript)
+    buildable: False
+  else
+    build-depends:
+        base,
+        aeson,
+        base64-bytestring,
+        bytestring,
+        case-insensitive,
+        containers,
+        crypton,
+        directory,
+        filepath,
+        hspec,
+        http-client,
+        http-types,
+        network,
+        ram,
+        stm,
+        text,
+        time,
+        typed-process,
+        wai,
+        warp,
+        zip-archive,
+        haskell-halogen-playwright,
+        wiki-smoke
