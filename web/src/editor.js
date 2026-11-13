@@ -801,9 +801,9 @@ const labelKey = (label) => label.trim().replace(/\s+/g, " ").toLowerCase();
 
 // The labels the document defines ([label]: destination), found where
 // blocks are: a paragraph, a heading or code holds none.
-const definedLabels = (state) => {
+const definedLabels = (state, tree = syntaxTree(state)) => {
   const labels = new Set();
-  syntaxTree(state).iterate({
+  tree.iterate({
     enter: (node) => {
       if (node.name === "LinkReference") {
         const label = node.node.getChild("LinkLabel");
@@ -834,11 +834,14 @@ const isLink = (state, node, labels) => {
 };
 
 // Whether a mention may be completed at a position: not inside any node
-// of notMentions, nor inside a link or an embed.
-const mentionCounts = (state, pos) => {
+// of notMentions, nor inside a link or an embed. `at` is where to ask
+// (wholeAt): the whole document, whose definitions say which [text] is a
+// link.
+const mentionCounts = (at) => {
+  const { state, pos, tree } = at;
   let defined = null;
-  const labels = () => (defined ??= definedLabels(state));
-  for (let node = syntaxTree(state).resolveInner(pos, -1); node; node = node.parent) {
+  const labels = () => (defined ??= definedLabels(state, tree));
+  for (let node = tree.resolveInner(pos, -1); node; node = node.parent) {
     if (notMentions.has(node.name)) return false;
     if ((node.name === "Link" || node.name === "Image") && isLink(state, node, labels)) return false;
     if (node.type.isTop) break;
@@ -904,9 +907,30 @@ const asker = (host, eventName) => {
 const unlessAborted = (context, asked) =>
   Promise.race([asked, new Promise((resolve) => context.addEventListener("abort", () => resolve(null)))]);
 
+// Where a completion's context is read, {state, pos, tree}: the view's own
+// state, or for a row of the slide mode (attachRow) the master's, at the
+// row's place in the whole text. A row's text alone does not say whether
+// [text] is a link (its label may be defined on another slide), nor
+// whether the row is inside a fence a slide above left open. The master's
+// tree is parsed to the end first: the master is hidden, and parses only
+// as it is idle. When the master does not hold the row's text (a moment
+// between the two), the row's own state is read.
+const wholeAt = (host, context) => {
+  const own = { state: context.state, pos: context.pos, tree: syntaxTree(context.state) };
+  const editor = host.wikiEditor;
+  const { view } = context;
+  if (!editor || !view || view === editor.view) return own;
+  let key;
+  for (const [k, v] of host.wikiRows ?? []) if (v === view) key = k;
+  const master = editor.view.state;
+  const range = key === undefined ? null : rangeOf(master, key);
+  if (range === null || master.sliceDoc(range.from, range.to) !== context.state.doc.toString()) return own;
+  return { state: master, pos: range.from + context.pos, tree: ensureSyntaxTree(master, master.doc.length, 200) ?? syntaxTree(master) };
+};
+
 // The completion source of mentions, asking the component through
-// `people`.
-const mentionSource = (people) => {
+// `people`; `whole` says where the context is read (wholeAt).
+const mentionSource = (people, whole) => {
   // "@login", and a space unless one follows already.
   const choose = (login) => (view, completion, from, to) => {
     const next = view.state.sliceDoc(to, to + 1);
@@ -917,7 +941,7 @@ const mentionSource = (people) => {
     const typed = context.matchBefore(typedMention);
     if (typed === null) return null;
     if (wordBefore.test(context.state.sliceDoc(Math.max(0, typed.from - 2), typed.from))) return null;
-    if (!mentionCounts(context.state, context.pos)) return null;
+    if (!mentionCounts(whole(context))) return null;
     const found = await unlessAborted(context, people.ask(typed.text.slice(1)));
     if (found === null || found.length === 0) return null;
     return {
@@ -965,10 +989,12 @@ const enterAfter = 2;
 
 // Whether "-:" on this line may be a table's: the line before it or the
 // rest of this one has a "|", or the tree has a table here.
-const nearTable = (state, line, pos) => {
+const nearTable = (at) => {
+  const { state, pos, tree } = at;
+  const line = state.doc.lineAt(pos);
   if (state.sliceDoc(pos, line.to).includes("|")) return true;
   if (line.number > 1 && state.doc.line(line.number - 1).text.includes("|")) return true;
-  for (let node = syntaxTree(state).resolveInner(pos, -1); node; node = node.parent) {
+  for (let node = tree.resolveInner(pos, -1); node; node = node.parent) {
     if (node.name === "Table") return true;
     if (node.type.isTop) break;
   }
@@ -977,13 +1003,14 @@ const nearTable = (state, line, pos) => {
 
 // What the emoji's list completes before `pos`, or null: where it starts
 // (the colon, or the "-" of "-:"), the letters typed of the name, and
-// whether it is the "-:" of a bullet.
-const emojiTyped = (state, pos) => {
+// whether it is the "-:" of a bullet. Whether "-:" is near a table is
+// asked where `at` says (wholeAt).
+const emojiTyped = (state, pos, at = { state, pos, tree: syntaxTree(state) }) => {
   const line = state.doc.lineAt(pos);
   const before = state.sliceDoc(line.from, pos);
   const bullet = typedBullet.exec(before);
   if (bullet !== null) {
-    return nearTable(state, line, pos) ? null : { from: line.from + bullet[1].length, letters: bullet[2], bullet: true };
+    return nearTable(at) ? null : { from: line.from + bullet[1].length, letters: bullet[2], bullet: true };
   }
   const colon = typedEmoji.exec(before);
   if (colon === null || (colon.index > 0 && !/\s/.test(before[colon.index - 1]))) return null;
@@ -993,8 +1020,9 @@ const emojiTyped = (state, pos) => {
 // Whether the list shown is the emoji's: its entries carry their emoji.
 const emojiShown = (state) => completionStatus(state) === "active" && currentCompletions(state)[0]?.emoji !== undefined;
 
-// The completion source of emoji, asking the component through `names`.
-const emojiSource = (names) => {
+// The completion source of emoji, asking the component through `names`;
+// `whole` says where the context is read (wholeAt).
+const emojiSource = (names, whole) => {
   // ":name:", or for "-:" the item "- :name: ", with no second space where
   // one follows already.
   const choose = (name, bullet) => (view, completion, from, to) => {
@@ -1003,8 +1031,9 @@ const emojiSource = (names) => {
     view.dispatch({ ...insertCompletionText(view.state, text, from, to), annotations: pickedCompletion.of(completion) });
   };
   return async (context) => {
-    const typed = emojiTyped(context.state, context.pos);
-    if (typed === null || !mentionCounts(context.state, context.pos)) return null;
+    const at = whole(context);
+    const typed = emojiTyped(context.state, context.pos, at);
+    if (typed === null || !mentionCounts(at)) return null;
     const found = await unlessAborted(context, names.ask(typed.letters));
     if (found === null || found.length === 0) return null;
     return {
@@ -1041,6 +1070,7 @@ const masterQuiet = (host, source) => (context) =>
   context.view !== undefined && context.view === host.wikiEditor?.view && host.wikiEditor.slidesShown() ? null : source(context);
 
 const completions = (host) => {
+  const whole = (context) => wholeAt(host, context);
   const people = asker(host, "wiki-mention");
   const names = asker(host, "wiki-emoji");
   // Whether the reader moved in the emoji's list with the keys (an arrow,
@@ -1108,7 +1138,7 @@ const completions = (host) => {
   return {
     extension: [
       autocompletion({
-        override: [mentionSource(people), emojiSource(names)].map((source) => masterQuiet(host, source)),
+        override: [mentionSource(people, whole), emojiSource(names, whole)].map((source) => masterQuiet(host, source)),
         icons: false,
         defaultKeymap: false,
         addToOptions: [emojiOfOption],

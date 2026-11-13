@@ -899,6 +899,53 @@ spec m = do
     mention `shouldSatisfy` (\line -> T.length line > 3 && "@" `T.isPrefixOf` line && " " `T.isSuffixOf` line)
     openTitles ui `shouldReturn` ["Deck", "Two"]
 
+  it "opens no mention's list in a link whose label another slide defines, in a row as in the raw Markdown" $ runPage $ do
+    let linked = T.intercalate "\n" ["# Deck", "", "## One", "", "First.", "", "[ref]: https://example.com", "", "## Two", "", "[x][ref] and [y][ref] here."]
+    (ui, _) <- openDeck linked
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["One", "Two"]
+    -- In the row: after the bracket of [x][ref].
+    rowSelect 2 9 9
+    openRowContent ui >>= (`typeText` "@ad")
+    unsafeIOToPageM (threadDelay 1_000_000)
+    length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
+    press "Enter"
+    eventually $ markdown ui `shouldReturn` T.replace "[x]" "[@ad\nx]" linked
+    -- In the raw Markdown: after the bracket of [y][ref].
+    modeButton ui "Raw" >>= click
+    editorText ui >>= shouldBeVisible
+    typedRow <- markdown ui
+    let at = T.length (fst (T.breakOn "[y]" typedRow)) + 1
+    selectText ui at at
+    editorText ui >>= (`typeText` "@ad")
+    unsafeIOToPageM (threadDelay 1_000_000)
+    length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
+    press "Enter"
+    eventually $ markdown ui `shouldReturn` T.replace "[y]" "[@ad\ny]" typedRow
+    -- A list does open there where no slide defines the label.
+    modeButton ui "Slides" >>= click
+    eventually $ openTitles ui `shouldReturn` ["One", "Two"]
+    rowSelect 2 0 0
+    rowText 2 >>= \t -> rowSelect 2 (T.length t) (T.length t)
+    openRowContent ui >>= (`typeText` " [@ad][nowhere]")
+    rowText 2 >>= \t -> rowSelect 2 (T.length t - 10) (T.length t - 10)
+    unsafeIOToPageM (threadDelay 300_000)
+    openRowContent ui >>= (`typeText` "m")
+    eventually $ length <$> findAll ui ".editor-slides .cm-tooltip-autocomplete" `shouldReturn` 1
+
+  it "opens no mention's list in a row that a fence left open above takes into its code" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    rowSelect 0 14 14
+    openRowContent ui >>= (`typeText` "\n\n```")
+    eventually $ (findAll ui ".editor-slides .slide-row-part" >>= traverse textContent) >>= (`shouldSatisfy` (not . null))
+    end <- T.length <$> rowText 2
+    rowSelect 2 end end
+    openRowContent ui >>= (`typeText` " @ad")
+    unsafeIOToPageM (threadDelay 1_000_000)
+    length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
+
   it "renders the deck whole for one slide's preview: a macro of an earlier slide, a footnote's number, the same slide in every view" $ runPage $ do
     (ui, wiki) <- openDeck macros
     find ui ".editor-side-by-side" >>= click
