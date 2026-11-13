@@ -40,6 +40,7 @@ import Maker.Deploy.Firewall qualified as Firewall
 import Maker.Deploy.Plan
 import Maker.Deploy.Prepare (pgCompose, pgWrapper)
 import Maker.Deploy.Rehearse (rehearse)
+import Maker.Deploy.Sqlite (checkServerSqlite, environmentLines, unitEnvironment)
 import Maker.Deploy.State (renderState, stateGet, stateSet, writeState)
 import Maker.Deploy.Tailscale qualified as Tailscale
 import Maker.Deploy.Unit
@@ -75,6 +76,15 @@ apply p = do
       databaseArgs
         | db == "postgres" = ["--database", dbUrl dbPort, "--database-password-file", pgDir </> "db-password"]
         | otherwise = ["--sqlite", dir </> "data" </> "wiki.sqlite"]
+
+  -- The variables the unit sets: the deploying shell's LD_LIBRARY_PATH,
+  -- and the toolchain's TeX Live on PATH ("Maker.Deploy.Sqlite"). The new
+  -- server is first started with them, in the service's environment, to
+  -- say which SQLite library it loads: a program that cannot start there,
+  -- or that refuses the library of a wiki in SQLite, stops the deploy
+  -- here, before the rehearsal and before anything changes.
+  unitEnv <- if server then unitEnvironment p else pure []
+  when server (checkServerSqlite p unitEnv)
 
   -- The upgrade is rehearsed on a copy of the wiki before anything of the
   -- running deployment changes, which keeps running meanwhile: a failed
@@ -281,7 +291,6 @@ apply p = do
     migrateAndCheck (dir </> "bin" </> "wiki-server") placeArgs >>= mapM_ rollBack
 
   let listen = if ':' `elem` bind then "[" <> bind <> "]:" <> port else bind <> ":" <> port
-  ldLibraryPath <- fromMaybe "" <$> lookupEnv "LD_LIBRARY_PATH"
   (description, execStart', extra) <-
     if server
       then do
@@ -310,21 +319,16 @@ apply p = do
             whatsNew = if v "whats_new" == "no" then " --no-whats-new" else ""
         -- A systemd user unit does not inherit the shell's environment, so
         -- a server linked against a library in a directory of one's own is
-        -- given LD_LIBRARY_PATH in its unit.
-        libraryPath <-
-          if null ldLibraryPath
-            then pure []
-            else do
-              when ('\n' `elem` ldLibraryPath) (die "LD_LIBRARY_PATH holds a newline, which a unit file cannot hold")
-              say ("the unit runs wiki-server with LD_LIBRARY_PATH=" <> ldLibraryPath <> ", as this shell has it: a systemd unit does not inherit the shell's environment")
-              pure ["Environment=\"LD_LIBRARY_PATH=" <> environmentValue ldLibraryPath <> "\""]
-        -- The toolchain's TeX Live, when the TeX step chose it, first on the
-        -- unit's PATH, where the server looks for xelatex.
-        let texPath = ["Environment=\"PATH=" <> environmentValue (v "tex_bin" <> ":" <> unitBasePath) <> "\"" | has p "tex_bin"]
+        -- given LD_LIBRARY_PATH in its unit; and the toolchain's TeX Live,
+        -- when the TeX step chose it, goes first on the unit's PATH, where
+        -- the server looks for xelatex. Both are in unitEnv, the list the
+        -- check of the server's SQLite ran with.
+        forM_ (lookup "LD_LIBRARY_PATH" unitEnv) $ \libraryPath ->
+          say ("the unit runs wiki-server with LD_LIBRARY_PATH=" <> libraryPath <> ", as this shell has it: a systemd unit does not inherit the shell's environment")
         pure
           ( "Wiki server (" <> name <> ") from " <> dir <> " on " <> bind <> ":" <> port
           , base <> tls <> database <> pdf <> whatsNew
-          , ["UMask=0077", "TimeoutStopSec=30"] <> libraryPath <> texPath
+          , ["UMask=0077", "TimeoutStopSec=30"] <> environmentLines unitEnv
           )
       else
         pure
@@ -575,11 +579,6 @@ apply p = do
           , "Status:  sh toolchain/deploy-local.sh --status --name " <> name <> prefixArg
           , "Stop:    sh toolchain/undeploy-local.sh --name " <> name <> prefixArg <> "   (--purge also deletes " <> dir <> ")"
           ]
-
--- | The PATH of a unit that uses the toolchain's TeX Live, after its bin
--- directory: the system's own programs.
-unitBasePath :: String
-unitBasePath = "/usr/local/bin:/usr/bin:/bin"
 
 -- | Node's check that an address answers 200.
 nodeFetch :: String

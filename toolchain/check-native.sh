@@ -43,9 +43,19 @@
 #     finds the system's zlib through pkg-config (zlib.pc);
 #   - SQLite, for direct-sqlite, which cabal.project builds with its flag
 #     systemlib: it compiles against the system's sqlite3.h and links
-#     -lsqlite3, so the check builds a one-line program that way through the
-#     compiler, and refuses a header older than SQLite 3.32.0, the oldest
-#     the server runs on;
+#     -lsqlite3, so the check builds a small program that way through the
+#     compiler and runs it. The program asks the library it loads what
+#     wiki-server asks it, and the check refuses what wiki-server refuses:
+#     a version older than toolchain/pins.env's SQLITE_MIN_VERSION
+#     (3.32.0), or a library built with THREADSAFE=0, OMIT_WAL,
+#     OMIT_FOREIGN_KEY or a MAX_VARIABLE_NUMBER below
+#     SQLITE_MIN_VARIABLE_NUMBER (32766). The line names the library's
+#     version and the file it was loaded from, and sqlite3.h's version when
+#     it differs. A program that builds and does not run (the library not
+#     found at run time) has a line of its own. This is the library this
+#     shell's loader finds: the service runs with its unit's environment,
+#     and the deploy asks the built wiki-server itself in that environment
+#     (wiki-server sqlite), before it stops the running server;
 #   - terminfo, for the configuration wizard only (--with-wizard): vty, the
 #     terminal library under brick, links GHC's terminfo package, which
 #     links -ltinfo (Debian's libncurses-dev, RHEL's ncurses-devel). The
@@ -94,7 +104,12 @@ for option do
       usage
       printf '\nChecks the commands and C libraries the native build of wiki-server needs\n'
       printf '(cc, make, curl, git, pkg-config, GMP, libpq, zlib, SQLite), one line each, and exits 1\n'
-      printf 'when one is missing. It installs nothing. libsodium is not needed from the system:\n'
+      printf 'when one is missing. It installs nothing. SQLite is checked by running a program\n'
+      printf 'built with sqlite3.h and -lsqlite3: the library it loads, not only the header, must\n'
+      printf 'be one wiki-server runs on (toolchain/pins.env: SQLITE_MIN_VERSION and the rest).\n'
+      printf "That is the library this shell's loader finds; the service sees its unit's\n"
+      printf "environment, not this shell's, and the deploy checks the built wiki-server there\n"
+      printf 'before it stops the running one. libsodium is not needed from the system:\n'
       printf 'the bootstrap builds it from source (toolchain/libsodium.sh). It also says whether the\n'
       printf 'xelatex on PATH typesets the PDF exports (toolchain/check-tex.sh), which is not\n'
       printf 'needed for the build and never fails the check. --without-postgres\n'
@@ -225,21 +240,116 @@ else
 fi
 
 # SQLite, as direct-sqlite links it with its flag systemlib (cabal.project):
-# a program with sqlite3.h and -lsqlite3, through the C compiler, then the
-# header's version against the oldest the server runs on, 3.32.0
-# (wiki-server/src/Wiki/Server/Storage/SqliteLibrary.hs says why).
+# a program with sqlite3.h and -lsqlite3, through the C compiler, which is
+# then run. The program prints what the server reads of the library it
+# loads: its version, whether it is thread-safe, whether it was built
+# without the write-ahead log or foreign keys, and its limit of parameters
+# in one statement (sqlite3_limit on a database in memory, which starts at
+# the value the library was built with). It also prints the header's
+# version, and the file the library was loaded from: dladdr on the
+# library's own version string, so that no ldd is needed. The floors are
+# toolchain/pins.env's (SQLITE_MIN_VERSION, SQLITE_MIN_VARIABLE_NUMBER):
+# the numbers wiki-server/src/Wiki/Server/Storage/SqliteLibrary.hs keeps,
+# and says why. A header and a library of different versions are said even
+# when both are new enough: the build and the run then find SQLite in
+# different places.
+sqlite_min=$(sed -n 's/^SQLITE_MIN_VERSION=//p' "$(dirname "$0")/pins.env" 2>/dev/null | head -n 1 || true)
+sqlite_variables=$(sed -n 's/^SQLITE_MIN_VARIABLE_NUMBER=//p' "$(dirname "$0")/pins.env" 2>/dev/null | head -n 1 || true)
+# A version's number as SQLITE_VERSION_NUMBER writes it (3.32.0 is
+# 3032000); it fails for text that is not three numbers with dots between.
+version_number() {
+  case $1 in '' | *[!0-9.]* | *..* | .* | *.) return 1 ;; esac
+  old_ifs=$IFS
+  IFS=.
+  # shellcheck disable=SC2086 # the version is split at its dots here.
+  set -- $1
+  IFS=$old_ifs
+  [ $# = 3 ] || return 1
+  printf '%s\n' "$(($1 * 1000000 + $2 * 1000 + $3))"
+}
+# Whether a text is a number of digits only.
+digits() { case $1 in '' | *[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 if ! has cc; then
   lack SQLite libsqlite3-dev sqlite-devel "not checked: needs cc"
+elif ! sqlite_min_number=$(version_number "$sqlite_min") || ! digits "$sqlite_variables"; then
+  lack SQLite libsqlite3-dev sqlite-devel "not checked: toolchain/pins.env names no SQLITE_MIN_VERSION or SQLITE_MIN_VARIABLE_NUMBER"
 else
   probe=$(mktemp -d)
   trap 'rm -rf "$probe"' EXIT
-  printf '#include <sqlite3.h>\nint main(void) { return sqlite3_libversion_number() > 0 ? 0 : 1; }\n' >"$probe/sqlite.c"
-  if ! cc -o "$probe/sqlite" "$probe/sqlite.c" -lsqlite3 >"$probe/cc.log" 2>&1; then
+  cat >"$probe/sqlite.c" <<'EOF'
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <stdio.h>
+#include <sqlite3.h>
+int main(void) {
+  Dl_info info;
+  sqlite3 *db = 0;
+  int variables = -1;
+  const char *version = sqlite3_libversion();
+  if (sqlite3_open(":memory:", &db) == SQLITE_OK) variables = sqlite3_limit(db, SQLITE_LIMIT_VARIABLE_NUMBER, -1);
+  sqlite3_close(db);
+  printf("header %s\n", SQLITE_VERSION);
+  printf("version %s\n", version);
+  printf("number %d\n", sqlite3_libversion_number());
+  printf("file %s\n", dladdr((const void *)version, &info) && info.dli_fname ? info.dli_fname : "");
+  printf("threadsafe %d\n", sqlite3_threadsafe());
+  printf("omit_wal %d\n", sqlite3_compileoption_used("OMIT_WAL"));
+  printf("omit_foreign_key %d\n", sqlite3_compileoption_used("OMIT_FOREIGN_KEY"));
+  printf("max_variable_number %d\n", variables);
+  return 0;
+}
+EOF
+  if ! cc -o "$probe/sqlite" "$probe/sqlite.c" -lsqlite3 -ldl >"$probe/cc.log" 2>&1; then
     lack SQLite libsqlite3-dev sqlite-devel "cc cannot build a program with sqlite3.h and -lsqlite3"
-  elif ! printf '#include <sqlite3.h>\n#if SQLITE_VERSION_NUMBER < 3032000\n#error older than 3.32.0\n#endif\n' | cc -E -x c - >/dev/null 2>&1; then
-    lack SQLite libsqlite3-dev sqlite-devel "sqlite3.h is older than SQLite 3.32.0, the oldest wiki-server runs on"
   else
-    report SQLite ok "sqlite3.h and -lsqlite3, through cc (3.32.0 or later)"
+    sqlite_status=0
+    "$probe/sqlite" >"$probe/out" 2>"$probe/err" || sqlite_status=$?
+    field() { sed -n "s/^$1 //p" "$probe/out" | head -n 1; }
+    sqlite_number=$(field number)
+    if [ "$sqlite_status" != 0 ] || ! digits "$sqlite_number"; then
+      # The loader's own words, without the probe's path in front.
+      why=$(sed -n '1p' "$probe/err")
+      why=${why#"$probe/sqlite: "}
+      [ -n "$why" ] || why="it exited $sqlite_status"
+      if [ "$sqlite_status" = 126 ]; then
+        # The program could not be executed at all (a temporary directory
+        # mounted noexec): nothing is known of the library, and the deploy
+        # still asks the built wiki-server before the swap.
+        report SQLite ok "sqlite3.h and -lsqlite3 build a program, which cannot be run here ($why): the library it would load is not checked"
+      else
+        if [ "$sqlite_status" = 127 ]; then
+          why="$why; the loader does not find at run time the library the build linked: give its directory in LD_LIBRARY_PATH, or put it on the loader's path (/etc/ld.so.conf.d, then ldconfig)"
+        fi
+        lack SQLite libsqlite3-dev sqlite-devel "a program built with sqlite3.h and -lsqlite3 does not run: $why"
+      fi
+    else
+      sqlite_header=$(field header)
+      sqlite_version=$(field version)
+      sqlite_file=$(field file)
+      [ -n "$sqlite_file" ] || sqlite_file='a file dladdr does not name'
+      sqlite_max=$(field max_variable_number)
+      if [ "$sqlite_header" = "$sqlite_version" ]; then
+        seen="sqlite3.h and the library a program built with -lsqlite3 loads are $sqlite_version ($sqlite_file)"
+      else
+        seen="sqlite3.h is $sqlite_header and the library a program built with -lsqlite3 loads is $sqlite_version ($sqlite_file)"
+      fi
+      refused=', which wiki-server refuses'
+      if [ "$sqlite_number" -lt "$sqlite_min_number" ]; then
+        lack SQLite libsqlite3-dev sqlite-devel "$seen: wiki-server needs SQLite $sqlite_min or later"
+      elif [ "$(field threadsafe)" = 0 ]; then
+        lack SQLite libsqlite3-dev sqlite-devel "$seen, built with THREADSAFE=0$refused"
+      elif [ "$(field omit_wal)" = 1 ]; then
+        lack SQLite libsqlite3-dev sqlite-devel "$seen, built with OMIT_WAL$refused"
+      elif [ "$(field omit_foreign_key)" = 1 ]; then
+        lack SQLite libsqlite3-dev sqlite-devel "$seen, built with OMIT_FOREIGN_KEY$refused"
+      elif digits "$sqlite_max" && [ "$sqlite_max" -lt "$sqlite_variables" ]; then
+        lack SQLite libsqlite3-dev sqlite-devel "$seen, built with MAX_VARIABLE_NUMBER=$sqlite_max$refused (it needs $sqlite_variables or more)"
+      elif [ "$sqlite_header" = "$sqlite_version" ]; then
+        report SQLite ok "$seen; $sqlite_min or later, built as wiki-server needs"
+      else
+        report SQLite ok "$seen; $sqlite_min or later, built as wiki-server needs, but the two differ: the build and the run find SQLite in different places"
+      fi
+    fi
   fi
   rm -rf "$probe"
   trap - EXIT

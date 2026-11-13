@@ -33,7 +33,9 @@
 #
 #   1. Build: with --server, first toolchain/check-native.sh, which checks
 #      the commands and C libraries wiki-server's native build needs (GMP,
-#      libpq, zlib, SQLite; libsodium the bootstrap builds from source, and links
+#      libpq, zlib, SQLite: for SQLite, the library a program built with
+#      sqlite3.h and -lsqlite3 loads in this shell, not only the header,
+#      against the floors of toolchain/pins.env; libsodium the bootstrap builds from source, and links
 #      into wiki-server) before anything is downloaded or built, and
 #      names their Debian and RHEL packages; a library built elsewhere is
 #      found through LIBRARY_PATH, C_INCLUDE_PATH, CPATH or PKG_CONFIG_PATH,
@@ -125,7 +127,20 @@
 #      PostgreSQL, whole (accounts, settings and all) with --move-to-postgres
 #      below. --fresh (or "yes" at the question, on a terminal) goes on,
 #      moving the file aside into data/replaced/<time>/, never deleting it.
-#   2. Install: stop the running service; with --server, back its database up
+#   2. Install: with --server, first, before the upgrade's rehearsal and so
+#      with --no-rehearsal too, run the new wiki-server's `wiki-server sqlite`
+#      in the service's environment (the systemd user manager's and the
+#      unit's Environment= lines, LD_LIBRARY_PATH among them, not this
+#      shell's), which says which SQLite library it loads. The check of step
+#      1 saw the library this shell's loader finds; this one sees the
+#      service's. A server that cannot start there (no libsqlite3 where the
+#      service's loader looks) stops the deploy, and so does one that
+#      refuses its library for a wiki in SQLite (for one in PostgreSQL,
+#      which opens no SQLite database, that is a warning), with the running
+#      wiki untouched: the library must be on the loader's own path
+#      (/etc/ld.so.conf.d, then ldconfig), or in a directory this shell's
+#      LD_LIBRARY_PATH names, which the unit is given.
+#      Then stop the running service; with --server, back its database up
 #      (`wiki-server backup`, into data/backups/: VACUUM INTO on SQLite,
 #      pg_dump on PostgreSQL, the container's own) with the new binary, and if
 #      that fails start the old service again and stop. The new server then
@@ -982,11 +997,56 @@ linger_report() {
 # (maker/src/Maker/Deploy/Tex.hs); --status keeps the check below.
 UNIT_BASE_PATH=/usr/local/bin:/usr/bin:/bin
 
+# The value the user's systemd manager gives a variable, from `systemctl
+# --user show-environment`, with systemd's quoting undone: a value with
+# whitespace, a control character or a character the shell treats
+# specially is printed $'...', with C escapes inside (a backslash and a
+# quote after a backslash, \n, \t, and a backslash and three octal digits
+# for another control byte; maker/src/Maker/Deploy/Manager.hs reads it the
+# same way). It fails, printing nothing, for a variable the manager does
+# not have, or whose line does not read.
+manager_value() {
+  systemctl --user show-environment 2>/dev/null | LC_ALL=C awk -v name="$1" '
+    index($0, name "=") == 1 { line = substr($0, length(name) + 2); found = 1 }
+    END {
+      if (!found) exit 1
+      if (substr(line, 1, 2) != "$\047") { print line; exit 0 }
+      out = ""; i = 3; n = length(line)
+      while (i <= n) {
+        c = substr(line, i, 1)
+        if (c == "\047") { if (i != n) exit 1; print out; exit 0 }
+        if (c != "\\") { out = out c; i++; continue }
+        if (++i > n) exit 1
+        c = substr(line, i, 1)
+        if (c ~ /[0-7]/) {
+          v = 0
+          for (k = 0; k < 3 && i <= n && substr(line, i, 1) ~ /[0-7]/; k++) { v = v * 8 + substr(line, i, 1); i++ }
+          if (v == 0 || v > 255) exit 1
+          out = out sprintf("%c", v)
+          continue
+        }
+        if (c == "x") {
+          v = 0
+          for (k = 0; k < 2 && i < n && index("0123456789abcdef", tolower(substr(line, i + 1, 1))) > 0; k++) { i++; v = v * 16 + index("0123456789abcdef", tolower(substr(line, i, 1))) - 1 }
+          if (k == 0 || v == 0) exit 1
+          out = out sprintf("%c", v); i++
+          continue
+        }
+        e = index("abeEfnrtv", c)
+        if (e > 0) out = out substr("\007\b\033\033\f\n\r\t\v", e, 1)
+        else if (c == "\\" || c == "\047" || c == "\"" || c == "?") out = out c
+        else exit 1
+        i++
+      }
+      exit 1
+    }'
+}
+
 # The PATH the user's systemd manager gives a unit that sets none, which is
-# the PATH the service sees. When systemctl says nothing, systemd's usual
-# default.
+# the PATH the service sees. When systemctl says nothing, or says it in a
+# line that does not read, systemd's usual default.
 manager_path() {
-  path=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^PATH=//p' | tail -n 1)
+  path=$(manager_value PATH) || path=
   printf '%s\n' "${path:-$UNIT_BASE_PATH}"
 }
 
@@ -1043,7 +1103,9 @@ tex_status_report() {
   esac
 }
 tex_engine_report() {
-  unit_path=$(sed -n 's/^Environment="PATH=\(.*\)"$/\1/p' "$unit_file" 2>/dev/null | tail -n 1)
+  # The unit's own PATH, with the escaping the deploy wrote it with undone
+  # (a backslash before a backslash or a quote, % doubled).
+  unit_path=$(sed -n 's/^Environment="PATH=\(.*\)"$/\1/p' "$unit_file" 2>/dev/null | tail -n 1 | sed 's/\\\(.\)/\1/g;s/%%/%/g')
   if [ -n "$unit_path" ]; then
     whose="the toolchain's TeX Live, first on the unit's PATH"
   else

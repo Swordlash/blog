@@ -9,6 +9,7 @@
 -- > wiki-server oidc check --data DIR [DATABASE] [NAME]
 -- > wiki-server guide (install | update) --data DIR [DATABASE]
 -- > wiki-server compress DIR
+-- > wiki-server sqlite
 -- > wiki-server --version
 --
 -- DATABASE is @--database postgres:\/\/USER\@HOST\/NAME
@@ -36,7 +37,12 @@
 -- @guide update@ gives its pages this version's text ("Wiki.Server.Guide").
 -- @compress@ writes a gzip copy beside each of the application's files
 -- worth compressing, for a deployment made without Node
--- ("Wiki.Server.Compress").
+-- ("Wiki.Server.Compress"). @sqlite@ prints which SQLite library the
+-- program runs on, the line @check@ prints first, and exits 0; or prints
+-- why the server refuses the library and exits 1. It opens no wiki and
+-- needs no data directory: the deploy runs it with the new program, in
+-- the service's environment, before it stops the running server
+-- ("Wiki.Server.Storage.SqliteLibrary").
 module Main (main) where
 
 import GHC.IO.Encoding (mkTextEncoding, setFileSystemEncoding, setForeignEncoding, setLocaleEncoding)
@@ -52,6 +58,7 @@ import Wiki.Server.CopyDatabase (CopyOptions, CopyOutcome (..), copyParser, runC
 import Wiki.Server.Options (PlaceOptions, ServeOptions, placeOptions, serveOptions)
 import Wiki.Server.Rehearsal (RehearsalOptions, RehearsalOutcome (..), rehearsalParser, runRehearsal)
 import Wiki.Server.Storage.Backup (defaultKeep)
+import Wiki.Server.Storage.SqliteLibrary (sqliteAnswer)
 import Wiki.Server.Version (serverVersion, versionReport)
 
 -- | What the server is asked to do.
@@ -78,6 +85,8 @@ data Command
     Rehearse RehearsalOptions
   | -- | Copy the database into another, empty one.
     CopyDatabase CopyOptions
+  | -- | Say which SQLite library the program runs on, and whether it can.
+    Sqlite
 
 commands :: ParserInfo Command
 commands =
@@ -94,6 +103,7 @@ commands =
               <> command "oidc" (info (Oidc <$> oidcCheckParser) (progDesc "Check the providers people sign in with, and print their redirect URIs"))
               <> command "guide" (info (Guide <$> guideParser) (progDesc "Install the guide, the wiki's documentation, or give its pages this version's text"))
               <> command "compress" (info compressCommand (progDesc "Write a gzip copy beside each of the application's files worth compressing, for the server to send"))
+              <> command "sqlite" (info (pure Sqlite) (progDesc "Say which SQLite library this program runs on, and exit 1 when the server refuses it; opens no wiki"))
           )
           <|> (Serve <$> serveOptions)
       )
@@ -215,6 +225,12 @@ main = do
           exitWith (ExitFailure 1)
         written <- compressDirectory dir
         putText ("Wrote " <> show written <> " gzip copies in " <> toS dir <> ".")
+      Sqlite ->
+        sqliteAnswer >>= \case
+          Right line -> putText line
+          Left why -> do
+            putErrText ("wiki-server: " <> why)
+            exitWith (ExitFailure 1)
       Oidc c -> do
         (fine, lines') <- runOidcCheck c
         traverse_ putText lines'

@@ -189,8 +189,8 @@ fixture() {
   CABAL_DIR=$case_dir/cabal
   export CABAL_DIR
   mkdir -p "$FAKE_DOCKER"
-  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_TINFO FAKE_NO_SQLITE FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_RESTORE_FAIL FAKE_NO_DOCKER \
-    FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
+  unset XDG_CONFIG_HOME XDG_CACHE_HOME FAKE_NO_TINFO FAKE_NO_SQLITE FAKE_SQLITE_VERSION FAKE_SQLITE_NUMBER FAKE_SHELL_ONLY FAKE_NO_ZLIB FAKE_BOOTSTRAP_ZLIB FAKE_CABAL_NO_LIBRARY FAKE_CABAL_SEMOPEN FAKE_SEMAPHORE PKG_CONFIG_PATH LIBRARY_PATH C_INCLUDE_PATH CPATH LD_LIBRARY_PATH FAKE_GITHUB FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_MIGRATE_FAIL FAKE_CHECK_FAIL FAKE_RESTORE_FAIL FAKE_NO_DOCKER \
+    FAKE_MANAGER_ENV FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL \
     FAKE_GIT_REPOS FAKE_TLMGR_FAIL FAKE_INSTALL_TL_NO_BIN FAKE_XELATEX_BROKEN WIKI_TEX_TIMEOUT FAKE_PERL_MAKE_FAIL FAKE_TEX_MIRROR_DOWN \
     FAKE_COPY_EXIT FAKE_MOVE_COMPARE_EXIT FAKE_SERVE_PG_FAIL FAKE_PG_UP_FAIL FAKE_REHEARSE_EXIT FAKE_RELOAD_FAIL FAKE_RESTART_PG_FAIL FAKE_RESTART_PG_LOCK FAKE_RESTART_PG_TAMPER FAKE_STOP_PG_FAIL FAKE_SERVE_PG_SILENT \
     WIKI_TEST_MOVE_FAILPOINT WIKI_TEST_MOVE_OPERATIONS
@@ -313,6 +313,35 @@ case \$command in
       written=\$((written + 1))
     done
     printf 'Wrote %s gzip copies in %s.\n' "\$written" "\$target" ;;
+  sqlite)
+    # wiki-server sqlite, which the deploy runs with the new program in the
+    # service's environment before it changes anything (Maker.Deploy.Sqlite):
+    # the unit's variables over the systemd manager's, nothing of the
+    # deploying shell's. The FAKE_ variables do not reach it, so it is
+    # steered by files: with $case_dir/sqlite-library naming a directory,
+    # it starts only when LD_LIBRARY_PATH names that directory, as a program
+    # linked against a library there does; with $case_dir/sqlite-refused,
+    # it refuses the library. It logs the LD_LIBRARY_PATH it was given, and
+    # FAKE_SHELL_ONLY, which a case sets in the deploying shell alone.
+    printf 'wiki-server sqlite saw LD_LIBRARY_PATH=%s FAKE_SHELL_ONLY=%s\n' "\${LD_LIBRARY_PATH:-}" "\${FAKE_SHELL_ONLY:-}" >>"$EVENTS"
+    if [ -f "$case_dir/sqlite-library" ]; then
+      needed=\$(cat "$case_dir/sqlite-library")
+      case :\${LD_LIBRARY_PATH:-}: in
+        *:"\$needed":*) ;;
+        *)
+          printf '%s: error while loading shared libraries: libsqlite3.so.0: cannot open shared object file: No such file or directory\n' "\$0" >&2
+          exit 127 ;;
+      esac
+    fi
+    if [ -f "$case_dir/sqlite-unknown" ]; then
+      printf 'Invalid argument \`sqlite'"'"'\n\nUsage: wiki-server [COMMAND | ...]\n' >&2
+      exit 1
+    fi
+    if [ -f "$case_dir/sqlite-refused" ]; then
+      printf 'wiki-server: wiki-server needs SQLite 3.32.0 or later, and the SQLite library on this machine is 3.26.0: install a newer SQLite (Debian, Ubuntu: libsqlite3-0; RHEL, Fedora: sqlite-libs).\n' >&2
+      exit 1
+    fi
+    printf "SQLite 3.45.1, the system's library.\n" ;;
   guide)
     [ -z "\${FAKE_GUIDE_FAIL:-}" ] || { printf 'fake guide failure\n' >&2; exit 1; }
     printf "The guide's pages have this release's text (5 pages).\n" ;;
@@ -488,7 +517,10 @@ case $name in
     # The preprocessor finds every header (gmp.h, a recent enough
     # sqlite3.h). A link with -ltinfo, the wizard's probe, writes its
     # program, unless FAKE_NO_TINFO is set; one with -lsqlite3, SQLite's,
-    # unless FAKE_NO_SQLITE is.
+    # unless FAKE_NO_SQLITE is. SQLite's program, which the check runs,
+    # prints a library like Debian's, 3.45.1, unless FAKE_SQLITE_VERSION
+    # names another version (with FAKE_SQLITE_NUMBER), behind the same
+    # 3.45.1 header.
     output= tinfo= sqlite=
     while [ $# -gt 0 ]; do
       case $1 in
@@ -507,7 +539,15 @@ case $name in
       printf 'sqlite.c:1:10: fatal error: sqlite3.h: No such file or directory\n' >&2
       exit 1
     fi
-    printf '#!/bin/sh\n' >"$output"
+    if [ -n "$sqlite" ]; then
+      cat >"$output" <<'PROBE'
+#!/bin/sh
+printf 'header 3.45.1\nversion %s\nnumber %s\n' "${FAKE_SQLITE_VERSION:-3.45.1}" "${FAKE_SQLITE_NUMBER:-3045001}"
+printf 'file /usr/lib/x86_64-linux-gnu/libsqlite3.so.0\nthreadsafe 1\nomit_wal 0\nomit_foreign_key 0\nmax_variable_number 250000\n'
+PROBE
+    else
+      printf '#!/bin/sh\n' >"$output"
+    fi
     chmod +x "$output" ;;
   make) ;;
   dpkg-query) printf 'install ok installed\n' ;;
@@ -788,7 +828,17 @@ case $name in
       printf '%s\n' "$!" >"$FAKE_SYSTEMD/$unit.pid"
     }
     case $1 in
-      show-environment) printf 'HOME=%s\nPATH=%s\n' "$HOME" "$FAKE_SERVICE_PATH" ;;
+      show-environment)
+        # As systemd prints it: a value with a space or a character the
+        # shell treats specially in $'...', a backslash and a quote escaped
+        # (systemctl(1)). FAKE_MANAGER_ENV adds lines as they are.
+        printf 'HOME=%s\n' "$HOME"
+        case $FAKE_SERVICE_PATH in
+          *[!A-Za-z0-9/:._,+@%=-]*)
+            printf "PATH=\$'%s'\n" "$(printf '%s' "$FAKE_SERVICE_PATH" | sed "s/[\\\\']/\\\\&/g")" ;;
+          *) printf 'PATH=%s\n' "$FAKE_SERVICE_PATH" ;;
+        esac
+        [ -z "${FAKE_MANAGER_ENV:-}" ] || printf '%s\n' "$FAKE_MANAGER_ENV" ;;
       # FAKE_RELOAD_FAIL fails a daemon-reload, and FAKE_RESTART_PG_FAIL a
       # restart of a unit on PostgreSQL: the move's switch and its start.
       daemon-reload) [ -z "${FAKE_RELOAD_FAIL:-}" ] || { printf 'Failed to reload daemon\n' >&2; exit 1; } ;;
@@ -1360,11 +1410,20 @@ assert_contains "$HOME/wiki-demo/bin/wiki" "WIKI_DATABASE_PASSWORD_FILE='$pgd/db
 [ ! -e "$data/wiki.sqlite" ] || fail 'a server on PostgreSQL made data/wiki.sqlite'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer'
 assert_contains "$out" 'Its database is PostgreSQL in Docker'
+assert_contains "$out" "the new wiki-server runs on SQLite 3.45.1, the system's library, in the service's environment"
 pass 'the first deploy on PostgreSQL makes the container with its volume and its own password, waits for it, then backs up and starts the server'
 
+# A server on PostgreSQL still links SQLite, and is asked which it loads;
+# one it would refuse (here, the fake's sqlite-refused) is a warning only,
+# since a wiki in PostgreSQL never opens a SQLite database.
 : >"$EVENTS"
 out=$case_dir/again
-deploy --no-build >"$out" 2>&1 || fail 'a redeploy on PostgreSQL failed'
+touch "$case_dir/sqlite-refused"
+deploy --no-build >"$out" 2>&1 || fail "a redeploy on PostgreSQL with a SQLite library the server refuses failed: $(cat "$out")"
+rm "$case_dir/sqlite-refused"
+assert_contains "$out" 'the new wiki-server would refuse the SQLite library it loads'
+assert_contains "$out" 'wiki-server needs SQLite 3.32.0 or later, and the SQLite library on this machine is 3.26.0'
+assert_contains "$out" 'A wiki in PostgreSQL never opens a SQLite database, so the deploy goes on.'
 assert_contains "$EVENTS" 'docker: started the container of wiki-demo'
 assert_lacks "$EVENTS" 'docker: created'
 [ "$(cat "$pgd/db-password")" = "$password" ] || fail 'the redeploy made another password'
@@ -2309,6 +2368,97 @@ assert_contains "$out" '--no-rehearsal: the upgrade is not rehearsed'
 assert_contains "$EVENTS" 'wiki-server backup'
 pass 'an upgrade is rehearsed before the running deployment changes: a failed check stops it with the wiki untouched, and --no-rehearsal skips it'
 
+# Before the rehearsal, and before anything of the running deployment
+# changes, the new wiki-server says which SQLite library it loads
+# (wiki-server sqlite, Maker.Deploy.Sqlite), run in the service's
+# environment: the systemd manager's and the unit's variables, among them
+# the LD_LIBRARY_PATH the deploy copies from its shell into the unit, and
+# nothing else of the shell's. A server that refuses the library of a wiki
+# in SQLite, or that cannot start, stops the deploy with the old server
+# still running, with --no-rehearsal too.
+running_untouched() {
+  assert_lacks "$EVENTS" 'systemctl stop wiki-demo.service'
+  assert_lacks "$EVENTS" 'wiki-server backup'
+  assert_lacks "$EVENTS" 'wiki-server rehearse'
+  assert_contains "$out" 'The running wiki is untouched.'
+  [ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = '200 application/json' ] || fail "the running server stopped answering ($1)"
+}
+touch "$case_dir/sqlite-refused"
+for rehearsal in '' --no-rehearsal; do
+  : >"$EVENTS"
+  out=$case_dir/sqlite-refused${rehearsal:+-without-rehearsal}
+  if deploy --no-build $rehearsal >"$out" 2>&1; then fail "deployed a server that refuses its SQLite library ($rehearsal)"; fi
+  assert_contains "$out" "the new wiki-server refuses the SQLite library it loads in the service's environment"
+  assert_contains "$out" '    wiki-server: wiki-server needs SQLite 3.32.0 or later, and the SQLite library on this machine is 3.26.0'
+  assert_contains "$out" 'a file in /etc/ld.so.conf.d naming its directory, then sudo ldconfig'
+  running_untouched "refused $rehearsal"
+done
+rm "$case_dir/sqlite-refused"
+printf '/opt/sqlite/lib\n' >"$case_dir/sqlite-library"
+for rehearsal in '' --no-rehearsal; do
+  : >"$EVENTS"
+  out=$case_dir/sqlite-not-found${rehearsal:+-without-rehearsal}
+  if FAKE_SHELL_ONLY=1 deploy --no-build $rehearsal >"$out" 2>&1; then fail "deployed a server that cannot start ($rehearsal)"; fi
+  assert_contains "$out" "the new wiki-server does not start in the service's environment"
+  assert_contains "$out" 'error while loading shared libraries: libsqlite3.so.0: cannot open shared object file'
+  assert_contains "$out" "or run the deploy from a shell whose LD_LIBRARY_PATH names it, which the deploy writes into the unit"
+  assert_contains "$EVENTS" 'wiki-server sqlite saw LD_LIBRARY_PATH= FAKE_SHELL_ONLY='
+  assert_lacks "$EVENTS" 'FAKE_SHELL_ONLY=1'
+  running_untouched "not found $rehearsal"
+done
+# A shell whose LD_LIBRARY_PATH no longer names the library: the unit
+# would be written with that one, so the server cannot start, and the
+# deploy stops there. With the library's directory, the check passes and
+# the deploy goes on to the rehearsal (made to fail here, so that the
+# running deployment stays as the cases after this one expect it).
+: >"$EVENTS"
+out=$case_dir/sqlite-elsewhere
+if FAKE_SHELL_ONLY=1 LD_LIBRARY_PATH=/opt/sqlite-old/lib deploy --no-build >"$out" 2>&1; then fail 'deployed a server whose LD_LIBRARY_PATH no longer names its library'; fi
+assert_contains "$EVENTS" 'wiki-server sqlite saw LD_LIBRARY_PATH=/opt/sqlite-old/lib FAKE_SHELL_ONLY='
+assert_lacks "$EVENTS" 'FAKE_SHELL_ONLY=1'
+assert_contains "$out" "the new wiki-server does not start in the service's environment"
+running_untouched 'LD_LIBRARY_PATH elsewhere'
+: >"$EVENTS"
+out=$case_dir/sqlite-found
+if FAKE_REHEARSE_EXIT=6 FAKE_SHELL_ONLY=1 LD_LIBRARY_PATH=/opt/sqlite/lib deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose rehearsal failed succeeded'; fi
+assert_contains "$EVENTS" 'wiki-server sqlite saw LD_LIBRARY_PATH=/opt/sqlite/lib FAKE_SHELL_ONLY='
+assert_lacks "$EVENTS" 'FAKE_SHELL_ONLY=1'
+assert_contains "$out" "the new wiki-server runs on SQLite 3.45.1, the system's library, in the service's environment"
+assert_contains "$EVENTS" 'wiki-server rehearse'
+[ "$(line_of "$EVENTS" 'wiki-server sqlite')" -lt "$(line_of "$EVENTS" 'wiki-server rehearse')" ] || fail 'the SQLite check did not come before the rehearsal'
+rm "$case_dir/sqlite-library"
+# A wiki-server from before the command (a --no-build over an older
+# build) cannot be asked: its usage error is not a refusal, and the
+# deploy goes on without the check, saying so. The rehearsal is made to
+# fail, so that the running deployment stays as the cases after this one
+# expect it.
+touch "$case_dir/sqlite-unknown"
+: >"$EVENTS"
+out=$case_dir/sqlite-unknown-out
+if FAKE_REHEARSE_EXIT=6 deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose rehearsal failed succeeded'; fi
+rm "$case_dir/sqlite-unknown"
+assert_contains "$out" 'the new wiki-server does not know the command sqlite'
+assert_lacks "$out" 'refuses the SQLite library'
+assert_contains "$EVENTS" 'wiki-server rehearse'
+# The systemd manager's own environment reaches the check as the service
+# gets it: an LD_LIBRARY_PATH with a space, which systemctl prints as
+# $'...', names the library's directory with its quoting undone, and the
+# check passes with no LD_LIBRARY_PATH in the deploying shell. A line of
+# the manager's that does not read is left out, with a warning naming its
+# variable. The rehearsal is made to fail after the check, so that the
+# running deployment stays as the cases after this one expect it.
+printf '/opt/sqlite custom/lib\n' >"$case_dir/sqlite-library"
+: >"$EVENTS"
+out=$case_dir/sqlite-manager
+if FAKE_REHEARSE_EXIT=6 FAKE_MANAGER_ENV="LD_LIBRARY_PATH=\$'/opt/sqlite custom/lib'
+BROKEN=\$'unterminated" deploy --no-build >"$out" 2>&1; then fail 'an upgrade whose rehearsal failed succeeded'; fi
+rm "$case_dir/sqlite-library"
+assert_contains "$EVENTS" 'wiki-server sqlite saw LD_LIBRARY_PATH=/opt/sqlite custom/lib FAKE_SHELL_ONLY='
+assert_contains "$out" "the new wiki-server runs on SQLite 3.45.1, the system's library, in the service's environment"
+assert_contains "$out" "the systemd user manager's environment has a line the deploy cannot read, for BROKEN"
+assert_contains "$EVENTS" 'wiki-server rehearse'
+pass "the new server is asked which SQLite it loads in the service's environment before anything changes: a refusal or a server that cannot start stops the deploy with the old server running, with or without the rehearsal, and the manager's own LD_LIBRARY_PATH is read with systemd's quoting undone"
+
 # A migration that fails rolls back the same way; when the restore of the
 # backup fails too, the rollback stops there, with the service stopped and
 # the previous deployment kept, and --rollback finishes it.
@@ -2731,7 +2881,14 @@ assert_contains "$out" 'LD_LIBRARY_PATH'
 [ "$(grep -c '^ok ' "$out")" = 9 ] || fail 'the check without zlib did not report the other eight items and xelatex ok'
 # SQLite's development files, which wiki-server links since direct-sqlite
 # is built with the system's SQLite.
-assert_contains "$case_dir/check" 'ok       SQLite      sqlite3.h and -lsqlite3, through cc (3.32.0 or later)'
+assert_contains "$case_dir/check" 'ok       SQLite      sqlite3.h and the library a program built with -lsqlite3 loads are 3.45.1 (/usr/lib/x86_64-linux-gnu/libsqlite3.so.0); 3.32.0 or later, built as wiki-server needs'
+# The library the check's program loads is judged, not the header: a
+# library older than 3.32.0 behind a new header is missing.
+out=$case_dir/check-old-sqlite
+status=0
+FAKE_SQLITE_VERSION=3.26.0 FAKE_SQLITE_NUMBER=3026000 sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || status=$?
+[ "$status" = 1 ] || fail "the check with SQLite 3.26.0 behind a 3.45.1 header exited $status, not 1"
+assert_contains "$out" 'missing  SQLite      sqlite3.h is 3.45.1 and the library a program built with -lsqlite3 loads is 3.26.0 (/usr/lib/x86_64-linux-gnu/libsqlite3.so.0): wiki-server needs SQLite 3.32.0 or later (Debian: libsqlite3-dev; RHEL: sqlite-devel)'
 out=$case_dir/check-no-sqlite
 status=0
 FAKE_NO_SQLITE=1 sh "$case_dir/repo/toolchain/check-native.sh" >"$out" 2>&1 || status=$?
@@ -3999,6 +4156,17 @@ assert_contains "$out" "PDF exports: $case_dir/tex/xelatex works, the TeX on thi
 assert_lacks "$HOME/$unit" '--no-pdf'
 deploy --status >"$out" 2>&1 || fail '--status failed'
 assert_contains "$out" "PDF exports: $case_dir/tex/xelatex works (the TeX on this machine, on the service's PATH)"
+# A service PATH with a space, which systemctl prints as $'...': the TeX
+# step and --status both read it with the quoting undone.
+mkdir -p "$case_dir/te x"
+cp "$case_dir/tex/xelatex" "$case_dir/te x/xelatex"
+FAKE_SERVICE_PATH="$case_dir/te x:$NO_TEX"
+out=$case_dir/spaced
+deploy --no-build >"$out" 2>&1 || fail "the deploy with a TeX on a PATH with a space failed: $(cat "$out")"
+assert_contains "$out" "PDF exports: $case_dir/te x/xelatex works, the TeX on this machine"
+deploy --status >"$out" 2>&1 || fail '--status failed'
+assert_contains "$out" "PDF exports: $case_dir/te x/xelatex works (the TeX on this machine, on the service's PATH)"
+FAKE_SERVICE_PATH=$case_dir/tex:$NO_TEX
 undeploy >/dev/null 2>&1
 pass 'a TeX of the machine'"'"'s on the service'"'"'s PATH: used when it works, its reason said and --no-pdf set when it fails, dropped when it works again, and the deploy goes on'
 

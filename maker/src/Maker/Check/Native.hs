@@ -24,10 +24,15 @@
 -- * zlib: through pkg-config (@zlib.pc@), as the zlib package finds it.
 -- * SQLite: direct-sqlite is built with its flag @systemlib@
 --   (cabal.project), so it compiles against the system's @sqlite3.h@ and
---   links @-lsqlite3@. The check builds a one-line program that way
---   through cc, then refuses a header older than SQLite 3.32.0, the
---   oldest the server runs on ("Wiki.Server.Storage.SqliteLibrary" in
---   wiki-server says why).
+--   links @-lsqlite3@. The check builds a small program that way through
+--   cc and runs it ('probeSource'): the program asks the library it loads
+--   what wiki-server asks it, and the check refuses what wiki-server
+--   refuses ('sqliteVerdict'), against the floors of @toolchain/pins.env@
+--   ("Wiki.Server.Storage.SqliteLibrary" in wiki-server says why). The
+--   line names the library's version and its file, and the header's
+--   version when it differs. This is the library this process's loader
+--   finds; the deploy asks the built wiki-server itself, in its unit's
+--   environment, before it stops the running server.
 -- * libsodium is not looked for: the bootstrap builds the release
 --   @toolchain/pins.env@ pins from source (@toolchain/libsodium.sh@), as a
 --   static library in the toolchain's directory, so the machine needs none.
@@ -47,13 +52,21 @@ module Maker.Check.Native
   , findings
   , render
   , itemLine
+
+    -- * SQLite
+  , SqliteFloor (..)
+  , sqliteFloor
+  , SqliteProbe (..)
+  , sqliteVerdict
+  , probeSource
   )
 where
 
+import Control.Exception (IOException, displayException, try)
 import Control.Monad (filterM)
-import Data.Char (isSpace)
+import Data.Char (isDigit, isSpace)
 import Data.List (intercalate, sort, stripPrefix)
-import Data.Maybe (fromMaybe, isJust, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
 import Development.Shake (getDirectoryFilesIO)
 import Maker.Process (decodeFs, found, output, succeeds)
 import System.Directory (doesFileExist, executable, getPermissions)
@@ -192,7 +205,7 @@ findings root options = do
   gmp <- gmpItem hasCc
   (libpq, elsewhere) <- libpqItem options hasPkgConfig
   zlib <- zlibItem hasPkgConfig
-  sqlite <- sqliteItem hasCc
+  sqlite <- sqliteItem root hasCc
   sodium <- sodiumLine root
   terminfo <- terminfoItem options hasCc
   pure
@@ -300,24 +313,167 @@ zlibItem hasPkgConfig
     lacks = Missing . Lack "zlib" "zlib1g-dev" "zlib-devel"
 
 -- | SQLite, as direct-sqlite links it: a program with @sqlite3.h@ and
--- @-lsqlite3@ through cc, then the header's version, through cc's
--- preprocessor, against the oldest the server runs on.
-sqliteItem :: Bool -> IO Line
-sqliteItem hasCc
-  | not hasCc = pure (lacks "not checked: needs cc")
+-- @-lsqlite3@ through cc ('probeSource'), which is then run, and what it
+-- prints judged against the floors of @toolchain/pins.env@
+-- ('sqliteVerdict'). The program runs in this process's environment, so
+-- the library is the one this shell's loader finds.
+sqliteItem :: FilePath -> Bool -> IO Line
+sqliteItem root hasCc
+  | not hasCc = pure (Missing (sqliteLack "not checked: needs cc"))
   | otherwise = do
-      linked <- probe "sqlite" "#include <sqlite3.h>\nint main(void) { return sqlite3_libversion_number() > 0 ? 0 : 1; }\n" "-lsqlite3"
-      recent <-
-        if linked
-          then (== ExitSuccess) <$> runProcess (setStdin (byteStringInput "#include <sqlite3.h>\n#if SQLITE_VERSION_NUMBER < 3032000\n#error older than 3.32.0\n#endif\n") (quiet (proc "cc" ["-E", "-x", "c", "-"])))
-          else pure False
-      pure (found' linked recent)
+      let file = root </> "toolchain" </> "pins.env"
+      exists <- doesFileExist file
+      pins <- if exists then readFile' file else pure ""
+      case sqliteFloor pins of
+        Nothing -> pure (Missing (sqliteLack "not checked: toolchain/pins.env names no SQLITE_MIN_VERSION or SQLITE_MIN_VARIABLE_NUMBER"))
+        Just floor' -> sqliteVerdict floor' <$> runProbe
   where
-    found' linked recent
-      | not linked = lacks "cc cannot build a program with sqlite3.h and -lsqlite3"
-      | not recent = lacks "sqlite3.h is older than SQLite 3.32.0, the oldest wiki-server runs on"
-      | otherwise = Ok "SQLite" "sqlite3.h and -lsqlite3, through cc (3.32.0 or later)"
-    lacks = Missing . Lack "SQLite" "libsqlite3-dev" "sqlite-devel"
+    runProbe = withTempDir $ \dir -> do
+      let source = dir </> "sqlite.c"
+          program = dir </> "sqlite"
+      writeFile source probeSource
+      built <- runProcess (quiet (proc "cc" ["-o", program, source, "-lsqlite3", "-ldl"]))
+      if built /= ExitSuccess
+        then pure ProbeNotBuilt
+        else do
+          result <- try (readProcess (setStdin nullStream (proc program [])))
+          pure $ case result of
+            Right (code, out, err) ->
+              let first = takeWhile (/= '\n') (decodeFs err)
+               in ProbeRan (status code) (fromMaybe first (stripPrefix (program <> ": ") first)) (Prelude.lines (decodeFs out))
+            Left (e :: IOException) -> ProbeRan 126 (displayException e) []
+    status = \case
+      ExitSuccess -> 0
+      ExitFailure n -> n
+
+-- | The C program the SQLite item builds and runs. It prints what the
+-- server reads of the library it loads ("Wiki.Server.Storage.SqliteLibrary"
+-- in wiki-server), one @key value@ line each: the header's version, the
+-- library's version and its number, the file the library was loaded from
+-- (@dladdr@ on the library's own version string, so that no @ldd@ is
+-- needed), whether it is thread-safe, whether it was built without the
+-- write-ahead log or foreign keys, and its limit of parameters in one
+-- statement (@sqlite3_limit@ on a database in memory, which starts at the
+-- value the library was built with). @toolchain/check-native.sh@ builds
+-- the same program.
+probeSource :: String
+probeSource =
+  unlines
+    [ "#define _GNU_SOURCE"
+    , "#include <dlfcn.h>"
+    , "#include <stdio.h>"
+    , "#include <sqlite3.h>"
+    , "int main(void) {"
+    , "  Dl_info info;"
+    , "  sqlite3 *db = 0;"
+    , "  int variables = -1;"
+    , "  const char *version = sqlite3_libversion();"
+    , "  if (sqlite3_open(\":memory:\", &db) == SQLITE_OK) variables = sqlite3_limit(db, SQLITE_LIMIT_VARIABLE_NUMBER, -1);"
+    , "  sqlite3_close(db);"
+    , "  printf(\"header %s\\n\", SQLITE_VERSION);"
+    , "  printf(\"version %s\\n\", version);"
+    , "  printf(\"number %d\\n\", sqlite3_libversion_number());"
+    , "  printf(\"file %s\\n\", dladdr((const void *)version, &info) && info.dli_fname ? info.dli_fname : \"\");"
+    , "  printf(\"threadsafe %d\\n\", sqlite3_threadsafe());"
+    , "  printf(\"omit_wal %d\\n\", sqlite3_compileoption_used(\"OMIT_WAL\"));"
+    , "  printf(\"omit_foreign_key %d\\n\", sqlite3_compileoption_used(\"OMIT_FOREIGN_KEY\"));"
+    , "  printf(\"max_variable_number %d\\n\", variables);"
+    , "  return 0;"
+    , "}"
+    ]
+
+-- | The floors the SQLite item checks the library against, from
+-- @toolchain/pins.env@: the oldest version wiki-server runs on, as text
+-- and as SQLite's number (3.32.0 is 3032000), and the fewest parameters
+-- in one statement. wiki-server keeps the same numbers in its own module,
+-- since a program cannot read the file where it runs; the maker's tests
+-- check that the two agree.
+data SqliteFloor = SqliteFloor
+  { version :: String
+  , number :: Int
+  , variables :: Int
+  }
+  deriving (Eq, Show)
+
+-- | The floors from the text of @toolchain/pins.env@; 'Nothing' when it
+-- names no readable @SQLITE_MIN_VERSION@ or @SQLITE_MIN_VARIABLE_NUMBER@.
+sqliteFloor :: String -> Maybe SqliteFloor
+sqliteFloor pins = do
+  version <- pin "SQLITE_MIN_VERSION"
+  number <- versionNumber version
+  variables <- digits =<< pin "SQLITE_MIN_VARIABLE_NUMBER"
+  pure SqliteFloor {version, number, variables}
+  where
+    pin key = listToMaybe [v | l <- Prelude.lines pins, Just v <- [stripPrefix (key <> "=") l]]
+
+-- | A version's number as @SQLITE_VERSION_NUMBER@ writes it (3.32.0 is
+-- 3032000); 'Nothing' for text that is not three numbers with dots
+-- between.
+versionNumber :: String -> Maybe Int
+versionNumber v = case traverse digits (dots v) of
+  Just [major, minor, patch] -> Just (major * 1000000 + minor * 1000 + patch)
+  _ -> Nothing
+  where
+    dots s = case break (== '.') s of
+      (part, _ : rest) -> part : dots rest
+      (part, []) -> [part]
+
+-- | A number of digits only.
+digits :: String -> Maybe Int
+digits s
+  | not (null s) && all isDigit s = Just (read s)
+  | otherwise = Nothing
+
+-- | What the SQLite probe did.
+data SqliteProbe
+  = -- | cc could not build it.
+    ProbeNotBuilt
+  | -- | It ran: how it exited, the first line it wrote to its standard
+    -- error without the program's path in front (the loader's words when
+    -- the library is not found), and the lines of its standard output.
+    ProbeRan Int String [String]
+  deriving (Eq, Show)
+
+-- | The SQLite item's line, from what the probe did, judged as wiki-server
+-- judges the library it runs on (@sqliteRefusal@): the version first,
+-- then the options, in the server's order.
+sqliteVerdict :: SqliteFloor -> SqliteProbe -> Line
+sqliteVerdict floor' = \case
+  ProbeNotBuilt -> lacks "cc cannot build a program with sqlite3.h and -lsqlite3"
+  ProbeRan 126 err _ ->
+    Ok "SQLite" ("sqlite3.h and -lsqlite3 build a program, which cannot be run here (" <> err <> "): the library it would load is not checked")
+  ProbeRan code err out
+    | code /= 0 || isNothing (digits (field "number")) ->
+        let why = if null err then "it exited " <> show code else err
+            hint
+              | code == 127 = "; the loader does not find at run time the library the build linked: give its directory in LD_LIBRARY_PATH, or put it on the loader's path (/etc/ld.so.conf.d, then ldconfig)"
+              | otherwise = ""
+         in lacks ("a program built with sqlite3.h and -lsqlite3 does not run: " <> why <> hint)
+    | Just n <- digits (field "number"), n < floor'.number -> lacks (seen <> ": wiki-server needs SQLite " <> floor'.version <> " or later")
+    | field "threadsafe" == "0" -> lacks (seen <> ", built with THREADSAFE=0" <> refused)
+    | field "omit_wal" == "1" -> lacks (seen <> ", built with OMIT_WAL" <> refused)
+    | field "omit_foreign_key" == "1" -> lacks (seen <> ", built with OMIT_FOREIGN_KEY" <> refused)
+    | Just m <- digits (field "max_variable_number")
+    , m < floor'.variables ->
+        lacks (seen <> ", built with MAX_VARIABLE_NUMBER=" <> show m <> refused <> " (it needs " <> show floor'.variables <> " or more)")
+    | same -> Ok "SQLite" (seen <> "; " <> floor'.version <> " or later, built as wiki-server needs")
+    | otherwise -> Ok "SQLite" (seen <> "; " <> floor'.version <> " or later, built as wiki-server needs, but the two differ: the build and the run find SQLite in different places")
+    where
+      field key = fromMaybe "" (listToMaybe [v | l <- out, Just v <- [stripPrefix (key <> " ") l]])
+      header = field "header"
+      version = field "version"
+      file = let f = field "file" in if null f then "a file dladdr does not name" else f
+      same = header == version
+      seen
+        | same = "sqlite3.h and the library a program built with -lsqlite3 loads are " <> version <> " (" <> file <> ")"
+        | otherwise = "sqlite3.h is " <> header <> " and the library a program built with -lsqlite3 loads is " <> version <> " (" <> file <> ")"
+  where
+    lacks = Missing . sqliteLack
+    refused = ", which wiki-server refuses"
+
+-- | A missing SQLite, with its packages.
+sqliteLack :: String -> Lack
+sqliteLack = Lack "SQLite" "libsqlite3-dev" "sqlite-devel"
 
 -- | libsodium's line, which is not counted: the bootstrap builds the
 -- pinned release from source, so nothing is needed from the machine. The

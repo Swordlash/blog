@@ -41,6 +41,7 @@ library
     Maker.Deploy.Firewall
     Maker.Deploy.Front
     Maker.Deploy.Layout
+    Maker.Deploy.Manager
     Maker.Deploy.Move
     Maker.Deploy.Operations
     Maker.Deploy.Options
@@ -48,6 +49,7 @@ library
     Maker.Deploy.Plan
     Maker.Deploy.Prepare
     Maker.Deploy.Rehearse
+    Maker.Deploy.Sqlite
     Maker.Deploy.State
     Maker.Deploy.Upgrade
     Maker.Deploy.Tailscale

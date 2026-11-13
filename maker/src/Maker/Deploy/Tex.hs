@@ -26,17 +26,14 @@ import Data.IORef
 import Data.List (isPrefixOf, isSuffixOf, sort, stripPrefix)
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.Time (defaultTimeLocale, formatTime, getZonedTime)
+import Maker.Deploy.Manager (managerEnvironment)
 import Maker.Deploy.Plan
+import Maker.Deploy.Sqlite (unitBasePath)
 import System.Directory
 import System.Environment (getEnvironment, lookupEnv)
 import System.FilePath ((</>))
 import System.IO
 import System.Process.Typed
-
--- | The PATH of a unit that uses the toolchain's TeX Live, after its bin
--- directory: the system's own programs.
-unitBasePath :: String
-unitBasePath = "/usr/local/bin:/usr/bin:/bin"
 
 -- | The CTAN mirror TeX Live is installed from when --texlive-mirror names
 -- none; it redirects to a mirror near the machine.
@@ -220,13 +217,15 @@ offer p t root' perlRoot mirror offerOff = do
                       say ("PDF exports: " <> without "working " c.line <> " works, the toolchain's TeX Live; the unit puts " <> newBin <> " first on its PATH")
 
 -- | The PATH the user's systemd manager gives a unit that sets none, which
--- the service sees; systemd's usual default when systemctl says nothing.
+-- the service sees, with systemd's quoting undone ("Maker.Deploy.Manager");
+-- systemd's usual default when systemctl says nothing, or says it in a
+-- line that does not read.
 managerPath :: IO String
-managerPath = do
-  (_, out) <- outputOf "systemctl" ["--user", "show-environment"]
-  pure $ case [rest | l <- lines out, Just rest <- [stripPrefix "PATH=" l]] of
-    [] -> unitBasePath
-    paths -> let path = last paths in if null path then unitBasePath else path
+managerPath =
+  flip fmap managerEnvironment $ \answer ->
+    case [path | Just (variables, _) <- [answer], ("PATH", path) <- variables] of
+      [] -> unitBasePath
+      paths -> let path = last paths in if null path then unitBasePath else path
 
 -- | The bin directory of a TeX Live installation (bin/<platform>) that
 -- holds a program.
