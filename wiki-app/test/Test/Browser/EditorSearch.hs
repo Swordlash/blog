@@ -117,6 +117,25 @@ spec m = do
     searchFocus `shouldReturn` "master"
     editorSelection ui `shouldReturn` (2, 20)
 
+  it "steps through matches of no length, line by line, and leaves Ctrl+F to the browser while the preview is shown alone" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    setMarkdown ui "# Hello, world\n\nA\nB\nC"
+    selectText ui 2 2
+    press "Control+f"
+    find ui ".editor-search-regexp" >>= click
+    find ui ".editor-search-find" >>= (`typeText` "^")
+    eventually $ said ui `shouldReturn` "5 matches"
+    for_ [15, 16, 18, 20] $ \at -> do
+      press "Enter"
+      editorSelection ui `shouldReturn` (at, at)
+    press "Escape"
+    -- The preview shown alone: the text and the panel are hidden, and
+    -- Ctrl+F is not the editor's.
+    find ui ".editor-show-preview" >>= click
+    eventually $ find ui ".editor-back" >>= shouldBeVisible
+    press "Control+f"
+    length <$> findAll ui ".editor-search" `shouldReturn` 0
+
   it "says a regular expression that is not one and matches nothing, matches case and whole words when asked, and stops counting at 1000" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     setMarkdown ui "# Hello, world\n\nCat cat category CAT.\n"

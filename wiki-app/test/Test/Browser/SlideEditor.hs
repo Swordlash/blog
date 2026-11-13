@@ -1091,6 +1091,41 @@ spec m = do
     eventually $ said ui `shouldReturn` "4 matches"
     headerCounts ui `shouldReturn` [("Three", "2 matches")]
 
+  it "moves the focus with the match on F3 in a row's text, the row left staying open, and keeps the marks of a row Replace all writes in" $ runPage $ do
+    (ui, _) <- openDeck searchDeck
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀", "One"]
+    rowSelect 1 10 16
+    press "Control+f"
+    eventually $ said ui `shouldReturn` "1 of 3"
+    -- Back in the row's text, F3: the match's row opens with the focus and
+    -- the match, which the editor's selection is.
+    rowSelect 1 10 16
+    press "F3"
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀", "One", "Three"]
+    eventually $ searchFocus `shouldReturn` "text 3"
+    rowSelection 3 `shouldReturn` (10, 16)
+    eventually $ said ui `shouldReturn` "2 of 3"
+    unsafeIOToPageM (fromJSText <$> js_slide_invariants) `shouldReturn` ""
+    -- Replace all in an open row: its marks are those of the text written.
+    find ui ".editor-search-replacement" >>= (`typeText` "NEEDLE")
+    find ui ".editor-search-replace-all" >>= click
+    eventually $ rowText 3 `shouldReturn` "## Three\n\nNEEDLE and NEEDLE."
+    eventually $ map (\(i, t, _) -> (i, t)) <$> searchMarks `shouldReturn` [(1, "NEEDLE"), (3, "NEEDLE"), (3, "NEEDLE")]
+    -- A replacement that makes a heading: the rows are cut again.
+    find ui ".editor-search-find" >>= clear
+    find ui ".editor-search-find" >>= (`typeText` "Nothing.")
+    find ui ".editor-search-replacement" >>= clear
+    find ui ".editor-search-replacement" >>= (`typeText` "## Four")
+    find ui ".editor-search-replace-all" >>= click
+    eventually $ rowTitles ui `shouldReturn` ["Deck 😀", "One", "Two", "Four", "Three"]
+    -- And with the search open, the raw Markdown marks its matches.
+    find ui ".editor-search-find" >>= clear
+    find ui ".editor-search-find" >>= (`typeText` "needle")
+    modeButton ui "Raw" >>= click
+    eventually $ map (\(i, t, _) -> (i, t)) <$> searchMarks `shouldReturn` [(-1, "NEEDLE"), (-1, "NEEDLE"), (-1, "NEEDLE")]
+    unsafeIOToPageM (fromJSText <$> js_slide_invariants) `shouldReturn` ""
+
   it "selects a regular expression's match across two slides in the row it starts in" $ runPage $ do
     (ui, _) <- openDeck searchDeck
     eventually $ openTitles ui `shouldReturn` ["Deck 😀"]
@@ -1492,12 +1527,16 @@ spec m = do
             inList
             press "Control+y"
             pure ("redo", Just (redoModel model))
-        -- A step of the search, from its panel: no text changes, and a
-        -- closed row with the match opens, the others staying as they are.
+        -- A step of the search: no text changes, and a closed row with the
+        -- match opens, the others staying as they are. F3 where a row's
+        -- text has the focus, which moves the focus to the match's row;
+        -- Next in the panel elsewhere, the focus staying there.
         | kind < 90 -> do
             searching
-            find ui ".editor-search-next" >>= click
-            pure ("search step", Just model)
+            at <- slideFocus
+            if "text " `T.isPrefixOf` at
+              then press "F3" >> pure ("F3 in " <> at, Just model)
+              else find ui ".editor-search-next" >>= click >> pure ("search step", Just model)
         -- Replace, twice when the selection is no match: the first selects
         -- the next match (opening its row), changing nothing, and the
         -- second replaces it and selects the next.
