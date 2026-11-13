@@ -21,7 +21,8 @@ technical: true
 
 - Once a week, and when CI is started by hand, CI runs the same suite with
   the browser's processor slowed down four times, to find tests that only
-  pass on a quick machine:
+  pass on a quick machine. Each step of the test may then take four times
+  as long before it counts as failed:
 
   ```sh
   HALOGEN_PLAYWRIGHT_THROTTLE=4 sh toolchain/smoke-suite.sh demo

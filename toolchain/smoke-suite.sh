@@ -22,7 +22,9 @@
 # dist-newstyle/native-fast, which CI's wasm job caches (NATIVE_PROJECT and
 # NATIVE_BUILDDIR name others, as for toolchain/smoke-test.sh). The
 # driver's variables pass through: HALOGEN_PLAYWRIGHT_THROTTLE=4 runs the
-# suite with every page's processor slowed down four times,
+# suite with every page's processor slowed down four times (and, unless
+# HALOGEN_PLAYWRIGHT_TIMEOUT says otherwise, each call may then take four
+# times the plain 30 seconds),
 # HALOGEN_PLAYWRIGHT_ARTIFACTS=<dir> keeps a failing example's screenshot,
 # HALOGEN_PLAYWRIGHT_CONSOLE=1 prints what the pages log as it arrives, and
 # HALOGEN_PLAYWRIGHT_HEADED=1 shows the browser.

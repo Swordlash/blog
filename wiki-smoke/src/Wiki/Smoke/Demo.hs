@@ -52,6 +52,7 @@ import System.Directory (doesFileExist)
 import System.Environment (lookupEnv, setEnv)
 import System.FilePath ((</>))
 import System.IO (hSetEncoding, stderr, stdout, utf8)
+import Text.Read (readMaybe)
 
 -- | The demo, served for the suite.
 data Demo = Demo
@@ -73,6 +74,9 @@ data Demo = Demo
 -- may take 30 seconds (@HALOGEN_PLAYWRIGHT_TIMEOUT@, when it is not set),
 -- the time the JavaScript smoke tests allowed: the application is a few
 -- megabytes of WebAssembly, and the islands load libraries of their own.
+-- A run slowed down on purpose (@HALOGEN_PLAYWRIGHT_THROTTLE@, a factor)
+-- gets that time times the factor: 120 seconds at 4, so that a throttled
+-- run by hand waits as CI's throttled job does ('defaultTimeout').
 withDemo :: String -> (Demo -> Spec) -> IO ()
 withDemo name spec = withDemoIO name (pure . spec)
 
@@ -87,7 +91,8 @@ withDemoIO name spec = do
   dir <- fromMaybe "../dist-newstyle/wasm/public/app" <$> lookupEnv "WIKI_DEMO_DIR"
   required <- (== Just "1") <$> lookupEnv "WIKI_SMOKE_REQUIRED"
   timeout <- lookupEnv "HALOGEN_PLAYWRIGHT_TIMEOUT"
-  when (isNothing timeout) $ setEnv "HALOGEN_PLAYWRIGHT_TIMEOUT" "30000"
+  throttle <- lookupEnv "HALOGEN_PLAYWRIGHT_THROTTLE"
+  when (isNothing timeout) $ setEnv "HALOGEN_PLAYWRIGHT_TIMEOUT" (show (defaultTimeout throttle))
   built <- (&&) <$> doesFileExist (dir </> "index.html") <*> doesFileExist (dir </> "app.wasm")
   if not built
     then
@@ -101,6 +106,13 @@ withDemoIO name spec = do
       hasNotFound <- doesFileExist (dir </> "404.html")
       let options = defaultServeOptions {basePath = base, notFound = if hasNotFound then Just "404.html" else Nothing}
       serveDirectoryWith options dir $ \site -> spec Demo {url = site, dir} >>= hspec . describe name
+
+-- | The time a call of the driver may take when @HALOGEN_PLAYWRIGHT_TIMEOUT@
+-- is not set, in milliseconds: 30 seconds, times the throttle's factor when
+-- the run is slowed down (@HALOGEN_PLAYWRIGHT_THROTTLE@, read as the driver
+-- reads it; a factor below 1, or none, counts as 1).
+defaultTimeout :: Maybe String -> Int
+defaultTimeout throttle = ceiling (30000 * max 1 (fromMaybe 1 (throttle >>= readMaybe)) :: Double)
 
 -- | The base path a built page names in its @<base href>@ (@/@ without
 -- one): the path it was built to be served under (@HALOGEN_BASE_PATH@).

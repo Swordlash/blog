@@ -1092,11 +1092,15 @@ jobs:
       run: sh toolchain/smoke-suite.sh screenshots
 
     # The demo's smoke test with every page's processor four times slower,
-    # in smoke-throttled's run of these steps only (see that job).
+    # in smoke-throttled's run of these steps only (see that job). Each call
+    # of the driver may take four times as long too: the plain 30 seconds
+    # times the throttle, the rule wiki-smoke's Wiki.Smoke.Demo applies by
+    # itself when no timeout is given, written here so the job says it.
     - name: Smoke-test the demo with the processor throttled
       if: github.job == 'smoke-throttled'
       env:
         HALOGEN_PLAYWRIGHT_THROTTLE: '4'
+        HALOGEN_PLAYWRIGHT_TIMEOUT: '120000'
       run: sh toolchain/smoke-suite.sh demo
 
     # Independent SQLite and PostgreSQL smoke runs can overlap. PostgreSQL

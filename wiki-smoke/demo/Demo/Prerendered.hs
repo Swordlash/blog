@@ -146,8 +146,7 @@ spec site paths visitorGate = do
   -- sizes as built, which are what the server sends.
   it "draws the first TikZ picture in a browser that has fetched nothing yet" $ onDemoPage demoContext $ \page -> do
     start <- getMonotonicTime
-    -- The heaviest page with nothing cached: a longer timeout.
-    visit (withTimeout 120000 page) (address site.demo "/s/docs/p/markdown-guide/")
+    visit page (address site.demo "/s/docs/p/markdown-guide/")
     -- TikZJax draws it, in its worker: a condition.
     waitFor (first (locator page "#app .wiki-tikz > svg")) Visible
     drawn <- getMonotonicTime
@@ -238,10 +237,7 @@ spec site paths visitorGate = do
     -- Held on the context: the request is TikZJax's worker's, which a
     -- page's route may not see.
     format <- hold (pageContext page) "**/tikzjax/core.dump.bin"
-    -- The guide, the heaviest page, in a browser that has fetched nothing:
-    -- app.wasm compiled and the page adopted may take longer than the other
-    -- calls, slowed down four times on a busy machine.
-    visit (withTimeout 120000 page) (address site.demo "/s/docs/p/markdown-guide/")
+    visit page (address site.demo "/s/docs/p/markdown-guide/")
     waitQuiet page
     -- TikZJax's worker has asked for TeX's format, which is held: the
     -- picture is being drawn, and stays so until the end.
