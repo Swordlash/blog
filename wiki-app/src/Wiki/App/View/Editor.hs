@@ -102,6 +102,16 @@
 -- component offers them to CodeMirror ('offerFolds'). A fold hides lines
 -- and changes no text: the draft, the preview and a save have all of it.
 --
+-- The editor has a search of its own over the whole text (WP5.103b of
+-- docs/PLAN.md), in a panel above the text, or above a presentation's
+-- rows ("Wiki.App.View.SearchPanel"): Ctrl+F (Cmd+F on a Mac) anywhere in
+-- the editor opens it with the selection as the text to find, F3 and
+-- Shift+F3 step, Escape closes it. CodeMirror finds, marks and counts the
+-- matches and replaces them (@web/src/editor.js@); the component counts
+-- them on the rows' headers. A step slide by slide opens the row the
+-- match is in and leaves the other rows open. Once CodeMirror is in place
+-- the browser's own find is reached by its menu only ('searchOffered').
+--
 -- The toolbar's commands are pure functions ("Wiki.Core.Markdown.Edit"). A
 -- button or a shortcut reads the text and the selection, applies the
 -- command, and writes the change back as one edit that undo reverts in one
@@ -244,7 +254,7 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID)
 import DOM.HTML.Indexed qualified as I
-import Data.List (lookup, zip3)
+import Data.List (elemIndex, lookup, zip3)
 import Data.Map.Strict qualified as Map
 import Data.Row (type (.+), type (.==))
 import Data.Set qualified as Set
@@ -278,10 +288,13 @@ import Wiki.App.Browser (replacingEntry)
 import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
+  , Find (..)
   , GridKey (..)
   , Layout (..)
+  , Matches (..)
   , PickedFile (..)
   , RowWanted (..)
+  , Stepped (..)
   , announceUpload
   , answerEmoji
   , answerMention
@@ -290,6 +303,7 @@ import Wiki.App.Editor.Browser
   , changesLeft
   , chosenFiles
   , clickElement
+  , currentText
   , cursorLine
   , cursorLineOf
   , decision
@@ -310,6 +324,7 @@ import Wiki.App.Editor.Browser
   , historyBack
   , holdFocus
   , insertAtCursor
+  , matchesOf
   , mentionAsked
   , nextProblem
   , offerFolds
@@ -327,6 +342,12 @@ import Wiki.App.Editor.Browser
   , rowKeyOf
   , rowWanted
   , rowsLayout
+  , searchClosed
+  , searchIn
+  , searchReplace
+  , searchReplaceAll
+  , searchSeed
+  , searchStep
   , selectedSpan
   , setRows
   , settleChanges
@@ -355,6 +376,7 @@ import Wiki.App.View.NewKindDialog qualified as NewKindDialog
 import Wiki.App.View.Popup (watchPopup)
 import Wiki.App.View.Preview qualified as Preview
 import Wiki.App.View.ProviderIcons (claudeColour, claudePath, openAiPath)
+import Wiki.App.View.SearchPanel qualified as SearchPanel
 import Wiki.App.View.SlideRow qualified as SlideRow
 import Wiki.Core.Access (Access (Closed))
 import Wiki.Core.Assistant
@@ -377,7 +399,7 @@ import Wiki.Core.Assistant
   )
 import Wiki.Core.Assistant qualified as Assistant (ErrorKind (Unreachable))
 import Wiki.Core.Assistant.Edit (Decision (..))
-import Wiki.Core.Assistant.Prompt (Span)
+import Wiki.Core.Assistant.Prompt (Span (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Diff (Diff (..), diffText)
 import Wiki.Core.Draft qualified as D
@@ -441,6 +463,7 @@ type Slots =
     .+ ("linkDialog" .== H.Slot (Const Void) LinkDialog.Output ())
     .+ ("homeIcon" .== H.Slot (Const Void) ViewOutput ())
     .+ ("slideRow" .== H.Slot (Const Void) SlideRow.Output (Int, Int))
+    .+ ("search" .== H.Slot SearchPanel.Query SearchPanel.Output ())
 
 -- | 'Work': the text being written, and the page it started from.
 data Work = Work
@@ -665,6 +688,22 @@ data State = State
   , oneSlide :: Bool
   -- ^ Whether the preview of a presentation's raw Markdown shows the
   -- cursor's slide alone, rather than the whole deck.
+  , searchOpen :: Bool
+  -- ^ Whether the search's panel is shown ("Wiki.App.View.SearchPanel").
+  , searchFor :: Find
+  -- ^ What the search asks for, kept while the panel is closed, for the
+  -- next time it opens.
+  , matches :: Maybe Matches
+  -- ^ The search's matches, as CodeMirror last counted them.
+  , rowMatches :: Map RowKey Int
+  -- ^ How many of the matches start in each row, for the rows' headers:
+  -- only rows counted whole.
+  , searchNote :: Maybe (Text, Text)
+  -- ^ What the panel says after its count: that the last step went past
+  -- the end or the start, or how many matches Replace all replaced.
+  , searchStepped :: Bool
+  -- ^ Whether a step or a replacement selected a match since the panel
+  -- opened: closing it then puts the focus at the match.
   , selection :: Maybe Span
   -- ^ What is selected in the text, as CodeMirror last reported.
   , pendingChanges :: Int
@@ -763,6 +802,8 @@ data Action
   | MoveFromText RowKey Int
   | NewSlide
   | Relaid
+  | FromSearch SearchPanel.Output
+  | MatchesFound Matches
 
 -- | The local storage key for whether the preview goes beside the
 -- Markdown.
@@ -788,6 +829,79 @@ slidesShown st = st.slidesMode && st.master /= Absent && isDeck st
 -- a text ('Wiki.App.Editor.Browser.editorKey'), so never from a header.
 writesAtCursor :: State -> Bool
 writesAtCursor st = not (slidesShown st && null st.openRows)
+
+-- | Whether Ctrl+F and F3 are the editor's own search (WP5.103b of
+-- docs/PLAN.md): one search over the whole text, run on CodeMirror, so
+-- once it is in place, while the text is shown (with the preview shown
+-- alone, Ctrl+F is the browser's, over the preview). It is offered in the
+-- raw Markdown too, of a
+-- presentation and of a document: the browser's own find sees only the
+-- lines CodeMirror has drawn (not a folded spoiler, not text scrolled far
+-- away), and one search that behaves the same in both modes is one thing
+-- to learn. To offer it slide by slide only, this would be
+-- @slidesShown st@. Where it is not offered, Ctrl+F is the browser's.
+searchOffered :: State -> Bool
+searchOffered st = st.master == Attached && st.mode == Editing
+
+-- | The match the editor's selection is, if it is one: its index among the
+-- matches counted.
+currentMatch :: State -> Maybe Int
+currentMatch st = do
+  found <- st.matches
+  selected <- st.selection
+  elemIndex (selected.from, selected.to) found.spans
+
+-- | What the search's panel says of the matches: "3 of 12" when the
+-- selection is one of them, "12 matches" when it is not, then the note of
+-- the last step ('searchNote'). A count that stopped at its limit is
+-- "1000+".
+searchSaid :: State -> Text
+searchSaid st = case st.matches of
+  _ | T.null st.searchFor.query -> ""
+  Nothing -> ""
+  Just found
+    | not found.valid -> "Not a valid regular expression"
+    | otherwise ->
+        let n = length found.spans
+            total = show n <> (if found.capped then "+" else "")
+            counted = case currentMatch st of
+              _ | n == 0 -> "No matches"
+              Just i -> show (i + 1) <> " of " <> total
+              Nothing -> total <> (if n == 1 && not found.capped then " match" else " matches")
+            -- The note of the last step or replacement, while the text is
+            -- the one it was said of.
+            noted = case (st.searchNote, st.loaded) of
+              (Just (said, text), Ready w) | w.body == text -> ", " <> said
+              _ -> ""
+         in counted <> noted
+
+-- | How many of the matches start in each row, from the rows' starts the
+-- count was made with. A count that stopped at its limit counts only the
+-- rows that end before the last match counted: the others may have more.
+countsPerRow :: Matches -> Map RowKey Int
+countsPerRow found
+  | not found.valid = mempty
+  | otherwise = Map.fromList [(k, n) | ((k, n), whole) <- zip (SlideRows.countPerRow found.starts starts) complete, whole]
+  where
+    starts = map fst found.spans
+    complete
+      | found.capped = [next <= lastStart | next <- map snd (drop 1 found.starts) <> [maxBound]]
+      | otherwise = repeat True
+    lastStart = fromMaybe 0 (lastMay starts)
+
+-- | What a row's header says of the search's matches: how many start in
+-- the row, or, for a row the count did not reach whole (it stopped at its
+-- limit, 1000, before the row's end), that they were not counted.
+rowMatchesOf :: State -> RowKey -> Maybe SlideRow.RowMatches
+rowMatchesOf st key = case (Map.lookup key st.rowMatches, st.matches) of
+  (Just n, _) -> Just (SlideRow.Counted n)
+  (Nothing, Just found) | found.valid && found.capped -> Just SlideRow.NotCounted
+  _ -> Nothing
+
+-- | A text as a regular expression of JavaScript's that matches it as it
+-- is written.
+escapedPattern :: Text -> Text
+escapedPattern = T.concatMap (\c -> if c `elem` ("\\^$.*+?()[]{}|" :: [Char]) then T.pack ['\\', c] else T.singleton c)
 
 -- | 'Master' is where CodeMirror, the master, is: not in place yet, in
 -- place, or never to be, the page having no editor's script.
@@ -1020,6 +1134,12 @@ component =
               , announcement = ""
               , cursorAt = 1
               , oneSlide = False
+              , searchOpen = False
+              , searchFor = Find {query = "", replacement = "", caseSensitive = False, regexp = False, wholeWord = False}
+              , matches = Nothing
+              , rowMatches = mempty
+              , searchNote = Nothing
+              , searchStepped = False
               , measures = Nothing
               , selection = Nothing
               , pendingChanges = 0
@@ -1346,11 +1466,19 @@ component =
 
     -- The keys the editor handles, recognised in the keydown's listener,
     -- which stops the browser's own action for them. Any other key makes no
-    -- action and is left to the browser. Escape belongs to the editor only
-    -- while a menu is open, to close it.
+    -- action and is left to the browser.
+    --
+    -- Escape is taken by the innermost open thing: a list of the
+    -- completion, in the text, stops it there (@web/src/editor.js@); then
+    -- a toolbar's menu closes; then a dialog of the editor's (a link to a
+    -- page, a new kind of box) closes itself; then, outermost, the search
+    -- closes, from anywhere in the editor's form (its panel, the text, a
+    -- row's text or header, the toolbar), the focus going where it came
+    -- from, or to the match after a step. Otherwise it is the browser's.
     keyAction :: State -> Event -> Maybe Action
     keyAction st ev = case editorKey ev of
       Just EscapeKey | isJust st.menu -> Just CloseMenu
+      Just EscapeKey | st.searchOpen && not (st.linkDialogOpen || st.kindDialogOpen) -> Just (FromSearch SearchPanel.Closed)
       Just EscapeKey -> Nothing
       -- Alt+Up and Alt+Down are the browser's until slides move by them
       -- again (WP5.103's next stage).
@@ -1358,6 +1486,11 @@ component =
       -- they are the browser's.
       Just (MoveSlideKey by) | slidesShown st -> (`MoveFromText` by) <$> rowKeyOf ev
       Just (MoveSlideKey _) -> Nothing
+      -- Ctrl+F and F3 are the editor's search's once CodeMirror is in
+      -- place, and the browser's before: its own find is then reached by
+      -- its menu.
+      Just FindKey | not (searchOffered st) -> Nothing
+      Just (FindNextKey _) | not (searchOffered st) -> Nothing
       Just key -> Just (Key key)
       Nothing -> Nothing
 
@@ -1725,10 +1858,15 @@ component =
         @I.HTMLdiv
         (HH.ElemName "div")
         [HP.class_ "editor-source"]
-        ( [ ("providers", providerBar st)
-          ,
-            ( "cm"
-            , [hh|
+        ( [("providers", providerBar st)]
+            -- Kept while the preview is shown alone, hidden with the text,
+            -- and while CodeMirror is put in place again (a reload): the
+            -- search is the editor's state ('searchFor'), which the panel is
+            -- drawn from and CodeMirror is given ('EditorReady').
+            <> [("search", searchPanel st) | st.searchOpen]
+            <> [
+                 ( "cm"
+                 , [hh|
               <div
                 class="editor-cm"
                 ref={{ st.host }}
@@ -1746,25 +1884,42 @@ component =
                 {{ HE.handler' (EventType "wiki-editor-failed") (const (Just EditorFailed)) }}
                 {{ HE.handler' (EventType "wiki-row-wanted") (fmap RowWantedBy . rowWanted) }}
                 {{ HE.handler' (EventType "wiki-relayout") (const (Just Relaid)) }}
+                {{ HE.handler' (EventType "wiki-matches") (fmap MatchesFound . matchesOf) }}
               ></div>
             |]
-            )
-          ,
-            ( loadKey st
-            , HH.element
-                @I.HTMLtextarea
-                (HH.ElemName "textarea")
-                [ HP.class_ "editor-text"
-                , attr "aria-label" "The page's Markdown"
-                , HE.onValueInput Typed
-                , HP.autofocus True
-                ]
-                [HH.text work.loadedBody]
-            )
-          , ("hint", [hh|<p class="editor-hint">{{ hint st }}</p>|])
-          ]
+                 )
+               ,
+                 ( loadKey st
+                 , HH.element
+                     @I.HTMLtextarea
+                     (HH.ElemName "textarea")
+                     [ HP.class_ "editor-text"
+                     , attr "aria-label" "The page's Markdown"
+                     , HE.onValueInput Typed
+                     , HP.autofocus True
+                     ]
+                     [HH.text work.loadedBody]
+                 )
+               , ("hint", [hh|<p class="editor-hint">{{ hint st }}</p>|])
+               ]
             <> [("slides", HH.div [HP.class_ "editor-slides-holder"] [slideList st, HH.p [HP.class_ "visually-hidden editor-slides-status", attr "role" "status"] [HH.text st.announcement]]) | slidesShown st]
         )
+
+    -- The search's panel, above CodeMirror's host: above the text in the
+    -- raw Markdown, and above the rows slide by slide, where the text is
+    -- hidden.
+    searchPanel :: State -> H.ComponentHTML Action Slots m
+    searchPanel st =
+      HH.slot
+        "search"
+        ()
+        SearchPanel.component
+        SearchPanel.Input
+          { find = st.searchFor
+          , said = searchSaid st
+          , invalid = st.searchFor.regexp && maybe False (\found -> not found.valid) st.matches && not (T.null st.searchFor.query)
+          }
+        FromSearch
 
     -- A presentation's rows, slide by slide, one per slide, keyed by the
     -- row's key (and the load: a reload makes new rows), so that a row
@@ -1792,6 +1947,7 @@ component =
                     , dropMark = case st.dropAt of
                         Just (at, after) | at == h.key -> Just after
                         _ -> Nothing
+                    , matches = if st.searchOpen then rowMatchesOf st h.key else Nothing
                     }
                   FromRow
               ]
@@ -1840,7 +1996,7 @@ component =
     hint :: State -> Text
     hint st
       | st.uploading > 0 = "Uploading " <> show st.uploading <> (if st.uploading == 1 then " file…" else " files…")
-      | otherwise = "Drop or paste files here to attach them. Ctrl+S saves; Tab indents."
+      | otherwise = "Drop or paste files here to attach them. Ctrl+S saves; Ctrl+F finds; Tab indents."
 
     attachmentList :: Bool -> Work -> H.ComponentHTML Action Slots m
     attachmentList hasTextAtCursor work =
@@ -1943,6 +2099,11 @@ component =
             Previewing -> backToEditing
         EscapeKey -> closeMenu
         MoveSlideKey _ -> pass
+        FindKey -> openSearch
+        -- F3 with the panel closed opens it, as Ctrl+F does.
+        FindNextKey forward -> do
+          open <- gets (\st -> st.searchOpen)
+          if open then handleAction (FromSearch (SearchPanel.Step forward)) else openSearch
       Submit -> save Stay
       SaveAndClose -> save Close
       -- The work is discarded, and so is its draft.
@@ -2276,6 +2437,36 @@ component =
       -- takes it to the row the history put the cursor in, which the
       -- "wiki-row-wanted" after this event opens.
       Relaid -> recutRowsWith True
+      -- The search's panel: what it asks for is searched at once; a step
+      -- or a replacement goes from the editor's selection, and slide by
+      -- slide opens the match's row ("web/src/editor.js"'s rowsSync).
+      FromSearch (SearchPanel.Changed s) -> do
+        modify (\st -> st {searchFor = s, searchNote = Nothing})
+        gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (searchIn host s))
+      FromSearch (SearchPanel.Step forward) ->
+        withHost $ \host -> do
+          went <- H.liftEffect (searchStep host forward)
+          noting host (if went == Wrapped then Just (if forward then "from the start" else "from the end") else Nothing)
+          modify (\st -> st {searchStepped = st.searchStepped || went /= NoMatch})
+      FromSearch SearchPanel.Replace ->
+        withHost $ \host -> do
+          done <- H.liftEffect (searchReplace host)
+          noting host Nothing
+          modify (\st -> st {searchStepped = st.searchStepped || done})
+          -- A replacement can make a heading, or take one away.
+          recutRows
+      FromSearch SearchPanel.ReplaceAll ->
+        withHost $ \host -> do
+          n <- H.liftEffect (searchReplaceAll host)
+          noting host (Just (if n == 1 then "1 replaced" else show n <> " replaced"))
+          recutRows
+      -- Closed: the marks go, and the focus goes back where it came from,
+      -- or after a step to the match ('searchClosed').
+      FromSearch SearchPanel.Closed -> do
+        st <- get
+        modify (\s -> s {searchOpen = False, matches = Nothing, rowMatches = mempty, searchNote = Nothing})
+        for_ st.hostElement $ \host -> H.liftEffect (searchClosed host st.searchStepped)
+      MatchesFound found -> whenM (gets (\st -> st.searchOpen)) $ modify (\st -> st {matches = Just found, rowMatches = countsPerRow found})
       -- CodeMirror's module did not load: there will be no master, and the
       -- presentation is its Markdown in the textarea, as on a page without
       -- the editor's script. Only while the master is awaited: a failure
@@ -2298,6 +2489,8 @@ component =
         st <- get
         for_ st.hostElement $ \host -> do
           H.liftEffect (slidesModeIn host (slidesShown st))
+          -- A master made again (a reload) searches as the panel asks.
+          when st.searchOpen $ H.liftEffect (searchIn host st.searchFor)
           when (isDeck st) $
             H.liftEffect (rowsLayout host)
               >>= traverse_
@@ -2386,7 +2579,9 @@ component =
           found <- H.getRef st.host
           available <- H.liftEffect editorAvailable
           let master = if inBrowser && not available then Absent else Waiting
-          modify (\s -> freshRows s {hostElement = found, pendingChanges = 0, selection = Nothing, master})
+          -- The search's count and notes were of the text before; the
+          -- search itself stays, and is given to the CodeMirror coming.
+          modify (\s -> freshRows s {hostElement = found, pendingChanges = 0, selection = Nothing, master, matches = Nothing, rowMatches = mempty, searchNote = Nothing})
           traverse_ (\host -> H.liftEffect (attachEditor host w.loadedBody)) found
           -- The text loaded is checked at once, the typing after a pause.
           -- Only in a browser: a page prerendered natively has no
@@ -2741,6 +2936,43 @@ component =
       st <- get
       let total = length [() | h <- st.rowHeads, isJust h.number]
       say (capital (slideNamed key st) <> " moved to " <> maybe "its place" (\(n :: Int) -> show n <> " of " <> show total) (head [n | h <- st.rowHeads, h.key == key, Just n <- [h.number]]))
+
+    -- Open the search's panel, or with it open focus its field again: the
+    -- text to find is the editor's selection when that is on one line (as
+    -- a regular expression, the selection escaped), unless the selection
+    -- is a match of the search already, which would only replace the
+    -- search with what it found; the field focused and its text selected.
+    openSearch :: H.HalogenM State Action Slots ViewOutput m ()
+    openSearch =
+      withHost $ \host -> do
+        seed <- H.liftEffect (searchSeed host)
+        st <- get
+        let kept = st.searchOpen && isJust (currentMatch st)
+            asked
+              | T.null seed || kept = st.searchFor
+              | st.searchFor.regexp = st.searchFor {query = escapedPattern seed}
+              | otherwise = st.searchFor {query = seed}
+        modify $ \s ->
+          s
+            { searchOpen = True
+            , searchFor = asked
+            , searchNote = Nothing
+            , searchStepped = st.searchOpen && st.searchStepped
+            , matches = if st.searchOpen && asked == st.searchFor then st.matches else Nothing
+            }
+        H.tell "search" () (SearchPanel.Open asked)
+        H.liftEffect (searchIn host asked)
+
+    -- Say this of the last step or replacement of the search, of the text
+    -- CodeMirror holds now: shown while the editor's text is that one.
+    noting :: Element -> Maybe Text -> H.HalogenM State Action Slots ViewOutput m ()
+    noting host said = do
+      text <- H.liftEffect (currentText host)
+      modify (\st -> st {searchNote = (,text) <$> said})
+
+    -- Act on CodeMirror's host, once the text is loaded.
+    withHost :: (Element -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()
+    withHost act = gets (\st -> st.hostElement) >>= traverse_ act
 
     say :: Text -> H.HalogenM State Action Slots ViewOutput m ()
     say said = modify (\st -> st {announcement = said})

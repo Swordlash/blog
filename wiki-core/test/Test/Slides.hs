@@ -278,8 +278,33 @@ spec = describe "Slides" $ do
               Folds.BlockSpoiler -> Nothing
          in [f.from | f <- Folds.folds source, Just n <- [level f], n <= 2, f.from `notElem` starts] === []
 
-    it "has no slides in a text with a carriage return" $
-      slideSpans "## A\r\n\r\nText\r\n\r\n## B\r\n" `shouldBe` []
+    it "has the slides of a text with carriage returns on CodeMirror's lines, a line feed ending a line" $ do
+      -- \r\n: the parser's lines and CodeMirror's are the same.
+      [(sp.from, sp.to, sp.title) | sp <- slideSpans "## A\r\n\r\nText\r\n\r\n## B\r\n"] `shouldBe` [(1, 3, "A"), (5, 5, "B")]
+      -- \r\n\n is one line break for the parser and two for CodeMirror;
+      -- a lone \r ends a line for the parser only.
+      [(sp.from, sp.title) | sp <- slideSpans "## A\r\n\nText\r\n\n## B\rMore\n\n## C\n"] `shouldBe` [(1, "A"), (5, "B"), (7, "C")]
+      -- The same slides as the text with line feeds alone.
+      let returns = "# Deck\r\n\r\nBy me.\r\n\r\n## One\r\n\r\nFirst.\r\n\r\n## Two\r\nSecond.\r\n"
+      slideSpans returns `shouldBe` slideSpans (T.replace "\r\n" "\n" returns)
+
+    it "has no slides when two would start on one line of CodeMirror's, what comes before the first heading too" $ do
+      slideSpans "## A\r## B\r\nText\n" `shouldBe` []
+      slideSpans "Intro.\r## A\n\nText" `shouldBe` []
+
+    prop "never puts two slides on one line of CodeMirror's, nor ends one before it starts, line breaks made lone carriage returns or not" $
+      forAll ((,) <$> aDeck <*> listOf (elements [False, True])) $ \(source, lone) ->
+        let pieces = T.splitOn "\n" (T.replace "\r" "" source)
+            breaks = take (length pieces - 1) (lone <> repeat False)
+            text = T.concat (zipWith (\line r -> line <> (if r then "\r" else "\n")) pieces breaks) <> fromMaybe "" (lastMay pieces)
+            spans = slideSpans text
+         in counterexample (show (text, spans)) $
+              and (zipWith (<) (map (\sp -> sp.from) spans) (drop 1 (map (\sp -> sp.from) spans))) && all (\sp -> sp.to >= sp.from) spans
+
+    prop "has the slides of a text with \\r\\n line breaks that the text with \\n has" $
+      forAll aDeck $ \source ->
+        let plain = T.replace "\r" "" source
+         in slideSpans (T.replace "\n" "\r\n" plain) === slideSpans plain
 
     it "fixes nothing but the preamble when the first opener is of level two" $
       fixedSlides (slideSpans "## A\n\n# B\n") `shouldBe` 0

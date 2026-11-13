@@ -96,7 +96,8 @@ function wiki_test_slide_row_cursor_seen(index) {
 // quiet: "" when it holds, else what does not. The rows' ranges tile the
 // master's text with a line break between each two; every open row's
 // editor shows its range of the master's text; and an editor with the
-// focus has the master's selection, moved by its row's start. Offsets are
+// focus has the master's selection, moved by its row's start, or the part of
+// it in the row for a match of the search wider than the row. Offsets are
 // UTF-16 units: the walk that asks types ASCII only.
 function wiki_test_slide_invariants() {
   const host = document.querySelector(".editor-cm:not(.slide-row-body)");
@@ -125,7 +126,13 @@ function wiki_test_slide_invariants() {
     if (row.state.doc.toString() !== text.slice(range.from, range.to)) found.push(`row ${key} shows ${JSON.stringify(row.state.doc.toString())}, not ${JSON.stringify(text.slice(range.from, range.to))}`);
     if (row.hasFocus) {
       const { anchor, head } = row.state.selection.main;
-      if (master.anchor !== anchor + range.from || master.head !== head + range.from) {
+      // The one exception: a match of the search wider than the row, which
+      // the row shows the part of in it, the master keeping it whole.
+      const wider =
+        (master.from < range.from || master.to > range.to) &&
+        anchor === Math.max(master.from, range.from) - range.from &&
+        head === Math.min(master.to, range.to) - range.from;
+      if (!wider && (master.anchor !== anchor + range.from || master.head !== head + range.from)) {
         found.push(`row ${key} has the focus at ${anchor}-${head} (its start ${range.from}), the editor's selection is ${master.anchor}-${master.head}`);
       }
     }

@@ -1,7 +1,10 @@
 // The heights the stylesheet stacks sticky things with (web/style.css):
 // the header's, which stays at the top of the window, and the page's bar of
 // actions', which stays under it, as the CSS variables --header-height and
-// --page-actions-height on the document. Both can wrap onto more lines on a
+// --page-actions-height on the document; and the editor's top's and its
+// toolbar's, which the editor's search stays under (--editor-top-height,
+// --editor-toolbar-height; the toolbar sticks alone on a phone, where the
+// top's box is none and measures 0). All can wrap onto more lines on a
 // narrow window, and the bar comes and goes with the page shown, so they are
 // measured rather than guessed: again whenever either changes size, and
 // whenever the document changes which elements they are.
@@ -17,6 +20,8 @@ function wiki_keep_heights() {
   const tracked = [
     [".wiki-header", "--header-height"],
     [".page-actions", "--page-actions-height"],
+    [".editor-top", "--editor-top-height"],
+    [".editor-toolbar", "--editor-toolbar-height"],
   ];
   let watched = [];
   const markStuck = () => {

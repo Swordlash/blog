@@ -3607,6 +3607,96 @@ body:has(.slides-view) {
   font-size: 0.85rem;
 }
 
+/* The editor's search (WP5.103b, Wiki.App.View.SearchPanel): above the
+   text, or above the rows slide by slide. It stays under the editor's top
+   while the page scrolls, so that its field and its count stay in sight
+   as Enter steps from match to match, rows opening far down. Two lines:
+   the text to find, its toggles, the count, Previous, Next and Close; the
+   replacement and its two buttons. On a phone the editor's top does not
+   stay, but its toolbar does: the panel stays under the toolbar. */
+.editor-search {
+  position: sticky;
+  top: calc(var(--header-height) + var(--editor-top-height, 0px));
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+@media (max-width: 760px) {
+  .editor-search {
+    top: calc(var(--header-height) + var(--editor-toolbar-height, 0px));
+  }
+}
+
+/* The providers' bubbles float over the text's right edge: the panel
+   keeps clear of them, as the rows do. */
+@media (min-width: 961px) {
+  .editor-source:has(.editor-provider) .editor-search {
+    margin-right: 5rem;
+  }
+}
+
+.editor-search-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.editor-search-find,
+.editor-search-replacement {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.editor-search-find[aria-invalid="true"] {
+  border-color: var(--danger);
+  outline-color: var(--danger);
+}
+
+.editor-search-toggles,
+.editor-search-moves,
+.editor-search-replaces {
+  display: inline-flex;
+  flex: none;
+  gap: 0.2rem;
+}
+
+.editor-search-toggle,
+.editor-search-moves button {
+  min-width: 2.1rem;
+  padding: 0.3rem 0.45rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.editor-search-word {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.editor-search-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--background);
+}
+
+.editor-search-count {
+  flex: 1 0 auto;
+  min-width: 6rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.editor-search-find[aria-invalid="true"] ~ .editor-search-count {
+  color: var(--danger);
+}
+
 /* A presentation edited slide by slide (WP5.103): the master, the
    CodeMirror over the whole text, is hidden, and the slides are a list of
    rows. The textarea stays until the master has taken its place (the rule
@@ -3772,6 +3862,17 @@ body:has(.slides-view) {
 
 .slide-row-problems {
   color: var(--danger);
+}
+
+/* A closed row's matches of the editor's search, on the colour of their
+   marks. */
+.slide-row-matches {
+  flex: none;
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
 }
 
 .slide-row-matches:empty {
@@ -8062,6 +8163,19 @@ a.mention {
    (web/src/editor.js): shown as the browser shows one. */
 .editor-cm .cm-wiki-kept-selection {
   background: color-mix(in srgb, Highlight 35%, transparent);
+}
+
+/* The editor's search's matches (web/src/editor.js), in the raw Markdown
+   and in the open rows: each on a ground of the warning's colour, the
+   current one, which the selection is, darker and outlined. */
+.editor-cm .cm-wiki-match {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+}
+
+.editor-cm .cm-wiki-match-current {
+  background: color-mix(in srgb, var(--warning) 50%, transparent);
+  outline: 1px solid var(--warning);
 }
 
 /* Inline math left open on its line (web/src/editor.js): a wavy red

@@ -106,6 +106,7 @@ module Wiki.Core.Slides
   , slideAtLine
   , moveSlide
   , slideChunks
+  , parserLineStarts
 
     -- * Whether a slide's content fits
   , Fit (..)
@@ -586,10 +587,17 @@ instance NFData SlideSpan where
 -- ('isOpener'), read from 'parseDeckSpans', so that the editor's slides
 -- are those 'deckOf' cuts; and, first, what comes before the first
 -- opener, when 'deckOf' makes a slide of it. A setext heading's slide
--- starts at its title's first line. None for a text with a carriage
--- return, whose lines the parser and CodeMirror count differently (a
--- @\\r@ ends a line for the one and not for the other): the editor then
--- has no slides to fold or move.
+-- starts at its title's first line.
+--
+-- The parser and CodeMirror count lines differently in a text with a
+-- carriage return: for the parser a @\\r@ ends a line, with every line
+-- feed right after it ('parserLineStarts'); for CodeMirror only a line
+-- feed does. The parser's lines are made CodeMirror's here, so that a
+-- text with @\\r\\n@ line breaks has its slides on the lines the editor
+-- shows (its rows' fits, the preview following the cursor). None when
+-- two slides would start on one line of CodeMirror's (a lone @\\r@
+-- between them, the slide of what comes before the first opener
+-- included): the editor then has no slides to mark or follow.
 slideSpans :: Text -> [SlideSpan]
 slideSpans source = slideSpansParsed source (either (const []) (map (first (fmap fst))) (parseDeckSpans source))
 
@@ -599,19 +607,39 @@ slideSpans source = slideSpansParsed source (either (const []) (map (first (fmap
 -- editor's check of the text and its slides.
 slideSpansParsed :: Text -> [(Maybe Int, Block)] -> [SlideSpan]
 slideSpansParsed source spans
-  | T.any (== '\r') source = []
+  | not (and (zipWith (<) allStarts (drop 1 allStarts))) = []
   | otherwise =
-      let openers = [(l, lvl, plainText xs) | (Just l, Heading lvl _ xs) <- deckLevel spans, lvl <= 2]
-          starts = [l | (l, _, _) <- openers]
-          ends = map (subtract 1) (drop 1 starts) <> [lineCount]
-          -- The slide of what comes before the first opener, when
-          -- 'deckOf' makes one: not of a look, footnotes or pauses alone.
-          untitled = case (deckOf (map snd spans)).slides of
-            s : _ -> isNothing s.title && not (null s.body && null s.notes)
-            [] -> False
+      let ends = map (subtract 1) (drop 1 starts) <> [lineCount]
           preamble = [SlideSpan {from = 1, to = lastNonBlank 1 (maybe lineCount (subtract 1) (head starts)), level = Nothing, title = ""} | untitled]
        in preamble <> [SlideSpan {from = l, to = lastNonBlank l e, level = Just lvl, title} | ((l, lvl, title), e) <- zip openers ends]
   where
+    -- The slide of what comes before the first opener, when 'deckOf' makes
+    -- one: not of a look, footnotes or pauses alone.
+    untitled = case (deckOf (map snd spans)).slides of
+      s : _ -> isNothing s.title && not (null s.body && null s.notes)
+      [] -> False
+    -- Every slide's first line, that slide of what comes before the first
+    -- opener's included: no two may be the same line of CodeMirror's.
+    allStarts = [1 | untitled] <> starts
+    found = [(l, lvl, plainText xs) | (Just l, Heading lvl _ xs) <- deckLevel spans, lvl <= 2]
+    openers = zipWith (\l (_, lvl, title) -> (l, lvl, title)) (editorLines [l | (l, _, _) <- found]) found
+    starts = [l | (l, _, _) <- openers]
+    -- CodeMirror's line of each of the parser's lines given, from 1, in
+    -- order: the same lines in a text without a carriage return.
+    editorLines
+      | T.any (== '\r') source = atLines 1 (scanl (+) 1 (map (T.count "\n") (pieces (parserLineStarts source) source)))
+      | otherwise = identity
+    -- The table's entries for ascending lines, walking the table once.
+    atLines n table = \case
+      [] -> []
+      l : ls -> case drop (l - n) table of
+        t : table' -> t : atLines l (t : table') ls
+        [] -> l : atLines n table ls
+    -- The text cut at the parser's lines' starts, one piece a line but
+    -- the last, in one walk over the text.
+    pieces starts' rest = case starts' of
+      a : more@(b : _) -> let (piece, rest') = T.splitAt (b - a) rest in piece : pieces more rest'
+      _ -> []
     sourceLines = T.splitOn "\n" source
     lineCount = length sourceLines
     lineAt n = fromMaybe "" (atMay sourceLines (n - 1))
@@ -628,6 +656,23 @@ fixedSlides spans = length (takeWhile fixed (zip [0 :: Int ..] spans))
   where
     firstOpener = length (takeWhile (isNothing . (.level)) spans)
     fixed (i, sp) = isNothing sp.level || (i == firstOpener && sp.level == Just 1)
+
+-- | The character each line of a text starts at, as the Markdown parser
+-- counts lines: commonmark 0.3.1's tokenizer ends a line at a line feed,
+-- and at a carriage return together with every line feed right after it
+-- (it groups characters with @Data.Text.groupBy@, which compares each
+-- character with the first of the group).
+parserLineStarts :: Text -> [Int]
+parserLineStarts = (0 :) . go 0 . T.unpack
+  where
+    go i = \case
+      '\n' : rest -> (i + 1) : go (i + 1) rest
+      '\r' : rest ->
+        let feeds = length (takeWhile (== '\n') rest)
+            next = i + 1 + feeds
+         in next : go next (drop feeds rest)
+      _ : rest -> go (i + 1) rest
+      [] -> []
 
 -- | The index of the slide a line is on, if any: the last slide that
 -- starts on or before it.
@@ -658,7 +703,9 @@ slideChunks source = case slideSpans source of
 -- slide's text is the same, only in another order. The slides that stay
 -- first ('fixedSlides') do not move, and none moves before them: a move
 -- that would is no move. A text with no slides, or an index out of range,
--- is left as it is.
+-- is left as it is, and so is a text with a carriage return: the line
+-- breaks a move adds are line feeds. (The editor moves rows with
+-- "Wiki.Core.SlideRows", which keeps a text's own line breaks.)
 --
 -- Line breaks are added where the slides would otherwise run together,
 -- and nowhere else. The last slide's text, which may end without one,
@@ -672,6 +719,7 @@ slideChunks source = case slideSpans source of
 -- after it), the move is no move.
 moveSlide :: Int -> Int -> Text -> Text
 moveSlide i j source
+  | T.any (== '\r') source = source
   | i == j || i < fixed || j < fixed || i >= count || j >= count = source
   | sameSlides plain = plain
   | sameSlides apart = apart

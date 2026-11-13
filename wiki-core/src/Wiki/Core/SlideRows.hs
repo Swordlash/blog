@@ -62,6 +62,7 @@ module Wiki.Core.SlideRows
 
     -- * Reading rows
   , rowAt
+  , countPerRow
   , fixedRows
   , rowHeading
   , rowTitle
@@ -71,13 +72,13 @@ module Wiki.Core.SlideRows
   )
 where
 
-import Data.List (zip4)
+import Data.List (span, zip4)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Protolude
 import Wiki.Core.Markdown.Ast (Block (..), Inline, parseDeckSpans, plainText)
-import Wiki.Core.Slides (deckLevel)
+import Wiki.Core.Slides (deckLevel, parserLineStarts)
 
 -- | 'RowKey' names a row while its text changes. The editor keeps a
 -- counter of keys and never gives a key twice, so that a new row never
@@ -427,6 +428,21 @@ reorderAt i j xs = take j rest <> take 1 (drop i xs) <> drop j rest
 rowAt :: Rows -> Int -> Int
 rowAt r offset = max 0 (length (takeWhile (<= offset) (rowStarts r)) - 1)
 
+-- | How many of some characters of a text (the starts of the editor's
+-- search's matches) are in each row of a layout, the rows given by their
+-- keys and starts in the order of the text, as the editor holds them: a
+-- character is in the last row that starts at or before it. One walk over
+-- the rows and the characters, sorted first.
+countPerRow :: [(RowKey, Int)] -> [Int] -> [(RowKey, Int)]
+countPerRow layout = go layout . sort
+  where
+    go rows' at = case rows' of
+      [] -> []
+      [(key, start)] -> [(key, length (dropWhile (< start) at))]
+      (key, start) : more@((_, next) : _) ->
+        let (inside, after) = span (< next) (dropWhile (< start) at)
+         in (key, length inside) : go more after
+
 -- | How many of the first rows stay where they are: the preamble, and the
 -- title slide, a first opener of level one. These rows are neither moved
 -- nor deleted, and no row is moved or put before them
@@ -519,23 +535,6 @@ openers source = case parseDeckSpans source of
       (l, level, xs) : rest -> case drop (l - n) starts of
         s : starts' -> (s, level, xs) : atLines (s : starts') l rest
         [] -> []
-
--- | The character each line of a text starts at, as the Markdown parser
--- counts lines: commonmark 0.3.1's tokenizer ends a line at a line feed,
--- and at a carriage return together with every line feed right after it
--- (it groups characters with @Data.Text.groupBy@, which compares each
--- character with the first of the group).
-parserLineStarts :: Text -> [Int]
-parserLineStarts = (0 :) . go 0 . T.unpack
-  where
-    go i = \case
-      '\n' : rest -> (i + 1) : go (i + 1) rest
-      '\r' : rest ->
-        let feeds = length (takeWhile (== '\n') rest)
-            next = i + 1 + feeds
-         in next : go next (drop feeds rest)
-      _ : rest -> go (i + 1) rest
-      [] -> []
 
 ----------------------------------------------------------------------
 -- Text
