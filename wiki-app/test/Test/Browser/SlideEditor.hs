@@ -48,6 +48,7 @@ $( browserJS
      , ("js_mermaid", "wiki_test_mermaid", Safe, [t|JSText -> IO ()|])
      , ("js_stall_start", "wiki_test_stall_start", Safe, [t|IO ()|])
      , ("js_slide_invariants", "wiki_test_slide_invariants", Safe, [t|IO JSText|])
+     , ("js_slide_drag", "wiki_test_slide_drag", Safe, [t|Int -> Int -> Int -> Int -> Int -> Bool -> IO Int|])
      , ("js_open_rows", "wiki_test_open_rows", Safe, [t|IO JSText|])
      , ("js_master_layout", "wiki_test_master_layout", Safe, [t|IO JSText|])
      , ("js_master_problems", "wiki_test_master_problems", Safe, [t|IO ()|])
@@ -982,6 +983,26 @@ spec m = do
       eventually $ openTitles ui `shouldReturn` ["One"]
       randomWalk ui seed 50
 
+  it "moves selected text dragged from one row to another as one step of the history, copies it with the copy key, and leaves a drag in one row to CodeMirror" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    -- "me" of "By me." dropped after "Second".
+    _ <- rowDrag 0 11 13 2 14 False
+    eventually $ markdown ui `shouldReturn` T.replace "Second." "Secondme." (T.replace "By me." "By ." deck)
+    rowFocused 2 `shouldReturn` True
+    rowSelection 2 `shouldReturn` (14, 16)
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` deck
+    -- With the copy key, the source stays.
+    _ <- rowDrag 0 11 13 2 14 True
+    eventually $ markdown ui `shouldReturn` T.replace "Second." "Secondme." deck
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` deck
+    -- In one row, CodeMirror's own move.
+    _ <- rowDrag 2 8 14 2 15 False
+    eventually $ markdown ui `shouldReturn` T.replace "Second." ".Second" deck
+
   it "renders the deck whole for one slide's preview: a macro of an earlier slide, a footnote's number, the same slide in every view" $ runPage $ do
     (ui, wiki) <- openDeck macros
     find ui ".editor-side-by-side" >>= click
@@ -1262,6 +1283,26 @@ spec m = do
                 rowSelect i p p
                 press "Backspace"
                 pure ("Backspace in row " <> show i <> " at " <> show p, Just (pushText (T.take (at - 1) model.text <> T.drop at model.text) model))
+        | kind < 40
+        , Just (i, j) <- pickTwo open -> do
+            source <- rowText i
+            target <- rowText j
+            let lowest k = if startOf k == 0 then 2 else 0
+                a = lowest i + fromIntegral r3 `mod` max 1 (T.length source - lowest i)
+                b = min (T.length source) (a + 1 + fromIntegral r2 `mod` 4)
+                p = lowest j + fromIntegral (r3 `div` 7) `mod` max 1 (T.length target + 1 - lowest j)
+            if a >= b || p > T.length target
+              then pure ("no text to drag", Just model)
+              else do
+                q <- rowDrag i a b j p False
+                let ga = startOf i + a
+                    gb = startOf i + b
+                    gq = startOf j + q
+                    word = T.take (gb - ga) (T.drop ga model.text)
+                    moved
+                      | gq <= ga = T.take gq model.text <> word <> T.take (ga - gq) (T.drop gq model.text) <> T.drop gb model.text
+                      | otherwise = T.take ga model.text <> T.take (gq - gb) (T.drop gb model.text) <> word <> T.drop gq model.text
+                pure ("drag " <> show a <> "-" <> show b <> " of row " <> show i <> " to " <> show q <> " of row " <> show j, Just (pushText moved model))
         | kind < 44
         , Just i <- pick open -> do
             t <- rowText i
@@ -1323,6 +1364,13 @@ spec m = do
         -- The title line's "# " keeps the caret after it.
         afterMark at = if at < 2 then 2 else at
         pick = pickFrom
+        pickTwo xs
+          | length xs < 2 = Nothing
+          | otherwise =
+              let size = length xs
+                  ii = fromIntegral r2 `mod` size
+                  jj = (ii + 1 + fromIntegral r3 `mod` (size - 1)) `mod` size
+               in (,) <$> atMay xs ii <*> atMay xs jj
         pickFrom xs = if null xs then Nothing else atMay xs (fromIntegral r2 `mod` length xs)
         -- Undo and redo need the focus in the list: on a header if it is
         -- nowhere there.
@@ -1573,6 +1621,17 @@ rowSelection i = do
 
 rowFocused :: Int -> PageM s Bool
 rowFocused i = unsafeIOToPageM (js_row_focused i)
+
+-- | Drag the text from one place to another of the row at an index and
+-- drop it in another row at a place (test-slides.js's
+-- wiki_test_slide_drag), with the copy key or not; where in that row the
+-- drop landed.
+rowDrag :: Int -> Int -> Int -> Int -> Int -> Bool -> PageM s Int
+rowDrag source a b target at copy = do
+  eventually $ (rowText source >>= (`shouldSatisfy` (not . T.null))) >> (rowText target >>= (`shouldSatisfy` (not . T.null)))
+  landed <- unsafeIOToPageM (js_slide_drag source a b target at copy)
+  settle
+  pure landed
 
 -- | Whether the cursor of the row at an index can be seen.
 rowCursorSeen :: Int -> PageM s Bool

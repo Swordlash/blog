@@ -96,7 +96,7 @@ import {
   insertCompletionText,
   pickedCompletion,
 } from "@codemirror/autocomplete";
-import { Annotation, ChangeSet, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
 import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, redo, redoSelection, standardKeymap, undo, undoSelection } from "@codemirror/commands";
 import {
@@ -1064,13 +1064,15 @@ const emojiOfOption = {
 
 // The completion of one editor, of mentions and of emoji, in one of the
 // library's completions (two would fight over the keys and the list), and
-// how the component answers it.
-// A completion source that the master leaves to its rows while a
-// presentation is edited slide by slide (attachRow): a row's typing reaches
-// the master as typing, and the master would ask the same question again
-// and open a list of its own. The rows share the extension, and ask.
-const masterQuiet = (host, source) => (context) =>
-  context.view !== undefined && context.view === host.wikiEditor?.view && host.wikiEditor.slidesShown() ? null : source(context);
+// how the component answers it. The master and the rows of the slide mode
+// share it (attachRow); slide by slide, the master's asks nothing and never
+// starts (masterCompletion, quiet), so that a row's typing, which reaches
+// the master as typing, starts no query of the master's: not even one that
+// would be "pending" until its sources answered nothing.
+
+// The master's completion: quiet while the presentation is edited slide by
+// slide, and the whole one for the raw Markdown.
+const masterCompletion = new Compartment();
 
 const completions = (host) => {
   const whole = (context) => wholeAt(host, context);
@@ -1138,17 +1140,18 @@ const completions = (host) => {
     { key: "Escape", run: escape },
     { key: "Tab", run: acceptCompletion },
   ];
+  const config = { icons: false, defaultKeymap: false, addToOptions: [emojiOfOption] };
+  const ownKeys = Prec.highest(keymap.of(keys.map((binding) => ({ ...binding, stopPropagation: true }))));
   return {
     extension: [
-      autocompletion({
-        override: [mentionSource(people, whole), emojiSource(names, whole)].map((source) => masterQuiet(host, source)),
-        icons: false,
-        defaultKeymap: false,
-        addToOptions: [emojiOfOption],
-      }),
+      autocompletion({ ...config, override: [mentionSource(people, whole), emojiSource(names, whole)] }),
       forgetMoves,
-      Prec.highest(keymap.of(keys.map((binding) => ({ ...binding, stopPropagation: true })))),
+      ownKeys,
     ],
+    // The same, asking nothing and never starting on typing: the master's
+    // slide by slide (masterCompletion). The library's state stays, so that
+    // a query or a timer of its from before goes on finding it.
+    quiet: [autocompletion({ ...config, override: [], activateOnTyping: false }), forgetMoves, ownKeys],
     mentioned: people.answer,
     emojied: names.answer,
     status: (state) => completionStatus(state) ?? "",
@@ -1593,6 +1596,51 @@ export function attachRow(masterHost, rowHost, key, focus) {
             selectionToMaster(key, focused, masterView);
             return false;
           },
+          // Selected text dragged out of this row: where it is in the
+          // master's text, and the text it is in, for a drop in another
+          // row (below). CodeMirror keeps a drag in the view it started in,
+          // and a row cannot take text out of another.
+          dragstart: (_event, dragged) => {
+            const now = rangeOf(masterView.state, key);
+            const { from, to } = dragged.state.selection.main;
+            masterHost.wikiRowDrag = now === null || from === to ? null : { key, from: now.from + from, to: now.from + to, doc: masterView.state.doc };
+            return false;
+          },
+          dragend: () => {
+            delete masterHost.wikiRowDrag;
+            return false;
+          },
+          // Text dragged from another row of the same master moves, as it
+          // does in one editor: one change of the master's, the source
+          // taken out and the text put in where it is dropped, one step of
+          // the history (move.drop), the text put in selected. With the
+          // platform's copy key (Alt on a Mac, Ctrl elsewhere, as
+          // CodeMirror decides), or when the master's text changed since
+          // the drag started, the drop is CodeMirror's own: the text is put
+          // in, and the source stays. A drop in the same row, and one from
+          // outside the page, are CodeMirror's own too.
+          drop: (event, here) => {
+            const drag = masterHost.wikiRowDrag;
+            if (!drag || drag.key === key || event.dataTransfer?.files?.length) return false;
+            delete masterHost.wikiRowDrag;
+            const copying = /Mac/.test(navigator.platform) ? event.altKey : event.ctrlKey;
+            const now = rangeOf(masterView.state, key);
+            if (copying || now === null || drag.doc !== masterView.state.doc) return false;
+            const at = now.from + here.posAtCoords({ x: event.clientX, y: event.clientY }, false);
+            const changes = masterView.state.changes([
+              { from: drag.from, to: drag.to },
+              { from: at, insert: masterView.state.sliceDoc(drag.from, drag.to) },
+            ]);
+            event.preventDefault();
+            here.focus();
+            masterView.dispatch({
+              changes,
+              selection: { anchor: changes.mapPos(at, -1), head: changes.mapPos(at, 1) },
+              userEvent: "move.drop",
+              scrollIntoView: true,
+            });
+            return true;
+          },
           // The browser's own undo and redo (a menu, a gesture) are the
           // master's too.
           beforeinput: (event) => {
@@ -1892,7 +1940,7 @@ export function attach(textarea, host, original, codeTokens) {
   const completion = completions(host);
   // Whether a presentation is edited slide by slide, its rows typing into
   // this master: the component says (slidesMode). The master's completion
-  // asks nothing then (masterQuiet), and its focus goes to a row.
+  // is quiet then (masterCompletion), and its focus goes to a row.
   let bySlide = false;
   // Whether the change being made is the author going somewhere (the next
   // problem), which a jump from row to row closes the row left for.
@@ -1924,7 +1972,7 @@ export function attach(textarea, host, original, codeTokens) {
       history(),
       titled ? titleLine : [],
       changes.extensions,
-      completion.extension,
+      masterCompletion.of(completion.extension),
       // Enter is a line break and nothing more, as in the textarea, except
       // while the completion's list is open, when it may choose (the
       // completion's keys come first); Tab and the toolbar's shortcuts are
@@ -2029,6 +2077,10 @@ export function attach(textarea, host, original, codeTokens) {
     // into the master: the master's completion is then off, and its focus
     // goes to a row (focus below).
     slidesMode: (on) => {
+      if (on !== bySlide) {
+        if (on) closeCompletion(view);
+        view.dispatch({ effects: masterCompletion.reconfigure(on ? completion.quiet : completion.extension) });
+      }
       bySlide = on;
     },
     slidesShown: () => bySlide,

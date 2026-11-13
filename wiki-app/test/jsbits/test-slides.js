@@ -144,6 +144,31 @@ function wiki_test_master_layout() {
   return document.querySelector(".editor-cm:not(.slide-row-body)")?.wikiEditor?.rows?.() ?? "{}";
 }
 
+// Drag the text from `a` to `b` of the row at index `from` and drop it in
+// the row at index `to` at `at`, with the platform's copy key held or not:
+// the events a mouse makes (dragstart on the selection, dragover and drop
+// where it is let go, dragend where it started). Where in the row the drop
+// lands, as the row's editor reads the drop's place; -1 without the rows.
+// Offsets are UTF-16 units: the tests drag ASCII.
+function wiki_test_slide_drag(from, a, b, to, at, copy) {
+  const source = wikiTestSlideRow(from);
+  const target = wikiTestSlideRow(to);
+  if (!source || !target) return -1;
+  source.select(a, b);
+  const dataTransfer = new DataTransfer();
+  source.view.contentDOM.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer }));
+  const box = target.view.coordsAtPos(at);
+  if (!box) return -1;
+  const mac = /Mac/.test(navigator.platform);
+  const place = { clientX: box.left + 1, clientY: (box.top + box.bottom) / 2 };
+  const init = { bubbles: true, cancelable: true, dataTransfer, ...place, ctrlKey: copy && !mac, altKey: copy && mac };
+  const landed = target.view.posAtCoords({ x: place.clientX, y: place.clientY }, false);
+  target.view.contentDOM.dispatchEvent(new DragEvent("dragover", init));
+  target.view.contentDOM.dispatchEvent(new DragEvent("drop", init));
+  source.view.contentDOM.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer }));
+  return landed;
+}
+
 // Where the focus is in the rows' list: "text N" in the text of the row at
 // index N, "header N" on its header's button, "elsewhere" outside the list,
 // and "nowhere" when nothing has it.

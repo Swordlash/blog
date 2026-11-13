@@ -60,6 +60,8 @@ $( browserJS
      , ("js_master_shown", "wiki_test_rows_master_shown", Safe, [t|IO Bool|])
      , ("js_errors", "wiki_test_rows_errors", Safe, [t|IO JSText|])
      , ("js_master_completing", "wiki_test_rows_master_completing", Safe, [t|IO JSText|])
+     , ("js_master_watch", "wiki_test_rows_master_watch", Safe, [t|IO ()|])
+     , ("js_master_seen", "wiki_test_rows_master_seen", Safe, [t|IO JSText|])
      , ("js_row_focused", "wiki_test_rows_focused", Safe, [t|Int -> IO Bool|])
      , ("js_row_type", "wiki_test_rows_type", Safe, [t|Int -> JSText -> IO ()|])
      , ("js_master_shown_text", "wiki_test_rows_master_shown_text", Safe, [t|IO JSText|])
@@ -206,9 +208,15 @@ spec m = do
 
   it "completes a mention and an emoji in the row that asked, through the master's host, and nowhere else" $ runPage $ do
     ui <- start deck [1, 2]
+    -- The master's completion watched from before the typing: the row's
+    -- typing reaches the master, which never starts a query of its own,
+    -- not even one that answers nothing.
+    unsafeIOToPageM js_master_watch
     typeAt ui 2 (rowLength deck 2) " :smi"
     eventually $ rowCompleting 2 `shouldReturn` "active"
     _ <- find ui ".rows-list li[data-key=\"2\"] .cm-tooltip-autocomplete"
+    unsafeIOToPageM (threadDelay 300_000)
+    (fromJSText <$> unsafeIOToPageM js_master_seen) `shouldReturn` "[]"
     -- Not in the master, which the row's typing reached, nor in row 1.
     (fromJSText <$> unsafeIOToPageM js_master_completing) `shouldReturn` ""
     rowCompleting 1 `shouldReturn` ""

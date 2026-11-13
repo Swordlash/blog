@@ -120,6 +120,25 @@ function wiki_test_rows_master_completing() {
   return wikiTestMaster()?.completing() ?? "";
 }
 
+// Every status the master's own completion shows from now on, read each
+// millisecond the page is free, until wiki_test_rows_master_seen: as JSON,
+// [] when it never had one (a query of the master's is "pending" for as
+// long as the library waits after a keystroke, a tenth of a second).
+function wiki_test_rows_master_watch() {
+  clearInterval(globalThis.wikiTestMasterWatch);
+  const seen = new Set();
+  globalThis.wikiTestMasterSeen = seen;
+  globalThis.wikiTestMasterWatch = setInterval(() => {
+    const status = wikiTestMaster()?.completing() ?? "";
+    if (status !== "") seen.add(status);
+  }, 1);
+}
+
+function wiki_test_rows_master_seen() {
+  clearInterval(globalThis.wikiTestMasterWatch);
+  return JSON.stringify([...(globalThis.wikiTestMasterSeen ?? [])]);
+}
+
 // The events counted since wiki_test_rows_watch, as JSON ["input",
 // "line 3", ...].
 function wiki_test_rows_told() {
