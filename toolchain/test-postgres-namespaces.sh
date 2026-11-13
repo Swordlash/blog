@@ -59,11 +59,37 @@ run() {
 # (dash's kill takes no "--": a process group is "-PGID" right after the
 # signal.)
 group_alive() { kill -0 "-$1" 2>/dev/null; }
-# The sessions PostgreSQL has on the databases listed in the file.
-# A failure of the query is said, not compared with 0.
+# The clients connected to the databases listed in the file: a count, or
+# nothing when the question could not be asked (psql goes through docker
+# exec, which can fail on a loaded machine). PostgreSQL's own workers (an
+# autovacuum worker visits a database now and then) are not clients and
+# are not counted.
 sessions_on() {
   names=$(sed "s/.*/'&'/" "$1" | paste -sd, -)
-  sql "SELECT count(*) FROM pg_stat_activity WHERE datname IN ($names)" || echo "the sessions could not be counted"
+  sql "SELECT count(*) FROM pg_stat_activity WHERE datname IN ($names) AND backend_type = 'client backend'" 2>/dev/null || true
+}
+# Wait until no client is connected to the databases listed in the file,
+# seen so ten looks in a row, a tenth of a second apart, for at most six
+# hundred looks (a minute and more). A command the killed run started in
+# the container (docker exec does not stop it with its client) can still
+# connect after a look that saw none, so one look of none is not enough;
+# and a look whose question failed counts as no look. The last count is
+# left in $last.
+unused() {
+  quiet=0
+  tries=0
+  last=''
+  while [ "$quiet" -lt 10 ] && [ "$tries" -lt 600 ]; do
+    tries=$((tries + 1))
+    last=$(sessions_on "$1")
+    case $last in
+      0) quiet=$((quiet + 1)) ;;
+      '') ;;
+      *) quiet=0 ;;
+    esac
+    [ "$quiet" -ge 10 ] || sleep 0.1
+  done
+  [ "$quiet" -ge 10 ]
 }
 
 listing >"$work/before"
@@ -120,8 +146,8 @@ wait "$killed" 2>/dev/null || true
 # docker exec clients of its pg_dump and psql) are not this shell's
 # children: killed, each is a zombie until whoever adopts it reaps it, and
 # kill -0 finds a zombie. So the group is given up to five seconds to be
-# gone, as the sessions are given thirty below, so that the check does not
-# race the reaping.
+# gone, as the sessions are given a minute below, so that the check does
+# not race the reaping.
 tries=0
 while group_alive "$killed" && [ "$tries" -lt 50 ]; do
   tries=$((tries + 1))
@@ -137,12 +163,7 @@ if kill -0 "$killed" 2>/dev/null || group_alive "$killed"; then
   alive=1
 else
   listing | grep -vxF -f "$work/known" >"$work/left" || true
-  tries=0
-  while [ -s "$work/left" ] && [ "$(sessions_on "$work/left")" != 0 ] && [ "$tries" -lt 300 ]; do
-    tries=$((tries + 1))
-    sleep 0.1
-  done
-  [ ! -s "$work/left" ] || [ "$(sessions_on "$work/left")" != 0 ] || dead=1
+  if [ -s "$work/left" ] && unused "$work/left"; then dead=1; fi
 fi
 killed_pid=$killed
 killed=''
@@ -151,10 +172,10 @@ if [ -n "$alive" ]; then
 elif [ ! -s "$work/left" ]; then
   fail "the killed run (pid $killed_pid) left no database: the test needs one, to check that the next run passes beside it"
 elif [ -z "$dead" ]; then
-  fail "the killed run's databases still have sessions thirty seconds after the kill: $(sessions_on "$work/left")"
-  # Which, and doing what: for the next one who reads this failure.
+  fail "the killed run's databases still had clients after six hundred looks a tenth of a second apart (${last:-not counted} at the last)"
+  # Which, whose and doing what: for the next one who reads this failure.
   names=$(sed "s/.*/'&'/" "$work/left" | paste -sd, -)
-  sql "SELECT datname || ' | ' || state || ' | since ' || (now() - query_start)::text || ' | ' || left(regexp_replace(query, '\s+', ' ', 'g'), 160) FROM pg_stat_activity WHERE datname IN ($names)" >&2 || true
+  sql "SELECT concat_ws(' | ', datname, backend_type, 'pid ' || pid, coalesce(application_name, ''), coalesce(state, ''), 'since ' || (now() - backend_start)::text, left(regexp_replace(coalesce(query, ''), '\s+', ' ', 'g'), 160)) FROM pg_stat_activity WHERE datname IN ($names)" >&2 || true
 elif [ -s "$work/left" ] && (run next) && [ -z "$(listing | grep -vxF -f "$work/known" | grep -vxF -f "$work/left")" ]; then
   pass "a run killed part-way, its processes gone and its databases unused, leaves $(wc -l <"$work/left") databases, and the next run passes all the same and leaves none of its own"
 else
