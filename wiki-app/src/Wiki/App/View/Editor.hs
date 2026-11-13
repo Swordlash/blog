@@ -1843,7 +1843,7 @@ component =
       | otherwise = "Drop or paste files here to attach them. Ctrl+S saves; Tab indents."
 
     attachmentList :: Bool -> Work -> H.ComponentHTML Action Slots m
-    attachmentList writable work =
+    attachmentList hasTextAtCursor work =
       [hh|
         <section class="editor-attachments">
           <h2>Attachments</h2>
@@ -1855,7 +1855,7 @@ component =
                 <li>
                   <a href={{ Body.linkUrlOf work.addresses a.id }} download={{ a.name.text }}>{{ a.name.text }}</a>
                   <span class="attachment-meta">{{ a.mediaType.text }}, {{ fileSize a.size }}</span>
-                  <button type="button" class="attachment-insert" disabled={{ not writable }} title={{ if writable then "Insert a reference to it at the cursor" else "Open a slide to insert it there" :: Text }} onClick={{ const (Insert a) }}>Insert</button>
+                  <button type="button" class="attachment-insert" disabled={{ not hasTextAtCursor }} title={{ if hasTextAtCursor then "Insert a reference to it at the cursor" else "Open a slide to insert it there" :: Text }} onClick={{ const (Insert a) }}>Insert</button>
                 </li>
               {% end %}
             </ul>
@@ -1974,8 +1974,8 @@ component =
       ToggleMenu which -> do
         was <- gets (\st -> st.menu)
         closeMenu
-        writable <- gets writesAtCursor
-        unless (was == Just which || not writable) $ do
+        hasTextAtCursor <- gets writesAtCursor
+        unless (was == Just which || not hasTextAtCursor) $ do
           modify (\st -> st {menu = Just which, emojiQuery = ""})
           watch <- gets (\st -> st.menuHolder) >>= (`watchPopup` CloseMenu)
           modify (\st -> st {menuWatch = watch})
