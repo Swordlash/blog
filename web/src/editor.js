@@ -1877,9 +1877,15 @@ const rowsSync = (host) =>
           for (const row of layout) if (row.to + 1 >= fromB && row.from - 1 <= toB) remark.add(row.key);
         });
       }
+      // Every row the selection's range, before and after, lies in: a
+      // match across rows is marked current in each row it runs through,
+      // not only in the one it starts in. (A closed row's header counts a
+      // match in the row it starts in, once: that is by its start.)
       if (update.docChanged || update.selectionSet) {
-        remark.add(rowAtPosition(update.state, update.state.selection.main.from));
-        remark.add(rowAtPosition(update.startState, update.startState.selection.main.from));
+        for (const state of [update.startState, update.state]) {
+          const { from, to } = state.selection.main;
+          for (const row of state.field(rowsLayout)) if (row.from <= to && row.to >= from) remark.add(row.key);
+        }
       }
     }
     for (const [key, view] of rows) {

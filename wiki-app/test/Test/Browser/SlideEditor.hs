@@ -1215,6 +1215,28 @@ spec m = do
     searchFocus `shouldReturn` "text 3"
     rowSelection 3 `shouldReturn` (10, 16)
 
+  it "marks a match across rows as the current one in every open row it runs through, and in no other after a step" $ runPage $ do
+    (ui, _) <- openDeck searchDeck
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀"]
+    for_ ["One", "Two", "Three"] $ \title -> rowHeader ui title >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀", "One", "Two", "Three"]
+    rowHeader ui "Two" >>= focus
+    press "Control+f"
+    find ui ".editor-search-regexp" >>= click
+    -- A slide's last line, ended by a full stop, and the next slide's
+    -- heading: three matches, each across two rows.
+    find ui ".editor-search-find" >>= (`typeText` "\\.\\s+## ")
+    eventually $ said ui `shouldReturn` "3 matches"
+    let currentRows = ordNub . sort . map (\(i, _, _) -> i) . filter (\(_, _, c) -> c) <$> searchMarks
+    find ui ".editor-search-next" >>= click
+    eventually $ currentRows `shouldReturn` [0, 1]
+    -- The replacement edited: every mark found again.
+    find ui ".editor-search-replacement" >>= (`typeText` "x")
+    find ui ".editor-search-next" >>= click
+    eventually $ currentRows `shouldReturn` [1, 2]
+    find ui ".editor-search-next" >>= click
+    eventually $ currentRows `shouldReturn` [2, 3]
+
   it "selects a regular expression's match across two slides in the row it starts in" $ runPage $ do
     (ui, _) <- openDeck searchDeck
     eventually $ openTitles ui `shouldReturn` ["Deck 😀"]
