@@ -1413,6 +1413,13 @@ const rowsSync = (host) =>
       // (keptInRow), may have come into the row or left it.
       if ((update.selectionSet || update.docChanged) && !view.hasFocus) view.dispatch({ effects: keptRefresh.of(null), annotations: mirrored.of(true) });
     }
+    // A change of the master's that asks for its cursor to be seen (an
+    // undo, a redo, the next problem, the toolbar writing) scrolls the open
+    // row the cursor is in: the master itself is hidden.
+    if (origin === undefined && update.transactions.some((tr) => tr.scrollIntoView)) {
+      const shown = rows.get(rowAtPosition(update.state, update.state.selection.main.head));
+      if (shown) cursorIntoView(shown);
+    }
     // A step, or its undo or redo: the component reads the rows again at
     // once ("wiki-relayout"), and decides which open and which has the
     // focus.
@@ -1445,9 +1452,18 @@ const rowsSync = (host) =>
           ? "redo"
           : "write";
     host.wikiFocusedRow = target;
-    rows.get(target)?.focus();
+    const open = rows.get(target);
+    if (open) {
+      open.focus();
+      cursorIntoView(open);
+    }
     want(target, reason !== "write" && left !== undefined, true, reason);
   });
+
+// Scroll a row's cursor into view: CodeMirror's focus does not scroll, and
+// a row opened or focused by a jump (an undo, the next problem) may be
+// below or above the window.
+const cursorIntoView = (view) => view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: "nearest" }) });
 
 // Put the row with this key of the master's layout in `rowHost`: a
 // CodeMirror over its range of the master's text, the master being the
@@ -1547,7 +1563,10 @@ export function attachRow(masterHost, rowHost, key, focus) {
       if (rowHost.wikiRow?.view === view) delete rowHost.wikiRow;
     },
   };
-  if (focus) view.focus();
+  if (focus) {
+    view.focus();
+    cursorIntoView(view);
+  }
 }
 
 // Put CodeMirror in `host` in place of `textarea`, with `original`, the
@@ -1895,7 +1914,11 @@ export function attach(textarea, host, original, codeTokens) {
   const focusText = () => {
     if (!bySlide) return view.focus();
     const key = rowAtPosition(view.state, view.state.selection.main.head);
-    host.wikiRows?.get(key)?.focus();
+    const row = host.wikiRows?.get(key);
+    if (row) {
+      row.focus();
+      cursorIntoView(row);
+    }
   };
 
   const editor = {

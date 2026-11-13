@@ -31,6 +31,20 @@ function wiki_test_slide_row_focused(index) {
   return wikiTestSlideRow(index)?.hasFocus() ?? false;
 }
 
+// Whether the cursor of the row at an index can be seen: inside the window
+// and inside every element around it that scrolls.
+function wiki_test_slide_row_cursor_seen(index) {
+  const view = wikiTestSlideRow(index)?.view;
+  const at = view?.coordsAtPos(view.state.selection.main.head);
+  if (!at) return false;
+  for (let element = view.scrollDOM.parentElement; element !== null; element = element.parentElement) {
+    if (!/(auto|scroll)/.test(getComputedStyle(element).overflowY) || element.scrollHeight <= element.clientHeight) continue;
+    const box = element.getBoundingClientRect();
+    if (at.top < box.top || at.bottom > box.bottom) return false;
+  }
+  return at.top >= 0 && at.bottom <= window.innerHeight;
+}
+
 // Where the focus is in the rows' list: "text N" in the text of the row at
 // index N, "header N" on its header's button, "elsewhere" outside the list,
 // and "nowhere" when nothing has it.

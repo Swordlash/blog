@@ -44,6 +44,7 @@ $( browserJS
      ["jsbits/test-slides.js", "jsbits/test-files.js"]
      [ ("js_slide_fits", "wiki_test_slide_fits", Safe, [t|IO JSText|])
      , ("js_slide_focus", "wiki_test_slide_focus", Safe, [t|IO JSText|])
+     , ("js_row_cursor_seen", "wiki_test_slide_row_cursor_seen", Safe, [t|Int -> IO Bool|])
      , ("js_drop_filePromise", "wiki_test_drop_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
      , ("js_pastePromise", "wiki_test_paste", Safe, [t|JSText -> JSText -> JSText -> JSText -> JSText -> IO (Promise Bool)|])
      , ("js_row_text", "wiki_test_slide_row_text", Safe, [t|Int -> IO JSText|])
@@ -599,13 +600,31 @@ spec m = do
     rowSelect 1 8 14
     eventually $ kept `shouldReturn` ""
 
-  it "takes back a selection with Ctrl+U in a row, from the one history" $ runPage $ do
+  it "takes back a selection with Ctrl+U in a row, from the one history, and indents with Tab" $ runPage $ do
     (ui, _) <- openDeck deck
     eventually $ openTitles ui `shouldReturn` ["Deck"]
     rowSelect 0 8 8
     rowSelect 0 10 12
     press "Control+u"
     eventually $ rowSelection 0 `shouldReturn` (8, 8)
+    press "Tab"
+    eventually $ markdown ui `shouldReturn` T.replace "By me." "  By me." deck
+    rowFocused 0 `shouldReturn` True
+
+  it "scrolls to the cursor of the row an undo takes it to, the editor's own text being hidden" $ runPage $ do
+    let long = T.intercalate "\n\n" ("# Long" : concat [["## S" <> show i, T.intercalate "\n\n" (replicate 8 "A paragraph of its own.")] | i <- [1 .. 30 :: Int]])
+    (ui, _) <- openDeck long
+    rowHeader ui "S30" >>= click
+    eventually $ openTitles ui `shouldReturn` ["S1", "S30"]
+    end <- T.length <$> eventually (rowText 30 >>= \t -> t <$ (t `shouldSatisfy` (not . T.null)))
+    rowSelect 30 end end
+    openRowContent ui >>= (`typeText` "x")
+    eventually $ markdown ui `shouldReturn` long <> "x"
+    rowContent ui "S1" >>= click
+    eventually $ rowCursorSeen 30 `shouldReturn` False
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` long
+    eventually $ rowCursorSeen 30 `shouldReturn` True
 
   it "gives the focus to the row an undo or a redo takes the cursor to when it takes away the row the focus was in, its text when open and its header when closed" $ runPage $ do
     (ui, _) <- openDeck deck
@@ -1062,6 +1081,10 @@ rowSelection i = do
 
 rowFocused :: Int -> PageM s Bool
 rowFocused i = unsafeIOToPageM (js_row_focused i)
+
+-- | Whether the cursor of the row at an index can be seen.
+rowCursorSeen :: Int -> PageM s Bool
+rowCursorSeen i = unsafeIOToPageM (js_row_cursor_seen i)
 
 -- | Where the focus is in the rows' list (test-slides.js's
 -- wiki_test_slide_focus).

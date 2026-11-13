@@ -646,11 +646,12 @@ data State = State
   , deletedOpen :: [RowKey]
   -- ^ The rows a step took away (a delete, its redo, the undo of a new
   -- slide) while they were open: an undo or redo that brings one back
-  -- opens it. Each removal says again whether its row was open: a key
-  -- leaves the list when its row is taken away closed, and every key
-  -- leaves it with the rows when the editor is loaded again. Keys are
-  -- never given twice, so a key the history no longer reaches is never
-  -- matched by mistake; the list holds at most one key per row taken away.
+  -- opens it. Each removal by a step says again whether its row was open.
+  -- A key leaves the list when its row is there again, when a step takes
+  -- the row away closed, and with all the rows when the editor is loaded
+  -- again. Keys are never given twice, so a key the history no longer
+  -- reaches is never matched by mistake; the list holds at most one key
+  -- per row taken away.
   , announcement :: Text
   -- ^ What the rows' live region says last: a move, a delete, a new slide,
   -- a jump.
@@ -2579,11 +2580,11 @@ component =
                         -- remembered as open or not as it was then, in place
                         -- of what was remembered of it before, so that any
                         -- number of undos and redos brings it back as it
-                        -- was when it went.
-                        gone = [r.key | r <- old.rows, r.key `notElem` keys]
-                        remembered s
-                          | afterStep = [k | k <- gone, wasOpen k] <> filter (`notElem` gone) s.deletedOpen
-                          | otherwise = s.deletedOpen
+                        -- was when it went. A row that is there again is
+                        -- forgotten: the step that takes it away next says
+                        -- again whether it was open.
+                        gone = if afterStep then [r.key | r <- old.rows, r.key `notElem` keys] else []
+                        remembered s = [k | k <- gone, wasOpen k] <> filter (`notElem` (gone <> keys)) s.deletedOpen
                     unless (new == old) $ do
                       taken <- H.liftEffect (setRows host layout.text new)
                       when taken . keepingRowsFocus $
