@@ -782,6 +782,27 @@ spec m = do
     eventuallyWithin 15000 $ rowProblems ui `shouldReturn` []
     length <$> findAll ui ".editor-problems" `shouldReturn` 0
 
+  it "measures a slide again when its diagram draws after the slides were measured, with nothing else changing" $ runPage $ do
+    -- A diagram tall enough to cut its slide, held until every slide is
+    -- measured without it: the slide fits then.
+    let tall = T.intercalate "\n" ["# Deck", "", "## Diagram", "", "Above it.", "", "```mermaid", "graph TD", T.intercalate "\n" ["  N" <> show i <> " --> N" <> show (i + 1) | i <- [1 .. 12 :: Int]], "```"]
+    unsafeIOToPageM js_fit_log_start
+    unsafeIOToPageM (js_mermaid (toJSText "hold"))
+    (ui, _) <- openDeck tall
+    eventually $ previewFits ui `shouldReturn` ["fits", "fits"]
+    eventually $ editorFits `shouldReturn` ["fits", "fits"]
+    before <- fitLog
+    [d.drawn | d <- before, d.diagrams > 0] `shouldSatisfy` (\drawn -> not (null drawn) && all (== 0) drawn)
+    -- The diagram drawn, and nothing else: no keystroke, no other slide
+    -- shown. The watch of the cards measures again by itself.
+    unsafeIOToPageM (js_mermaid (toJSText "as-is"))
+    eventuallyWithin 15000 $ length <$> findAll ui ".editor-preview .wiki-mermaid svg" `shouldReturn` 1
+    eventuallyWithin 15000 $ do
+      after <- fitLog
+      lastMay [d.drawn | d <- after, d.diagrams > 0] `shouldBe` Just 1
+    eventuallyWithin 15000 $ previewFits ui `shouldReturn` ["fits", "overflowing"]
+    eventuallyWithin 15000 $ editorFits `shouldReturn` ["fits", "overflowing"]
+
   it "puts every key typed through a split and a join where the caret is, keys coming as the rows are cut again" $ runPage $ do
     (ui, _) <- openDeck deck
     eventually $ openTitles ui `shouldReturn` ["Deck"]
@@ -887,7 +908,10 @@ spec m = do
     typed `shouldSatisfy` (< 5000)
 
   it "moves the cursor to a far slide of sixty slides of a hundred lines without holding the page, and no slower the second time" $ runPage $ do
-    (ui, _) <- openDeck longDeck
+    -- CodeMirror takes the deck's 300,000 characters in seconds on a
+    -- loaded machine: more than 'openDeck' waits.
+    (ui, _) <- openDeckWith False longDeck
+    _ <- eventuallyWithin 60_000 (editorText ui)
     -- Settled: the rows cut and every slide measured.
     eventuallyWithin 120_000 $ length <$> rowTitles ui `shouldReturn` 61
     eventuallyWithin 120_000 $ (fromJSText <$> unsafeIOToPageM js_slide_fits) >>= (`shouldSatisfy` (not . T.isInfixOf "unmeasured"))
@@ -1399,8 +1423,12 @@ spec m = do
       unsafeIOToPageM js_fit_log_start
       let text = fitDeck theme aspect
       (ui, wiki) <- openDeck text
-      -- Every slide measured, with its diagram drawn.
-      fits <- eventually $ do
+      -- Every slide measured, with its diagram drawn. Mermaid's bundle is
+      -- fetched and the diagram drawn up to 2.6 s after the editor opens
+      -- on a loaded machine, and its measure follows a frame to a few
+      -- hundred milliseconds later: a wait of two seconds failed there,
+      -- the diagram drawn and its measure not yet taken.
+      fits <- eventuallyWithin 15000 $ do
         found <- previewFits ui
         length found `shouldBe` 24
         found `shouldSatisfy` notElem "unmeasured"
