@@ -1879,7 +1879,23 @@ which the wiki pins since #227.
   page" (the request an `IntersectionObserver` starts after
   `bringNear`, waited for two seconds), the Vault suite's check for an
   exportable key (one example's leak fails every later one), and
-  `page.goBack` in the server smoke test's interactive SVG walk.
+  `page.goBack` in the server smoke test's interactive SVG walk
+  (it timed out four times that day). **(b) is done (#262):**
+  `toolchain/smoke-test.mjs` is gone; `wiki-smoke-demo` does what it
+  did in 82 examples with no fixed pause (of the script's 20
+  `eventually` calls 5 stay, each on something that is not the
+  program's), the adoption check through the library's two halves and
+  `Wiki.Smoke.Adoption`, which (c) uses too. The assistant's turn
+  counts as the program's work, so `waitQuiet` after Send means the
+  answer has ended. The call timeout is the plain one times the
+  throttle. The throttled run is the job `smoke-throttled`, weekly and
+  by hand. `npm run smoke-test` runs the Haskell suite for the demo and
+  then the node runner for the server's script, where three reads of
+  the address straight after a view now wait for the router. The
+  driver lacks response sizes on a request (the suite reads the files'
+  sizes) and a count of what `leaveOutContents` left out. Left: (c)
+  `test-passkeys.mjs` and `smoke-test-server.mjs` with the encrypted
+  walk and the canary, then (d).
 - **WP5.95 No view takes an older answer over a newer one (found by
   Codex on #243, rounds 12 and 13; left there on purpose).** The page view
   drops a fetched page older than the one it shows (`takesPage`, by
