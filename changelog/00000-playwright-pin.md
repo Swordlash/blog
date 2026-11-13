@@ -17,3 +17,5 @@ technical: true
 - The "Saved", "Copied" and export notices, and the writing assistant's
   seconds counter, are timed in a way the driver knows not to wait for.
   They look and last as before.
+- With "reduce motion" set in your system, the administration's list of
+  users no longer fades back in after it loads a page: it changes at once.
