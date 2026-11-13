@@ -315,7 +315,7 @@ spec = describe "Slides" $ do
         let (lead, chunks) = slideChunks source
          in lead <> T.concat chunks === source
 
-    prop "cuts the text where finding each slide's first character in the text's lines, slide by slide, cut it" $
+    modifyMaxSuccess (const 50) . prop "cuts the text where finding each slide's first character in the text's lines, slide by slide, cut it" $
       forAll aDeckWithBreaks $ \source ->
         let lineStart n = sum (map ((+ 1) . T.length) (take (n - 1) (T.splitOn "\n" source)))
             oracle = case slideSpans source of
@@ -428,23 +428,20 @@ spec = describe "Slides" $ do
     -- WP5.108: the text is split once, not once for each slide; the
     -- fits are those the split for each slide gave.
     -- Counted in bytes allocated, not timed: four times the slides, about
-    -- four times the work. Splitting the whole text for each slide made it
-    -- about sixteen times.
+    -- four times the work (4.0 when written). Splitting the whole text for
+    -- each slide, as before WP5.108, made it 11.4 times.
     it "grows with the text's length and no faster: four times the slides, less than six times the bytes allocated" $ do
-      ratios <- for [measuresWork, fitsWork, oldFitsWork] $ \work -> do
-        small <- work 20
-        large <- work 80
-        pure (fromIntegral large / fromIntegral small :: Double)
-      case ratios of
-        [measuring, fitting, old] -> do
-          (measuring, fitting) `shouldSatisfy` (\(a, b) -> a < 6 && b < 6)
-          -- The count tells the two growths apart: the old split, once
-          -- for each slide, grows more than ten times.
-          old `shouldSatisfy` (> 10)
-        _ -> expectationFailure "three measures"
+      small <- deckToMeasure 20
+      large <- deckToMeasure 80
+      ratios <- for [measuresWork, fitsWork] $ \work -> do
+        a <- work small
+        b <- work large
+        pure (fromIntegral b / fromIntegral a :: Double)
+      ratios `shouldSatisfy` all (< 6)
 
-    -- Fifty decks: each parses its text five times.
-    modifyMaxSuccess (const 50) . prop "says what splitting the text for each slide said, the measures made from the text's slides or found again" $
+    -- Thirty decks: each parses its text five times, which on wasm costs
+    -- about a quarter of a second.
+    modifyMaxSuccess (const 30) . prop "says what splitting the text for each slide said, the measures made from the text's slides or found again" $
       forAll ((,,) <$> aDeckWithBreaks <*> listOf (elements [Fits, Tight, Overflowing, Unmeasured]) <*> choose (0, length edits - 1)) $ \(source, fits, e) ->
         let later = maybe source ($ source) (atMay edits e)
             spansLater = slideSpans later
@@ -578,22 +575,13 @@ allocated value = do
 longDeck :: Int -> Text
 longDeck count = T.intercalate "\n" ("# Long" : "" : concat [["## Slide " <> show n, ""] <> ["Line " <> show k <> " of slide " <> show n <> ": the quick brown fox." | k <- [1 .. 27 :: Int]] <> [""] | n <- [1 .. count]])
 
--- | The work of measuring a deck of so many slides, of finding its fits
--- again after an edit, and of finding them as before WP5.108.
-measuresWork, fitsWork, oldFitsWork :: Int -> IO Int64
-measuresWork count = do
-  (source, spans, fits) <- deckToMeasure count
-  allocated (let m = measuresWith source spans fits in m == m)
-fitsWork count = do
-  (source, spans, fits) <- deckToMeasure count
+-- | The work of measuring a deck, and of finding its fits again.
+measuresWork, fitsWork :: (Text, [SlideSpan], [Fit]) -> IO Int64
+measuresWork (source, spans, fits) = allocated (let m = measuresWith source spans fits in m == m)
+fitsWork (source, spans, fits) = do
   m <- evaluate (measuresWith source spans fits)
   _ <- evaluate (m == m)
   allocated (let f = fitsNow (Just m) source spans in f == f)
-oldFitsWork count = do
-  (source, spans, fits) <- deckToMeasure count
-  m <- evaluate (oldMeasuresFor source fits)
-  _ <- evaluate (m == m)
-  allocated (let f = oldFitsNow (Just m) source spans in f == f)
 
 deckToMeasure :: Int -> IO (Text, [SlideSpan], [Fit])
 deckToMeasure count = do

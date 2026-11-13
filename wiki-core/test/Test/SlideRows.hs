@@ -270,8 +270,9 @@ spec = describe "SlideRows" $ do
 
   describe "reading rows" $ do
     -- WP5.108: the editor's check and the rows read one parse.
-    -- Fifty decks: each parses its text five times.
-    modifyMaxSuccess (const 50) . prop "find the openers the check finds in its one parse, and the rows taken in from them as from a parse of their own" $
+    -- Thirty decks: each parses its text five times, which on wasm costs
+    -- about a quarter of a second.
+    modifyMaxSuccess (const 30) . prop "find the openers the check finds in its one parse, and the rows taken in from them as from a parse of their own" $
       forAll anyDeck $ \source ->
         forAll (anEditOf (cut source)) $ \(_, edited, _) ->
           let whole = assemble edited
