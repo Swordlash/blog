@@ -941,6 +941,35 @@ spec m = do
     toTwentieth <- jumpTo 20
     (toLast, toTwentieth) `shouldSatisfy` (\(a, b) -> a < 1000 && b < 1000 && b <= 2 * a + 300)
 
+  it "checks sixty slides of a hundred lines again after a keystroke without holding the page" $ runPage $ do
+    -- A line of slide 30 that becomes a marker of an unknown block when
+    -- its first character goes: a problem the check finds in the new text.
+    let typing = T.intercalate "\n" [if n == longSlideLine 30 + 2 then "x[[!nothing]]" else l | (n, l) <- zip [1 :: Int ..] (T.splitOn "\n" longDeck)]
+    (ui, _) <- openDeck typing
+    let problemsOf30 = findAll ui ".editor-slides .slide-row" >>= \rows -> maybe (pure "") (\r -> findAllIn r ".slide-row-problems" >>= fmap T.concat . traverse textContent) (atMay rows 30)
+    eventuallyWithin 120_000 $ length <$> rowTitles ui `shouldReturn` 61
+    eventuallyWithin 120_000 $ (fromJSText <$> unsafeIOToPageM js_slide_fits) >>= (`shouldSatisfy` (not . T.isInfixOf "unmeasured"))
+    -- Every slide is cut when presented: one problem on each row.
+    eventuallyWithin 120_000 $ problemsOf30 `shouldReturn` "1 problem"
+    rowHeader ui "Slide 30" >>= click
+    -- The caret after the "x", in the row's own text ("## Slide 30", a
+    -- blank line, then the line).
+    rowSelect 30 14 14
+    eventuallyWithin 60_000 $ cardTitles ui `shouldReturn` ["Slide 30"]
+    settle
+    -- One keystroke, and the pause after it: the text checked, the slides
+    -- measured, the rows' headers and the problems published for the new
+    -- text (the slide's fit and the new marker's problem both counted on
+    -- its row).
+    unsafeIOToPageM js_stall_start
+    press "Backspace"
+    eventuallyWithin 120_000 $ problemsOf30 `shouldReturn` "2 problems"
+    settle
+    -- Before WP5.108 the pause parsed the whole deck a dozen times and held
+    -- the page 7 seconds at once.
+    held <- unsafeIOToPageM js_stall
+    held `shouldSatisfy` (< 1000)
+
   it "takes the emoji or the mention chosen with the arrows in a row, though the hidden editor changes before Enter, with another row open" $ runPage $ do
     (ui, _) <- openDeck deck
     rowHeader ui "Two" >>= click
