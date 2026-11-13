@@ -126,7 +126,7 @@ import {
 import { markdownLanguage } from "@codemirror/lang-markdown";
 import { tagHighlighter, tags } from "@lezer/highlight";
 import { forEachDiagnostic, lintGutter, nextDiagnostic, setDiagnostics, setDiagnosticsEffect } from "@codemirror/lint";
-import { SearchQuery, replaceAll, replaceNext, search, setSearchQuery } from "@codemirror/search";
+import { SearchQuery } from "@codemirror/search";
 
 // What each piece of Markdown's syntax is drawn as: classes of web/style.css,
 // stable, so that the tests and the style sheet can name them. A marker
@@ -1457,12 +1457,14 @@ const foldsToRow = (key, view, state) => {
 // of the component's own (Wiki.App.View.SearchPanel) above the text or the
 // rows. The matching is @codemirror/search's: its SearchQuery and its
 // cursors, with its regular expressions and its whole-word rule, and its
-// commands that replace one match and every match, run on the master,
-// which holds the library's query (search(), setSearchQuery). Where a step
-// goes is the wiki's (stepFrom), from the same cursors: the library's own
-// steps find matches the text does not have (matchFrom says which).
-// The library's own panel and marks are not used: both belong to a view,
-// and slide by slide the master is hidden. What is the wiki's own:
+// replacement of a match ($&, $1). Everything else is the wiki's, on one
+// sequence of matches (eachMatch, below): the count, the marks, the
+// steps, Replace and Replace all are the same matches, so that none can
+// find one the others do not. The library's own panel, marks, steps and
+// replacements are not used: its panel and marks belong to a view, and
+// slide by slide the master is hidden; its steps and replacements start
+// their cursors at the selection, where they find matches the text does
+// not have (see eachMatch). What is the wiki's own:
 //
 // - the query the panel asks for, made the library's (searchQuery);
 // - the marks of the matches, the current one (the master's selection)
@@ -1502,28 +1504,23 @@ const escapedText = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // The library's query for what the panel asks for, {search, replace,
 // caseSensitive, regexp, wholeWord}, on a text whose title line's "# " is
-// guarded (`titled`) or not (a template's).
-//
-// A match that starts in the guarded "# " is no match of the search: it is
-// not counted, marked, stepped to or replaced, by Replace or by Replace
-// all. The "# " is not the author's to change (the title line's guard puts
-// it back), and a selection that would start in it starts after it, so
-// such a match could be counted but never selected whole or replaced. A
-// match in the title's own text, after the "# ", is one. The library
-// applies the rule (its `test`) in every cursor of the query's, so the
-// count, the marks, the steps and the replacements agree.
+// guarded (`titled`) or not (a template's): guardedQueries holds the
+// first.
+const guardedQueries = new WeakSet();
+
 const searchQuery = (spec, titled) => {
   const text = typeof spec?.search === "string" ? spec.search : "";
   const replace = typeof spec?.replace === "string" ? spec.replace : "";
-  return new SearchQuery({
+  const query = new SearchQuery({
     search: spec?.regexp ? text : escapedText(text),
     replace: spec?.regexp ? replace : replace.replace(/\$/g, "$$$$"),
     caseSensitive: Boolean(spec?.caseSensitive),
     wholeWord: Boolean(spec?.wholeWord),
     regexp: true,
     literal: true,
-    test: titled ? (_match, state, from) => !(from < titleMark.length && state.sliceDoc(0, titleMark.length) === titleMark) : undefined,
   });
+  if (titled) guardedQueries.add(query);
+  return query;
 };
 
 // How many matches are counted at most: the library selects at most as
@@ -1535,64 +1532,114 @@ const countLimit = 1000;
 // How long the typing must pause before the matches are counted again.
 const countDelay = 150;
 
-// How far before and after a range its matches are looked for: a match
-// that starts before a row may end in it, and whole word looks at the
-// characters around a match. The library's own marks look as far.
+// How far into a stretch of text looked through backwards a match must
+// start to be the last one before a place: one that starts nearer the
+// stretch's start may be the end of a longer one that starts before it.
+// The library looks back the same way.
 const matchMargin = 250;
 
 // The most marks a view shows: a regular expression such as "." matches
 // every character.
 const markLimit = 2000;
 
+// The search's matches: one sequence, the matches the library's cursor
+// finds going through the whole text from its start, but those that start
+// in a titled text's guarded "# " (inGuard). The count, the marks, the
+// steps, Replace and Replace all all take theirs from it (eachMatch).
+//
+// Where a cursor starts changes what it finds. A match of no length right
+// where the match before ended is none (the cursor skips it), but a cursor
+// that starts there finds it ("a|" in "ax" has none between the "a" and
+// the "x"); and a regular expression that looks behind, or across lines,
+// sees only the text from the cursor's start on ("(?<=a\n)b"). The library
+// has two cursors for a regular expression: one that goes a line at a
+// time (RegExpCursor), whose matches never leave their line and whose
+// expression sees only its line, so that a cursor started at a line's
+// start finds that line's matches as the whole text's does; and one over
+// the text as a whole (MultilineRegExpCursor), for an expression that
+// names a line break or a class that may hold one ("\s", "\W", "\D",
+// "\n", "\r", "[^"), which must start at the text's start to find what the
+// whole text's finds. eachMatch starts each there (acrossLines: the
+// library's own choice of cursor).
+//
+// A match in the guarded "# " is skipped here, not by the query's `test`
+// option. In the library's three cursors a failing test is not the same
+// thing: the string cursor (SearchCursor) drops that candidate and goes on,
+// RegExpCursor goes on to the next match, but MultilineRegExpCursor tries
+// the same match again over more text and, at the text's end, stops: a
+// failing test there ends the search ("\s+" on "# T\n\nword word" found
+// nothing after rejecting the space of "# ").
+//
+// What it costs, a full pass over 60 slides of 100 lines (528,000
+// characters, in Node): 0.1 to 2 ms for a query of a few thousand matches
+// or fewer, 5 ms for 36,000 ("e"), 13 ms for 107,000 ("\s+", across lines),
+// 59 ms for 522,000 ("."). A step over a query across lines walks from the
+// start to the match; one over a line at a time from the line it is in.
+const acrossLines = (query) => /\\[sWDnr]|\n|\r|\[\^/.test(query.search);
+
+// Whether a match that starts at a position is in a titled text's guarded
+// "# ": no match of the search. The "# " is not the author's to change (the
+// title line's guard puts it back), and a selection that would start in it
+// starts after it, so such a match could be counted but never selected
+// whole or replaced. A match in the title's own text, after the "# ", is
+// one.
+const inGuard = (query, state, from) => guardedQueries.has(query) && from < titleMark.length && state.sliceDoc(0, titleMark.length) === titleMark;
+
+// The search's matches from the place a position's line (or, across lines,
+// the text) starts, each given to `visit` as the cursor gives it ({from,
+// to, match}) until `visit` says true: enough.
+const eachMatch = (query, state, at, visit) => {
+  const cursor = query.getCursor(state, acrossLines(query) ? 0 : state.doc.lineAt(at).from);
+  while (!cursor.next().done) {
+    const match = cursor.value;
+    if (!inGuard(query, state, match.from) && visit(match)) return;
+  }
+};
+
+// What a match is replaced with: the library's own replacement, with
+// "$&", "$$" and the groups ("$1"), reached through its query's type
+// (create(), the library's own way to it).
+const replacementOf = (query, match) => query.create().getReplacement(match);
+
 // The matches of a query that overlap a range of a state, {from, to},
-// none of no length (a mark of no length shows nothing).
+// none of no length (a mark of no length shows nothing), at most
+// markLimit.
 const matchesIn = (state, query, from, to) => {
   const found = [];
-  const cursor = query.getCursor(state, Math.max(0, from - matchMargin), Math.min(state.doc.length, to + matchMargin));
-  while (found.length < markLimit && !cursor.next().done) {
-    const match = cursor.value;
-    if (match.from >= to) break;
+  eachMatch(query, state, from, (match) => {
+    if (match.from >= to) return true;
     if (match.to > from && match.to > match.from) found.push({ from: match.from, to: match.to });
-  }
+    return found.length >= markLimit;
+  });
   return found;
 };
 
-// The matches of a search are those the library's cursor finds going
-// through the text from its start, as Replace all and the count find them.
-// Where the cursor starts changes them: a match of no length right where
-// the match before ended is none (the cursor skips it), but a cursor that
-// starts there finds it. A cursor started in the middle of a line could so
-// find a match the text does not have ("a|" in "ax" has none between the
-// "a" and the "x"). The cursor goes a line at a time, so a cursor started
-// at a line's start finds the line's matches as the whole text's does:
-// matchFrom and matchBefore start there, and keep what lies after or
-// before the place asked.
-//
-// The first match of a query at or after a position that `wanted` takes,
-// or null: looked for from the position's line on, never collected from
-// the text's start, so that no count's limit stops a step.
+// The first match at or after a position that `wanted` takes, or null:
+// looked for from there on, never collected from the text's start, so
+// that no count's limit stops a step.
 const matchFrom = (query, state, at, wanted) => {
-  const cursor = query.getCursor(state, state.doc.lineAt(at).from);
-  while (!cursor.next().done) {
-    const { from, to } = cursor.value;
-    if (from >= at && wanted({ from, to })) return { from, to };
-  }
-  return null;
+  let found = null;
+  eachMatch(query, state, at, (match) => {
+    if (match.from < at || !wanted(match)) return false;
+    found = match;
+    return true;
+  });
+  return found;
 };
 
-// The last match of a query that starts at or before a position and that
-// `wanted` takes, or null: looked for in a stretch of text before the
-// position, from a line's start, twice as long each time it holds none,
-// as the library looks for a previous match.
+// The last match that starts at or before a position and that `wanted`
+// takes, or null: looked for in a stretch of text before the position,
+// twice as long each time it holds none, as the library looks for a
+// previous match (across lines, from the text's start at once).
 const matchBefore = (query, state, at, wanted) => {
   for (let size = 10000; ; size *= 2) {
-    const start = state.doc.lineAt(Math.max(0, at - size)).from;
+    const start = acrossLines(query) ? 0 : state.doc.lineAt(Math.max(0, at - size)).from;
     let found = null;
-    const cursor = query.getCursor(state, start);
-    while (!cursor.next().done && cursor.value.from <= at) {
-      const { from, to } = cursor.value;
-      if (wanted({ from, to })) found = { from, to };
-    }
+    eachMatch(query, state, start, (match) => {
+      if (match.from > at) return true;
+      if (match.from >= start && wanted(match)) found = match;
+      return false;
+    });
     if (start === 0 || (found !== null && found.from > start + matchMargin)) return found;
   }
 };
@@ -2386,14 +2433,14 @@ export function attach(textarea, host, original, codeTokens) {
     const found = [];
     let capped = false;
     if (query.valid) {
-      const cursor = query.getCursor(view.state);
-      while (!cursor.next().done) {
+      eachMatch(query, view.state, 0, (match) => {
         if (found.length === 2 * countLimit) {
           capped = true;
-          break;
+          return true;
         }
-        found.push(cursor.value.from, cursor.value.to);
-      }
+        found.push(match.from, match.to);
+        return false;
+      });
     }
     const layout = view.state.field(rowsLayout);
     const chars = charactersOfAll(view.state.doc.toString(), [...found, ...layout.map((row) => row.from)]);
@@ -2442,10 +2489,7 @@ export function attach(textarea, host, original, codeTokens) {
       folding,
       rowsLayout,
       steps,
-      // The search's: the library's query, which its commands read (a
-      // replacement shows the next match in the middle of the text), the panel's
-      // query, and the marks of its matches.
-      search({ literal: true, scrollToMatch: (range) => matchInView(range) }),
+      // The search's: the panel's query, and the marks of its matches.
       searching,
       masterMatches(() => !bySlide),
       rowsSync(host),
@@ -2780,7 +2824,7 @@ export function attach(textarea, host, original, codeTokens) {
       const query = searchQuery(spec, titled);
       const before = view.state.field(searching);
       const same = before !== null && before.search === query.search && before.caseSensitive === query.caseSensitive && before.wholeWord === query.wholeWord;
-      view.dispatch({ effects: [setSearchQuery.of(query), setSearching.of(query)] });
+      view.dispatch({ effects: setSearching.of(query) });
       if (!same) countMatches();
     },
     // The next match after the selection (true) or the previous one before
@@ -2797,52 +2841,58 @@ export function attach(textarea, host, original, codeTokens) {
       return step.wrapped ? 2 : 1;
     },
     // Replace the match selected and select the next, or with no match
-    // selected select the next (replaceNext, input.replace): 1 when it did
+    // selected select the next (input.replace): 1 when it did
     // either, 0 when there is no match. Slide by slide a replacement is a
     // write at the cursor: the match's row opens first, if it is closed.
     searchReplace: () => {
       const query = view.state.field(searching);
       if (!query?.valid) return 0;
-      const before = view.state.selection.main;
-      const here = matchFrom(query, view.state, before.from, () => true);
+      const { state } = view;
+      const before = state.selection.main;
+      const here = matchFrom(query, state, before.from, () => true);
       if (here === null || here.from !== before.from || here.to !== before.to) {
         // No match selected: the next one is.
-        const step = stepFrom(query, view.state, before, true);
+        const step = stepFrom(query, state, before, true);
         if (step === null) return 0;
         selectMatch(step.match);
         return 1;
       }
-      const key = rowAtPosition(view.state, before.from);
+      const key = rowAtPosition(state, before.from);
       if (bySlide && key !== undefined && !host.wikiRows?.has(key)) {
         host.dispatchEvent(new CustomEvent("wiki-row-wanted", { detail: { key, left: -1, close: false, focus: false, reason: "search" } }));
       }
-      const length = view.state.doc.length;
-      if (!replaceNext(view)) return 0;
-      // The next match after a replacement, by the rule the library's cursor
-      // goes through a text with, which Replace all replaces by: a match
-      // replaced at p..q with text of length n, the next is the first that
-      // starts after p + n, or at p + n only if it has a length. The
-      // library's replaceNext looks for it in the text before the
-      // replacement, from q, and maps it: for a match of no length ("^",
-      // "$", "\b", "(?=x)") that is the same place again, before or after
-      // the text put in, and Replace would write there for ever. So the
-      // wrapper looks again in the text after it, from p + n, and selects
-      // that one when it is another; past the end, the first match there is.
-      const end = before.to + view.state.doc.length - length;
-      const next = matchFrom(query, view.state, end, (m) => m.from > end || m.to > m.from) ?? matchFrom(query, view.state, 0, () => true);
-      const now = view.state.selection.main;
-      if (next !== null && (next.from !== now.from || next.to !== now.to)) selectMatch(next);
+      // The match selected replaced, and the next selected, by the rule the
+      // cursor goes through a text with, which Replace all replaces by: a
+      // match replaced at p..q with text of length n, the next is the first
+      // that starts after p + n, or at p + n only if it has a length;
+      // looked for in the text after the replacement. Past the end, the
+      // first match there is.
+      const insert = replacementOf(query, here);
+      const changes = state.changes({ from: here.from, to: here.to, insert });
+      const replaced = state.update({ changes }).state;
+      const end = here.from + insert.length;
+      const next = matchFrom(query, replaced, end, (m) => m.from > end || m.to > m.from) ?? matchFrom(query, replaced, 0, () => true);
+      view.dispatch({
+        changes,
+        selection: next === null ? undefined : EditorSelection.single(next.from, next.to),
+        effects: next === null ? [] : matchInView(EditorSelection.range(next.from, next.to)),
+        userEvent: "input.replace",
+      });
       return 1;
     },
-    // Replace every match, as one step of the history (replaceAll,
-    // input.replace.all): how many were replaced.
+    // Replace every match, as one step of the history (input.replace.all):
+    // how many were replaced.
     searchReplaceAll: () => {
       const query = view.state.field(searching);
       if (!query?.valid) return 0;
-      let count = 0;
-      const cursor = query.getCursor(view.state);
-      while (!cursor.next().done) count++;
-      return replaceAll(view) ? count : 0;
+      const changes = [];
+      eachMatch(query, view.state, 0, (match) => {
+        changes.push({ from: match.from, to: match.to, insert: replacementOf(query, match) });
+        return false;
+      });
+      if (changes.length === 0) return 0;
+      view.dispatch({ changes, userEvent: "input.replace.all" });
+      return changes.length;
     },
     // What the search starts with as the panel opens: the selection, when it
     // is on one line, and "" otherwise. What has the focus then is kept, for

@@ -20,13 +20,19 @@ import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, i
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
-import Test.Browser.Mount (slugs, startWith)
-import Test.Browser.Text (editorHost, editorSelection, inputsSeen, markdown, selectText, setMarkdown, utf16Length, watchEditor)
+import Test.Browser.Mount (slugs, startOn, startWith)
+import Test.Browser.Text (editorHost, editorSelection, editorText, inputsSeen, markdown, selectText, setMarkdown, utf16Length, watchEditor)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Backend (MonadWiki (..))
+import Wiki.App.Backend.Mem (runMemWiki)
 import Wiki.App.Editor.Browser (foldLines, foldedLines)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.App.Shell qualified as Shell
+import Wiki.Core.Page (Page (id, updatedAt))
+import Wiki.Core.PageKind qualified as Kind
+import Wiki.Core.Space (Space (id))
 
 $( browserJS
      ["jsbits/test-search.js"]
@@ -144,45 +150,61 @@ spec m = do
     press "Control+f"
     length <$> findAll ui ".editor-search" `shouldReturn` 0
 
-  -- Replace, once for each match, ends where Replace all ends: for
-  -- matches of no length at a line's start, its end, a word's edge, before
-  -- a character, and for a match that may be empty.
-  it "ends where Replace all ends when Replace is pressed once for each match, matches of no length included" $ runPage $ do
-    (ui, _) <- startWith m (Just "user-editor") helloEditor
-    let text = "# Title\n\nax\nax\nax"
-        start = do
-          setMarkdown ui text
-          -- The last "x": no match of any of these.
-          selectText ui (T.length text - 1) (T.length text)
-          press "Control+f"
-    -- Each time from the same text and selection, the search opened with
-    -- Ctrl+F (which takes the selection as its text) and asked again.
-    let asking pattern' = do
-          start
-          field <- find ui ".editor-search-find"
-          clear field
-          typeText field pattern'
-    start
-    find ui ".editor-search-regexp" >>= click
-    find ui ".editor-search-replacement" >>= (`typeText` "X")
-    press "Escape"
-    for_ ["^", "$", "\\b", "(?=x)", "a|"] $ \pattern' -> do
-      asking pattern'
-      n <- eventually $ do
-        shown <- said ui
-        maybe (expectationFailure ("no count: " <> show shown) >> pure 0) pure (head (mapMaybe (readMaybe . T.unpack) (T.words shown)))
-      -- The first press selects the first match after the selection; each
-      -- of the others replaces one and selects the next.
-      replaceButton <- find ui ".editor-search-replace"
-      replicateM_ (n + 1) (click replaceButton)
-      byOne <- markdown ui
-      press "Escape"
-      asking pattern'
-      find ui ".editor-search-replace-all" >>= click
-      every <- markdown ui
-      (pattern', byOne) `shouldBe` (pattern', every)
-      every `shouldNotBe` text
-      press "Escape"
+  -- One sequence of matches for everything: for each query of a table and
+  -- each text, in the raw Markdown and slide by slide, the steps visit
+  -- exactly the matches counted, each once, in the order of the text, and
+  -- come back to the first; and Replace, once for the first step and once
+  -- for each match, ends where Replace all ends. The queries: matches of
+  -- no length at a line's start, its end, a word's edge, before a
+  -- character and on an empty line; one that may be empty; white space
+  -- across lines, whose first match is in the title line's guarded "# ";
+  -- a look behind across a line; one across lines or not; and one whose
+  -- first match is in the guarded "# " and the others not.
+  for_ [False, True] $ \bySlide ->
+    it ("visits each match counted once in order and replaces as Replace all does, for every query of a table" <> (if bySlide then ", slide by slide" else ", in the raw Markdown")) $ runPage $ do
+      ui <- if bySlide then openDeck m "# Title\n\nax" else fst <$> startWith m (Just "user-editor") helloEditor
+      let case' text pattern' = do
+            setMarkdown ui text
+            selectText ui 2 2
+            field <- find ui ".editor-search-find"
+            clear field
+            typeText field pattern'
+            n <- eventually $ do
+              shown <- said ui
+              maybe (expectationFailure (toS ("no count for " <> pattern' <> ": " <> shown)) >> pure 0) pure (lastMay (mapMaybe (readMaybe . T.unpack) (T.words shown)))
+            next <- find ui ".editor-search-next"
+            visited <- replicateM (n + 1) (click next >> editorSelection ui)
+            let distinct = ordNub (take n visited)
+            (pattern', text, length distinct, atMay visited n) `shouldBe` (pattern', text, n, head visited)
+            -- In the order of the text, once the steps are taken from the
+            -- first match on: past the end, they go on from the start.
+            let steps = take n visited
+                (afterEnd, fromStart) = break (== minimum steps) steps
+            (pattern', text, fromStart <> afterEnd) `shouldBe` (pattern', text, sort steps)
+            -- Replace: the first press after a step replaces.
+            setMarkdown ui text
+            selectText ui 2 2
+            click next
+            replaceButton <- find ui ".editor-search-replace"
+            replicateM_ n (click replaceButton)
+            byOne <- markdown ui
+            setMarkdown ui text
+            selectText ui 2 2
+            find ui ".editor-search-replace-all" >>= click
+            every <- markdown ui
+            (pattern', text, byOne) `shouldBe` (pattern', text, every)
+            (pattern', text, every /= text) `shouldBe` (pattern', text, True)
+      -- Slide by slide the text is hidden: Ctrl+F on a row's header.
+      if bySlide then find ui ".editor-slides .slide-row-toggle" >>= focus else selectText ui 2 2
+      press "Control+f"
+      find ui ".editor-search-regexp" >>= click
+      find ui ".editor-search-replacement" >>= (`typeText` "X")
+      for_
+        [ ("# Title\n\nax\nax\nax", ["^", "$", "\\b", "(?=x)", "a|", "^$", "#|x"])
+        , ("# T\n\nword word\nword", ["\\s+", "word"])
+        , ("# T\n\na\nb\n\nab b", ["(?<=a\\n)b", "a\\nb|b"])
+        ]
+        $ \(text, patterns) -> for_ patterns (case' text)
 
   it "counts no match in the title line's guarded \"# \", steps to none and replaces none, and finds the title's own text, in the raw Markdown" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
@@ -331,6 +353,21 @@ spec m = do
     eventually $ markdown ui `shouldReturn` mails
   where
     helloEditor = EditPage (slugs ["blog"]) (slugs ["hello-world"])
+
+-- | The demo's "Hello, world" made a presentation with this text, open in
+-- the editor, CodeMirror in place.
+openDeck :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Text -> PageM s (Mounted s Shell.Query Void m)
+openDeck m text = do
+  (opener, wiki) <- startWith m (Just "user-editor") (Page (slugs ["blog"]) (slugs ["hello-world"]))
+  unmount opener
+  unsafeIOToPageM . runMemWiki wiki $ do
+    blog <- either (panic . show) identity <$> getSpace (slugs ["blog"])
+    hello <- either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])
+    made <- either (panic . show) identity <$> setPageKind hello.id Kind.Presentation
+    void (either (panic . show) identity <$> savePage made.id made.updatedAt "Deck" text)
+  ui <- startOn m wiki (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+  _ <- editorText ui
+  pure ui
 
 -- | A page with "needle" three times: on its third line, inside a block
 -- spoiler (lines 5 to 7), and after two hundred lines.
