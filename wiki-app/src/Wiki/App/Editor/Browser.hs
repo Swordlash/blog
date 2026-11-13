@@ -8,7 +8,8 @@
 -- reload or a close loses unsaved changes; the writing assistant's
 -- edits, as changes the author accepts or rejects; the questions
 -- CodeMirror asks to complete a mention or an emoji, with their answers;
--- and the folds of its text. The files, the keys and the events
+-- the folds of its text; and the search over the whole text, which
+-- @web/src/editor.js@ runs with @\@codemirror/search@. The files, the keys and the events
 -- CodeMirror sends are read through the Web types' fields; what works on the text itself (CodeMirror, or the
 -- textarea's selection in UTF-16 code units) is @jsbits/editor.js@, and
 -- CodeMirror is @web/src/editor.js@.
@@ -109,6 +110,18 @@ module Wiki.App.Editor.Browser
   , markDragged
   , pointerAfter
 
+    -- * The search
+  , Find (..)
+  , searchIn
+  , searchClosed
+  , searchStep
+  , Stepped (..)
+  , searchReplace
+  , searchReplaceAll
+  , searchSeed
+  , Matches (..)
+  , matchesOf
+
     -- * Mentions
   , mentionAsked
   , answerMention
@@ -196,6 +209,12 @@ $( browserJS
      , ("js_problems", "wiki_editor_problems", Safe, [t|Element -> JSText -> IO ()|])
      , ("js_next_problem", "wiki_editor_next_problem", Safe, [t|Element -> IO ()|])
      , ("js_offer_folds", "wiki_editor_offer_folds", Safe, [t|Element -> JSText -> JSText -> IO ()|])
+     , ("js_search", "wiki_editor_search", Safe, [t|Element -> JSText -> IO ()|])
+     , ("js_search_step", "wiki_editor_search_step", Safe, [t|Element -> Bool -> IO Int|])
+     , ("js_search_replace", "wiki_editor_search_replace", Safe, [t|Element -> IO Int|])
+     , ("js_search_replace_all", "wiki_editor_search_replace_all", Safe, [t|Element -> IO Int|])
+     , ("js_search_seed", "wiki_editor_search_seed", Safe, [t|Element -> IO JSText|])
+     , ("js_search_back", "wiki_editor_search_back", Safe, [t|Element -> Bool -> IO ()|])
      ]
  )
 
@@ -613,6 +632,12 @@ data EditorKey
   | -- | Alt+Up (-1) or Alt+Down (1) in the text: move a presentation's
     -- slide, the cursor's, one place up or down.
     MoveSlideKey Int
+  | -- | Ctrl+F, or Cmd+F on a Mac, anywhere in the editor: the editor's
+    -- search (WP5.103b).
+    FindKey
+  | -- | F3 ('True') or Shift+F3 ('False'), anywhere in the editor: the
+    -- search's next or previous match.
+    FindNextKey Bool
   deriving stock (Eq, Show)
 
 -- | Which of the editor's keys a keydown is, if any. Pure, so that a
@@ -626,12 +651,17 @@ data EditorKey
 -- (its code), since the character they type differs between layouts, as
 -- is P with Alt, which types a character of its own on a Mac. A key the
 -- list of a mention's completion acts on (Tab, Enter, Escape) never
--- reaches the form: CodeMirror stops it (@web/src/editor.js@).
+-- reaches the form: CodeMirror stops it (@web/src/editor.js@). Ctrl+F is
+-- the search's only where CodeMirror did not take it: on a Mac, Ctrl+F in
+-- the text moves the cursor one character on, as Emacs does, and the
+-- search is Cmd+F.
 editorKey :: Event -> Maybe EditorKey
 editorKey event
   | pressed.isComposing = Nothing
   | command && not pressed.altKey && not pressed.shiftKey && key == "s" = Just SaveKey
   | command && pressed.altKey && not pressed.shiftKey && pressed.code == "KeyP" = Just PreviewKey
+  | command && not pressed.altKey && not pressed.shiftKey && key == "f" && not (Event.defaultPreventedNow event) = Just FindKey
+  | not command && not pressed.altKey && pressed.key == "F3" = Just (FindNextKey (not pressed.shiftKey))
   | plain && key == "Escape" = Just EscapeKey
   | not inText = Nothing
   | plain && key == "Tab" = Just IndentKey
@@ -963,6 +993,99 @@ markDragged event (RowKey k) = js_mark_dragged event k
 -- the listener.
 pointerAfter :: Event -> Bool
 pointerAfter = js_pointer_after
+
+----------------------------------------------------------------------
+-- The search
+
+-- | 'Find' is what the editor's search asks for (WP5.103b): the text to
+-- find, what to replace it with, and whether case matters, whether the
+-- text is a regular expression (JavaScript's, with @$1@ and @$&@ in the
+-- replacement) and whether a match must be a whole word.
+data Find = Find
+  { query :: Text
+  , replacement :: Text
+  , caseSensitive :: Bool
+  , regexp :: Bool
+  , wholeWord :: Bool
+  }
+  deriving stock (Eq, Show)
+
+instance ToJSON Find where
+  toJSON s = object ["search" .= s.query, "replace" .= s.replacement, "caseSensitive" .= s.caseSensitive, "regexp" .= s.regexp, "wholeWord" .= s.wholeWord]
+
+-- | Search the editor's text (the host's CodeMirror, the master), in place
+-- of the search before: its matches marked, in the master and in each open
+-- row, and counted, the count told by a @wiki-matches@ event
+-- ('matchesOf'). A change of the replacement alone counts nothing again.
+searchIn :: (MonadIO m) => Element -> Find -> m ()
+searchIn host s = liftIO (js_search host (jsonText s))
+
+-- | The search is over: its marks gone, and the focus back where it was
+-- when the search began ('searchSeed'), or, after a step ('True'), at the
+-- match, in the raw Markdown or in the row it is in.
+searchClosed :: (MonadIO m) => Element -> Bool -> m ()
+searchClosed host stepped = liftIO $ do
+  js_search host (toJSText "")
+  js_search_back host stepped
+
+-- | Go to the next match after the editor's selection ('True') or the
+-- previous one before it, selecting it: slide by slide its row opens. What
+-- came of it.
+searchStep :: (MonadIO m) => Element -> Bool -> m Stepped
+searchStep host forward = liftIO (stepped <$> js_search_step host forward)
+  where
+    stepped = \case
+      0 -> NoMatch
+      2 -> Wrapped
+      _ -> Moved
+
+-- | 'Stepped' is what a step of the search came to: there was no match,
+-- the selection moved to one, or it went past the end of the text to the
+-- start (or past the start to the end) for it.
+data Stepped = NoMatch | Moved | Wrapped
+  deriving stock (Eq, Show)
+
+-- | Replace the match selected and select the next one, or, when no match
+-- is selected, select the next one: whether there was a match to do
+-- either with. Slide by slide, the replaced match's row opens first.
+searchReplace :: (MonadIO m) => Element -> m Bool
+searchReplace host = liftIO ((> 0) <$> js_search_replace host)
+
+-- | Replace every match, as one step of the history: how many.
+searchReplaceAll :: (MonadIO m) => Element -> m Int
+searchReplaceAll = liftIO . js_search_replace_all
+
+-- | The text the search starts with: the editor's selection, when it is
+-- on one line, or nothing. What has the focus is kept, for
+-- 'searchClosed'.
+searchSeed :: (MonadIO m) => Element -> m Text
+searchSeed host = liftIO (fromJSText <$> js_search_seed host)
+
+-- | 'Matches' is a search's matches, as a @wiki-matches@ event tells them:
+-- whether the query can match at all (an empty text or a regular
+-- expression that is not one cannot), whether the count stopped at its
+-- limit (1000), each match's start and end, and each row's key and start,
+-- in the same text, in characters.
+data Matches = Matches
+  { valid :: Bool
+  , capped :: Bool
+  , spans :: [(Int, Int)]
+  , starts :: [(RowKey, Int)]
+  }
+  deriving stock (Eq, Show)
+
+instance FromJSON Matches where
+  parseJSON = withObject "Matches" $ \o -> do
+    valid <- o .: "valid"
+    capped <- o .: "capped"
+    spans <- o .: "matches"
+    pairs <- o .: "rows"
+    pure Matches {valid, capped, spans, starts = [(RowKey k, s) | (k, s) <- pairs]}
+
+-- | The matches a @wiki-matches@ event tells. Pure, since the event does not
+-- change.
+matchesOf :: Event -> Maybe Matches
+matchesOf event = detailOf event >>= decodeStrict . encodeUtf8 . jsValText
 
 -- | Whether the browser should warn before a reload or closing the tab,
 -- as browsers do for a page with unsaved changes.

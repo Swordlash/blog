@@ -156,6 +156,7 @@ library
       Wiki.App.View.Reset
       Wiki.App.View.Search
       Wiki.App.View.SearchHit
+      Wiki.App.View.SearchPanel
       Wiki.App.View.SearchResults
       Wiki.App.View.Security
       Wiki.App.View.Server

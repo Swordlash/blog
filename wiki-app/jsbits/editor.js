@@ -88,6 +88,37 @@ function wiki_editor_history(host, undoing) {
   host.wikiEditor?.history?.(undoing);
 }
 
+// The editor's search (web/src/editor.js's search and the functions after
+// it), on the master: the query the panel asks for, JSON, or "" as it
+// closes; a step to the next (true) or previous match, 0 for none, 1, or
+// 2 past the end or the start; one match replaced (1) or none (0); every
+// match replaced, how many; the text the panel opens with; and the focus
+// given back as it closes. Nothing, or 0 and "", before CodeMirror is in
+// place.
+function wiki_editor_search(host, json) {
+  host.wikiEditor?.search?.(json);
+}
+
+function wiki_editor_search_step(host, forward) {
+  return host.wikiEditor?.searchStep?.(forward) ?? 0;
+}
+
+function wiki_editor_search_replace(host) {
+  return host.wikiEditor?.searchReplace?.() ?? 0;
+}
+
+function wiki_editor_search_replace_all(host) {
+  return host.wikiEditor?.searchReplaceAll?.() ?? 0;
+}
+
+function wiki_editor_search_seed(host) {
+  return host.wikiEditor?.searchSeed?.() ?? "";
+}
+
+function wiki_editor_search_back(host, stepped) {
+  host.wikiEditor?.searchBack?.(stepped);
+}
+
 // What has the focus in the rows' list (a row's text, a row's header), if
 // anything, kept before a change of the list (a re-cut, a jump, a move, a
 // row deleted or added), so that the focus can be given back when the

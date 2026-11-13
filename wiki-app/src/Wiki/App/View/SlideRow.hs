@@ -1,6 +1,7 @@
 -- | A row of a presentation's slide mode in the editor (WP5.103 of
 -- docs/PLAN.md): a header that shows the slide's number, its title, its
--- fit and its problems, and, while the row is open, a CodeMirror over the
+-- fit, its problems and, while the editor's search is open and the row is
+-- closed, its matches, and, while the row is open, a CodeMirror over the
 -- slide's Markdown ('Wiki.App.Editor.Browser.attachRow'). The row's edits
 -- are the editor's: one text, one history. The editor ("Wiki.App.View.Editor")
 -- lists the rows in a keyed list, each in a slot indexed by its key, so
@@ -114,6 +115,10 @@ data Input = Input
   , dropMark :: Maybe Bool
   -- ^ Where a row dragged over this one would go: before it ('False') or
   -- after it ('True'), drawn as a line.
+  , matches :: Maybe Int
+  -- ^ How many matches of the editor's search start in the row, while the
+  -- search is open and its count holds them all (WP5.103b). A closed row
+  -- says it on its header; an open row marks them in its text.
   }
 
 -- | What a row tells the editor: its header was clicked (to open or close
@@ -228,8 +233,10 @@ component =
                         ]
                           <> [HH.span [HP.class_ (HH.ClassName "slide-row-part")] [HH.text ("part of slide " <> show n)] | Just n <- [h.partOf]]
                           <> [HH.span [HP.class_ (HH.ClassName "slide-row-problems")] [HH.text (problemsPhrase h.problems)] | h.problems > 0]
-                          <> [ -- Where a search's matches in the slide will be told.
-                               HH.span [HP.class_ (HH.ClassName "slide-row-matches")] []
+                          <> [ -- The search's matches in the slide, while the row
+                               -- is closed: in the button's text, so that it is
+                               -- read with the slide's title.
+                               HH.span [HP.class_ (HH.ClassName "slide-row-matches")] [HH.text (matchesPhrase n) | not st.input.open, Just n <- [st.input.matches], n > 0]
                              , HH.span [HP.class_ (HH.ClassName ("slide-row-fit slide-fit-" <> fitName h.fit)), HP.attr (HH.AttrName "aria-hidden") "true"] []
                              , HH.span [HP.class_ (HH.ClassName "visually-hidden")] [HH.text (", " <> fitPhrase h)]
                              ]
@@ -305,7 +312,7 @@ component =
 -- | Whether two inputs of a row show the same: the master compared only by
 -- whether it is there, which it is from one load to the next.
 same :: Input -> Input -> Bool
-same a b = a.head == b.head && a.open == b.open && a.focus == b.focus && isJust a.master == isJust b.master && a.movable == b.movable && a.dropMark == b.dropMark
+same a b = a.head == b.head && a.open == b.open && a.focus == b.focus && isJust a.master == isJust b.master && a.movable == b.movable && a.dropMark == b.dropMark && a.matches == b.matches
 
 -- | The class of the line a dragged row would be dropped at.
 dropClass :: Maybe Bool -> Text
@@ -341,3 +348,7 @@ fitPhrase h = case h.partOf of
 problemsPhrase :: Int -> Text
 problemsPhrase 1 = "1 problem"
 problemsPhrase n = show n <> " problems"
+
+matchesPhrase :: Int -> Text
+matchesPhrase 1 = "1 match"
+matchesPhrase n = show n <> " matches"

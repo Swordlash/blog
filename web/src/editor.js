@@ -73,6 +73,10 @@
 // - a presentation edited slide by slide (WP5.103) is a list of rows, each
 //   a CodeMirror of its own over one slide's range of this one, the master
 //   (see attachRow below): one text, one history.
+// - the editor's search (WP5.103b) is one search over the whole text, in
+//   the raw Markdown and slide by slide, run on the master and asked for
+//   by the component's panel (see the search below): a "wiki-matches"
+//   event tells the component the matches there are.
 // - each change of the cursor's line is told by a "wiki-cursor-line"
 //   event, whose detail is the line, from 1, so that the preview of a
 //   presentation shows the cursor's slide.
@@ -122,6 +126,7 @@ import {
 import { markdownLanguage } from "@codemirror/lang-markdown";
 import { tagHighlighter, tags } from "@lezer/highlight";
 import { forEachDiagnostic, lintGutter, nextDiagnostic, setDiagnostics, setDiagnosticsEffect } from "@codemirror/lint";
+import { SearchQuery, findNext, findPrevious, replaceAll, replaceNext, search, setSearchQuery } from "@codemirror/search";
 
 // What each piece of Markdown's syntax is drawn as: classes of web/style.css,
 // stable, so that the tests and the style sheet can name them. A marker
@@ -1421,6 +1426,205 @@ const foldsToRow = (key, view, state) => {
   view.dispatch({ effects: offerFolds.of(inside.map((fold) => ({ from: fold.from - range.from, to: fold.to - range.from }))), annotations: mirrored.of(true) });
 };
 
+// The editor's search (WP5.103b of docs/PLAN.md): one search over the
+// whole text, in the raw Markdown and slide by slide, asked for by a panel
+// of the component's own (Wiki.App.View.SearchPanel) above the text or the
+// rows. The matching is @codemirror/search's: its SearchQuery and its
+// cursors, with its regular expressions and its whole-word rule, and its
+// commands that go to the next or the previous match and replace, run on
+// the master, which holds the library's query (search(), setSearchQuery).
+// The library's own panel and marks are not used: both belong to a view,
+// and slide by slide the master is hidden. What is the wiki's own:
+//
+// - the query the panel asks for, made the library's (searchQuery);
+// - the marks of the matches, the current one (the master's selection)
+//   apart: in the master over the lines it shows (masterMatches), and in
+//   each open row over the row's range, found from the master's side and
+//   sent to the row as the master's other marks are (matchesToRow);
+// - the matches counted, at most countLimit, and told to the component
+//   ("wiki-matches") with the rows' starts, after a pause in the typing
+//   (countDelay): the component counts them on the closed rows' headers.
+//
+// A query is always a regular expression to the library: a plain query is
+// one with every character escaped, and its replacement has every "$"
+// doubled. The library's cursor for a plain string walks the text a
+// character at a time (with Unicode's NFKD normalisation of each one): on
+// 60 slides of 100 lines, 528,000 characters, a pass over the whole text
+// took 65 to 90 ms, and the same query as an escaped regular expression
+// under 1 ms. A plain query so matches a character as written, not every
+// way Unicode can write it. `literal` keeps "\n", "\t" and "\\" in a query
+// and in a replacement as the characters typed: on a wiki, "\theta" and
+// "\nabla" are LaTeX.
+//
+// The panel's query, as the master's state holds it (searching): a
+// SearchQuery, one whose `valid` is false when its text is empty or not a
+// regular expression; null while the panel is closed.
+const setSearching = StateEffect.define();
+
+const searching = StateField.define({
+  create: () => null,
+  update: (query, tr) => {
+    for (const effect of tr.effects) if (effect.is(setSearching)) query = effect.value;
+    return query;
+  },
+});
+
+// A text as a regular expression that matches it, character for character.
+const escapedText = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// The library's query for what the panel asks for, {search, replace,
+// caseSensitive, regexp, wholeWord}.
+const searchQuery = (spec) => {
+  const text = typeof spec?.search === "string" ? spec.search : "";
+  const replace = typeof spec?.replace === "string" ? spec.replace : "";
+  return new SearchQuery({
+    search: spec?.regexp ? text : escapedText(text),
+    replace: spec?.regexp ? replace : replace.replace(/\$/g, "$$$$"),
+    caseSensitive: Boolean(spec?.caseSensitive),
+    wholeWord: Boolean(spec?.wholeWord),
+    regexp: true,
+    literal: true,
+  });
+};
+
+// How many matches are counted at most: the library selects at most as
+// many with its "select all matches", and each one counted crosses to
+// Haskell as a pair of numbers after every pause in the typing. A count
+// that reaches it is shown as "1000+".
+const countLimit = 1000;
+
+// How long the typing must pause before the matches are counted again.
+const countDelay = 150;
+
+// How far before and after a range its matches are looked for: a match
+// that starts before a row may end in it, and whole word looks at the
+// characters around a match. The library's own marks look as far.
+const matchMargin = 250;
+
+// The most marks a view shows: a regular expression such as "." matches
+// every character.
+const markLimit = 2000;
+
+// The matches of a query that overlap a range of a state, {from, to},
+// none of no length (a mark of no length shows nothing).
+const matchesIn = (state, query, from, to) => {
+  const found = [];
+  const cursor = query.getCursor(state, Math.max(0, from - matchMargin), Math.min(state.doc.length, to + matchMargin));
+  while (found.length < markLimit && !cursor.next().done) {
+    const match = cursor.value;
+    if (match.from >= to) break;
+    if (match.to > from && match.to > match.from) found.push({ from: match.from, to: match.to });
+  }
+  return found;
+};
+
+const matchMark = Decoration.mark({ class: "cm-wiki-match" });
+const currentMatchMark = Decoration.mark({ class: "cm-wiki-match cm-wiki-match-current" });
+
+// The matches' marks in the master, over the lines it shows, while the
+// raw Markdown is shown (`shown`): slide by slide, the master is hidden and
+// the rows show the marks. Found again at each change of the master, of
+// its text, its selection or the lines it shows: the lines shown are a
+// screenful.
+const masterMatches = (shown) =>
+  ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.decorations = this.marks(view);
+      }
+      update(update) {
+        if (update.docChanged || update.viewportChanged || update.selectionSet || update.transactions.some((tr) => tr.effects.length > 0)) {
+          this.decorations = this.marks(update.view);
+        }
+      }
+      marks(view) {
+        const query = view.state.field(searching);
+        if (!query?.valid || !shown()) return Decoration.none;
+        const { from: a, to: b } = view.state.selection.main;
+        const seen = new Set();
+        const marks = [];
+        for (const range of view.visibleRanges) {
+          for (const match of matchesIn(view.state, query, range.from, range.to)) {
+            const at = `${match.from}:${match.to}`;
+            if (seen.has(at)) continue;
+            seen.add(at);
+            marks.push((match.from === a && match.to === b ? currentMatchMark : matchMark).range(match.from, match.to));
+          }
+        }
+        return Decoration.set(marks, true);
+      }
+    },
+    { decorations: (plugin) => plugin.decorations },
+  );
+
+// The matches' marks in a row: those of the master's in the row's range,
+// cut to it and moved to the row (matchesToRow), each kept on its text as
+// the row is typed in until the next ones come. Set from the master's side
+// only, and marked `mirrored`: a row never sends them on.
+const setRowMatches = StateEffect.define();
+
+const rowMatches = StateField.define({
+  create: () => Decoration.none,
+  update(marks, tr) {
+    for (const effect of tr.effects) if (effect.is(setRowMatches)) return effect.value;
+    return tr.docChanged ? marks.map(tr.changes) : marks;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+// A row's marks as JSON, to tell whether new ones differ.
+const rowMatchesShown = new WeakMap();
+
+// The master's matches in a row's range, as the row's marks: the current
+// one is the match the master's selection is. The row is told only when
+// its marks are other than the ones it shows.
+const matchesToRow = (key, view, state) => {
+  const range = rangeOf(state, key);
+  if (range === null) return;
+  const query = state.field(searching, false) ?? null;
+  const { from: a, to: b } = state.selection.main;
+  const length = view.state.doc.length;
+  const inside = !query?.valid
+    ? []
+    : matchesIn(state, query, range.from, range.to)
+        .map((match) => ({
+          from: Math.max(match.from, range.from) - range.from,
+          to: Math.min(match.to, range.to) - range.from,
+          current: match.from === a && match.to === b,
+        }))
+        .filter((match) => match.from < match.to && match.to <= length);
+  const said = JSON.stringify(inside);
+  if ((rowMatchesShown.get(view) ?? "[]") === said) return;
+  rowMatchesShown.set(view, said);
+  view.dispatch({
+    effects: setRowMatches.of(Decoration.set(inside.map((match) => (match.current ? currentMatchMark : matchMark).range(match.from, match.to)), true)),
+    annotations: mirrored.of(true),
+  });
+};
+
+// A step of the search (select.search) or a replacement of one match
+// (input.replace), which selects a match: in the open row it starts in,
+// the part of it in the row selected, in the middle of the window. A match
+// across two rows (a regular expression with "\n", "\s" or "[^…]") has its
+// row where it starts. The master is hidden, and its own scroll shows
+// nothing.
+const searchStep = (update) => update.transactions.some((tr) => tr.isUserEvent("select.search") || (tr.isUserEvent("input.replace") && !tr.isUserEvent("input.replace.all")));
+
+const revealMatch = (key, view, state) => {
+  const range = rangeOf(state, key);
+  if (range === null) return;
+  const { from, to } = state.selection.main;
+  const a = Math.max(from, range.from) - range.from;
+  const b = Math.min(to, range.to) - range.from;
+  if (b < a || b > view.state.doc.length) return;
+  const own = view.state.selection.main;
+  view.dispatch({
+    selection: own.anchor === a && own.head === b ? undefined : EditorSelection.single(a, b),
+    effects: EditorView.scrollIntoView(EditorSelection.range(a, b), { y: "center" }),
+    annotations: mirrored.of(true),
+  });
+};
+
 // The master's side: the rows a change did not come from shown the
 // master's text, its problems and its folds; and, slide by slide, a
 // "jump": a change the author did not make in the row with the focus (an
@@ -1442,13 +1646,36 @@ const rowsSync = (host) =>
     const field = host.wikiEditor?.changesField;
     const tracked =
       field !== undefined && JSON.stringify(update.startState.field(field, false) ?? []) !== JSON.stringify(update.state.field(field, false) ?? []);
-    if (!update.docChanged && !update.selectionSet && !problems && !folds && !tracked) return;
+    const query = update.state.field(searching, false) ?? null;
+    const queried = (update.startState.field(searching, false) ?? null) !== query;
+    if (!update.docChanged && !update.selectionSet && !problems && !folds && !tracked && !queried) return;
     const origin = update.transactions.map((tr) => tr.annotation(rowOf)).find((key) => key !== undefined);
+    // The rows whose matches' marks are found again: every open row when
+    // the query or the rows' layout changed; while the panel is open, the
+    // rows a change of the text touched, and the rows the master's
+    // selection left and came to (the current match is marked apart).
+    // Found in a row's range, which is a slide: a keystroke costs a pass
+    // over its own slide, not over the whole text.
+    const remark = new Set();
+    if (queried || relaid || update.transactions.some((tr) => tr.effects.some((e) => e.is(setLayout)))) for (const key of rows.keys()) remark.add(key);
+    else if (query !== null) {
+      if (update.docChanged) {
+        const layout = update.state.field(rowsLayout);
+        update.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+          for (const row of layout) if (row.to + 1 >= fromB && row.from - 1 <= toB) remark.add(row.key);
+        });
+      }
+      if (update.docChanged || update.selectionSet) {
+        remark.add(rowAtPosition(update.state, update.state.selection.main.from));
+        remark.add(rowAtPosition(update.startState, update.startState.selection.main.from));
+      }
+    }
     for (const [key, view] of rows) {
       if (key !== origin) mirror(key, view, update.state);
       if (problems) problemsToRow(key, view, update.state);
       if (folds) foldsToRow(key, view, update.state);
       if (tracked || folds) changesToRow(key, view, update.state, field);
+      if (remark.has(key)) matchesToRow(key, view, update.state);
       // The master's selection, which a row without the focus marks
       // (keptInRow), may have come into the row or left it.
       if ((update.selectionSet || update.docChanged) && !view.hasFocus) view.dispatch({ effects: keptRefresh.of(null), annotations: mirrored.of(true) });
@@ -1459,6 +1686,14 @@ const rowsSync = (host) =>
     if (origin === undefined && update.transactions.some((tr) => tr.scrollIntoView)) {
       const shown = rows.get(rowAtPosition(update.state, update.state.selection.main.head));
       if (shown) cursorIntoView(shown);
+    }
+    // A step of the search, or one match replaced: the open row the match
+    // starts in shows it selected.
+    const stepping = origin === undefined && searchStep(update);
+    if (stepping) {
+      const key = rowAtPosition(update.state, update.state.selection.main.from);
+      const shown = rows.get(key);
+      if (shown) revealMatch(key, shown, update.state);
     }
     // A step, or its undo or redo: the component reads the rows again at
     // once ("wiki-relayout"), and decides which open. The focus follows as
@@ -1482,6 +1717,31 @@ const rowsSync = (host) =>
         for (const row of update.state.field(rowsLayout)) if (row.to >= fromB && row.from <= toB) written.add(row.key);
       });
       for (const key of written) if (key !== undefined && !rows.has(key)) want(key, false, false, "assistant");
+      return;
+    }
+    // Replace all writes in every slide with a match and moves no cursor:
+    // no row opens, and the headers count what is left.
+    if (update.transactions.some((tr) => tr.isUserEvent("input.replace.all"))) return;
+    // A step of the search, or one match replaced: the row the match
+    // starts in opens, as a jump's does, and shows it selected. The row
+    // left does not close, unlike after an undo: an author stepping through
+    // the matches keeps the rows he opened, and a step back finds its row
+    // still open. The focus stays where it is, in the search's panel, so
+    // that Enter there goes on stepping; only a row's text that had the
+    // focus (F3 pressed there) gives it to the match's row, since a row
+    // with the focus has the master's selection.
+    if (stepping) {
+      const target = rowAtPosition(update.state, update.state.selection.main.from);
+      if (target === undefined || target === left) return;
+      const open = rows.get(target);
+      if (left !== undefined) {
+        host.wikiFocusedRow = target;
+        open?.focus();
+      }
+      // A row opened by the step shows the match once it is there
+      // (attachRow).
+      if (!open) host.wikiRevealRow = target;
+      want(target, false, left !== undefined, "search");
       return;
     }
     // The rule this listener keeps, the one place every change of the
@@ -1578,6 +1838,7 @@ export function attachRow(masterHost, rowHost, key, focus) {
         titled ? titleLineWhile(() => rangeOf(masterView.state, key)?.from === 0) : [],
         master.rowExtensions,
         rowChanges(masterHost),
+        rowMatches,
         keptInRow(masterView, key),
         keymap.of([
           { key: "Enter", run: insertNewline, shift: insertNewline },
@@ -1671,6 +1932,15 @@ export function attachRow(masterHost, rowHost, key, focus) {
   problemsToRow(key, view, masterView.state);
   foldsToRow(key, view, masterView.state);
   changesToRow(key, view, masterView.state, master.changesField);
+  matchesToRow(key, view, masterView.state);
+  // A row a step of the search opened (rowsSync): the match selected and
+  // in the middle of the window, before the row takes the focus, if it
+  // does, which gives the row's selection to the master.
+  const revealed = masterHost.wikiRevealRow === key;
+  if (revealed) {
+    delete masterHost.wikiRevealRow;
+    revealMatch(key, view, masterView.state);
+  }
   const characterRange = () => {
     const now = rangeOf(masterView.state, key);
     return now === null ? [] : charactersOfAll(masterView.state.doc.toString(), [now.from, now.to]);
@@ -1699,7 +1969,7 @@ export function attachRow(masterHost, rowHost, key, focus) {
   };
   if (focus) {
     view.focus();
-    cursorIntoView(view);
+    if (!revealed) cursorIntoView(view);
   }
 }
 
@@ -1952,6 +2222,41 @@ export function attach(textarea, host, original, codeTokens) {
   let toldEmpty = true;
   // The cursor's line last told by a "wiki-cursor-line" event.
   let toldLine = 0;
+  // The search's matches, counted (countMatches) and told to the component
+  // as a "wiki-matches" event, whose detail is JSON {valid, capped,
+  // matches: [[from, to]], rows: [[key, from]]}: whether the query can
+  // match at all, whether the count stopped at countLimit, the matches,
+  // and the rows' layout of the same text, in characters. The count waits
+  // for a pause in the typing (countSoon).
+  let countTimer = null;
+  const countMatches = () => {
+    clearTimeout(countTimer);
+    countTimer = null;
+    const query = view.state.field(searching);
+    if (query === null) return;
+    const found = [];
+    let capped = false;
+    if (query.valid) {
+      const cursor = query.getCursor(view.state);
+      while (!cursor.next().done) {
+        if (found.length === 2 * countLimit) {
+          capped = true;
+          break;
+        }
+        found.push(cursor.value.from, cursor.value.to);
+      }
+    }
+    const layout = view.state.field(rowsLayout);
+    const chars = charactersOfAll(view.state.doc.toString(), [...found, ...layout.map((row) => row.from)]);
+    const matches = [];
+    for (let i = 0; i < found.length; i += 2) matches.push([chars[i], chars[i + 1]]);
+    const rows = layout.map((row, i) => [row.key, chars[found.length + i]]);
+    host.dispatchEvent(new CustomEvent("wiki-matches", { detail: JSON.stringify({ valid: query.valid, capped, matches, rows }) }));
+  };
+  const countSoon = () => {
+    clearTimeout(countTimer);
+    countTimer = setTimeout(countMatches, countDelay);
+  };
 
   // A textarea nobody has typed in has its cursor at the start, which is
   // the title line's "#": the cursor starts instead where the page's text
@@ -1988,6 +2293,12 @@ export function attach(textarea, host, original, codeTokens) {
       folding,
       rowsLayout,
       steps,
+      // The search's: the library's query, which its commands read (a
+      // step shows its match in the middle of the text), the panel's
+      // query, and the marks of its matches.
+      search({ literal: true, scrollToMatch: (range) => EditorView.scrollIntoView(range, { y: "center" }) }),
+      searching,
+      masterMatches(() => !bySlide),
       rowsSync(host),
       EditorView.contentAttributes.of({ "aria-label": textarea.getAttribute("aria-label") ?? "", ...wordAttributes }),
       filesLeftToPanes,
@@ -2010,6 +2321,13 @@ export function attach(textarea, host, original, codeTokens) {
         const before = update.startState.field(changes.field).length;
         const after = update.state.field(changes.field).length;
         if (before !== after) host.dispatchEvent(new CustomEvent("wiki-changes", { detail: after }));
+        // While the search's panel is open, the matches are counted again
+        // after a pause in the typing, or at once after a replacement, and
+        // when the rows' layout changed, which the counts per row are of.
+        if (update.state.field(searching) !== null) {
+          if (update.transactions.some((tr) => tr.isUserEvent("input.replace"))) countMatches();
+          else if (update.docChanged || update.transactions.some((tr) => tr.effects.some((e) => e.is(setLayout) || e.is(relayout)))) countSoon();
+        }
         if (update.docChanged || update.selectionSet) {
           const { from, to } = update.state.selection.main;
           const empty = from === to;
@@ -2287,6 +2605,110 @@ export function attach(textarea, host, original, codeTokens) {
       }
       focusText();
     },
+    // The search the panel asks for, JSON {search, replace, caseSensitive,
+    // regexp, wholeWord}, or "" when the panel closes: the matches marked
+    // and counted at once, the count told by a "wiki-matches" event. A
+    // change of the replacement alone counts nothing again.
+    search: (json) => {
+      let spec = null;
+      try {
+        spec = json === "" ? null : JSON.parse(json);
+      } catch {
+        spec = null;
+      }
+      if (spec === null) {
+        clearTimeout(countTimer);
+        countTimer = null;
+        if (view.state.field(searching) !== null) view.dispatch({ effects: setSearching.of(null) });
+        return;
+      }
+      const query = searchQuery(spec);
+      const before = view.state.field(searching);
+      const same = before !== null && before.search === query.search && before.caseSensitive === query.caseSensitive && before.wholeWord === query.wholeWord;
+      view.dispatch({ effects: [setSearchQuery.of(query), setSearching.of(query)] });
+      if (!same) countMatches();
+    },
+    // The next match after the selection (true) or the previous one before
+    // it (false), past the end to the start and the other way, selected
+    // (select.search): in the raw Markdown in the middle of the text, and
+    // slide by slide in its row, which opens (rowsSync). 0 when there is no
+    // match, 1 for a step, 2 for one that went past the end or the start.
+    searchStep: (forward) => {
+      const query = view.state.field(searching);
+      if (!query?.valid) return 0;
+      const before = view.state.selection.main;
+      // The library's step, unless it does not move: there is one match,
+      // selected already, or a match of no length is where the cursor is.
+      const stepped = (forward ? findNext : findPrevious)(view);
+      const now = view.state.selection.main;
+      if (!stepped || (now.from === before.from && now.to === before.to)) {
+        const all = [];
+        const cursor = query.getCursor(view.state);
+        while (all.length < countLimit && !cursor.next().done) all.push({ from: cursor.value.from, to: cursor.value.to });
+        if (all.length === 0) return 0;
+        const after = forward
+          ? (all.find((m) => m.from > before.from || (m.from === before.from && m.to > before.to)) ?? all[0])
+          : (all.findLast((m) => m.from < before.from || (m.from === before.from && m.to < before.to)) ?? all[all.length - 1]);
+        view.dispatch({
+          selection: EditorSelection.single(after.from, after.to),
+          effects: EditorView.scrollIntoView(EditorSelection.range(after.from, after.to), { y: "center" }),
+          userEvent: "select.search",
+        });
+      }
+      const after = view.state.selection.main;
+      return (forward ? after.from < before.to : after.from >= before.from) ? 2 : 1;
+    },
+    // Replace the match selected and select the next, or with no match
+    // selected select the next (replaceNext, input.replace): 1 when it did
+    // either, 0 when there is no match. Slide by slide a replacement is a
+    // write at the cursor: the match's row opens first, if it is closed.
+    searchReplace: () => {
+      const query = view.state.field(searching);
+      if (!query?.valid) return 0;
+      const { from, to } = view.state.selection.main;
+      if (bySlide && from < to) {
+        const cursor = query.getCursor(view.state, from);
+        const key = rowAtPosition(view.state, from);
+        if (!cursor.next().done && cursor.value.from === from && cursor.value.to === to && key !== undefined && !host.wikiRows?.has(key)) {
+          host.dispatchEvent(new CustomEvent("wiki-row-wanted", { detail: { key, left: -1, close: false, focus: false, reason: "search" } }));
+        }
+      }
+      return replaceNext(view) ? 1 : 0;
+    },
+    // Replace every match, as one step of the history (replaceAll,
+    // input.replace.all): how many were replaced.
+    searchReplaceAll: () => {
+      const query = view.state.field(searching);
+      if (!query?.valid) return 0;
+      let count = 0;
+      const cursor = query.getCursor(view.state);
+      while (!cursor.next().done) count++;
+      return replaceAll(view) ? count : 0;
+    },
+    // What the search starts with as the panel opens: the selection, when it
+    // is on one line, and "" otherwise. What has the focus then is kept, for
+    // searchBack, unless it is the panel itself (Ctrl+F in its field).
+    searchSeed: () => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && !active.closest(".editor-search")) host.wikiSearchFrom = active;
+      const { from, to } = view.state.selection.main;
+      const text = view.state.sliceDoc(from, to);
+      return from < to && text.length <= 500 && !/[\r\n]/.test(text) ? text : "";
+    },
+    // The panel closed (Escape, or its button): the focus back to where it
+    // came from (searchSeed), with its selection, when no step was made;
+    // after a step, to the match: the master's text, or slide by slide the
+    // row the match starts in, which a step opened.
+    searchBack: (stepped) => {
+      const from = host.wikiSearchFrom;
+      delete host.wikiSearchFrom;
+      const back = from instanceof HTMLElement && from.isConnected ? from : null;
+      if (!stepped && back !== null && !back.closest(".cm-editor")) return back.focus({ preventScroll: true });
+      if (!bySlide) return view.focus();
+      const row = host.wikiRows?.get(rowAtPosition(view.state, view.state.selection.main.from));
+      if (row) row.focus();
+      else back?.focus({ preventScroll: true });
+    },
     // The problems marked, as {from, to, message} in UTF-16 units, for the
     // browser tests.
     marked: () => {
@@ -2337,6 +2759,7 @@ export function attach(textarea, host, original, codeTokens) {
     previewShown: () => follow.previewShown(),
     textShown: () => follow.textShown(),
     destroy: () => {
+      clearTimeout(countTimer);
       editors.delete(editor);
       for (const row of host.wikiRows?.values() ?? []) row.destroy();
       host.wikiRows?.clear();
