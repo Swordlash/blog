@@ -75,7 +75,8 @@ import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), keyStateText)
-import Wiki.App.Backend.Http (HeldNow (..), HttpEnv, HttpWiki, PageRead (..), browserTransport, heldNow, newHttpEnv, ownersHeld, runHttpWiki)
+import Wiki.App.Backend.Http (HeldNow (..), HttpEnv, HttpWiki, PageRead (..), browserTransport, cacheOf, heldNow, newHttpEnv, newHttpEnvWith, ownersHeld, runHttpWiki)
+import Wiki.App.Backend.Http.Cache (Cache (..), emptyCache, withSpaces)
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State qualified as M
@@ -101,7 +102,7 @@ import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (Grants (..))
-import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
+import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchQuery)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Entry (..), Space (..))
 import Wiki.Core.Space qualified as Space
@@ -144,6 +145,7 @@ $( browserJS
      , ("js_committed", "wiki_test_encrypted_committed", Safe, [t|IO JSText|])
      , ("js_go_to", "wiki_test_encrypted_go_to", Safe, [t|JSText -> IO ()|])
      , ("js_settle", "wiki_test_encrypted_settle", Safe, [t|JSText -> JSText -> IO ()|])
+     , ("js_search_hits", "wiki_test_encrypted_search_hits", Safe, [t|JSText -> IO ()|])
      , ("js_sealed_again", "wiki_test_encrypted_sealed_again", Safe, [t|JSText -> IO ()|])
      , ("js_history_back", "wiki_test_encrypted_history_back", Safe, [t|IO ()|])
      , ("js_member", "wiki_test_encrypted_member", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
@@ -1697,8 +1699,11 @@ spec m = do
   -- the middle of turning its encryption off, shows nothing of a page made
   -- plain already before the reader confirms, by any route: the page's
   -- own, its permanent link, the list, its history and comments, the
-  -- search. Confirmed, the reader reads it, plain.
-  it "shows nothing of a page a decryption made plain while the space's gate is not confirmed, by any route" $ runPage $ do
+  -- search. The same holds with the tab's cache emptied by a write, which
+  -- empties the cached list of spaces with everything else: the gate is
+  -- decided from what the tab last knew of the space, not from the cache.
+  -- Confirmed, the reader reads it, plain.
+  it "shows nothing of a page a decryption made plain while the space's gate is not confirmed, by any route, with the list of spaces cached or emptied by a write" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))
     made <- ok =<< run env (createPage secret.id Nothing "Sealed title" "Sealed text.")
@@ -1712,21 +1717,148 @@ spec m = do
         shown = \case
           Right x -> "Plain" `T.isInfixOf` show x
           Left _ -> False
-    -- The page's route, and its permanent link: where it is, then there.
-    (shown <$> run tab (getPage secret.id [made.slug])) `shouldReturn` False
-    at <- ok =<< run tab (pageLocation made.id)
-    (shown <$> run tab (getPage secret.id at.page)) `shouldReturn` False
-    -- The list, its history and its comments.
-    (shown <$> run tab (listPages secret.id)) `shouldReturn` False
-    (shown <$> run tab (listVersions made.id (VersionsQuery Nothing 50))) `shouldReturn` False
-    run tab (listThreads made.id) >>= (`shouldSatisfy` isLeft)
-    -- The search.
-    hits <- run tab (searchPages (searchQuery "Plain"))
-    [h | h <- hits, h.page == made.id] `shouldBe` []
+        -- A write that fails, of a page that is not there: it empties the
+        -- tab's cache all the same, the list of spaces with it.
+        emptied = void (run tab (deletePage (PageId "nowhere")))
+        -- Each read below, with 'before' run first: some of them read the
+        -- list of spaces again into the cache.
+        nothingShown before = do
+          -- The page's route, and its permanent link: where it is, then
+          -- there.
+          before
+          (shown <$> run tab (getPage secret.id [made.slug])) `shouldReturn` False
+          before
+          at <- ok =<< run tab (pageLocation made.id)
+          before
+          (shown <$> run tab (getPage secret.id at.page)) `shouldReturn` False
+          -- The list, its history and its comments.
+          before
+          (shown <$> run tab (listPages secret.id)) `shouldReturn` False
+          before
+          (shown <$> run tab (listVersions made.id (VersionsQuery Nothing 50))) `shouldReturn` False
+          before
+          run tab (listThreads made.id) >>= (`shouldSatisfy` isLeft)
+          -- The search.
+          before
+          hits <- run tab (searchPages (searchQuery "Plain"))
+          [h | h <- hits, h.page == made.id] `shouldBe` []
+    -- The list of spaces cached, as the shell holds it.
+    nothingShown pass
+    (\c -> isJust c.spaces) <$> unsafeIOToPageM (cacheOf tab) `shouldReturn` True
+    -- The cache emptied before each read.
+    nothingShown emptied
     -- Confirmed: the page made plain reads plain.
     run tab (confirmedEntry secret.id)
     read' <- ok =<< run tab (getPage secret.id [made.slug])
     (read'.title, read'.body) `shouldBe` ("Plain title", "Plain text.")
+
+  -- #264's first review, P1: a tab whose cached list of spaces does not
+  -- name a space that asks each time (made, or opened to the reader, since
+  -- the list was read), and reads the space's record by itself, decides
+  -- the space's gate from the list as the server gives it now, never from
+  -- the record alone: nothing of the space is decrypted, and no key held,
+  -- before the reader confirms. The same for a subspace that does not ask
+  -- itself, under a parent that does: its gate is the parent's.
+  it "decrypts nothing of a space that asks each time, or of a subspace under it, that the cached list did not name, before the reader confirms" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Outer plans" "Behind the outer gate.")
+    inner <- ok =<< run env (createSpace (Just secret.id) "Inner")
+    innerMade <- ok =<< run env (createPage inner.id Nothing "Inner plans" "Behind the parent's gate.")
+    void (ok =<< run env (setEntry secret.id ConfirmEach))
+    -- The reader's keys, shared by the administrator's browser.
+    unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
+    void (ok =<< run env (confirmedEntry secret.id >> listPages secret.id))
+    void (ok =<< run env (listPages inner.id))
+    -- The reader's tab, started with a list of spaces that names neither.
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-reader"
+    unsafeIOToPageM (js_as (toJSText ("user-reader" :: Text)))
+    tab <- unsafeIOToPageM (newHttpEnvWith browserTransport (withSpaces [] emptyCache))
+    run tab endPreload
+    recordDecryptions
+    -- Each space's record, read by itself.
+    void (ok =<< run tab (getSpace [secretSlug]))
+    void (ok =<< run tab (getSpace [secretSlug, inner.slug]))
+    let shown :: (Show a) => Either WikiError a -> Bool
+        shown = \case
+          Right x -> any (`T.isInfixOf` show x) ["plans", "Behind"]
+          Left _ -> False
+    (shown <$> run tab (getPage secret.id [made.slug])) `shouldReturn` False
+    (shown <$> run tab (listPages secret.id)) `shouldReturn` False
+    (shown <$> run tab (getPage inner.id [innerMade.slug])) `shouldReturn` False
+    (shown <$> run tab (listPages inner.id)) `shouldReturn` False
+    stars <- ok =<< run tab starred
+    [s.title | s <- stars, s.page `elem` [made.id, innerMade.id]] `shouldSatisfy` all (== encryptedPageTitle)
+    (\h -> h.keys) <$> unsafeIOToPageM (heldNow tab) `shouldReturn` mempty
+    filter (\d -> any (`T.isInfixOf` d) [secret.id.text, inner.id.text]) <$> decryptedSince `shouldReturn` []
+    -- Confirmed: both read.
+    run tab (confirmedEntry secret.id)
+    page <- ok =<< run tab (getPage inner.id [innerMade.slug])
+    page.body `shouldBe` "Behind the parent's gate."
+
+  -- #264's first review, P2: a space a list of spaces read afresh leaves
+  -- out (deleted, or no longer open to the reader) is let go: its key and
+  -- its pages decrypted for the search, and the search finds nothing of
+  -- it, though the tab searched it before.
+  it "lets go of an encrypted space a list read afresh leaves out, and its search finds nothing of it" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Kept" "A walrus on the ice.")
+    unsafeIOToPageM (js_key_pair (toJSText ("user-reader" :: Text)))
+    void (ok =<< run env (listPages secret.id))
+    tab <- as "user-reader"
+    run tab endPreload
+    void (run tab listSpaces)
+    void (ok =<< run tab (getSpace [secretSlug]))
+    void (ok =<< run tab (getPage secret.id [made.slug]))
+    map (\h -> h.page) <$> run tab (searchPages (searchQuery "walrus")) `shouldReturn` [made.id]
+    before <- unsafeIOToPageM (heldNow tab)
+    (Set.member secret.id before.keys, Set.member secret.id before.found) `shouldBe` (True, True)
+    -- The reader is taken out of the space; a write empties the tab's
+    -- cache, and the next search reads the list afresh.
+    unsafeIOToPageM (js_remove_reader (toJSText ("user-reader" :: Text)))
+    void (run tab (deletePage (PageId "nowhere")))
+    hits <- run tab (searchPages (searchQuery "walrus"))
+    [h | h <- hits, h.page == made.id] `shouldBe` []
+    after <- unsafeIOToPageM (heldNow tab)
+    (Set.member secret.id after.keys, Set.member secret.id after.found) `shouldBe` (False, False)
+
+  -- #264's second review: one search decides from one list of spaces, read
+  -- afresh when a write emptied the cache, whether its words go to the
+  -- server and which spaces the browser searches. A space decrypted
+  -- elsewhere since the tab listed it is searched by the server at the
+  -- first search; a space encrypted elsewhere since is not asked of the
+  -- server, and the browser finds its page with the key.
+  it "finds at the first search after a write a page of a space decrypted elsewhere since, by the server's search" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Thawed" "A walrus on the ice.")
+    tab <- as "user-admin"
+    run tab endPreload
+    void (run tab listSpaces)
+    let inSecret = (searchQuery "walrus") {space = Just secret.id, includeSubspaces = True}
+        hit = SearchHit {page = made.id, space = secret.id, title = Snippet [Piece "Thawed" False], spacePath = [secretSlug], pagePath = [made.slug], snippet = Snippet [Piece "A walrus on the ice." False]}
+    -- Decrypted elsewhere: the space plain, its page with it, which the
+    -- server's search finds.
+    unsafeIOToPageM (js_made_plain (toJSText made.id.text) (toJSText ("Thawed" :: Text)) (toJSText ("A walrus on the ice." :: Text)))
+    unsafeIOToPageM (js_settle (toJSText secret.id.text) (toJSText ("plain" :: Text)))
+    unsafeIOToPageM (js_search_hits (toJSText (decodeUtf8 (toS (encode [hit])) :: Text)))
+    void (run tab (deletePage (PageId "nowhere")))
+    map (\h -> h.page) <$> run tab (searchPages inSecret) `shouldReturn` [made.id]
+
+  it "sends no word of a space encrypted elsewhere since to the server at the first search after a write, and finds its page with the key" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    tab <- as "user-admin"
+    run tab endPreload
+    -- Listed plain; encrypted elsewhere since, with a page.
+    void (run tab listSpaces)
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Frozen" "A walrus under the ice.")
+    void (run tab (deletePage (PageId "nowhere")))
+    since <- length <$> asked
+    map (\h -> h.page) <$> run tab (searchPages ((searchQuery "walrus") {space = Just secret.id, includeSubspaces = True})) `shouldReturn` [made.id]
+    sent <- drop since <$> asked
+    [r.url | r <- sent, "api/v1/search" `T.isPrefixOf` r.url] `shouldBe` []
 
   -- Turning encryption off checks a page's history as an export does,
   -- before anything of it is staged: a history the server rolled back
