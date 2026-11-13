@@ -41,7 +41,8 @@ export const letters = [
 ].join("");
 
 // The characters beyond ASCII that a picture is known to draw, each checked
-// against the real TikZJax by toolchain/smoke-test.mjs. A character outside
+// against the real TikZJax by wiki-smoke's demo suite (Demo.Prerendered),
+// which reads this list through node. A character outside
 // this list is not necessarily one that fails; it is the first suspect when
 // dvi2html throws.
 export const drawable = new Set([

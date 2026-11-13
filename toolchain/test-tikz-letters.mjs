@@ -1,7 +1,7 @@
 // The error a TikZ picture shows when TikZJax's fonts cannot draw one of its
 // characters (web/src/tikz-letters.mjs's `fontError`), and the TeX that
 // defines the ogonek. Whether the letters really draw is the smoke test's
-// part (toolchain/smoke-test.mjs), through the real TikZJax; this checks
+// part (wiki-smoke's demo suite), through the real TikZJax; this checks
 // the error's wording, the character and line it names, and what it skips.
 //
 //   node toolchain/test-tikz-letters.mjs

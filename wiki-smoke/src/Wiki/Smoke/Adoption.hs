@@ -186,11 +186,14 @@ markPrerendered page = do
   _ :: Bool <- evaluate page "(() => { document.querySelector('#app .wiki').dataset.prerendered = 'true'; return true; })()"
   pure ()
 
--- | The shell the page arrived with is the one on the page.
+-- | The shell the page arrived with is the one on the page, and the only
+-- one.
 stillPrerendered :: (HasCallStack) => Page -> IO ()
 stillPrerendered page = do
-  shells <- count (locator page "#app > .wiki[data-prerendered]")
-  unless (shells == 1) $ expectationFailure "the prerendered shell was replaced"
+  shells <- count (locator page "#app .wiki")
+  unless (shells == 1) $ expectationFailure ("the page has " <> show shells <> " shells")
+  marked <- count (locator page "#app > .wiki[data-prerendered]")
+  unless (marked == 1) $ expectationFailure "the prerendered shell was replaced"
 
 -- | Wait until every fitted frame of the page has the height the islands'
 -- script gives it, once the frame's document has loaded: the frame's own

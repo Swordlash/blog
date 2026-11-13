@@ -1,5 +1,5 @@
 // Drive the server's build of the wiki in headless Chromium, served by a real
-// wiki-server: the smoke test's second mode (toolchain/smoke-test.mjs is the
+// wiki-server: the smoke test's second mode (wiki-smoke's demo suite is the
 // first, the serverless demo's).
 //
 //   npm run smoke-test                            # both modes, after npm run build-wasm

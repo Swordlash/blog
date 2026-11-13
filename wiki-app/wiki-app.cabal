@@ -309,7 +309,7 @@ executable wiki-app-prerender
         wiki-app
 
 -- What the component renders, through Halogen.Static's in-memory document,
--- and the backend's contract, run against the in-memory backend over IO. In a browser, toolchain/smoke-test.mjs drives
+-- and the backend's contract, run against the in-memory backend over IO. In a browser, wiki-smoke's demo suite drives
 -- the built page.
 test-suite wiki-app-test
   import:           shared

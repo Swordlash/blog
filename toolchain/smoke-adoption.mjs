@@ -1,10 +1,12 @@
-// What the smoke tests (toolchain/smoke-test.mjs, the demo's, and
-// toolchain/smoke-test-server.mjs, the server's) allow the program to
-// change on a page it adopts, and to ask the API for once it has started. Each test marks the page the server sent,
-// lets the program adopt it, and counts every change since as a repair:
-// HTML that a page rendered ahead got wrong. A few attributes are written
-// by the page's scripts from what only the browser knows, and are not
-// repairs. Both tests take that list from here, so that they agree.
+// What the server's smoke test (toolchain/smoke-test-server.mjs) allows the
+// program to change on a page it adopts, and to ask the API for once it has
+// started. The test marks the page the server sent, lets the program adopt
+// it, and counts every change since as a repair: HTML that a page rendered
+// ahead got wrong. A few attributes are written by the page's scripts from
+// what only the browser knows, and are not repairs. The demo's smoke test,
+// in Haskell, has the same rules in wiki-smoke's Wiki.Smoke.Adoption, which
+// the server's test takes once it is ported too; until then a change here
+// is made there as well.
 
 // The attributes the page's scripts set, whatever the server sent:
 // data-prerendered the tests' own mark on the shell; data-stuck the
