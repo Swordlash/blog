@@ -1847,6 +1847,30 @@ which the wiki pins since #227.
   Shell, Tasks, Spaces, Slides, Search and Notifications move (about
   70 examples), and AGENTS.md's gate names the native suite. Until
   then nothing moves.
+- **WP5.110 CI's run in a quarter of an hour (the owner, 2026-11-13:
+  "testy trwające pół godziny to jest jakaś kpina, parę dni temu to
+  było 13").** Measured from the runs' own times: every native job
+  takes 10 to 14 minutes and has not grown; the `wasm` job took 15
+  minutes on 2026-11-11 and takes 24 to 27 now, and it is the run's
+  length. Its `Test` step went from 7.2 to 13.3 minutes and is exactly
+  as long as `wiki-core-test` compiled to wasm and run under Node (425
+  s for 1235 examples on 2026-11-11, 524 s at midnight on the 13th,
+  790 s for 1404 that evening: half as slow again in a day, for 3%
+  more examples), beside which the two shards of the browser suite
+  take 6 minutes (481 examples then, 676 now). Its smoke step went
+  from 2.6 to 6.4 minutes, after the tests and one suite after another
+  (the demo 106 s, the server on SQLite 109 s and again on PostgreSQL
+  114 s). The rest is 5 minutes of setting up and building. So: find
+  which of wiki-core's examples take the time on wasm and what made
+  them slower on 2026-11-13 (a property run 1600 times, a text grown,
+  a quadratic function: fix the function, not the count, if it is
+  one); then give the three kinds of work their own jobs from one
+  build (the browser suite, wiki-core and wiki-api on wasm, the smoke
+  suites), each no longer than the native jobs, and say what it costs
+  in runner minutes, which the repository pays for while it is
+  private. A check keeps it: the workflow's summary prints each
+  suite's time, and a suite over its budget fails with the slowest
+  examples named.
 - **WP5.108 The pause after typing in a long presentation (found by
   WP5.105's measures, #269).** On the deck of 60 slides of 100 lines,
   the pause after a keystroke holds the page 7 to 11 seconds at its
@@ -1960,10 +1984,14 @@ which the wiki pins since #227.
   PostgreSQL too when a database is given), then the node runner for
   the two tests of JavaScript modules. A path given to the smoke
   scripts is read from the caller's directory
-  (`toolchain/caller-paths.sh`). **(d)**: the late events in the
-  server's suites, the node scripts that stay and the README's section
-  are #270; the three tests that raced on a clock or on each other are
-  a pull request of their own.
+  (`toolchain/caller-paths.sh`). **(d), its first three parts, is
+  done (#270):** the late events in the server's suites (218 actions
+  read, one raced: Escape on the administration's user dialog),
+  `afterEvent` in `Wiki.Smoke.Browser` for every suite, the README's
+  one section on the smoke tests with the node scripts that stay and
+  why (none drives a browser as a test), and AGENTS.md's three
+  sentences. Left of the package: the three tests that raced on a
+  clock or on each other (branch `raced-tests`).
 - **WP5.95 No view takes an older answer over a newer one (found by
   Codex on #243, rounds 12 and 13; left there on purpose).** The page view
   drops a fetched page older than the one it shows (`takesPage`, by
