@@ -327,6 +327,12 @@ data ConversionInfo = ConversionInfo
   , cannotEncrypt :: [Text]
   , cannotDecrypt :: [Text]
   , nothingWritten :: Bool
+  , clearing :: Bool
+  -- ^ Whether the plain text a conversion deleted is still in SQLite's
+  -- files: the truncating checkpoint after its last commit was held back
+  -- by a reader of the database, and runs again after the next write
+  -- (and at the server's start). Always false on PostgreSQL, whose old
+  -- rows stay in its files until it is vacuumed, whatever this says.
   -- ^ Whether the space has nothing written in it, its home page as it
   -- was made: such a space is encrypted at once
   -- ('Wiki.Api.EncryptedApi''s @encrypt@), any other by a conversion.

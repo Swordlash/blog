@@ -33,6 +33,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Database.Beam (all_, delete, filter_, runDelete, runSelectReturningList, runUpdate, select, update, val_, (<-.), (==.))
+import Database.SQLite.Simple qualified as SQLite
 import Protolude
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
@@ -1158,6 +1159,38 @@ spec backing = describe "encrypted spaces in the storage" $ do
       void (ok =<< as p.ada (savePage pid readBack.updatedAt "Title 3" "Text 3"))
 
     conversionPrivacy backing
+
+    -- The plain text is gone from SQLite's files only once a truncating
+    -- checkpoint has run after the last commit. A reader that holds a
+    -- snapshot holds it back: the conversion then keeps the cleanup
+    -- pending, says so, and runs it at the next write after the reader is
+    -- gone. (On PostgreSQL there is no such checkpoint.)
+    it "clears the plain text from SQLite's files at the next write once a reader no longer holds back the checkpoint" $ withSystemTempDirectory "conversion" $ \dir -> withPlaceIn backing $ \at -> case at.database of
+      SqliteFile file -> withStorage defaultConfig at $ \st -> do
+        p <- makePeople st
+        let as :: UserId -> StoredWiki IO a -> IO a
+            as u = runStoredWiki st (AsUser u)
+        s' <- privateSpace st p.ada "Held"
+        home <- ok =<< as p.ada (homeOf s'.id)
+        made <- ok =<< as p.ada (createPage s'.id Nothing (marker "title") ("Now " <> marker "text"))
+        void (ok =<< as p.ada (startEncrypting s'.id StartEncrypting {keys = [startKey p s'.id]}))
+        encryptPage st p.ada dir s'.id home.id []
+        -- A reader holding a snapshot through the last commit.
+        snapshot <- SQLite.open file
+        SQLite.execute_ snapshot "BEGIN"
+        void (SQLite.query_ snapshot "SELECT count(*) FROM pages" :: IO [SQLite.Only Int])
+        encryptPage st p.ada dir s'.id made.id []
+        -- Ended, but not done: the plain text is still being cleared.
+        ((\i -> (i.running, i.clearing)) <$> (ok =<< as p.ada (conversionInfo s'.id))) `shouldReturn` (Nothing, True)
+        SQLite.execute_ snapshot "ROLLBACK"
+        SQLite.close snapshot
+        -- The next write runs the cleanup left pending.
+        void (ok =<< as p.ada (createSpace Nothing "After"))
+        ((\i -> i.clearing) <$> (ok =<< as p.ada (conversionInfo s'.id))) `shouldReturn` False
+        files <- databaseFiles at
+        contents <- traverse (\f -> (f,) <$> BS.readFile f) =<< filterM doesFileExist files
+        [f | (f, b) <- contents, m <- [marker "title", marker "text"], encodeUtf8 m `BS.isInfixOf` b] `shouldBe` []
+      _ -> pass
 
     -- Every way a conversion ends cleans up as its last commit does: a
     -- decryption turned back before it committed anything leaves no file

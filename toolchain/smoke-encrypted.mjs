@@ -526,6 +526,10 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
   assert.equal(convert.status, 201, `the space to convert: ${JSON.stringify(convert.body)}`);
   const created = await raw(ada2, `spaces/${encodeURIComponent(convert.body.id)}/pages`, { method: "POST", json: { parent: null, title: pm.title, body: `Once: ${pm.older}.` } });
   assert.equal(created.status, 201, `the page to convert: ${JSON.stringify(created.body)}`);
+  // Two more pages, so that a conversion can be stopped halfway; and the
+  // reader of the first part, who reads the space too.
+  for (const n of [1, 2]) assert.equal((await raw(ada2, `spaces/${encodeURIComponent(convert.body.id)}/pages`, { method: "POST", json: { parent: null, title: `Filler ${n}`, body: "Filler." } })).status, 201, "a filler page");
+  assert.equal((await raw(ada2, `spaces/${encodeURIComponent(convert.body.id)}/grants`, { method: "PUT", json: { subject: { tag: "SubjectUser", contents: bea.id }, permission: "View", granted: true } })).status, 204, "the reader of the space to convert");
   const resaved = await raw(ada2, `pages/${encodeURIComponent(created.body.id)}`, { method: "PUT", headers: { "If-Match": created.etag }, json: { title: pm.title, body: `Now: ${pm.text} and ${pm.quote}.` } });
   assert.equal(resaved.status, 200, `the page's second version: ${JSON.stringify(resaved.body)}`);
   const threaded = await raw(ada2, `pages/${encodeURIComponent(created.body.id)}/threads`, { method: "POST", json: { anchor: { exact: pm.quote, prefix: "and ", suffix: "." }, body: pm.comment } });
@@ -565,6 +569,19 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
   await converter.locator("#app .page-view .actions a", { hasText: "History" }).click();
   await converter.locator("#app .history-view", { hasText: pm.older }).waitFor({ timeout });
   console.log("ok: a space that had pages encrypted page by page in its administrator's browser, and read back decrypted with its history, comment and attachment");
+  // The reader reads the page under this first encryption, once a
+  // member's browser has shared the key with her.
+  const readerReads = async (what) => {
+    await converter.goto(url("/s/smoke-convert/"));
+    await converter.locator("#app .page-view .page-body").waitFor({ timeout });
+    await eventually(async () => {
+      await bea.page.goto(url("/s/smoke-convert/pages/"));
+      await bea.page.locator("#app .space-view a", { hasText: pm.title }).first().click({ timeout: 2000 });
+      await bea.page.locator("#app .page-view .page-body", { hasText: pm.text }).waitFor({ timeout: 2000 });
+    }, `the reader reads the page ${what}`);
+    assert.equal(await bea.page.locator("#app .encrypted-rollback").count(), 0, `the reader's browser took the page ${what} for a fork`);
+  };
+  await readerReads("under the first encryption");
   const leftOut = [
     { matches: (f) => f.startsWith(join(data, "backups")), why: "a backup made before the conversion keeps the plain text until it is pruned" },
     { matches: (f) => f.endsWith(plainBlob), why: "the attachment's plain file, which that backup names" },
@@ -647,7 +664,40 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
   const againSaved = converter.waitForResponse((r) => r.request().method() === "PUT" && /^\/api\/v1\/encrypted\/pages\/[^/]+$/.test(new URL(r.url()).pathname), { timeout });
   await againEditor.press("Control+s");
   assert.equal((await againSaved).status(), 200, "a save of the page encrypted again");
-  console.log("ok: the space encrypted again, a page read under its first encryption reads and saves with no fork reported");
+  await readerReads("encrypted again");
+  console.log("ok: the space encrypted again, a page read under its first encryption reads and saves with no fork reported, in her browser and in a reader's");
+
+  // Its encryption turned off, stopped halfway, and turned back: the pages
+  // decrypted meanwhile are encrypted again, each a new chain, which both
+  // browsers take as such.
+  await converter.goto(url("/s/smoke-convert/pages/"));
+  await converter.locator("#app .space-settings-toggle").click();
+  await converter.locator("#app .space-permissions .decrypt-space").click();
+  await converter.locator("#app .space-permissions .decrypt-confirm").click();
+  await converter.locator("#app .space-permissions .conversion-stop").click({ timeout });
+  await converter.locator("#app .space-permissions .conversion-reverse").click({ timeout });
+  await eventually(async () => {
+    const s = (await raw(ada2, "spaces/at/smoke-convert")).body;
+    assert.ok(s.encryption && !s.conversion, `the space is not encrypted again yet: ${JSON.stringify(s)}`);
+  }, "the decryption turned back");
+  for (const title of [pm.title, "Filler 1", "Filler 2"]) {
+    await converter.goto(url("/s/smoke-convert/pages/"));
+    await converter.locator("#app .space-view a", { hasText: title }).first().click();
+    await converter.locator("#app .page-view .page-body").waitFor({ timeout });
+    assert.equal(await converter.locator("#app .encrypted-rollback").count(), 0, `the page ${title} turned back was taken for a fork`);
+  }
+  await readerReads("after a decryption turned back");
+  await converter.goto(url("/s/smoke-convert/pages/"));
+  await converter.locator("#app .space-view a", { hasText: pm.title }).first().click();
+  await converter.locator("#app .page-view a", { hasText: "Edit" }).first().click();
+  const backEditor = converter.locator(editorText);
+  await backEditor.waitFor({ timeout });
+  await backEditor.press("End");
+  await backEditor.type(" Saved once more.");
+  const backSaved = converter.waitForResponse((r) => r.request().method() === "PUT" && /^\/api\/v1\/encrypted\/pages\/[^/]+$/.test(new URL(r.url()).pathname), { timeout });
+  await backEditor.press("Control+s");
+  assert.equal((await backSaved).status(), 200, "a save of the page after the decryption turned back");
+  console.log("ok: a decryption stopped halfway and turned back, every page reads with no fork reported, in her browser and in a reader's, and saves");
   await ada2.context.close();
 
   for (const c of [ada.context, bea.context, elsewhere]) await c.close();

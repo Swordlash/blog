@@ -373,6 +373,11 @@ data Storage = Storage
   -- seen, in a write or a read ('noticeGeneration'). A newer one calls the
   -- 'Config' @permissionsChanged@ callback.
   , lock :: Maybe DataLock
+  , pendingCleanup :: IORef Bool
+  -- ^ Whether a truncating checkpoint of SQLite's log is owed: one after
+  -- a conversion's write was held back by a reader. It is tried again
+  -- after every write, on the writer, until it runs ('owedCheckpoint'),
+  -- and at the server's start.
   -- ^ The data directory's lock. A storage opened with 'openStorage',
   -- which may delete files in the directory, holds it. A storage opened
   -- beside a running server ('withStorageAside') does not.
@@ -528,7 +533,13 @@ openWith collect config place = do
             (,,,said) <$> (newIORef . Just =<< runDb c loadSettings) <*> (newIORef . Just =<< runDb c loadServerSettings) <*> (newIORef =<< runDb c permissionsGeneration)
         tracer <- newIORef Nothing
         permissions <- newIORef Nothing
-        pure Storage {engine, place, config, settings, serverKept, tracer, permissions, newestGeneration, lock, release, migrated}
+        pendingCleanup <- newIORef False
+        let st = Storage {engine, place, config, settings, serverKept, tracer, permissions, newestGeneration, lock, release, migrated, pendingCleanup}
+        -- A checkpoint owed when the server stopped is run now: what a
+        -- conversion deleted is then gone from the log and the file.
+        case engine of
+          Engine p -> withResource p.writer $ \c -> checkpoint c >>= writeIORef pendingCleanup . not
+        pure st
 
 -- | The pools of a database's connections: one writer, and the readers.
 -- A connection unused for ten minutes is closed.
@@ -1101,6 +1112,7 @@ transactThenFrom st who address mode (Tx body) committed = case st.engine of
     -- action has kept any new settings in memory, so that the checks it
     -- then makes read them.
     for_ outcome $ \(ctx, generation, a) -> do
+      when (mode == Writes) (owedCheckpoint st c)
       committed a
       made <- readIORef ctx.told
       unless (null made) (st.config.notify (reverse made))
@@ -1923,7 +1935,9 @@ uploadSealedAttachmentFile pid up file = do
 
 -- | A space's conversion ('E.ConversionInfo').
 conversionInfo :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError E.ConversionInfo)
-conversionInfo = run Reads . conversionInfoTx
+conversionInfo sid = do
+  owed <- StoredWiki (asks (\env -> env.storage.pendingCleanup)) >>= liftIO . readIORef
+  fmap (\i -> i {E.clearing = owed}) <$> run Reads (conversionInfoTx sid)
 
 -- | Start encrypting a space that has pages.
 startEncrypting :: (MonadIO m) => SpaceId -> E.StartEncrypting -> StoredWiki m (Either WikiError E.ConversionInfo)
@@ -1979,13 +1993,31 @@ reverseConversion sid = do
 -- decrypted or encrypted) stays behind. Every way a conversion ends goes
 -- through here: its last commit, and turning it back, at once or at its
 -- last commit.
+--
+-- A reader of the database that holds a snapshot holds the checkpoint
+-- back: it is tried again for a while, and, when it still cannot run, it
+-- is owed ('pendingCleanup'), tried after every write and at the start,
+-- and the conversion says so ('E.ConversionInfo''s @clearing@) until it
+-- has run.
 afterConversionWrite :: (MonadIO m) => Bool -> StoredWiki m ()
 afterConversionWrite ended = do
   st <- StoredWiki (asks (\env -> env.storage))
   liftIO $ case st.engine of
     Engine p -> withResource p.writer $ \c -> do
-      void (checkpoint c)
+      let tries :: Int -> IO Bool
+          tries n =
+            checkpoint c >>= \case
+              True -> pure True
+              False | n > 1 -> threadDelay 100000 >> tries (n - 1)
+              False -> pure False
+      done <- tries 20
+      writeIORef st.pendingCleanup (not done)
       when (ended && isJust st.lock) (collectGarbage c st.place.dataDir)
+
+-- | Run the truncating checkpoint a conversion owes, if one is owed, on
+-- the writer after a write ('pendingCleanup').
+owedCheckpoint :: (Backend be) => Storage -> Connection be -> IO ()
+owedCheckpoint st c = whenM (readIORef st.pendingCleanup) (checkpoint c >>= writeIORef st.pendingCleanup . not)
 
 -- | Set whether readers of an encrypted space confirm each time they open
 -- it ('Wiki.Core.Space.Entry'), as its administrators do.
@@ -4764,7 +4796,7 @@ conversionInfoTx sid = do
       root <- conversionRootOf s
       covered <- filter (\x -> isJust x.conversion) <$> subtreeOf root.id
       left <- db (unconvertedIn (map (\x -> x.id) (filter viewable covered)))
-      pure E.ConversionInfo {running = Just running, root = (\x -> x.id) <$> mfilter viewable (Just root), spaces = map (\x -> x.id) (filter viewable covered), left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False}
+      pure E.ConversionInfo {running = Just running, root = (\x -> x.id) <$> mfilter viewable (Just root), spaces = map (\x -> x.id) (filter viewable covered), left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False}
     Nothing -> do
       tree <- subtreeOf sid
       enc <- if isJust s.encryption then pure [] else encryptRefusals s c tree
@@ -4779,6 +4811,7 @@ conversionInfoTx sid = do
           , cannotEncrypt = enc
           , cannotDecrypt = dec
           , nothingWritten = untouched
+          , clearing = False
           }
 
 -- | Start encrypting a space that has pages, and the plain spaces below
@@ -4825,7 +4858,7 @@ startEncryptingTx sid req = do
   requireEncryptionRule sid
   left <- db (unconvertedIn (map (\x -> x.id) plainTree))
   record "space.encryption-started" (spaceSubject s) [("spaces", show (length plainTree)), ("pages", show (length left))]
-  pure E.ConversionInfo {running = Just Encrypting, root = Just sid, spaces = map (\x -> x.id) plainTree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False}
+  pure E.ConversionInfo {running = Just Encrypting, root = Just sid, spaces = map (\x -> x.id) plainTree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False}
 
 -- | Start turning the encryption of a space, and of the spaces below it,
 -- off.
@@ -4839,7 +4872,7 @@ startDecryptingTx sid = do
   for_ tree $ \x -> db (clearConverted x.id >> setConversion x.id (Just Decrypting))
   left <- db (unconvertedIn (map (\x -> x.id) tree))
   record "space.decryption-started" (spaceSubject s) [("spaces", show (length tree)), ("pages", show (length left))]
-  pure E.ConversionInfo {running = Just Decrypting, root = Just sid, spaces = map (\x -> x.id) tree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False}
+  pure E.ConversionInfo {running = Just Decrypting, root = Just sid, spaces = map (\x -> x.id) tree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False}
 
 -- | A page a conversion stages or commits, checked: its space is being
 -- converted this way, the page is not converted yet, and the caller may
@@ -5197,7 +5230,7 @@ reverseConversionTx sid = do
   record "space.conversion-reversed" (spaceSubject root) [("was", Space.conversionName way), ("spaces", show (length covered))]
   left <- db (unconvertedIn (map (\x -> x.id) covered))
   _ <- endIfDone back root covered
-  pure E.ConversionInfo {running = if null left then Nothing else Just back, root = Just root.id, spaces = map (\x -> x.id) covered, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False}
+  pure E.ConversionInfo {running = if null left then Nothing else Just back, root = Just root.id, spaces = map (\x -> x.id) covered, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False}
 
 --------------------------------------------------------------------------------
 -- Comments and attachments in an encrypted space

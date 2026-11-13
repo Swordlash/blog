@@ -227,6 +227,13 @@ function wikiTestEncServer(request) {
       return wikiTestEncJson(200, s.space);
     }
     if (!s.space.encryption) return wikiTestEncJson(409, { error: "Conflict", text: "This space is not encrypted." });
+    // Its conversion, as far as a test of the permissions' view needs it:
+    // what runs and the pages left, and turning the encryption off.
+    if (rest === "/conversion" && request.method === "GET") return wikiTestEncJson(200, wikiTestEncConversion(s));
+    if (rest === "/conversion/decrypt" && request.method === "POST") {
+      s.space.conversion = "decrypting";
+      return wikiTestEncJson(200, wikiTestEncConversion(s));
+    }
     // Its readers, as the users a mention names: those the test gives.
     if (rest === "/readers" && request.method === "GET") return wikiTestEncJson(200, wikiTestEncrypted.readerUsers ?? []);
     // Whether its readers confirm each time they open it, set by an
@@ -482,6 +489,13 @@ function wiki_test_encrypted_live(message) {
   const editor = new BroadcastChannel("wiki-live-preview");
   editor.postMessage(JSON.parse(message));
   editor.close();
+}
+
+// A space's conversion as the server answers it (Wiki.Api.Encrypted's
+// ConversionInfo): every page left while one runs.
+function wikiTestEncConversion(s) {
+  const left = s.space.conversion ? [...wikiTestEncrypted.pages.values()].filter((p) => p.space === s.space.id).map((p) => ({ page: p.id, space: p.space })) : [];
+  return { running: s.space.conversion ?? null, root: s.space.id, spaces: [s.space.id], left, cannotEncrypt: [], cannotDecrypt: [], nothingWritten: false, clearing: false };
 }
 
 // The users the server answers as the space's readers, as JSON.

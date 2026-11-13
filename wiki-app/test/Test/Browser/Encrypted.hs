@@ -1304,6 +1304,26 @@ spec m = do
     [r.url | r <- sent, "notifications/people" `T.isInfixOf` r.url || "nobody-here" `T.isInfixOf` (r.url <> r.body)] `shouldBe` []
     unmount ui
 
+  -- A conversion just started shows how far it is, and Stop, while its
+  -- pages are converted: here held at its first page.
+  it "shows a conversion's progress and Stop from its start" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    void (ok =<< run env (createPage secret.id Nothing "Turned plain" "Text."))
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    ui <- startServer m (R.SpacePages [secretSlug])
+    find ui ".space-settings-toggle" >>= click
+    eventually (find ui ".decrypt-space") >>= click
+    confirm <- eventually (find ui ".decrypt-confirm")
+    eventually (getAttribute confirm "disabled" `shouldReturn` Nothing)
+    holdAt "GET" (endpointUrl (\e -> e.encrypted.conversion secret.id))
+    click confirm
+    eventually (find ui ".conversion-progress" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "left"))
+    _ <- find ui ".conversion-stop"
+    release
+    unmount ui
+
   it "turns asking each time on in the space's permissions, and asks the administrator who turned it on too" $ runPage $ do
     env <- encryptedSpace "user-admin"
     void (ok =<< run env (encryptSpace secret.id))

@@ -799,7 +799,13 @@ bytes (what an encrypted page's ciphertext holds; a plain page has no such
 limit), and, to turn it off, a parent space that is encrypted too. Afterwards the plain text is
 gone from the wiki's database: SQLite's files are written over where it
 was, and its log emptied; on PostgreSQL old rows stay in the database's
-files until it is vacuumed. **Backups made before keep the plain text**,
+files until it is vacuumed (the wiki does not vacuum it: its
+administrator's maintenance does). SQLite's log is emptied by a
+checkpoint after the conversion's last commit, which a reader of the
+database (a backup being taken, a tool with the file open) can hold
+back: the space's permissions then say that the old text is still being
+cleared, and the checkpoint runs again after each write to the wiki, and
+at the server's start, until it has run. **Backups made before keep the plain text**,
 and the attachments' plain files they name stay in the data directory,
 until those backups are pruned: nothing deletes a backup.
 

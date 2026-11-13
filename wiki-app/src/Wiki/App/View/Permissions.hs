@@ -172,7 +172,10 @@ component =
               <p class="permissions-intro">{{ sealedText }}</p>
             </div>
           {% end %}
-          {% if isJust space.conversion %}
+          {% if maybe False (\i -> i.clearing) st.conversionInfo %}
+            <p class="permissions-intro conversion-clearing" role="status">The plain text this conversion deleted is still in the database's files: a reader of the database holds them back. It is cleared at the next write to the wiki.</p>
+          {% end %}
+          {% if isJust running %}
             <div class="permissions-conversion">
               {% for n in toList st.converting %}
                 <p class="permissions-intro conversion-progress" role="status">{{ conversionWord }}: {{ pagesLeft n }} left. Keep this page open until it is done.</p>
@@ -186,7 +189,7 @@ component =
               {% end %}
             </div>
           {% end %}
-          {% if isJust space.encryption && isNothing space.conversion %}
+          {% if isJust space.encryption && isNothing running %}
             <div class="permissions-encrypted">
               <p class="permissions-intro encrypted-note">Encrypted: the titles and texts of this space's pages, and their histories, are encrypted in its members' browsers, and the server cannot read them. Its name stays readable, to whoever sees it in the list of spaces. Each reader granted here gets the space's key from a member's browser, the next time a member opens the space.</p>
               <p class="permissions-intro encrypted-removal">Removing someone here gives the space a new key: your browser makes it at once if you hold the key, or another administrator's does when they next open the space, and until then nothing more can be written in it. Whoever was removed and kept the old key can still read what was written before, with a copy of what the server stores, but nothing written after.</p>
@@ -221,7 +224,7 @@ component =
             <div class="permissions-encrypt">
               {% if st.confirming %}
                 <p class="permissions-intro encrypt-explained">Encrypting this space encrypts the titles and texts of its pages, and their histories, in its members' browsers: the server cannot read them, search them, export them, or show them in feeds or previews. Their comments and attachments are encrypted too, and so are the spaces below it, each with a key of its own. The space's name stays readable. Its members need the wiki's HTTPS address and their keys (your account's security) to read it. Its encryption can be turned off again here.</p>
-                <p class="permissions-intro encrypt-pages">A space that has pages is encrypted in your browser, page by page: until it is done nothing else can be written in it, and if it stops, an administrator who holds the key continues it here. Each page gets a new address (its link by id keeps working). What was plain is then gone from the wiki's database, but not from the backups made before: they keep the plain text, and the files of the attachments they name, until they are pruned. Nothing deletes a backup.</p>
+                <p class="permissions-intro encrypt-pages">A space that has pages is encrypted in your browser, page by page: until it is done nothing else can be written in it, and if it stops, an administrator who holds the key continues it here. Each page gets a new address (its link by id keeps working). What was plain is then gone from the wiki's database (on SQLite once nothing reading its files holds them back, which this page says; on PostgreSQL only once the database is vacuumed), but not from the backups made before: they keep the plain text, and the files of the attachments they name, until they are pruned. Nothing deletes a backup.</p>
                 {{ refusalsView cannotEncrypt }}
                 <button type="button" class="primary encrypt-confirm" disabled={{ st.busy || not (null cannotEncrypt) }} onClick={{ const Encrypt }}>Encrypt</button>
                 <button type="button" class="encrypt-cancel" disabled={{ st.busy }} onClick={{ const (AskEncrypt False) }}>Cancel</button>
@@ -240,14 +243,18 @@ component =
         -- A private space that is not public may be encrypted: a top-level
         -- space, or a subspace made private from its parent. The server
         -- says why one with pages written in it may not.
-        encryptable = isNothing space.encryption && isNothing space.conversion && not space.public && (space.sealed || isNothing space.parent)
+        encryptable = isNothing space.encryption && isNothing running && not space.public && (space.sealed || isNothing space.parent)
         -- Whether a space above this one asks each time, which covers it.
         askedAbove = maybe False (/= space.id) (gateOf st.input.context.spaces space.id)
+        -- The conversion running: the one this view started, turned
+        -- round or continues (its answer), before the shell has read the
+        -- space again, else the space's.
+        running = (st.conversionInfo >>= \i -> i.running) <|> space.conversion
         cannotEncrypt = maybe [] (\i -> i.cannotEncrypt) st.conversionInfo
         cannotDecrypt = maybe [] (\i -> i.cannotDecrypt) st.conversionInfo
         leftNow = maybe 0 (\i -> length i.left) st.conversionInfo
         conversionWord :: Text
-        conversionWord = case space.conversion of
+        conversionWord = case running of
           Just Decrypting -> "Turning its encryption off"
           _ -> "Encrypting its pages"
         pagesLeft :: Int -> Text
@@ -406,14 +413,14 @@ component =
           else
             startConversion space.id Encrypting >>= \case
               Left e -> modify (\st -> st {busy = False, problem = Just e})
-              Right info -> modify (\st -> st {confirming = False}) >> convertAll (length info.left)
+              Right info -> modify (\st -> st {confirming = False, conversionInfo = Just info}) >> convertAll (length info.left)
       AskDecrypt asking -> modify (\st -> st {confirmingOff = asking})
       Decrypt -> do
         space <- gets (\st -> st.input.space)
         modify (\st -> st {busy = True, problem = Nothing})
         startConversion space.id Decrypting >>= \case
           Left e -> modify (\st -> st {busy = False, problem = Just e})
-          Right info -> modify (\st -> st {confirmingOff = False}) >> convertAll (length info.left)
+          Right info -> modify (\st -> st {confirmingOff = False, conversionInfo = Just info}) >> convertAll (length info.left)
       Continue -> do
         modify (\st -> st {busy = True, problem = Nothing})
         convertAll =<< gets (\st -> maybe 0 (\i -> length i.left) st.conversionInfo)
@@ -426,7 +433,7 @@ component =
           Left e -> modify (\st -> st {busy = False, problem = Just e})
           Right info
             | isNothing info.running -> H.raise (Changed Nothing)
-            | otherwise -> convertAll (length info.left)
+            | otherwise -> modify (\st -> st {conversionInfo = Just info}) >> convertAll (length info.left)
       ChooseWho n -> modify (\st -> st {who = n})
       ChooseWhat n -> for_ (atMay permissions n) $ \p -> modify (\st -> st {what = p})
       Grant ->
