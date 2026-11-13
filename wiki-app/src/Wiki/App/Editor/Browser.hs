@@ -814,7 +814,8 @@ data Layout = Layout
   -- ^ Where the selection starts, the cursor being where it ends.
   , cursor :: Int
   , focused :: Maybe RowKey
-  -- ^ The row whose editor had the focus last.
+  -- ^ The row whose editor had the focus last. It may have been closed
+  -- since: a use that needs an editor asks whether the row is open.
   , starts :: [(RowKey, Int)]
   }
 

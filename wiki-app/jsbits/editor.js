@@ -97,8 +97,12 @@ function wiki_editor_history(host, undoing) {
 // fork), so the element is watched instead: the first time it loses the
 // focus, if it lost it to nothing (no other element took it) and no press
 // of the pointer came since the change (a press is the author moving the
-// focus, which stays where it went), it takes the focus back in the next
-// frame, when the patch has put it back in the page. The watch ends at
+// focus, which stays where it went), it takes the focus back as soon as
+// the patch is done: in a microtask, which runs before the browser handles
+// any other event, so that a key pressed during the patch still reaches
+// the element (a frame later, a key typed in between went to the page's
+// body and was lost); an element not back in the page by then is tried
+// again in the next frame. The watch ends at
 // that first loss of the focus, restored or not, or after a second without
 // one; either way its listener and its timer are both gone.
 function wiki_editor_hold_focus(list) {
@@ -114,11 +118,14 @@ function wiki_editor_hold_focus(list) {
   const back = (event) => {
     clearTimeout(timer);
     if (event.relatedTarget !== null) return;
-    requestAnimationFrame(() => {
+    const restore = () => {
       const nowhere = document.activeElement === null || document.activeElement === document.body;
       const pressed = (globalThis.wikiLastPointer ?? 0) > held;
       if (nowhere && !pressed && active.isConnected) active.focus({ preventScroll: true });
-    });
+    };
+    // An element the patch has not put back yet is tried again in the
+    // next frame.
+    queueMicrotask(() => (active.isConnected ? restore() : requestAnimationFrame(restore)));
   };
   active.addEventListener("focusout", back, { once: true });
   timer = setTimeout(() => active.removeEventListener("focusout", back), 1000);

@@ -1429,7 +1429,11 @@ const rowsSync = (host) =>
     }
     const editor = host.wikiEditor;
     if (!editor?.slidesShown() || origin !== undefined) return;
-    const left = host.wikiFocusedRow;
+    // The row a jump leaves: the open row whose text has the focus now, if
+    // any. Not the row whose text had the focus last (wikiFocusedRow):
+    // that row may have been closed since, and a jump into it must open
+    // it.
+    const left = [...rows].find(([, view]) => view.hasFocus)?.[0];
     const want = (key, close, focus, reason) =>
       host.dispatchEvent(new CustomEvent("wiki-row-wanted", { detail: { key, left: left ?? -1, close, focus, reason } }));
     if (update.docChanged && update.transactions.some((tr) => tr.isUserEvent("input.wiki.assistant"))) {
@@ -1443,6 +1447,9 @@ const rowsSync = (host) =>
     }
     if (!(update.docChanged || update.selectionSet)) return;
     const target = rowAtPosition(update.state, update.state.selection.main.head);
+    // Nothing to open or focus when the cursor stays in the row with the
+    // focus. Anywhere else, an open row takes the focus, and a closed one
+    // opens with it (the component, on "wiki-row-wanted").
     if (target === undefined || target === left) return;
     const reason = editor.jumping()
       ? "problem"
@@ -1482,6 +1489,31 @@ export function attachRow(masterHost, rowHost, key, focus) {
   // The history's keys, each run on the master's history: the undo and
   // redo of changes and of selections.
   const keys = historyKeymap.map((binding) => ({ ...binding, run: () => binding.run(masterView) }));
+  // Backspace at the row's start, and Delete at its end, delete the
+  // character before or after the row in the master's text, as they would
+  // in one editor: a row's edges are not the text's. Without this a key
+  // typed there did nothing, which loses a key a fast typist meant for
+  // the line break above a heading just taken away, before the pause after
+  // which the rows join. The change is the row's (rowOf): it moves no focus
+  // and opens no other row.
+  const acrossEdge = (forward) => (rowView) => {
+    const { selection } = rowView.state;
+    const cursor = selection.main;
+    if (selection.ranges.length > 1 || !cursor.empty || cursor.head !== (forward ? rowView.state.doc.length : 0)) return false;
+    const now = rangeOf(masterView.state, key);
+    if (now === null) return false;
+    const { doc } = masterView.state;
+    const at = forward ? now.to : now.from;
+    if (forward ? at >= doc.length : at <= 0) return false;
+    const pair = forward ? doc.sliceString(at, at + 2) : doc.sliceString(Math.max(0, at - 2), at);
+    const size = pair.length === 2 && pair.codePointAt(0) > 0xffff ? 2 : 1;
+    masterView.dispatch({
+      changes: forward ? { from: at, to: at + size } : { from: at - size, to: at },
+      annotations: rowOf.of(key),
+      userEvent: forward ? "delete.forward" : "delete.backward",
+    });
+    return true;
+  };
   const { anchor, head } = masterView.state.selection.main;
   const inside = (at) => at >= range.from && at <= range.to;
   const titled = masterHost.dataset.titleLine !== "false";
@@ -1500,7 +1532,14 @@ export function attachRow(masterHost, rowHost, key, focus) {
         master.rowExtensions,
         rowChanges(masterHost),
         keptInRow(masterView, key),
-        keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...keys, ...textKeys, ...foldKeys]),
+        keymap.of([
+          { key: "Enter", run: insertNewline, shift: insertNewline },
+          ...keys,
+          { key: "Backspace", run: acrossEdge(false) },
+          { key: "Delete", run: acrossEdge(true) },
+          ...textKeys,
+          ...foldKeys,
+        ]),
         EditorView.lineWrapping,
         // The row's text is named by its title on the header.
         EditorView.contentAttributes.of({ "aria-labelledby": `slide-row-title-${key}`, ...wordAttributes }),

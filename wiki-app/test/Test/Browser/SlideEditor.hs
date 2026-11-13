@@ -44,11 +44,13 @@ $( browserJS
      ["jsbits/test-slides.js", "jsbits/test-files.js"]
      [ ("js_slide_fits", "wiki_test_slide_fits", Safe, [t|IO JSText|])
      , ("js_slide_focus", "wiki_test_slide_focus", Safe, [t|IO JSText|])
+     , ("js_mermaid", "wiki_test_mermaid", Safe, [t|JSText -> IO ()|])
      , ("js_row_cursor_seen", "wiki_test_slide_row_cursor_seen", Safe, [t|Int -> IO Bool|])
      , ("js_drop_filePromise", "wiki_test_drop_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
      , ("js_pastePromise", "wiki_test_paste", Safe, [t|JSText -> JSText -> JSText -> JSText -> JSText -> IO (Promise Bool)|])
      , ("js_row_text", "wiki_test_slide_row_text", Safe, [t|Int -> IO JSText|])
-     , ("js_row_select", "wiki_test_slide_row_select", Safe, [t|Int -> Int -> Int -> IO ()|])
+     , ("js_row_select", "wiki_test_slide_row_select", Safe, [t|Int -> Int -> Int -> IO Bool|])
+     , ("js_rows_late", "wiki_test_rows_late", Safe, [t|Int -> IO ()|])
      , ("js_row_selection", "wiki_test_slide_row_selection", Safe, [t|Int -> IO JSText|])
      , ("js_row_focused", "wiki_test_slide_row_focused", Safe, [t|Int -> IO Bool|])
      , ("js_stale_rows", "wiki_test_stale_rows", Safe, [t|JSText -> IO JSText|])
@@ -533,6 +535,9 @@ spec m = do
     rowText 0 >>= (`shouldSatisfy` T.isPrefixOf "# ")
 
   it "keeps the title line's mark in the row that starts the text, whichever row that is after a split or a join, and nowhere else" $ runPage $ do
+    -- The rows' editors come late, as on a slow machine: a row is shown
+    -- open before its CodeMirror is there to select in.
+    unsafeIOToPageM (js_rows_late 300)
     (ui, _) <- openDeck deck
     eventually $ openTitles ui `shouldReturn` ["Deck"]
     -- A heading typed under the title: after the pause the editor it was
@@ -543,6 +548,7 @@ spec m = do
     eventually $ rowFocused 1 `shouldReturn` True
     openRowContent ui >>= (`typeText` "s")
     eventually $ markdown ui `shouldReturn` T.replace "By me." "By me.\n## News" deck
+    unsafeIOToPageM (js_rows_late 0)
     unmount ui
     -- "One" joined to the title slide, its heading taken away in its own
     -- editor, which then starts the text and keeps the mark.
@@ -703,6 +709,88 @@ spec m = do
     length <$> findAll failed ".editor-slides" `shouldReturn` 0
     find failed ".editor-text" >>= shouldBeVisible
     unsafeIOToPageM (js_editor_script (toJSText "as-is"))
+
+  it "opens a closed row that an undo or a toolbar command takes the cursor to, though its text had the focus last" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    rowSelect 2 15 15
+    openRowContent ui >>= (`typeText` "x")
+    eventually $ markdown ui `shouldReturn` T.replace "Second." "Second.x" deck
+    -- Closed by its header, which keeps the focus: Ctrl+Z there.
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` deck
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    eventually $ rowFocused 2 `shouldReturn` True
+    -- Selected, closed, and made bold from the toolbar.
+    rowSelect 2 8 15
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    find ui ".editor-toolbar button.tool[aria-label=\"Bold\"]" >>= click
+    eventually $ markdown ui `shouldReturn` T.replace "Second." "**Second.**" deck
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+
+  it "opens a closed row that the next problem is in, though its text had the focus last" $ runPage $ do
+    let broken = T.intercalate "\n" ["# Deck", "", "## One", "", "Fine.", "", "## Two", "", "Half: $\\frac{1}$ here.", "", "## Three", "", "Fine."]
+    (ui, _) <- openDeck broken
+    eventually $ openTitles ui `shouldReturn` ["One"]
+    eventually $ find ui ".editor-problems" >>= (`shouldHaveText` "1 problem")
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["One", "Two"]
+    rowSelect 2 0 0
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["One"]
+    find ui ".editor-problems" >>= click
+    eventually $ openTitles ui `shouldReturn` ["One", "Two"]
+    eventually $ rowFocused 2 `shouldReturn` True
+
+  it "counts on its row a diagram's failure that comes after the slides were measured, and no longer once the diagram is fixed" $ runPage $ do
+    let drawn = T.intercalate "\n" ["# Deck", "", "## One", "", "```mermaid", "graph LR", "  a -->", "```", "", "## Two", "", "Second."]
+        rowProblems ui = findAll ui ".editor-slides .slide-row-problems" >>= traverse textContent
+    unsafeIOToPageM (js_mermaid (toJSText "hold"))
+    (ui, _) <- openDeck drawn
+    eventually $ editorFits >>= (`shouldSatisfy` \fits -> length fits == 3 && all (/= "unmeasured") fits)
+    rowProblems ui `shouldReturn` []
+    unsafeIOToPageM (js_mermaid (toJSText "as-is"))
+    -- Mermaid's bundle is fetched the first time a diagram is drawn.
+    eventuallyWithin 15000 $ find ui ".editor-problems" >>= (`shouldHaveText` "1 problem")
+    eventually $ rowProblems ui `shouldReturn` ["1 problem"]
+    -- Fixed in its row.
+    eventually $ openTitles ui `shouldReturn` ["One"]
+    rowSelect 1 35 35
+    openRowContent ui >>= (`typeText` " b")
+    eventually $ markdown ui `shouldReturn` T.replace "  a -->" "  a --> b" drawn
+    eventuallyWithin 15000 $ rowProblems ui `shouldReturn` []
+    length <$> findAll ui ".editor-problems" `shouldReturn` 0
+
+  it "puts every key typed through a split and a join where the caret is, keys coming as the rows are cut again" $ runPage $ do
+    (ui, _) <- openDeck deck
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    rowSelect 0 14 14
+    -- Each key after a pause about as long as the one after which the
+    -- rows are cut again, so that some arrive while a cut is on its way.
+    let paced keys = for_ (zip keys (cycle [150_000, 190_000, 200_000, 210_000, 230_000, 260_000])) $ \(key, pause) -> do
+          unsafeIOToPageM (threadDelay pause)
+          press key
+    paced ["Enter", "#", "#", " ", "M", "i", "d", "a", "b", "c", "d", "e", "f"]
+    let split = T.replace "By me." "By me.\n## Midabcdef" deck
+    eventually $ markdown ui `shouldReturn` split
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "Midabcdef", "One", "Two", "Three"]
+    -- Taken away again, key by key: the rows join. The last Backspace
+    -- comes at the start of the row before the rows have joined, and
+    -- takes the line break above it all the same.
+    paced (replicate 13 "Backspace")
+    eventually $ markdown ui `shouldReturn` deck
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    -- Delete at a row's end takes the line break after it.
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    end <- T.length <$> eventually (rowText 1 >>= \t -> t <$ (t `shouldSatisfy` (not . T.null)))
+    rowSelect 1 end end
+    press "Delete"
+    eventually $ markdown ui `shouldReturn` T.replace "First.\n\n## Two" "First.\n## Two" deck
 
   it "renders the deck whole for one slide's preview: a macro of an earlier slide, a footnote's number, the same slide in every view" $ runPage $ do
     (ui, wiki) <- openDeck macros
@@ -1069,8 +1157,14 @@ openRowContent ui = find ui ".editor-slides .cm-editor.cm-focused .cm-content"
 rowText :: Int -> PageM s Text
 rowText i = unsafeIOToPageM (fromJSText <$> js_row_text i)
 
+-- A row shown open gets its CodeMirror a moment later: the selection waits
+-- until the row's editor is there to take it, so that what is typed next
+-- goes where the test means. (The editor may move it: the title line's
+-- guard keeps it out of the "# ".)
 rowSelect :: Int -> Int -> Int -> PageM s ()
-rowSelect i anchor h = unsafeIOToPageM (js_row_select i anchor h) >> settle
+rowSelect i anchor h = do
+  eventually $ unsafeIOToPageM (js_row_select i anchor h) `shouldReturn` True
+  settle
 
 rowSelection :: Int -> PageM s (Int, Int)
 rowSelection i = do

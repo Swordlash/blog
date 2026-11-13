@@ -17,9 +17,21 @@ function wiki_test_slide_row_text(index) {
 }
 
 // Select from anchor to head in the row at an index, and give the row the
-// focus, as a click would; and the row's selection, as JSON [anchor, head].
+// focus, as a click would: whether the row had its editor to select in (a
+// row shown open gets its CodeMirror a moment later); and the row's
+// selection, as JSON [anchor, head].
 function wiki_test_slide_row_select(index, anchor, head) {
-  wikiTestSlideRow(index)?.select(anchor, head);
+  const row = wikiTestSlideRow(index);
+  row?.select(anchor, head);
+  return row !== null;
+}
+
+// The rows' editors put in place `ms` milliseconds late, or at once for 0:
+// a row shown open before its CodeMirror is there, as on a slow machine.
+function wiki_test_rows_late(ms) {
+  const islands = globalThis.wikiTestRowIslands ?? globalThis.wikiIslands;
+  globalThis.wikiTestRowIslands = islands;
+  globalThis.wikiIslands = ms > 0 ? { ...islands, attachRow: (...args) => setTimeout(() => islands.attachRow(...args), ms) } : islands;
 }
 
 function wiki_test_slide_row_selection(index) {
@@ -29,6 +41,22 @@ function wiki_test_slide_row_selection(index) {
 // Whether the row at an index has the focus.
 function wiki_test_slide_row_focused(index) {
   return wikiTestSlideRow(index)?.hasFocus() ?? false;
+}
+
+// Mermaid's diagrams held until released ("hold"), or drawn as they come
+// ("as-is"), the ones held drawn then: a diagram drawn, or failing, after
+// the slides were measured.
+function wiki_test_mermaid(how) {
+  const islands = globalThis.wikiTestMermaidIslands ?? globalThis.wikiIslands;
+  globalThis.wikiTestMermaidIslands = islands;
+  if (how === "hold") {
+    globalThis.wikiTestMermaidHeld = [];
+    globalThis.wikiIslands = { ...islands, renderMermaid: (...args) => globalThis.wikiTestMermaidHeld.push(args) };
+  } else {
+    globalThis.wikiIslands = islands;
+    for (const held of globalThis.wikiTestMermaidHeld ?? []) islands.renderMermaid(...held);
+    globalThis.wikiTestMermaidHeld = [];
+  }
 }
 
 // Whether the cursor of the row at an index can be seen: inside the window

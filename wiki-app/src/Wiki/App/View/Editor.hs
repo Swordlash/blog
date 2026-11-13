@@ -787,16 +787,18 @@ freshRows st = case st.loaded of
   Ready w
     | w.page.kind == Kind.Presentation ->
         let (rows, nextKey) = SlideRows.cutRows st.nextKey w.loadedBody
-         in st {rows = Just rows, nextKey, openRows = [], keptOpen = [], focusRow = Nothing, deletedOpen = [], rowHeads = headsOf st w.loadedBody rows}
+         in st {rows = Just rows, nextKey, openRows = [], keptOpen = [], focusRow = Nothing, deletedOpen = [], rowHeads = headsOf st (problemsOf st) w.loadedBody rows}
   _ -> st {rows = Nothing, rowHeads = [], openRows = [], keptOpen = [], focusRow = Nothing, deletedOpen = []}
 
 -- | The rows' headers of a text cut into rows, with what the last check
--- and the last measures say of that text.
-headsOf :: State -> Text -> Rows -> [SlideRow.Head]
-headsOf st text rows =
+-- and the last measures say of that text: the problems given, which are
+-- 'problemsOf' the state, counted on the rows they are in when the text
+-- is the one checked.
+headsOf :: State -> [Problems.Problem] -> Text -> Rows -> [SlideRow.Head]
+headsOf st problems text rows =
   let checkedNow = st.checkedText == text && isDeck st
       spans = if checkedNow then st.checked.slides else Slides.slideSpans text
-   in SlideRow.heads text rows spans (Slides.fitsNow st.measures text spans) (if checkedNow then problemRanges text (problemsOf st) else [])
+   in SlideRow.heads text rows spans (Slides.fitsNow st.measures text spans) (if checkedNow then problemRanges text problems else [])
 
 -- | The problems the editor marks: the last check's, the failed islands'
 -- in its text, the slides that do not fit, and the rows a block left open
@@ -2175,7 +2177,6 @@ component =
       -- shows: marked beside the slides' handles and among the problems.
       FromPreview (Preview.SlidesMeasured text fits) -> do
         modify (\st -> st {measures = Just (Slides.measuresFor text fits)})
-        refreshHeads
         publishProblems
       FromPreview (Preview.IslandDrawn key out) -> do
         before <- gets (\st -> st.failedIslands)
@@ -2245,7 +2246,6 @@ component =
       Relaid -> do
         had <- rowWithFocus
         recutRowsWith True
-        refreshHeads
         for_ had $ \key -> unlessM (gets (elem key . rowKeys)) focusCursorRow
       -- CodeMirror's module did not load: there will be no master, and the
       -- presentation is its Markdown in the textarea, as on a page without
@@ -2274,7 +2274,7 @@ component =
                     when taken $ do
                       let start = atMay rows.rows (SlideRows.rowAt rows layout.cursor)
                       modify (\s -> s {rows = Just rows, nextKey, openRows = [r.key | Just r <- [start]]})
-                      refreshHeads
+                      publishProblems
                 )
       DiscardOffered -> do
         withPage (void . discardDraft)
@@ -2566,7 +2566,7 @@ component =
                   for_ (SlideRows.fromLayout layout.text layout.starts) $ \laid -> do
                     let edited = SlideRows.changedSince old laid
                         (cut', nextKey) = SlideRows.recut st.nextKey (Just layout.cursor) edited laid
-                        new = keepFocused layout cut'
+                        new = keepFocused st.openRows layout cut'
                         keys = [r.key | r <- new.rows]
                         wasOpen k = k `elem` st.openRows
                         neighbours = zip3 (Nothing : map Just keys) keys (map Just (drop 1 keys) <> [Nothing])
@@ -2587,8 +2587,12 @@ component =
                         remembered s = [k | k <- gone, wasOpen k] <> filter (`notElem` (gone <> keys)) s.deletedOpen
                     unless (new == old) $ do
                       taken <- H.liftEffect (setRows host layout.text new)
-                      when taken . keepingRowsFocus $
-                        modify (\s -> s {rows = Just new, nextKey, openRows = opened, deletedOpen = remembered s})
+                      when taken $ do
+                        keepingRowsFocus $
+                          modify (\s -> s {rows = Just new, nextKey, openRows = opened, deletedOpen = remembered s})
+                        -- New rows, new headers, and maybe other rows a
+                        -- block left open swallows.
+                        publishProblems
               )
         _ -> pass
 
@@ -2624,7 +2628,7 @@ component =
       taken <- H.liftEffect (stepIn host layout.text event edits new select)
       when taken $ do
         keepingRowsFocus (modify (\s -> s {rows = Just new, dragging = Nothing}))
-        refreshHeads
+        publishProblems
       pure taken
 
     -- Move a slide one place up (-1) or down (1), as one step.
@@ -2709,28 +2713,20 @@ component =
     say :: Text -> H.HalogenM State Action Slots ViewOutput m ()
     say said = modify (\st -> st {announcement = said})
 
-    -- The row whose editor has the focus keeps it through a re-cut: when
-    -- its key is gone (its start was taken away, an undo joining it to the
-    -- row above), the row the cursor is in now takes that key, and so the
-    -- editor.
-    keepFocused :: Layout -> Rows -> Rows
-    keepFocused layout rows = case layout.focused of
+    -- The row whose editor had the focus last keeps that editor through a
+    -- re-cut, if it is still open: when its key is gone (its start was
+    -- taken away, an undo joining it to the row above), the row the cursor
+    -- is in now takes that key, and so the editor. A row closed since has
+    -- no editor to keep, and its key is given to no other row.
+    keepFocused :: [RowKey] -> Layout -> Rows -> Rows
+    keepFocused open layout rows = case layout.focused of
       Just focused
-        | focused `elem` map fst layout.starts
+        | focused `elem` open
+        , focused `elem` map fst layout.starts
         , focused `notElem` [r.key | r <- rows.rows]
         , Just here <- atMay rows.rows (SlideRows.rowAt rows layout.cursor) ->
             SlideRows.Rows {SlideRows.rows = [if r.key == here.key then SlideRows.Row {SlideRows.key = focused, SlideRows.text = r.text} else r | r <- rows.rows], SlideRows.separators = rows.separators}
       _ -> rows
-
-    -- The rows' headers made again from the rows and the last check.
-    refreshHeads :: H.HalogenM State Action Slots ViewOutput m ()
-    refreshHeads = do
-      st <- get
-      for_ st.rows $ \rows -> do
-        let text = SlideRows.assemble rows
-            found = headsOf st text rows
-        _ <- liftIO (evaluate (sum [T.length h.title | h <- found]))
-        modify (\s -> s {rowHeads = found})
 
     -- The keys of the rows there are.
     rowKeys :: State -> [RowKey]
@@ -2763,10 +2759,10 @@ component =
           Ready w -> do
             found <- liftIO (evaluate (force (Problems.checkText w.page.kind w.body)))
             modify $ \st -> keepDrawnFailures st {checkWait = Nothing, checked = found, checkedText = w.body}
-            publishProblems
             gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (offerFolds host w.body found.folds))
+            -- Cut first: the rows a block left open swallows are problems.
             recutRows
-            refreshHeads
+            publishProblems
           _ -> modify (\st -> st {checkWait = Nothing})
       modify (\st -> st {checkWait = Just waiting})
 
@@ -2788,14 +2784,33 @@ component =
             st {failedIslands = Map.restrictKeys st.failedIslands (Map.keysSet st.checked.islands)}
       _ -> st
 
-    -- Mark the problems of the last check, and the failed islands' that are
-    -- in its text, in CodeMirror, and count them.
+    -- The problems, from one value ('problemsOf': the last check's, the
+    -- failed islands' in its text, the slides that do not fit, and the
+    -- rows a block left open swallows), shown everywhere they are shown:
+    -- marked in CodeMirror and counted on the "N problems" button, while
+    -- the editor holds the text checked, and counted on the rows' headers,
+    -- with the rows' fits. The headers are made only here, so that no
+    -- source of problems can change the button and leave the headers
+    -- behind. Run by everything that changes one of those: a check that
+    -- has finished, an island drawn or failed late, the slides measured,
+    -- the editor in place, a step, and a re-cut of the rows taken (after a
+    -- pause in the typing, or for a step's undo or redo). While the editor holds another text than the one checked
+    -- (a step, typing since the check), CodeMirror keeps its marks mapped
+    -- through the changes, and the next check marks them again.
     publishProblems :: H.HalogenM State Action Slots ViewOutput m ()
     publishProblems = do
       st <- get
       let problems = problemsOf st
-      traverse_ (\host -> H.liftEffect (showProblems host (problemRanges st.checkedText problems))) st.hostElement
-      when (length problems /= st.problemCount) $ modify (\s -> s {problemCount = length problems})
+          holdsChecked = case st.loaded of
+            Ready w -> w.body == st.checkedText
+            _ -> False
+      when holdsChecked $ do
+        traverse_ (\host -> H.liftEffect (showProblems host (problemRanges st.checkedText problems))) st.hostElement
+        when (length problems /= st.problemCount) $ modify (\s -> s {problemCount = length problems})
+      for_ st.rows $ \rows -> do
+        let found = headsOf st problems (SlideRows.assemble rows) rows
+        _ <- liftIO (evaluate (sum [T.length h.title | h <- found]))
+        modify (\s -> s {rowHeads = found})
 
     cancelPreview :: H.HalogenM State Action Slots ViewOutput m ()
     cancelPreview = do
