@@ -980,6 +980,9 @@ data SealedVersions f = SealedVersionRow
   , body :: Columnar f Text
   , chain_number :: Columnar f (Maybe Int64)
   , previous_tag :: Columnar f (Maybe Text)
+  , origin_tag :: Columnar f (Maybe Text)
+  -- ^ Which chain it is of ('Wiki.Core.Encrypted.Chain''s @origin@, step
+  -- 22), none for a version written before origins.
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)

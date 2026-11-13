@@ -461,10 +461,10 @@ revokeUrl url = when inBrowser (js_revoke (toJSText url))
 -- | The latest version of a page that this browser has read and checked
 -- for the user ("Wiki.Core.Encrypted"'s 'Seen'), if it remembers one.
 -- Natively, none.
-seenOf :: UserId -> PageId -> IO (Maybe Seen)
+seenOf :: UserId -> PageId -> IO [Seen]
 seenOf u pid
-  | inBrowser = rightToMaybe . eitherDecodeStrict . encodeUtf8 . fromJSText <$> js_seen (toJSText u.text) (toJSText pid.text)
-  | otherwise = pure Nothing
+  | inBrowser = fromMaybe [] . rightToMaybe . eitherDecodeStrict . encodeUtf8 . fromJSText <$> js_seen (toJSText u.text) (toJSText pid.text)
+  | otherwise = pure []
 
 -- | Remember the latest version of a page this browser has read and
 -- checked for the user, only forward ("Wiki.Core.Encrypted"'s 'keepIn'),

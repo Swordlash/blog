@@ -177,6 +177,7 @@ insertSealedVersion pid at c =
           , body = c.body.ciphertext.text
           , chain_number = (\x -> fromIntegral x.number) <$> c.chain
           , previous_tag = (\x -> (\t -> t.text) <$> x.previous) =<< c.chain
+          , origin_tag = (\x -> (\t -> t.text) <$> x.origin) =<< c.chain
           }
       ]
 
@@ -185,7 +186,7 @@ contentOf r =
   SealedContent
     { tag = VersionTag r.tag
     , keyId = KeyId r.key_id
-    , chain = (\n -> Chain {number = fromIntegral n, previous = VersionTag <$> r.previous_tag}) <$> r.chain_number
+    , chain = (\n -> Chain {number = fromIntegral n, previous = VersionTag <$> r.previous_tag, origin = VersionTag <$> r.origin_tag}) <$> r.chain_number
     , title = Sealed {nonce = Nonce r.title_nonce, ciphertext = Ciphertext r.title}
     , body = Sealed {nonce = Nonce r.body_nonce, ciphertext = Ciphertext r.body}
     }

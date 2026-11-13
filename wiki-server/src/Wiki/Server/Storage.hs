@@ -272,7 +272,7 @@ import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentBody, formerAuthor, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (KeyGrant), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedMeta (..), VersionTag (..), chainAfter, encapsulatedBytes, firstChain, headingOf, keyIdBytes, maxAnchorCiphertext, maxBodyCiphertext, maxCommentCiphertext, maxMetaCiphertext, maxTitleCiphertext, nonceBytes, sealedKeyBytes)
+import Wiki.Core.Encrypted (Encapsulated (..), KeyGrant (KeyGrant), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedMeta (..), VersionTag (..), chainAfter, encapsulatedBytes, headingOf, isFirstChain, keyIdBytes, maxAnchorCiphertext, maxBodyCiphertext, maxCommentCiphertext, maxMetaCiphertext, maxTitleCiphertext, nonceBytes, sealedKeyBytes)
 import Wiki.Core.Encrypted qualified as CE
 import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, checkLogins, rootedArchive, threadsAmong, withoutHomeDocument)
 import Wiki.Core.Export qualified as Export
@@ -3550,7 +3550,7 @@ insertSealedHome s k new = do
   checkSealedParts new.pageKey new.content
   unless (new.pageKey.spaceKeyId == k) $
     failWith (Conflict "The space's key has changed since: open the space again.")
-  unless (new.content.chain == Just firstChain) $
+  unless (maybe False isFirstChain new.content.chain) $
     failWith (Conflict outOfChain)
   random <- T.take 12 . T.filter (/= '-') <$> newId
   time <- now
@@ -3843,7 +3843,7 @@ createSealedPageTx sid new = do
     failWith (Conflict "The space's key has changed since: open the space again.")
   -- The first version of the chain ("Wiki.Core.Encrypted"): a browser of
   -- before versions were chained sends none, and is told to reload.
-  unless (new.content.chain == Just firstChain) $
+  unless (maybe False isFirstChain new.content.chain) $
     failWith (Conflict outOfChain)
   requireNoRenewal sid c k
   nodes <- db (childPages sid parent)
@@ -5082,7 +5082,10 @@ commitConvertedTx pid commit = do
     Encrypting -> do
       requireNoRenewal s.id c k
       let versions = staged.sealed.versions
-          chained = and (List.zipWith3 (\n v before -> v.content.chain == Just CE.Chain {number = n, previous = before}) [1 ..] versions (Nothing : map (\v -> Just v.content.tag) versions))
+          -- One chain from 1, with an origin of its own: a page encrypted
+          -- again is a chain readers tell from the one before.
+          origin = (\x -> x.origin) =<< ((\v -> v.content.chain) =<< head versions)
+          chained = isJust origin && and (List.zipWith3 (\n v before -> v.content.chain == Just CE.Chain {number = n, previous = before, origin}) [1 ..] versions (Nothing : map (\v -> Just v.content.tag) versions))
       when (null staged.pageKeys) $ incomplete "its key"
       unless (map (\v -> micro v.updatedAt) versions == map micro times) $ incomplete "its versions"
       unless chained $ invalid "The versions staged are not one chain from the first."

@@ -336,10 +336,19 @@ function wikiEncSeenAll(user) {
   }
 }
 
-// The version seen of a page, as JSON {number, tag}, or "" for none.
+// What is remembered of a page: one {number, tag, origin} for each chain
+// of it read (Wiki.Core.Encrypted's Seen), in the order they were first
+// read, the latest last. A record from before origins, {number, tag}, is
+// the chain without one.
+function wikiEncChains(record) {
+  if (record === undefined || record === null) return [];
+  if (Array.isArray(record.chains)) return record.chains;
+  return [{ number: record.number, tag: record.tag, origin: null }];
+}
+
+// The versions seen of a page, as a JSON list, "[]" for none.
 function wiki_enc_seen(user, page) {
-  const seen = wikiEncSeenAll(user)[page];
-  return seen === undefined ? "" : JSON.stringify(seen);
+  return JSON.stringify(wikiEncChains(wikiEncSeenAll(user)[page]));
 }
 
 // Remember the version seen of a page (JSON {number, tag}), only forward,
@@ -348,14 +357,28 @@ function wiki_enc_seen(user, page) {
 // another tab cannot write between the two). "now" when it is remembered,
 // "later" when a later version was remembered already and stays, "fork"
 // when another version under the same number was, which stays too.
+// A chain not remembered yet is added as the latest (a page encrypted
+// again); a version of one remembered before the latest, or of no chain
+// after one with an origin, stays as it is ("later"); in the latest chain,
+// as before.
 function wiki_enc_keep_seen(user, page, seen) {
   try {
     const all = wikiEncSeenAll(user);
     const next = JSON.parse(seen);
-    const before = all[page];
-    if (before !== undefined && before.number > next.number) return "later";
-    if (before !== undefined && before.number === next.number) return before.tag === next.tag ? "now" : "fork";
-    all[page] = next;
+    const origin = next.origin ?? null;
+    const chains = wikiEncChains(all[page]);
+    const at = chains.findIndex((c) => (c.origin ?? null) === origin);
+    if (at === -1) {
+      if (origin === null && chains.length > 0) return "later";
+      chains.push({ number: next.number, tag: next.tag, origin });
+    } else {
+      if (at !== chains.length - 1) return "later";
+      const before = chains[at];
+      if (before.number > next.number) return "later";
+      if (before.number === next.number) return before.tag === next.tag ? "now" : "fork";
+      chains[at] = { number: next.number, tag: next.tag, origin };
+    }
+    all[page] = { chains };
     localStorage.setItem("wiki-chain:" + user, JSON.stringify(all));
     return "now";
   } catch {

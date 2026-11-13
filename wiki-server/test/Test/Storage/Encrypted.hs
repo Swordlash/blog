@@ -205,7 +205,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
     contents <- ok =<< as p.ada (sealedContents secret.id)
     [x.content | x <- contents, x.id /= homeIdOf secret.id] `shouldBe` [secondContent]
     versions <- ok =<< as p.ada (sealedVersions pid (VersionsQuery Nothing 50))
-    [(v.number, v.heading.title, v.heading.chain) | v <- versions] `shouldBe` [(2, secondContent.title, secondContent.chain), (1, (contentOf 'a').title, Just firstChain)]
+    [(v.number, v.heading.title, v.heading.chain) | v <- versions] `shouldBe` [(2, secondContent.title, secondContent.chain), (1, (contentOf 'a').title, Just (firstChain testOrigin))]
     first' <- ok =<< as p.ada (sealedVersionAt pid made.updatedAt)
     first'.content `shouldBe` contentOf 'a'
     -- A plain space's pages are not read through these routes.
@@ -229,7 +229,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
     as p.ada (createSealedPage secret.id NewSealedPage {id = pid, parent = Nothing, pageKey = pageKeyOf, content = unchained 'a', kind = Kind.Document}) >>= (`shouldSatisfy` conflict)
     made <- ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a'))
     -- A save that skips a number, names another version, or has no chain.
-    let skipping = chainedAs (Just (Chain 3 (Just (contentOf 'a').tag))) (contentOf 'b')
+    let skipping = chainedAs (Just (Chain 3 (Just (contentOf 'a').tag) (Just testOrigin))) (contentOf 'b')
         elsewhere = savedOn (contentOf 'z') 'b'
     for_ [skipping, elsewhere, unchained 'b'] $ \c ->
       as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = c}) >>= (`shouldSatisfy` conflict)
@@ -238,11 +238,11 @@ spec backing = describe "encrypted spaces in the storage" $ do
     writing st (runUpdate (update wikiDb.sealed_versions (\v -> mconcat [v.chain_number <-. val_ Nothing, v.previous_tag <-. val_ Nothing]) (\v -> v.page_id ==. val_ pid.text)))
     old <- ok =<< as p.ada (sealedPageAt secret.id [made.slug])
     old.content `shouldBe` unchained 'a'
-    let chained = chainedAs (Just (Chain 1 (Just (contentOf 'a').tag))) (contentOf 'b')
+    let chained = chainedAs (Just (Chain 1 (Just (contentOf 'a').tag) Nothing)) (contentOf 'b')
     saved <- ok =<< as p.ada (saveSealedPage pid old.updatedAt SealedEdit {content = chained})
-    saved.content.chain `shouldBe` Just (Chain 1 (Just (contentOf 'a').tag))
+    saved.content.chain `shouldBe` Just (Chain 1 (Just (contentOf 'a').tag) Nothing)
     third <- ok =<< as p.ada (saveSealedPage pid saved.updatedAt SealedEdit {content = savedOn chained 'c'})
-    third.content.chain `shouldBe` Just (Chain 2 (Just chained.tag))
+    third.content.chain `shouldBe` Just (Chain 2 (Just chained.tag) Nothing)
 
   -- A new key when a reader is removed (WP5.74b3 of docs/PLAN.md, item 2):
   -- every way a reader stops being one makes a rotation due, and while it
@@ -372,7 +372,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
       -- The next version is encrypted with the page's new key: one with
       -- the old is refused.
       as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = savedOn (contentOf 'a') 'c'}) >>= (`shouldSatisfy` conflict)
-      let underNew = chainedAs (Just (chainAfter (contentOf 'a').tag (Just firstChain))) (contentUnder read'.pageKey.keyId 'c')
+      let underNew = chainedAs (Just (chainAfter (contentOf 'a').tag (Just (firstChain testOrigin)))) (contentUnder read'.pageKey.keyId 'c')
       saved <- ok =<< as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = underNew})
       saved.content.keyId `shouldBe` read'.pageKey.keyId
       first' <- ok =<< as p.ada (sealedVersionAt pid made.updatedAt)
@@ -1365,7 +1365,7 @@ pageKeyUnder k c = PageKey {keyId = KeyId (bytes16 c), spaceKeyId = k, wrapped =
 -- as one chain from 1, each with a tag of its own.
 chainOf :: PageKey -> Char -> [UTCTime] -> [StagedVersion]
 chainOf key c times =
-  [ StagedVersion {updatedAt = at, content = SealedContent {tag = tagOf i, keyId = key.keyId, chain = Just Chain {number = i, previous = if i == 1 then Nothing else Just (tagOf (i - 1))}, title = base.title, body = base.body}}
+  [ StagedVersion {updatedAt = at, content = SealedContent {tag = tagOf i, keyId = key.keyId, chain = Just Chain {number = i, previous = if i == 1 then Nothing else Just (tagOf (i - 1)), origin = Just (VersionTag (toBase64Url (BS.pack (replicate 16 (fromIntegral (ord c))))))}, title = base.title, body = base.body}}
   | (i, at) <- zip [1 ..] times
   ]
   where
@@ -1606,6 +1606,10 @@ giveKey st u c = do
 bytes :: Int -> Text
 bytes n = toBase64Url (BS.replicate n 120)
 
+-- | The origin of the chains the tests start.
+testOrigin :: VersionTag
+testOrigin = VersionTag (bytes16 'o')
+
 bytes16 :: Char -> Text
 bytes16 c = toBase64Url (BS.replicate 16 (fromIntegral (ord c)))
 
@@ -1651,7 +1655,7 @@ contentUnder k c =
   SealedContent
     { tag = VersionTag (bytes16 c)
     , keyId = k
-    , chain = Just firstChain
+    , chain = Just (firstChain testOrigin)
     , title = Sealed (Nonce (bytes16' 12)) (Ciphertext (bytes16' 40))
     , body = Sealed (Nonce (bytes16' 12)) (Ciphertext (bytes16' 200))
     }

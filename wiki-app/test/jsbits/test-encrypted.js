@@ -113,9 +113,9 @@ function wikiTestEncHeading(content) {
 // latest's tag (Wiki.Core.Encrypted's chainAfter).
 function wikiTestEncFollows(chain, latest) {
   if (!chain) return false;
-  if (latest === null) return chain.number === 1 && (chain.previous ?? null) === null;
+  if (latest === null) return chain.number === 1 && (chain.previous ?? null) === null && typeof chain.origin === "string";
   const number = latest.chain ? latest.chain.number + 1 : 1;
-  return chain.number === number && chain.previous === latest.tag;
+  return chain.number === number && chain.previous === latest.tag && (chain.origin ?? null) === (latest.chain?.origin ?? null);
 }
 
 function wikiTestEncServer(request) {
@@ -727,7 +727,7 @@ function wiki_test_encrypted_seen_at(user, page, index) {
   if (index < 0) delete all[page];
   else {
     const content = wikiTestEncrypted.pages.get(page).versions[index].content;
-    all[page] = { number: content.chain.number, tag: content.tag };
+    all[page] = { chains: [{ number: content.chain.number, tag: content.tag, origin: content.chain.origin ?? null }] };
   }
   localStorage.setItem(key, JSON.stringify(all));
 }

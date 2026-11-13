@@ -620,6 +620,34 @@ export async function encryptedSpaces({ browser, url, origin, data, work, wikiSe
   await plainEditor.press("Control+s");
   assert.equal((await plainSaved).status(), 200, "a save of the page plain again, by the plain route");
   console.log("ok: the space's encryption turned off page by page, every page plain again with its versions, comment and attachment");
+
+  // Encrypted again: each page a new chain of its versions, of an origin
+  // of its own, which her browser, that read the page under the first
+  // encryption, takes as such and not as a fork; she reads it and saves
+  // it, encrypted.
+  await converter.goto(url("/s/smoke-convert/pages/"));
+  await converter.locator("#app .space-view", { hasText: pm.title }).waitFor({ timeout });
+  await converter.locator("#app .space-settings-toggle").click();
+  await converter.locator("#app .space-permissions .encrypt-space").click();
+  await converter.locator("#app .space-permissions .encrypt-pages").waitFor({ timeout });
+  await converter.locator("#app .space-permissions .encrypt-confirm").click();
+  await eventually(async () => {
+    const s = (await raw(ada2, "spaces/at/smoke-convert")).body;
+    assert.ok(s.encryption && !s.conversion, `the space is not encrypted again yet: ${JSON.stringify(s)}`);
+  }, "the space encrypted again page by page");
+  await converter.goto(url("/s/smoke-convert/pages/"));
+  await converter.locator("#app .space-view a", { hasText: pm.title }).first().click();
+  await converter.locator("#app .page-view .page-body", { hasText: pm.text }).waitFor({ timeout });
+  assert.equal(await converter.locator("#app .encrypted-rollback").count(), 0, "the page encrypted again was taken for a fork");
+  await converter.locator("#app .page-view a", { hasText: "Edit" }).first().click();
+  const againEditor = converter.locator(editorText);
+  await againEditor.waitFor({ timeout });
+  await againEditor.press("End");
+  await againEditor.type(" Saved again.");
+  const againSaved = converter.waitForResponse((r) => r.request().method() === "PUT" && /^\/api\/v1\/encrypted\/pages\/[^/]+$/.test(new URL(r.url()).pathname), { timeout });
+  await againEditor.press("Control+s");
+  assert.equal((await againSaved).status(), 200, "a save of the page encrypted again");
+  console.log("ok: the space encrypted again, a page read under its first encryption reads and saves with no fork reported");
   await ada2.context.close();
 
   for (const c of [ada.context, bea.context, elsewhere]) await c.close();

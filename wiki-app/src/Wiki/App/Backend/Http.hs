@@ -1935,7 +1935,8 @@ sealedHomeOf :: (MonadIO m) => SpaceKey -> SpaceId -> Text -> KeyId -> HttpWiki 
 sealedHomeOf key sid name k = liftIO . runExceptT $ do
   pid <- ExceptT (first Invalid <$> newPageId)
   (pk, pageKey) <- ExceptT (first Invalid <$> newPageKey key k sid pid)
-  content <- ExceptT (first Invalid <$> sealContent pk sid pid pageKey.keyId firstChain homeTitle (homeBody name))
+  origin <- lift newTag
+  content <- ExceptT (first Invalid <$> sealContent pk sid pid pageKey.keyId (firstChain origin) homeTitle (homeBody name))
   lift (forgetPageKey pk)
   -- A home page is always a document ("Wiki.Core.PageKind").
   pure NewSealedPage {id = pid, parent = Nothing, pageKey, content, kind = Kind.Document}
@@ -2171,7 +2172,7 @@ foundProblem pid problem = modifyHeld (\h -> h {heldProblems = Map.insert pid pr
 savedHead :: (MonadIO m) => PageId -> UTCTime -> SealedContent -> HttpWiki m ()
 savedHead pid at content = do
   rememberHeads [(pid, (at, content.tag, content.chain))]
-  for_ content.chain $ \c -> rememberSeen pid Seen {number = c.number, tag = content.tag}
+  for_ content.chain $ \c -> rememberSeen pid Seen {number = c.number, tag = content.tag, origin = c.origin}
 
 -- | Remember the version seen of a page, only forward ('keepSeen'): a
 -- fork of what another tab remembered meanwhile is the problem it is.
@@ -2196,8 +2197,9 @@ withUser step = ((\s -> s.user) <$> session) >>= traverse_ step
 -- something was wrong, which is recorded instead.
 checkHead :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> VersionTag -> Maybe Chain -> HttpWiki m ()
 checkHead key sid pid k tag chain = withUser $ \u -> do
-  seen <- liftIO (seenOf u.id pid)
-  verdict <- case (judgeHead seen tag chain, seen) of
+  seens <- liftIO (seenOf u.id pid)
+  -- Judged against the latest chain seen, of its own origin.
+  verdict <- case (judgeHead seens tag chain, lastMay seens) of
     (Left problem, _) -> pure (Left problem)
     (Right (Advanced n), Just s) ->
       historyDown key sid pid k s.number (min maxVersionsPageSize (n + 1)) Nothing [] <&> \case
@@ -2206,7 +2208,7 @@ checkHead key sid pid k tag chain = withUser $ \u -> do
     _ -> pure (Right ())
   case verdict of
     Left problem -> foundProblem pid problem
-    Right () -> for_ chain $ \c -> rememberSeen pid Seen {number = c.number, tag}
+    Right () -> for_ chain $ \c -> rememberSeen pid Seen {number = c.number, tag, origin = c.origin}
 
 -- | A page's history, the latest first, read a page at a time from a
 -- version on (all of it for 'Nothing'), each page's titles decrypted,
@@ -2393,7 +2395,8 @@ sealedCreatePage kind sid parent title body current =
     when (T.null (T.strip title)) $ throwError (Invalid "A page's title cannot be blank.")
     pid <- ExceptT (first Invalid <$> liftIO newPageId)
     (pk, pageKey) <- ExceptT (first Invalid <$> liftIO (newPageKey key current sid pid))
-    content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid pageKey.keyId firstChain (T.strip title) body))
+    origin <- liftIO newTag
+    content <- ExceptT (first Invalid <$> liftIO (sealContent pk sid pid pageKey.keyId (firstChain origin) (T.strip title) body))
     liftIO (forgetPageKey pk)
     made <- ExceptT (write (getResponse <$> endpoints.encrypted.createPage sid NewSealedPage {id = pid, parent, pageKey, content, kind}))
     lift (rememberPages sid [(pid, pageKey)])
@@ -2922,8 +2925,11 @@ encryptOnePage sid k pid =
         sealing :: IO (Either Text a) -> ExceptT WikiError (HttpWiki m) a
         sealing = ExceptT . fmap (first Invalid) . liftIO
     flip finally' (liftIO (forgetPageKey pk)) $ do
-      -- Every version, the oldest first, as one chain from 1.
-      contents <- reverse . snd <$> foldlM (\(before, done) v -> sealing (sealContent pk sid pid kid (maybe firstChain (\(c :: SealedContent) -> chainAfter c.tag c.chain) before) v.title v.body) <&> \c -> (Just c, (v.updatedAt, c) : done)) (Nothing, []) versions
+      -- Every version, the oldest first, as one chain from 1, of an
+      -- origin of its own: a page encrypted again, after its encryption
+      -- was turned off, is a new chain, which its readers tell from a fork.
+      origin <- liftIO newTag
+      contents <- reverse . snd <$> foldlM (\(before, done) v -> sealing (sealContent pk sid pid kid (maybe (firstChain origin) (\(c :: SealedContent) -> chainAfter c.tag c.chain) before) v.title v.body) <&> \c -> (Just c, (v.updatedAt, c) : done)) (Nothing, []) versions
       anchors <- for threads $ \t -> (t.id,) <$> for t.anchor (\a -> SealedAnchor kid <$> sealing (sealText pk (decodeUtf8 (BSL.toStrict (encode a))) (anchorData sid pid kid t.id)))
       comments <- for [(t, c) | t <- threads, c <- t.comments] $ \(t, c) -> do
         tag <- liftIO newTag

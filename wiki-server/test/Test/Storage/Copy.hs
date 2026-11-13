@@ -341,7 +341,7 @@ everyTable = do
     ]
   row wikiDb.key_grants [KeyGrantRow {resource_kind = "space", resource_id = "copy-sealed", key_id = "copy-space-key", recipient = "copy-u1", recipient_key_id = "copy-key", enc = "enc", sealed = "sealed", created_at = time 1}]
   row wikiDb.page_keys [PageKeyRow {page_id = "copy-late", key_id = "copy-page-key", space_key_id = "copy-space-key", nonce = "nonce", wrapped = "wrapped", current = True}]
-  row wikiDb.sealed_versions [SealedVersionRow {page_id = "copy-page", updated_at = time 1, tag = "tag", key_id = "copy-page-key", title_nonce = "n1", title = "t", body_nonce = "n2", body = "b", chain_number = Just 2, previous_tag = Just "earlier-tag"}]
+  row wikiDb.sealed_versions [SealedVersionRow {page_id = "copy-page", updated_at = time 1, tag = "tag", key_id = "copy-page-key", title_nonce = "n1", title = "t", body_nonce = "n2", body = "b", chain_number = Just 2, previous_tag = Just "earlier-tag", origin_tag = Just "origin-tag"}]
   row wikiDb.sealed_threads [SealedThreadRow {thread_id = "copy-thread", key_id = "copy-page-key", anchored = True, anchor_nonce = Just "n", anchor = Just "a"}]
   row wikiDb.sealed_comments [SealedCommentRow {comment_id = "copy-comment", key_id = "copy-page-key", tag = "tag", nonce = "n", body = "b"}]
   row wikiDb.sealed_attachments [SealedAttachmentRow {attachment_id = "copy-att", key_id = "copy-page-key", meta_nonce = "n", meta = "m", bytes_nonce = "b", staged_blob = Just "copy-staged-blob"}]

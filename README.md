@@ -918,6 +918,19 @@ How it works:
   against an older version on that device. Versions written before this
   check came (WP5.74b3) are not numbered; their order is the server's
   word.
+- A page encrypted again, after its space's encryption was turned off,
+  starts a new chain of versions under the same page: each chain has an
+  origin, a random id the browser that starts it picks and every version
+  of it binds in its encryption. Your browser keeps what it read of each
+  chain of a page; a new chain it takes as the page encrypted again, and
+  a chain it read before the latest one, shown again, as the page as it
+  was (the banner says so). What this rests on: only a browser that holds
+  the space's key can start a chain. Nothing proves who sealed a grant of
+  the key to you, so a server that seals a key of its own making to your
+  public key could show you a space, and chains, of its own: the checks
+  hold for the keys the space's members made, as everything here does
+  (see "Your keys": the server is trusted to say which public key is
+  whose).
 - Search runs in your browser: the first search after the page opens
   fetches every page of each encrypted space whose key you hold and
   decrypts it in memory, until a change: one you make, a save the page

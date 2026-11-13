@@ -869,14 +869,21 @@ spec m = do
   it "remembers a version seen only forward, whatever another tab remembered meanwhile, and a fork not at all" $ runPage $ do
     let u = UserId "user-admin"
         pid = PageId "page-remembered"
-    seenAt' u pid (Seen 3 "t3") `shouldReturn` KeptNow
+        o = Just "o1"
+    seenAt' u pid (Seen 3 "t3" o) `shouldReturn` KeptNow
     -- A tab that checked version 2 while another remembered 3.
-    seenAt' u pid (Seen 2 "t2") `shouldReturn` KeptLater
-    unsafeIOToPageM (seenOf u pid) `shouldReturn` Just (Seen 3 "t3")
-    seenAt' u pid (Seen 3 "x3") `shouldReturn` KeptFork
-    unsafeIOToPageM (seenOf u pid) `shouldReturn` Just (Seen 3 "t3")
-    seenAt' u pid (Seen 4 "t4") `shouldReturn` KeptNow
-    unsafeIOToPageM (seenOf u pid) `shouldReturn` Just (Seen 4 "t4")
+    seenAt' u pid (Seen 2 "t2" o) `shouldReturn` KeptLater
+    unsafeIOToPageM (seenOf u pid) `shouldReturn` [Seen 3 "t3" o]
+    seenAt' u pid (Seen 3 "x3" o) `shouldReturn` KeptFork
+    unsafeIOToPageM (seenOf u pid) `shouldReturn` [Seen 3 "t3" o]
+    seenAt' u pid (Seen 4 "t4" o) `shouldReturn` KeptNow
+    unsafeIOToPageM (seenOf u pid) `shouldReturn` [Seen 4 "t4" o]
+    -- The page encrypted again: a chain of its own after the first, which
+    -- stays as it was read; a version of the first, from a tab that read
+    -- it late, changes nothing.
+    seenAt' u pid (Seen 1 "n1" (Just "o2")) `shouldReturn` KeptNow
+    seenAt' u pid (Seen 5 "t5" o) `shouldReturn` KeptLater
+    unsafeIOToPageM (seenOf u pid) `shouldReturn` [Seen 4 "t4" o, Seen 1 "n1" (Just "o2")]
 
   it "renews the key when a reader is removed, and the removed reader's tab, with the old key, opens nothing written after" $ runPage $ do
     env <- encryptedSpace "user-admin"
