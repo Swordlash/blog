@@ -126,7 +126,7 @@ import {
 import { markdownLanguage } from "@codemirror/lang-markdown";
 import { tagHighlighter, tags } from "@lezer/highlight";
 import { forEachDiagnostic, lintGutter, nextDiagnostic, setDiagnostics, setDiagnosticsEffect } from "@codemirror/lint";
-import { SearchQuery, findNext, findPrevious, replaceAll, replaceNext, search, setSearchQuery } from "@codemirror/search";
+import { SearchQuery, replaceAll, replaceNext, search, setSearchQuery } from "@codemirror/search";
 
 // What each piece of Markdown's syntax is drawn as: classes of web/style.css,
 // stable, so that the tests and the style sheet can name them. A marker
@@ -1449,8 +1449,10 @@ const foldsToRow = (key, view, state) => {
 // of the component's own (Wiki.App.View.SearchPanel) above the text or the
 // rows. The matching is @codemirror/search's: its SearchQuery and its
 // cursors, with its regular expressions and its whole-word rule, and its
-// commands that go to the next or the previous match and replace, run on
-// the master, which holds the library's query (search(), setSearchQuery).
+// commands that replace one match and every match, run on the master,
+// which holds the library's query (search(), setSearchQuery). Where a step
+// goes is the wiki's (stepFrom), from the same cursors: the library's own
+// steps find matches the text does not have (matchFrom says which).
 // The library's own panel and marks are not used: both belong to a view,
 // and slide by slide the master is hidden. What is the wiki's own:
 //
@@ -1491,8 +1493,18 @@ const searching = StateField.define({
 const escapedText = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // The library's query for what the panel asks for, {search, replace,
-// caseSensitive, regexp, wholeWord}.
-const searchQuery = (spec) => {
+// caseSensitive, regexp, wholeWord}, on a text whose title line's "# " is
+// guarded (`titled`) or not (a template's).
+//
+// A match that starts in the guarded "# " is no match of the search: it is
+// not counted, marked, stepped to or replaced, by Replace or by Replace
+// all. The "# " is not the author's to change (the title line's guard puts
+// it back), and a selection that would start in it starts after it, so
+// such a match could be counted but never selected whole or replaced. A
+// match in the title's own text, after the "# ", is one. The library
+// applies the rule (its `test`) in every cursor of the query's, so the
+// count, the marks, the steps and the replacements agree.
+const searchQuery = (spec, titled) => {
   const text = typeof spec?.search === "string" ? spec.search : "";
   const replace = typeof spec?.replace === "string" ? spec.replace : "";
   return new SearchQuery({
@@ -1502,6 +1514,7 @@ const searchQuery = (spec) => {
     wholeWord: Boolean(spec?.wholeWord),
     regexp: true,
     literal: true,
+    test: titled ? (_match, state, from) => !(from < titleMark.length && state.sliceDoc(0, titleMark.length) === titleMark) : undefined,
   });
 };
 
@@ -1536,27 +1549,59 @@ const matchesIn = (state, query, from, to) => {
   return found;
 };
 
+// The matches of a search are those the library's cursor finds going
+// through the text from its start, as Replace all and the count find them.
+// Where the cursor starts changes them: a match of no length right where
+// the match before ended is none (the cursor skips it), but a cursor that
+// starts there finds it. A cursor started in the middle of a line could so
+// find a match the text does not have ("a|" in "ax" has none between the
+// "a" and the "x"). The cursor goes a line at a time, so a cursor started
+// at a line's start finds the line's matches as the whole text's does:
+// matchFrom and matchBefore start there, and keep what lies after or
+// before the place asked.
+//
 // The first match of a query at or after a position that `wanted` takes,
-// or null: looked for from the position on, never collected from the
-// text's start, so that no count's limit stops a step.
+// or null: looked for from the position's line on, never collected from
+// the text's start, so that no count's limit stops a step.
 const matchFrom = (query, state, at, wanted) => {
-  const cursor = query.getCursor(state, at);
-  while (!cursor.next().done) if (wanted(cursor.value)) return { from: cursor.value.from, to: cursor.value.to };
+  const cursor = query.getCursor(state, state.doc.lineAt(at).from);
+  while (!cursor.next().done) {
+    const { from, to } = cursor.value;
+    if (from >= at && wanted({ from, to })) return { from, to };
+  }
   return null;
 };
 
 // The last match of a query that starts at or before a position and that
 // `wanted` takes, or null: looked for in a stretch of text before the
-// position, twice as long each time it holds none, as the library looks
-// for a previous match.
+// position, from a line's start, twice as long each time it holds none,
+// as the library looks for a previous match.
 const matchBefore = (query, state, at, wanted) => {
   for (let size = 10000; ; size *= 2) {
-    const start = Math.max(0, at - size);
+    const start = state.doc.lineAt(Math.max(0, at - size)).from;
     let found = null;
     const cursor = query.getCursor(state, start);
-    while (!cursor.next().done && cursor.value.from <= at) if (wanted(cursor.value)) found = { from: cursor.value.from, to: cursor.value.to };
+    while (!cursor.next().done && cursor.value.from <= at) {
+      const { from, to } = cursor.value;
+      if (wanted({ from, to })) found = { from, to };
+    }
     if (start === 0 || (found !== null && found.from > start + matchMargin)) return found;
   }
+};
+
+// The match a step of the search goes to from a selection, {from, to}:
+// forward, the first that starts at or after the selection's end and is
+// not the selection itself; back, the last that ends at or before its
+// start and is not it. Past the text's end, the first of the text, and
+// before its start the last: `wrapped` says so. Null when there is none.
+const stepFrom = (query, state, selection, forward) => {
+  const same = (m) => m.from === selection.from && m.to === selection.to;
+  const found = forward
+    ? matchFrom(query, state, selection.to, (m) => !same(m))
+    : matchBefore(query, state, selection.from, (m) => m.to <= selection.from && !same(m));
+  if (found !== null) return { match: found, wrapped: false };
+  const around = forward ? matchFrom(query, state, 0, () => true) : matchBefore(query, state, state.doc.length, () => true);
+  return around === null ? null : { match: around, wrapped: true };
 };
 
 // The scroll a step of the search asks for slide by slide: none.
@@ -1670,6 +1715,9 @@ const revealMatch = (key, view, state) => {
     selection: own.anchor === a && own.head === b ? undefined : EditorSelection.single(a, b),
     effects: EditorView.scrollIntoView(EditorSelection.range(a, b), { y: "center" }),
     annotations: mirrored.of(true),
+    // The master's selection, as it is: no filter of the row's (the first
+    // row's title line's guard) moves it.
+    filter: false,
   });
 };
 
@@ -2356,7 +2404,7 @@ export function attach(textarea, host, original, codeTokens) {
       rowsLayout,
       steps,
       // The search's: the library's query, which its commands read (a
-      // step shows its match in the middle of the text), the panel's
+      // replacement shows the next match in the middle of the text), the panel's
       // query, and the marks of its matches.
       search({ literal: true, scrollToMatch: (range) => matchInView(range) }),
       searching,
@@ -2688,7 +2736,7 @@ export function attach(textarea, host, original, codeTokens) {
         if (view.state.field(searching) !== null) view.dispatch({ effects: setSearching.of(null) });
         return;
       }
-      const query = searchQuery(spec);
+      const query = searchQuery(spec, titled);
       const before = view.state.field(searching);
       const same = before !== null && before.search === query.search && before.caseSensitive === query.caseSensitive && before.wholeWord === query.wholeWord;
       view.dispatch({ effects: [setSearchQuery.of(query), setSearching.of(query)] });
@@ -2702,22 +2750,10 @@ export function attach(textarea, host, original, codeTokens) {
     searchStep: (forward) => {
       const query = view.state.field(searching);
       if (!query?.valid) return 0;
-      const before = view.state.selection.main;
-      // The library's step, unless it does not move: there is one match,
-      // selected already, or a match of no length is where the cursor is.
-      const stepped = (forward ? findNext : findPrevious)(view);
-      const now = view.state.selection.main;
-      if (!stepped || (now.from === before.from && now.to === before.to)) {
-        const { state } = view;
-        const after = forward
-          ? (matchFrom(query, state, before.from, (m) => m.from > before.from || (m.from === before.from && m.to > before.to)) ?? matchFrom(query, state, 0, () => true))
-          : (matchBefore(query, state, before.from, (m) => m.from < before.from || (m.from === before.from && m.to < before.to)) ??
-            matchBefore(query, state, state.doc.length, () => true));
-        if (after === null) return 0;
-        selectMatch(after);
-      }
-      const after = view.state.selection.main;
-      return (forward ? after.from < before.to : after.from >= before.from) ? 2 : 1;
+      const step = stepFrom(query, view.state, view.state.selection.main, forward);
+      if (step === null) return 0;
+      selectMatch(step.match);
+      return step.wrapped ? 2 : 1;
     },
     // Replace the match selected and select the next, or with no match
     // selected select the next (replaceNext, input.replace): 1 when it did
@@ -2726,27 +2762,35 @@ export function attach(textarea, host, original, codeTokens) {
     searchReplace: () => {
       const query = view.state.field(searching);
       if (!query?.valid) return 0;
-      const { from, to } = view.state.selection.main;
-      if (bySlide && from < to) {
-        const cursor = query.getCursor(view.state, from);
-        const key = rowAtPosition(view.state, from);
-        if (!cursor.next().done && cursor.value.from === from && cursor.value.to === to && key !== undefined && !host.wikiRows?.has(key)) {
-          host.dispatchEvent(new CustomEvent("wiki-row-wanted", { detail: { key, left: -1, close: false, focus: false, reason: "search" } }));
-        }
-      }
       const before = view.state.selection.main;
-      const length = view.state.doc.length;
-      const at = matchFrom(query, view.state, before.from, () => true);
-      const empty = at !== null && at.from === before.from && at.to === before.to && before.empty;
-      if (!replaceNext(view)) return 0;
-      // A match of no length (a regular expression such as "^") replaced:
-      // the library's next match is the same place again, before the text
-      // put in. The next is looked for after that text, and past the place.
-      if (empty) {
-        const end = before.from + view.state.doc.length - length;
-        const next = matchFrom(query, view.state, end, (m) => m.from > before.from || m.to > before.to) ?? matchFrom(query, view.state, 0, () => true);
-        if (next !== null) selectMatch(next);
+      const here = matchFrom(query, view.state, before.from, () => true);
+      if (here === null || here.from !== before.from || here.to !== before.to) {
+        // No match selected: the next one is.
+        const step = stepFrom(query, view.state, before, true);
+        if (step === null) return 0;
+        selectMatch(step.match);
+        return 1;
       }
+      const key = rowAtPosition(view.state, before.from);
+      if (bySlide && key !== undefined && !host.wikiRows?.has(key)) {
+        host.dispatchEvent(new CustomEvent("wiki-row-wanted", { detail: { key, left: -1, close: false, focus: false, reason: "search" } }));
+      }
+      const length = view.state.doc.length;
+      if (!replaceNext(view)) return 0;
+      // The next match after a replacement, by the rule the library's cursor
+      // goes through a text with, which Replace all replaces by: a match
+      // replaced at p..q with text of length n, the next is the first that
+      // starts after p + n, or at p + n only if it has a length. The
+      // library's replaceNext looks for it in the text before the
+      // replacement, from q, and maps it: for a match of no length ("^",
+      // "$", "\b", "(?=x)") that is the same place again, before or after
+      // the text put in, and Replace would write there for ever. So the
+      // wrapper looks again in the text after it, from p + n, and selects
+      // that one when it is another; past the end, the first match there is.
+      const end = before.to + view.state.doc.length - length;
+      const next = matchFrom(query, view.state, end, (m) => m.from > end || m.to > m.from) ?? matchFrom(query, view.state, 0, () => true);
+      const now = view.state.selection.main;
+      if (next !== null && (next.from !== now.from || next.to !== now.to)) selectMatch(next);
       return 1;
     },
     // Replace every match, as one step of the history (replaceAll,

@@ -1162,6 +1162,29 @@ spec m = do
     eventually $ said ui `shouldReturn` "1000+ matches"
     eventually $ headerCounts ui `shouldReturn` [("B", "matches not counted"), ("C", "matches not counted")]
 
+  it "counts no match in the title line's guarded \"# \" in the first row, and finds and replaces the title's own text there" $ runPage $ do
+    (ui, _) <- openDeck searchDeck
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀"]
+    rowSelect 0 2 2
+    press "Control+f"
+    find ui ".editor-search-regexp" >>= click
+    find ui ".editor-search-find" >>= (`typeText` "^# Deck")
+    eventually $ said ui `shouldReturn` "No matches"
+    press "Enter"
+    rowSelection 0 `shouldReturn` (2, 2)
+    find ui ".editor-search-replace-all" >>= click
+    markdown ui `shouldReturn` searchDeck
+    find ui ".editor-search-find" >>= clear
+    find ui ".editor-search-find" >>= (`typeText` "Deck")
+    eventually $ said ui `shouldReturn` "1 match"
+    press "Enter"
+    eventually $ rowSelection 0 `shouldReturn` (2, 6)
+    eventually $ said ui `shouldReturn` "1 of 1"
+    find ui ".editor-search-replacement" >>= (`typeText` "Card")
+    find ui ".editor-search-replace" >>= click
+    markdown ui `shouldReturn` T.replace "# Deck" "# Card" searchDeck
+    unsafeIOToPageM (fromJSText <$> js_slide_invariants) `shouldReturn` ""
+
   it "selects a regular expression's match across two slides in the row it starts in" $ runPage $ do
     (ui, _) <- openDeck searchDeck
     eventually $ openTitles ui `shouldReturn` ["Deck 😀"]

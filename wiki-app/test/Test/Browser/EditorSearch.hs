@@ -124,7 +124,8 @@ spec m = do
     press "Control+f"
     find ui ".editor-search-regexp" >>= click
     find ui ".editor-search-find" >>= (`typeText` "^")
-    eventually $ said ui `shouldReturn` "5 matches"
+    -- Four: the line's start before the title line's "# " is none.
+    eventually $ said ui `shouldReturn` "4 matches"
     for_ [15, 16, 18, 20] $ \at -> do
       press "Enter"
       editorSelection ui `shouldReturn` (at, at)
@@ -135,6 +136,77 @@ spec m = do
     eventually $ find ui ".editor-back" >>= shouldBeVisible
     press "Control+f"
     length <$> findAll ui ".editor-search" `shouldReturn` 0
+
+  -- Replace, once for each match, ends where Replace all ends: for
+  -- matches of no length at a line's start, its end, a word's edge, before
+  -- a character, and for a match that may be empty.
+  it "ends where Replace all ends when Replace is pressed once for each match, matches of no length included" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    let text = "# Title\n\nax\nax\nax"
+        start = do
+          setMarkdown ui text
+          -- The last "x": no match of any of these.
+          selectText ui (T.length text - 1) (T.length text)
+          press "Control+f"
+    -- Each time from the same text and selection, the search opened with
+    -- Ctrl+F (which takes the selection as its text) and asked again.
+    let asking pattern' = do
+          start
+          field <- find ui ".editor-search-find"
+          clear field
+          typeText field pattern'
+    start
+    find ui ".editor-search-regexp" >>= click
+    find ui ".editor-search-replacement" >>= (`typeText` "X")
+    press "Escape"
+    for_ ["^", "$", "\\b", "(?=x)", "a|"] $ \pattern' -> do
+      asking pattern'
+      n <- eventually $ do
+        shown <- said ui
+        maybe (expectationFailure ("no count: " <> show shown) >> pure 0) pure (head (mapMaybe (readMaybe . T.unpack) (T.words shown)))
+      -- The first press selects the first match after the selection; each
+      -- of the others replaces one and selects the next.
+      replaceButton <- find ui ".editor-search-replace"
+      replicateM_ (n + 1) (click replaceButton)
+      byOne <- markdown ui
+      press "Escape"
+      asking pattern'
+      find ui ".editor-search-replace-all" >>= click
+      every <- markdown ui
+      (pattern', byOne) `shouldBe` (pattern', every)
+      every `shouldNotBe` text
+      press "Escape"
+
+  it "counts no match in the title line's guarded \"# \", steps to none and replaces none, and finds the title's own text, in the raw Markdown" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    let text = "# T\n\nA T here."
+    setMarkdown ui text
+    selectText ui (T.length text) (T.length text)
+    press "Control+f"
+    find ui ".editor-search-replacement" >>= (`typeText` "U")
+    let asking regexp asked = do
+          toggle <- find ui ".editor-search-regexp"
+          pressed <- getAttribute toggle "aria-pressed"
+          when (pressed /= Just (if regexp then "true" else "false")) (click toggle)
+          field <- find ui ".editor-search-find"
+          clear field
+          typeText field asked
+    for_ [(True, "^# T"), (False, "# "), (True, "#\\s*T"), (True, "^#")] $ \(regexp, asked) -> do
+      asking regexp asked
+      eventually $ ((asked,) <$> said ui) `shouldReturn` (asked, "No matches")
+      press "Enter"
+      editorSelection ui `shouldReturn` (T.length text, T.length text)
+      find ui ".editor-search-replace" >>= click
+      find ui ".editor-search-replace-all" >>= click
+      markdown ui `shouldReturn` text
+    -- "T", the title's own text, is a match: the title's and the text's.
+    asking False "T"
+    eventually $ said ui `shouldReturn` "2 matches"
+    press "Enter"
+    editorSelection ui `shouldReturn` (2, 3)
+    eventually $ said ui `shouldReturn` "1 of 2, from the start"
+    find ui ".editor-search-replace" >>= click
+    markdown ui `shouldReturn` "# U\n\nA T here."
 
   it "replaces matches of no length one after the other, and steps past the count's limit, both ways" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
