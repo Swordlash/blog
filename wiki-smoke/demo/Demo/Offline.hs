@@ -43,6 +43,7 @@ spec site =
         getAttribute (locator page "head link[rel=\"manifest\"]") "href" `shouldReturn` Just "./manifest.webmanifest"
         -- The worker takes the page over: the browser's work, a condition.
         waitForFunction page "navigator.serviceWorker.controller !== null"
+        settle page
         -- Installable where the page is served: the worker's scope is the
         -- site's base path, and Chromium reads the manifest from under it
         -- with no errors, its start and scope there too, and finds nothing

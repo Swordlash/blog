@@ -34,6 +34,10 @@ spec site paths visitorGate = do
         expect (path `elem` paths) (Text.unpack path <> " was not prerendered")
       forM_ ["/s/docs/p/tour/", "/s/team/p/team-handbook/"] $ \path ->
         expect (path `notElem` paths) (Text.unpack path <> ", a home page's old address, was prerendered")
+      -- The pages with a TikZ picture, which alone may fetch TikZJax (each
+      -- page's example checks that the others do not).
+      pictured <- length . filter hasTikz <$> mapM (fmap snd . fetchText site) paths
+      report (tshow pictured <> " of the " <> tshow (length paths) <> " pages have a TikZ picture")
 
     -- Each page as a server sends it, before any script runs, then loaded
     -- with app.wasm held back until it has been seen and every node of it
