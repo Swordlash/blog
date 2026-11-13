@@ -1,18 +1,223 @@
-// A click with Ctrl held, for the browser tests of a presentation's editor
-// (Test.Browser.SlideEditor): the runner's clicks hold no modifier. The
-// element clicked is the index-th of those the selector finds in the
-// editor; its listener reads the click's ctrlKey, as it does a user's.
-function wiki_test_ctrl_click(selector, index) {
-  const element = document.querySelectorAll(selector)[index];
-  if (!element) return false;
-  element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }));
-  return true;
+// The rows of a presentation's editor slide by slide, for the browser
+// tests (Test.Browser.SlideEditor): the list's items in order, a row's
+// CodeMirror reached through the object web/src/editor.js's attachRow puts
+// on its host. Offsets are characters (code points).
+function wikiTestSlideRow(index) {
+  return document.querySelectorAll(".editor-slides > li")[index]?.querySelector(".slide-row-body")?.wikiRow ?? null;
 }
 
-// The fits the editor marks beside its slides' handles, as JSON.
+// The fits the rows' headers show, as JSON, in the order of the rows.
 function wiki_test_slide_fits() {
-  const editor = document.querySelector(".editor-cm .cm-content")?.wikiEditor;
-  return JSON.stringify(editor ? editor.slideFits() : []);
+  return JSON.stringify([...document.querySelectorAll(".editor-slides .slide-row")].map((row) => row.dataset.fit ?? ""));
+}
+
+// The text of the row at an index, "" when it is closed.
+function wiki_test_slide_row_text(index) {
+  return wikiTestSlideRow(index)?.text() ?? "";
+}
+
+// Select from anchor to head in the row at an index, and give the row the
+// focus, as a click would: whether the row had its editor to select in (a
+// row shown open gets its CodeMirror a moment later); and the row's
+// selection, as JSON [anchor, head].
+function wiki_test_slide_row_select(index, anchor, head) {
+  const row = wikiTestSlideRow(index);
+  row?.select(anchor, head);
+  return row !== null;
+}
+
+// The rows' editors put in place `ms` milliseconds late, or at once for 0:
+// a row shown open before its CodeMirror is there, as on a slow machine.
+function wiki_test_rows_late(ms) {
+  const islands = globalThis.wikiTestRowIslands ?? globalThis.wikiIslands;
+  globalThis.wikiTestRowIslands = islands;
+  globalThis.wikiIslands = ms > 0 ? { ...islands, attachRow: (...args) => setTimeout(() => islands.attachRow(...args), ms) } : islands;
+}
+
+function wiki_test_slide_row_selection(index) {
+  return JSON.stringify(wikiTestSlideRow(index)?.selection() ?? []);
+}
+
+// Whether the row at an index has the focus.
+function wiki_test_slide_row_focused(index) {
+  return wikiTestSlideRow(index)?.hasFocus() ?? false;
+}
+
+// Mermaid's diagrams held until released ("hold"), or drawn as they come
+// ("as-is"), the ones held drawn then: a diagram drawn, or failing, after
+// the slides were measured.
+function wiki_test_mermaid(how) {
+  const islands = globalThis.wikiTestMermaidIslands ?? globalThis.wikiIslands;
+  globalThis.wikiTestMermaidIslands = islands;
+  if (how === "hold") {
+    globalThis.wikiTestMermaidHeld = [];
+    globalThis.wikiIslands = { ...islands, renderMermaid: (...args) => globalThis.wikiTestMermaidHeld.push(args) };
+  } else {
+    globalThis.wikiIslands = islands;
+    for (const held of globalThis.wikiTestMermaidHeld ?? []) islands.renderMermaid(...held);
+    globalThis.wikiTestMermaidHeld = [];
+  }
+}
+
+// The longest time, in milliseconds, the page's thread was held without a
+// break since the measure started: a timer due every 10 ms that comes late
+// by that much.
+function wiki_test_stall_start() {
+  clearInterval(globalThis.wikiTestStallTimer);
+  let last = performance.now();
+  globalThis.wikiTestStall = 0;
+  globalThis.wikiTestStallTimer = setInterval(() => {
+    const now = performance.now();
+    globalThis.wikiTestStall = Math.max(globalThis.wikiTestStall, now - last);
+    last = now;
+  }, 10);
+}
+
+function wiki_test_stall() {
+  clearInterval(globalThis.wikiTestStallTimer);
+  return Math.round(globalThis.wikiTestStall ?? 0);
+}
+
+// Whether the cursor of the row at an index can be seen: inside the window
+// and inside every element around it that scrolls.
+function wiki_test_slide_row_cursor_seen(index) {
+  const view = wikiTestSlideRow(index)?.view;
+  const at = view?.coordsAtPos(view.state.selection.main.head);
+  if (!at) return false;
+  for (let element = view.scrollDOM.parentElement; element !== null; element = element.parentElement) {
+    if (!/(auto|scroll)/.test(getComputedStyle(element).overflowY) || element.scrollHeight <= element.clientHeight) continue;
+    const box = element.getBoundingClientRect();
+    if (at.top < box.top || at.bottom > box.bottom) return false;
+  }
+  return at.top >= 0 && at.bottom <= window.innerHeight;
+}
+
+// What the slide mode must always hold, checked in the page once it is
+// quiet: "" when it holds, else what does not. The rows' ranges tile the
+// master's text with a line break between each two; every open row's
+// editor shows its range of the master's text; and an editor with the
+// focus has the master's selection, moved by its row's start. Offsets are
+// UTF-16 units: the walk that asks types ASCII only.
+function wiki_test_slide_invariants() {
+  const host = document.querySelector(".editor-cm:not(.slide-row-body)");
+  const editor = host?.wikiEditor;
+  if (!editor?.rowRanges) return "no editor";
+  const text = editor.view.state.doc.toString();
+  const ranges = editor.rowRanges();
+  const found = [];
+  if (ranges.length === 0) found.push("no rows");
+  else {
+    if (ranges[0].from !== 0) found.push(`the first row starts at ${ranges[0].from}`);
+    const last = ranges[ranges.length - 1];
+    if (last.to !== text.length) found.push(`the last row ends at ${last.to} of ${text.length}`);
+    for (let i = 1; i < ranges.length; i++) {
+      const gap = text.slice(ranges[i - 1].to, ranges[i].from);
+      if (gap !== "\n" && gap !== "\r\n") found.push(`between rows ${i - 1} and ${i}: ${JSON.stringify(gap)}`);
+    }
+  }
+  const master = editor.view.state.selection.main;
+  for (const [key, row] of host.wikiRows ?? []) {
+    const range = ranges.find((r) => r.key === key);
+    if (!range) {
+      found.push(`row ${key} is open but not in the layout`);
+      continue;
+    }
+    if (row.state.doc.toString() !== text.slice(range.from, range.to)) found.push(`row ${key} shows ${JSON.stringify(row.state.doc.toString())}, not ${JSON.stringify(text.slice(range.from, range.to))}`);
+    if (row.hasFocus) {
+      const { anchor, head } = row.state.selection.main;
+      if (master.anchor !== anchor + range.from || master.head !== head + range.from) {
+        found.push(`row ${key} has the focus at ${anchor}-${head} (its start ${range.from}), the editor's selection is ${master.anchor}-${master.head}`);
+      }
+    }
+  }
+  return found.join("; ");
+}
+
+// The open rows' indices in the list, as JSON.
+function wiki_test_open_rows() {
+  return JSON.stringify([...document.querySelectorAll(".editor-slides > li")].flatMap((item, i) => (item.querySelector(".slide-row.open") ? [i] : [])));
+}
+
+// The master's layout as the component reads it (web/src/editor.js's
+// rows): {text, anchor, head, focused, rows: [[key, from]]}, characters.
+function wiki_test_master_layout() {
+  return document.querySelector(".editor-cm:not(.slide-row-body)")?.wikiEditor?.rows?.() ?? "{}";
+}
+
+// Drag the text from `a` to `b` of the row at index `from` and drop it in
+// the row at index `to` at `at`, with the platform's copy key held or not:
+// the events a mouse makes (dragstart on the selection, dragover and drop
+// where it is let go, dragend where it started). Where in the row the drop
+// lands, as the row's editor reads the drop's place; -1 without the rows.
+// Offsets are UTF-16 units: the tests drag ASCII.
+function wiki_test_slide_drag(from, a, b, to, at, copy) {
+  const source = wikiTestSlideRow(from);
+  const target = wikiTestSlideRow(to);
+  if (!source || !target) return -1;
+  source.select(a, b);
+  const dataTransfer = new DataTransfer();
+  source.view.contentDOM.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer }));
+  const box = target.view.coordsAtPos(at);
+  if (!box) return -1;
+  const mac = /Mac/.test(navigator.platform);
+  const place = { clientX: box.left + 1, clientY: (box.top + box.bottom) / 2 };
+  const init = { bubbles: true, cancelable: true, dataTransfer, ...place, ctrlKey: copy && !mac, altKey: copy && mac };
+  const landed = target.view.posAtCoords({ x: place.clientX, y: place.clientY }, false);
+  target.view.contentDOM.dispatchEvent(new DragEvent("dragover", init));
+  target.view.contentDOM.dispatchEvent(new DragEvent("drop", init));
+  source.view.contentDOM.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer }));
+  return landed;
+}
+
+// Where the focus is in the rows' list: "text N" in the text of the row at
+// index N, "header N" on its header's button, "elsewhere" outside the list,
+// and "nowhere" when nothing has it.
+function wiki_test_slide_focus() {
+  const active = document.activeElement;
+  if (active === null || active === document.body) return "nowhere";
+  const items = [...document.querySelectorAll(".editor-slides > li")];
+  const index = items.findIndex((item) => item.contains(active));
+  if (index < 0) return "elsewhere";
+  return `${active.closest(".slide-row-body") ? "text" : "header"} ${index}`;
+}
+
+// The master's problems told again, as the check does after a pause in the
+// typing: a transaction of the hidden master's own, while a row completes.
+function wiki_test_master_problems() {
+  document.querySelector(".editor-cm:not(.slide-row-body)")?.wikiEditor?.problems?.([]);
+}
+
+// Give the open editor's master a layout cut for another text than the one
+// it holds, as a cut of an older text that arrives late: whether the master
+// took it, and whether its layout has the key the cut gave.
+function wiki_test_stale_rows(text) {
+  const host = document.querySelector(".editor-cm:not(.slide-row-body)");
+  const taken = host?.wikiEditor?.setRows?.(text, "[[999, 0, 1]]") ?? false;
+  const keys = JSON.parse(host?.wikiEditor?.rows?.() || "{\"rows\": []}").rows.map((row) => row[0]);
+  return JSON.stringify([taken, keys.includes(999)]);
+}
+
+// The page's islands without the editor ("absent"), with an editor whose
+// module fails to load ("fail"), with an editor that waits until released
+// ("hold"), or as they were ("as-is"): what a page without its editor's
+// script, one whose editor's module cannot be fetched, or one still
+// loading it, gives the editor.
+function wiki_test_editor_script(how) {
+  const islands = globalThis.wikiTestIslands ?? globalThis.wikiIslands;
+  globalThis.wikiTestIslands = islands;
+  if (how === "as-is") {
+    globalThis.wikiIslands = islands;
+    for (const held of globalThis.wikiTestHeld ?? []) islands.attachEditor(...held);
+    globalThis.wikiTestHeld = [];
+  } else if (how === "absent") {
+    globalThis.wikiIslands = { ...islands, attachEditor: undefined };
+  } else if (how === "fail") {
+    const failing = () => Promise.reject(new Error("The test keeps the editor's module from loading."));
+    globalThis.wikiIslands = { ...islands, attachEditor: (textarea, host, original) => islands.attachEditor(textarea, host, original, failing) };
+  } else {
+    globalThis.wikiTestHeld = [];
+    globalThis.wikiIslands = { ...islands, attachEditor: (...args) => globalThis.wikiTestHeld.push(args) };
+  }
 }
 
 // Start, or read, the log of the preview's measures of its cards
@@ -145,3 +350,4 @@ function wiki_test_ids_report() {
     .map((a) => a.getAttribute("href"));
   return JSON.stringify({ duplicates, outside, contents });
 }
+

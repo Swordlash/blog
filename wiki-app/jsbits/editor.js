@@ -35,6 +35,111 @@ function wiki_editor_attach(host, original) {
   if (textarea) globalThis.wikiIslands?.attachEditor?.(textarea, host, original);
 }
 
+// Put a row of a presentation's slide mode in `rowHost`: a CodeMirror over
+// the range the master's layout gives the row with this key, the master
+// being the CodeMirror in `masterHost` (web/src/editor.js's attachRow).
+// Without the page's islands.js, or before the master is in place, nothing.
+function wiki_editor_attach_row(masterHost, rowHost, key, focus) {
+  globalThis.wikiIslands?.attachRow?.(masterHost, rowHost, key, focus);
+}
+
+// Let go of the row in `rowHost`, if it has one.
+function wiki_editor_detach_row(rowHost) {
+  rowHost.wikiRow?.destroy();
+}
+
+// Whether the page can put CodeMirror in place of the textarea: its
+// islands.js is there, with the editor.
+function wiki_editor_available() {
+  return typeof globalThis.wikiIslands?.attachEditor === "function";
+}
+
+// The master's text, its cursor and its rows' layout, as JSON {text, head,
+// rows: [[key, from]]} in characters; "" before CodeMirror is in place.
+function wiki_editor_rows(host) {
+  return host.wikiEditor?.rows?.() ?? "";
+}
+
+// Give the master the rows' layout Haskell cut `text` into, JSON [[key,
+// from, to]] in characters: taken only while the master holds that text.
+function wiki_editor_set_rows(host, text, json) {
+  return host.wikiEditor?.setRows?.(text, json) ?? false;
+}
+
+// Tell the master whether the presentation is edited slide by slide.
+function wiki_editor_slides_mode(host, on) {
+  host.wikiEditor?.slidesMode?.(on);
+}
+
+// A structural step on the master's text (web/src/editor.js's step):
+// whether the master took it, which it does only while it holds `text`.
+function wiki_editor_step(host, text, json) {
+  return host.wikiEditor?.step?.(text, json) ?? false;
+}
+
+// Give the focus to the header of the row with this key in the rows' list,
+// once the render that may have just put it there is done.
+function wiki_editor_focus_header(list, key) {
+  requestAnimationFrame(() => list.querySelector(`[data-row-key="${key}"] .slide-row-toggle`)?.focus({ preventScroll: true }));
+}
+
+// The editor's undo (true) or redo (false), on the master's history.
+function wiki_editor_history(host, undoing) {
+  host.wikiEditor?.history?.(undoing);
+}
+
+// What has the focus in the rows' list (a row's text, a row's header), if
+// anything, kept before a change of the list (a re-cut, a jump, a move, a
+// row deleted or added), so that the focus can be given back when the
+// list's patch moves that element: an element the browser takes out and
+// puts back loses the focus. Halogen gives no hook after its patch, which
+// may come after the change returns (a render of the component's, after a
+// fork), so the element is watched instead: the first time it loses the
+// focus, if it lost it to nothing (no other element took it) and no press
+// of the pointer came since the change (a press is the author moving the
+// focus, which stays where it went), it takes the focus back as soon as
+// the patch is done: in a microtask, which runs before the browser handles
+// any other event, so that a key pressed during the patch still reaches
+// the element (a frame later, a key typed in between went to the page's
+// body and was lost); an element not back in the page by then is tried
+// again in the next frame. The watch ends at
+// that first loss of the focus, restored or not, or after a second without
+// one; either way its listener and its timer are both gone.
+function wiki_editor_hold_focus(list) {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !list.contains(active)) return;
+  if (!globalThis.wikiPointerWatched) {
+    globalThis.wikiPointerWatched = true;
+    document.addEventListener("pointerdown", () => (globalThis.wikiLastPointer = performance.now()), true);
+  }
+  list.wikiHeld = active;
+  const held = performance.now();
+  let timer = 0;
+  const back = (event) => {
+    clearTimeout(timer);
+    if (event.relatedTarget !== null) return;
+    const restore = () => {
+      const nowhere = document.activeElement === null || document.activeElement === document.body;
+      const pressed = (globalThis.wikiLastPointer ?? 0) > held;
+      if (nowhere && !pressed && active.isConnected) active.focus({ preventScroll: true });
+    };
+    // An element the patch has not put back yet is tried again in the
+    // next frame.
+    queueMicrotask(() => (active.isConnected ? restore() : requestAnimationFrame(restore)));
+  };
+  active.addEventListener("focusout", back, { once: true });
+  timer = setTimeout(() => active.removeEventListener("focusout", back), 1000);
+}
+
+// The same, at once: the focus back to what had it in the list, if the
+// change's patch has already taken it away to nothing.
+function wiki_editor_restore_focus(list) {
+  const nowhere = document.activeElement === null || document.activeElement === document.body;
+  const last = list.wikiHeld;
+  list.wikiHeld = null;
+  if (nowhere && last instanceof HTMLElement && last.isConnected) last.focus({ preventScroll: true });
+}
+
 function wikiCharacters(text, units) {
   let count = 0;
   for (let at = 0; at < units; at++) {

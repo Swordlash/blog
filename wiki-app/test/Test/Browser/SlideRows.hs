@@ -1,0 +1,535 @@
+{-# LANGUAGE TemplateHaskell #-}
+
+-- | The rows of a presentation's slide mode (WP5.103 of docs/PLAN.md) over
+-- a master CodeMirror, in a browser, on hosts of a harness of their own:
+-- the master is the editor's CodeMirror ('attachEditor'), each row a
+-- CodeMirror over one range of its text ('attachRow'), in a child
+-- component in a keyed list, its range cut by "Wiki.Core.SlideRows".
+--
+-- What the slide mode rests on, shown before it is built: typing in a row
+-- is the master's typing, one undo step a word and one a row; an undo run
+-- from a row takes back the last change wherever it was, the master's
+-- cursor and the row that change was in following it; a master hidden
+-- with @display: none@ still moves to a problem, selects and scrolls, and
+-- tells of its input and its cursor's line; the completion of mentions and
+-- emoji, asked through the master's host, answers in the row that asked;
+-- a reorder of the keyed list keeps an open row's CodeMirror, the same
+-- element with its text and selection; and rows cut where the Markdown
+-- parser's lines are, which are not always the master's, show and edit
+-- their ranges, carriage returns included, byte for byte: one after a lone
+-- carriage return, which the master does not break its line at, and one
+-- after @\\r\\n\\n@, one line break to the parser and two to the master.
+module Test.Browser.SlideRows (spec) where
+
+import Control.Monad.UUID (MonadUUID)
+import DOM.HTML.Indexed qualified as I
+import Data.Aeson (decodeStrict)
+import Data.Row (Empty, type (.==))
+import Data.Text qualified as T
+import Halogen qualified as H
+import Halogen.HTML qualified as HH
+import Halogen.HTML.Events qualified as HE
+import Halogen.HTML.Properties qualified as HP
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Protolude hiding (State, find)
+import Test.Hspec.Halogen
+import Web.DOM.Internal.Types qualified as Web
+import Web.Event.Event (EventType (..))
+import Wiki.App.Editor.Browser (answerEmoji, answerMention, attachEditor, attachRow, detachRow, emojiAsked, mentionAsked, setRows, slidesModeIn)
+import Wiki.Core.Id (UserId (..))
+import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), cutRows, rowStarts)
+import Wiki.Core.User (Login (..), User (..))
+
+$( browserJS
+     ["jsbits/test-slide-rows.js"]
+     [ ("js_master_ready", "wiki_test_rows_master_ready", Safe, [t|IO Bool|])
+     , ("js_row_ready", "wiki_test_rows_row_ready", Safe, [t|Int -> IO Bool|])
+     , ("js_master_text", "wiki_test_rows_master_text", Safe, [t|IO JSText|])
+     , ("js_master_selection", "wiki_test_rows_master_selection", Safe, [t|IO JSText|])
+     , ("js_row_text", "wiki_test_rows_text", Safe, [t|Int -> IO JSText|])
+     , ("js_row_range", "wiki_test_rows_range", Safe, [t|Int -> IO JSText|])
+     , ("js_row_selection", "wiki_test_rows_selection", Safe, [t|Int -> IO JSText|])
+     , ("js_row_select", "wiki_test_rows_select", Safe, [t|Int -> Int -> Int -> IO ()|])
+     , ("js_row_completing", "wiki_test_rows_completing", Safe, [t|Int -> IO JSText|])
+     , ("js_watch", "wiki_test_rows_watch", Safe, [t|IO ()|])
+     , ("js_told", "wiki_test_rows_told", Safe, [t|IO JSText|])
+     , ("js_problem", "wiki_test_rows_problem", Safe, [t|Int -> Int -> IO ()|])
+     , ("js_next_problem", "wiki_test_rows_next_problem", Safe, [t|IO JSText|])
+     , ("js_master_select", "wiki_test_rows_master_select", Safe, [t|Int -> Int -> IO JSText|])
+     , ("js_master_panels", "wiki_test_rows_master_panels", Safe, [t|IO Int|])
+     , ("js_master_shown", "wiki_test_rows_master_shown", Safe, [t|IO Bool|])
+     , ("js_errors", "wiki_test_rows_errors", Safe, [t|IO JSText|])
+     , ("js_master_completing", "wiki_test_rows_master_completing", Safe, [t|IO JSText|])
+     , ("js_master_watch", "wiki_test_rows_master_watch", Safe, [t|IO ()|])
+     , ("js_master_seen", "wiki_test_rows_master_seen", Safe, [t|IO JSText|])
+     , ("js_row_focused", "wiki_test_rows_focused", Safe, [t|Int -> IO Bool|])
+     , ("js_row_type", "wiki_test_rows_type", Safe, [t|Int -> JSText -> IO ()|])
+     , ("js_master_shown_text", "wiki_test_rows_master_shown_text", Safe, [t|IO JSText|])
+     ]
+ )
+
+spec :: forall m -> (MonadBrowserTest m, MonadUUID m) => Spec
+spec m = do
+  it "sends typing in a row to the master, one undo step a word and one a row" $ runPage $ do
+    _ <- start deck [1, 2]
+    -- At the end of row 1's text, then of row 2's, each word's keys typed
+    -- from one call in the page: no machine is slow enough to part them by
+    -- CodeMirror's grouping window.
+    typeFast 1 (rowLength deck 1) " word"
+    let once = insertAt (rowEnd deck 1) " word" deck
+    masterText `shouldReturn` once
+    rowText 1 `shouldReturn` rowOf once 1
+    typeFast 2 (rowLength deck 2) " more"
+    let twice = insertAt (rowEnd deck 2 + T.length " word") " more" once
+    masterText `shouldReturn` twice
+    rowText 2 `shouldReturn` rowOf twice 2
+    -- Ctrl+Z in row 2 takes back its word, whole; again, row 1's word,
+    -- whole, which row 1 shows.
+    press "Control+z"
+    eventually $ masterText `shouldReturn` once
+    rowText 2 `shouldReturn` rowOf deck 2
+    press "Control+z"
+    eventually $ masterText `shouldReturn` deck
+    rowText 1 `shouldReturn` rowOf deck 1
+    -- And Ctrl+Y brings row 1's back.
+    press "Control+y"
+    eventually $ masterText `shouldReturn` once
+    rowText 1 `shouldReturn` rowOf once 1
+
+  it "starts another undo step in a row after a pause longer than CodeMirror's grouping window" $ runPage $ do
+    _ <- start deck [1]
+    typeFast 1 (rowLength deck 1) " one"
+    -- 500 ms is CodeMirror's newGroupDelay.
+    unsafeIOToPageM (threadDelay 700_000)
+    unsafeIOToPageM (js_row_type 1 (toJSText " two"))
+    let both = insertAt (rowEnd deck 1) " one two" deck
+    masterText `shouldReturn` both
+    press "Control+z"
+    eventually $ masterText `shouldReturn` insertAt (rowEnd deck 1) " one" deck
+    press "Control+z"
+    eventually $ masterText `shouldReturn` deck
+
+  it "takes back from a row the last change, made in another row, with the master's cursor in that row, open or closed" $ runPage $ do
+    ui <- start deck [1, 2]
+    typeAt ui 2 (rowLength deck 2) " more"
+    let typed = insertAt (rowEnd deck 2) " more" deck
+    masterText `shouldReturn` typed
+    -- The focus in row 1, Ctrl+Z there.
+    selectIn 1 3 3
+    press "Control+z"
+    eventually $ masterText `shouldReturn` deck
+    rowText 2 `shouldReturn` rowOf deck 2
+    rowText 1 `shouldReturn` rowOf deck 1
+    (_, head') <- masterSelection
+    head' `shouldSatisfy` within (rowRange deck 2)
+    -- Row 2 closed, the same: the change is undone in the master alone,
+    -- the cursor where row 2 is.
+    typeAt ui 2 (rowLength deck 2) " more"
+    masterText `shouldReturn` typed
+    closeRow ui 2
+    selectIn 1 3 3
+    press "Control+z"
+    eventually $ masterText `shouldReturn` deck
+    (_, head'') <- masterSelection
+    head'' `shouldSatisfy` within (rowRange deck 2)
+    -- Opened and given the focus there, row 2 starts at the master's
+    -- cursor, which stays where the undo put it.
+    void (query ui (H.mkTell (OpenRow 2)))
+    eventually $ unsafeIOToPageM (js_row_ready 2) `shouldReturn` True
+    rowContent ui 2 >>= focus
+    masterSelection `shouldReturn` (head'', head'')
+    rowSelection 2 `shouldReturn` (head'' - rowStart deck 2, head'' - rowStart deck 2)
+
+  it "takes a row's selection to the master when the row takes the focus without a click, so that an undo goes back to that row" $ runPage $ do
+    ui <- start deck [1, 2]
+    selectIn 1 3 3
+    (_, inRow1) <- masterSelection
+    inRow1 `shouldSatisfy` within (rowRange deck 1)
+    -- The focus moved to row 2 as Tab moves it, no selection set: its
+    -- cursor is at its start, and the master's goes there.
+    rowContent ui 2 >>= focus
+    (_, inRow2) <- masterSelection
+    inRow2 `shouldBe` rowStart deck 2
+    press "x"
+    masterText `shouldReturn` insertAt (rowStart deck 2) "x" deck
+    selectIn 1 3 3
+    press "Control+z"
+    eventually $ masterText `shouldReturn` deck
+    (_, back) <- masterSelection
+    back `shouldSatisfy` within (rowRange deck 2)
+
+  it "keeps a master hidden by display: none moving to a problem, selecting and scrolling, with no panel, and telling of its input and cursor's line" $ runPage $ do
+    ui <- start deck [1, 3]
+    void (query ui (H.mkTell (HideMaster True)))
+    eventually $ unsafeIOToPageM js_master_shown `shouldReturn` False
+    unsafeIOToPageM js_watch
+    typeAt ui 1 (rowLength deck 1) "!"
+    let typed = insertAt (rowEnd deck 1) "!" deck
+    masterText `shouldReturn` typed
+    told <- toldEvents
+    told `shouldSatisfy` elem "input"
+    told `shouldSatisfy` any ("line " `T.isPrefixOf`)
+    -- A problem in row 3: the master goes to it, and row 3 shows the
+    -- master's selection.
+    let (problemFrom, problemTo) = (rowStart typed 3 + 3, rowStart typed 3 + 8)
+    unsafeIOToPageM (js_problem problemFrom problemTo)
+    (fromJSText <$> unsafeIOToPageM js_next_problem) `shouldReturn` ""
+    masterSelection `shouldReturn` (problemFrom, problemTo)
+    rowSelection 3 `shouldReturn` (3, 8)
+    (fromJSText <$> unsafeIOToPageM (js_master_select (rowStart typed 2) (rowStart typed 2 + 2))) `shouldReturn` ""
+    masterSelection `shouldReturn` (rowStart typed 2, rowStart typed 2 + 2)
+    unsafeIOToPageM js_master_panels `shouldReturn` 0
+    toldEvents >>= (`shouldSatisfy` ((> length told) . length))
+    -- CodeMirror logs what an update listener or its measuring throws,
+    -- the measuring a frame later.
+    unsafeIOToPageM (threadDelay 100_000)
+    errorsLogged `shouldReturn` []
+
+  it "builds a master in a host hidden from the start, which rows type into and undo in, and which shows their text once shown" $ runPage $ do
+    ui <- mount m harness (Harness deck True)
+    unsafeIOToPageM js_watch
+    eventuallyWithin 10000 $ unsafeIOToPageM js_master_ready `shouldReturn` True
+    void (query ui (H.mkTell SendRows))
+    unsafeIOToPageM js_master_shown `shouldReturn` False
+    void (query ui (H.mkTell (OpenRow 2)))
+    eventually $ unsafeIOToPageM (js_row_ready 2) `shouldReturn` True
+    typeAt ui 2 (rowLength deck 2) " hidden"
+    let typed = insertAt (rowEnd deck 2) " hidden" deck
+    masterText `shouldReturn` typed
+    press "Control+z"
+    eventually $ masterText `shouldReturn` deck
+    press "Control+y"
+    eventually $ masterText `shouldReturn` typed
+    void (query ui (H.mkTell (HideMaster False)))
+    eventually $ unsafeIOToPageM js_master_shown `shouldReturn` True
+    eventually $ (fromJSText <$> unsafeIOToPageM js_master_shown_text) >>= (`shouldSatisfy` T.isInfixOf "Beta.\n hidden")
+    unsafeIOToPageM (threadDelay 100_000)
+    errorsLogged `shouldReturn` []
+
+  it "completes a mention and an emoji in the row that asked, through the master's host, and nowhere else" $ runPage $ do
+    ui <- start deck [1, 2]
+    -- The master's completion watched from before the typing: the row's
+    -- typing reaches the master, which never starts a query of its own,
+    -- not even one that answers nothing.
+    unsafeIOToPageM js_master_watch
+    typeAt ui 2 (rowLength deck 2) " :smi"
+    eventually $ rowCompleting 2 `shouldReturn` "active"
+    _ <- find ui ".rows-list li[data-key=\"2\"] .cm-tooltip-autocomplete"
+    unsafeIOToPageM (threadDelay 300_000)
+    (fromJSText <$> unsafeIOToPageM js_master_seen) `shouldReturn` "[]"
+    -- Not in the master, which the row's typing reached, nor in row 1.
+    (fromJSText <$> unsafeIOToPageM js_master_completing) `shouldReturn` ""
+    rowCompleting 1 `shouldReturn` ""
+    length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 1
+    -- CodeMirror takes no choice in the list's first 75 ms.
+    unsafeIOToPageM (threadDelay 100_000)
+    press "Tab"
+    let emoji = insertAt (rowEnd deck 2) " :smile:" deck
+    eventually $ masterText `shouldReturn` emoji
+    rowText 2 `shouldReturn` rowOf emoji 2
+    text <- rowContent ui 2
+    typeText text " @ad"
+    eventually $ rowCompleting 2 `shouldReturn` "active"
+    _ <- find ui ".rows-list li[data-key=\"2\"] .cm-tooltip-autocomplete"
+    -- CodeMirror takes no choice in the list's first 75 ms.
+    unsafeIOToPageM (threadDelay 100_000)
+    press "Enter"
+    let mention = insertAt (rowEnd deck 2) " :smile: @ada " deck
+    eventually $ masterText `shouldReturn` mention
+    rowText 2 `shouldReturn` rowOf mention 2
+
+  it "moves an open row's CodeMirror with the list, the same element with its text and selection" $ runPage $ do
+    ui <- start deck [1, 2]
+    selectIn 2 3 6
+    before2 <- find ui ".rows-list li[data-key=\"2\"] .cm-editor"
+    before1 <- find ui ".rows-list li[data-key=\"1\"] .cm-editor"
+    void (query ui (H.mkTell (Reorder [0, 2, 3, 1])))
+    keysShown ui `shouldReturn` ["0", "2", "3", "1"]
+    after2 <- find ui ".rows-list li[data-key=\"2\"] .cm-editor"
+    after1 <- find ui ".rows-list li[data-key=\"1\"] .cm-editor"
+    after2 `shouldBeSameElement` before2
+    after1 `shouldBeSameElement` before1
+    -- Moved, row 2's CodeMirror lost the focus it had, as an element
+    -- moved in the page does: the slide mode gives it back after a move.
+    unsafeIOToPageM (js_row_focused 2) `shouldReturn` False
+    rowText 2 `shouldReturn` rowOf deck 2
+    rowSelection 2 `shouldReturn` (3, 6)
+    -- And it is still the master's: typing in it after the move.
+    typeAt ui 2 (rowLength deck 2) "!"
+    masterText `shouldReturn` insertAt (rowEnd deck 2) "!" deck
+
+  it "shows and edits a row that starts inside one of the master's lines, carriage returns and all" $ runPage $ do
+    ui <- start returns [1, 2]
+    -- Row 1 starts after a lone carriage return, inside the master's
+    -- first line; row 2 after "\r\n\n", at the start of one of the
+    -- master's lines, which the parser counts otherwise.
+    map (rowOf returns) [0, 1, 2] `shouldBe` ["# Deck 😀", "## One\r\n", "## Two\rx\r\nmore\n"]
+    rowText 1 `shouldReturn` rowOf returns 1
+    rowText 2 `shouldReturn` rowOf returns 2
+    rowRangeShown 1 `shouldReturn` rowRange returns 1
+    rowRangeShown 2 `shouldReturn` rowRange returns 2
+    typeAt ui 1 (rowLength returns 1) "X"
+    let typedOne = insertAt (rowEnd returns 1) "X" returns
+    masterText `shouldReturn` typedOne
+    rowText 1 `shouldReturn` rowOf typedOne 1
+    -- After the carriage return inside row 2.
+    typeAt ui 2 (T.length "## Two\r") "Y"
+    let typedTwo = insertAt (rowStart typedOne 2 + T.length "## Two\r") "Y" typedOne
+    masterText `shouldReturn` typedTwo
+    rowText 2 `shouldReturn` rowOf typedTwo 2
+    press "Control+z"
+    eventually $ masterText `shouldReturn` typedOne
+  where
+    start :: forall s. Text -> [Int] -> PageM s (Mounted s Query Void m)
+    start text open = do
+      ui <- mount m harness (Harness text False)
+      eventuallyWithin 10000 $ unsafeIOToPageM js_master_ready `shouldReturn` True
+      void (query ui (H.mkTell SendRows))
+      for_ open $ \k -> do
+        void (query ui (H.mkTell (OpenRow k)))
+        eventually $ unsafeIOToPageM (js_row_ready k) `shouldReturn` True
+      pure ui
+
+    closeRow :: forall s. Mounted s Query Void m -> Int -> PageM s ()
+    closeRow ui k = do
+      void (query ui (H.mkTell (CloseRow k)))
+      eventually $ unsafeIOToPageM (js_row_ready k) `shouldReturn` False
+
+    rowContent :: forall s. Mounted s Query Void m -> Int -> PageM s (Element s)
+    rowContent ui k = find ui (".rows-list li[data-key=\"" <> show k <> "\"] .cm-content")
+
+    -- Put the cursor in a row, and type there key by key.
+    typeAt :: forall s. Mounted s Query Void m -> Int -> Int -> Text -> PageM s ()
+    typeAt ui k at typed = do
+      content <- rowContent ui k
+      selectIn k at at
+      typeText content typed
+
+    -- Put the cursor in a row, and type there, every key from one call.
+    typeFast :: forall s. Int -> Int -> Text -> PageM s ()
+    typeFast k at typed = do
+      selectIn k at at
+      unsafeIOToPageM (js_row_type k (toJSText typed))
+      settle
+
+    selectIn :: forall s. Int -> Int -> Int -> PageM s ()
+    selectIn k anchor head' = unsafeIOToPageM (js_row_select k anchor head') >> settle
+
+    masterText :: forall s. PageM s Text
+    masterText = fromJSText <$> unsafeIOToPageM js_master_text
+
+    rowText :: forall s. Int -> PageM s Text
+    rowText k = fromJSText <$> unsafeIOToPageM (js_row_text k)
+
+    rowCompleting :: forall s. Int -> PageM s Text
+    rowCompleting k = fromJSText <$> unsafeIOToPageM (js_row_completing k)
+
+    masterSelection :: forall s. PageM s (Int, Int)
+    masterSelection = pairOf . fromJSText <$> unsafeIOToPageM js_master_selection
+
+    rowSelection :: forall s. Int -> PageM s (Int, Int)
+    rowSelection k = pairOf . fromJSText <$> unsafeIOToPageM (js_row_selection k)
+
+    rowRangeShown :: forall s. Int -> PageM s (Int, Int)
+    rowRangeShown k = pairOf . fromJSText <$> unsafeIOToPageM (js_row_range k)
+
+    toldEvents :: forall s. PageM s [Text]
+    toldEvents = (\t -> fromMaybe [] (decodeStrict (encodeUtf8 (fromJSText t)))) <$> unsafeIOToPageM js_told
+
+    errorsLogged :: forall s. PageM s [Text]
+    errorsLogged = (\t -> fromMaybe ["unreadable"] (decodeStrict (encodeUtf8 (fromJSText t)))) <$> unsafeIOToPageM js_errors
+
+    keysShown :: forall s. Mounted s Query Void m -> PageM s [Text]
+    keysShown ui = findAll ui ".rows-list > li" >>= traverse (fmap (fromMaybe "") . (`getAttribute` "data-key"))
+
+    within :: (Int, Int) -> Int -> Bool
+    within (a, b) x = x >= a && x <= b
+
+-- | A pair read from JSON @[a, b]@, (-1, -1) for anything else.
+pairOf :: Text -> (Int, Int)
+pairOf t = case decodeStrict (encodeUtf8 t) of
+  Just [a, b] -> (a, b)
+  _ -> (-1, -1)
+
+-- | A deck with an emoji (two UTF-16 units, one character) before rows 2
+-- and 3.
+deck :: Text
+deck = "# Deck\n\n## One 😀\n\nAlpha.\n\n## Two\n\nBeta.\n\n## Three\n\nGamma.\n"
+
+-- | A deck whose rows start inside the master's lines: row 1 after a lone
+-- carriage return, row 2 after @\\r\\n\\n@; an emoji before both.
+returns :: Text
+returns = "# Deck 😀\r## One\r\n\n## Two\rx\r\nmore\n"
+
+-- | The rows of a text, cut fresh.
+rowsOf :: Text -> Rows
+rowsOf = fst . cutRows (RowKey 0)
+
+rowOf :: Text -> Int -> Text
+rowOf text k = maybe "" (\r -> r.text) (atMay (rowsOf text).rows k)
+
+rowStart :: Text -> Int -> Int
+rowStart text k = fromMaybe 0 (atMay (rowStarts (rowsOf text)) k)
+
+rowLength :: Text -> Int -> Int
+rowLength text k = T.length (rowOf text k)
+
+rowEnd :: Text -> Int -> Int
+rowEnd text k = rowStart text k + rowLength text k
+
+rowRange :: Text -> Int -> (Int, Int)
+rowRange text k = (rowStart text k, rowEnd text k)
+
+insertAt :: Int -> Text -> Text -> Text
+insertAt at piece text = T.take at text <> piece <> T.drop at text
+
+----------------------------------------------------------------------
+-- The harness
+
+-- | The harness's input: the text, and whether the master's host is
+-- hidden from the start.
+data Harness = Harness Text Bool
+
+-- | What a test asks of the harness: the master given the rows' layout
+-- and put in the slide mode, once it is there; a row opened or closed; the
+-- list in another order of keys; the master hidden or shown.
+data Query a
+  = SendRows a
+  | OpenRow Int a
+  | CloseRow Int a
+  | Reorder [Int] a
+  | HideMaster Bool a
+
+data State = State
+  { text :: Text
+  , rows :: Rows
+  -- ^ The text's fresh cut, keys from 0.
+  , order :: [Int]
+  , opened :: [Int]
+  , hidden :: Bool
+  , masterRef :: H.RefLabel
+  , masterHost :: Maybe Web.Element
+  }
+
+data Action
+  = Initialize
+  | MentionAsked Int Text
+  | EmojiAsked Int Text
+
+type Slots = ("row" .== H.Slot (Const Void) Void Int)
+
+-- | The master, with the textarea it takes the place of, and a keyed list
+-- of rows over a text, one per row of its fresh cut, closed.
+harness :: forall m. (MonadIO m, MonadUUID m) => H.Component Query Harness Void m
+harness =
+  H.mkComponent
+    H.ComponentSpec
+      { initialState = \(Harness text hidden) -> do
+          ref <- H.newRefLabel "rows-master"
+          let cut = rowsOf text
+          pure State {text, rows = cut, order = [0 .. length cut.rows - 1], opened = [], hidden, masterRef = ref, masterHost = Nothing}
+      , render
+      , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.handleQuery = handleQuery, H.initialize = Just Initialize}
+      }
+  where
+    render :: State -> H.ComponentHTML Action Slots m
+    render st =
+      HH.div_
+        [ HH.div
+            ( [ HP.class_ (HH.ClassName "rows-master")
+              , HP.ref st.masterRef
+              , HE.handler' (EventType "wiki-mention") (\ev -> uncurry MentionAsked <$> mentionAsked ev)
+              , HE.handler' (EventType "wiki-emoji") (\ev -> uncurry EmojiAsked <$> emojiAsked ev)
+              ]
+                <> [HP.attr (HH.AttrName "style") "display: none" | st.hidden]
+            )
+            []
+        , HH.element @I.HTMLtextarea (HH.ElemName "textarea") [HP.class_ (HH.ClassName "rows-text"), HP.attr (HH.AttrName "style") "display: none"] [HH.text st.text]
+        , HH.keyed
+            @I.HTMLol
+            (HH.ElemName "ol")
+            [HP.class_ (HH.ClassName "rows-list")]
+            [ (show k, HH.li [HP.attr (HH.AttrName "data-key") (show k)] [HH.slot "row" k row RowInput {master = st.masterHost, key = RowKey k, open = k `elem` st.opened} absurd])
+            | k <- st.order
+            ]
+        ]
+
+    handleAction :: Action -> H.HalogenM State Action Slots Void m ()
+    handleAction = \case
+      Initialize -> do
+        st <- get
+        found <- H.getRef st.masterRef
+        modify (\s -> s {masterHost = found})
+        traverse_ (\host -> H.liftEffect (attachEditor host st.text)) found
+      MentionAsked i _ ->
+        gets (\st -> st.masterHost) >>= traverse_ (\host -> H.liftEffect (answerMention host i (Just [ada])))
+      EmojiAsked i _ ->
+        gets (\st -> st.masterHost) >>= traverse_ (\host -> H.liftEffect (answerEmoji host i [("smile", "😄")]))
+
+    handleQuery :: Query a -> H.HalogenM State Action Slots Void m (Maybe a)
+    handleQuery = \case
+      SendRows next -> do
+        st <- get
+        for_ st.masterHost $ \host -> H.liftEffect $ do
+          void (setRows host st.text st.rows)
+          slidesModeIn host True
+        pure (Just next)
+      OpenRow k next -> modify (\st -> st {opened = ordNub (k : st.opened)}) $> Just next
+      CloseRow k next -> modify (\st -> st {opened = filter (/= k) st.opened}) $> Just next
+      Reorder keys next -> modify (\st -> st {order = keys}) $> Just next
+      HideMaster h next -> modify (\st -> st {hidden = h}) $> Just next
+
+    ada = User {id = UserId "ada", login = Login "ada", displayName = "Ada Lovelace", avatar = Nothing}
+
+-- | A row's input: the master's host, the row's key in the master's
+-- layout, and whether it is open.
+data RowInput = RowInput
+  { master :: Maybe Web.Element
+  , key :: RowKey
+  , open :: Bool
+  }
+
+data RowState = RowState
+  { input :: RowInput
+  , ref :: H.RefLabel
+  , attached :: Bool
+  }
+
+data RowAction = RowSync | RowReceive RowInput | RowGone
+
+-- | A row: a host its CodeMirror is put in while it is open, and let go of
+-- when it closes or goes.
+row :: forall m. (MonadIO m, MonadUUID m) => H.Component (Const Void) RowInput Void m
+row =
+  H.mkComponent
+    H.ComponentSpec
+      { initialState = \input -> (\ref -> RowState {input, ref, attached = False}) <$> H.newRefLabel "rows-host"
+      , render = \st -> HH.div [HP.class_ (HH.ClassName "rows-host"), HP.ref st.ref] []
+      , eval =
+          H.mkEval
+            H.defaultEval
+              { H.handleAction = handleAction
+              , H.initialize = Just RowSync
+              , H.receive = Just . RowReceive
+              , H.finalize = Just RowGone
+              }
+      }
+  where
+    handleAction :: RowAction -> H.HalogenM RowState RowAction Empty Void m ()
+    handleAction = \case
+      RowSync -> sync
+      RowReceive input -> modify (\st -> st {input}) >> sync
+      RowGone -> gets (\st -> st.ref) >>= H.getRef >>= traverse_ (H.liftEffect . detachRow)
+
+    sync :: H.HalogenM RowState RowAction Empty Void m ()
+    sync = do
+      st <- get
+      host <- H.getRef st.ref
+      case (st.input.open, st.attached, st.input.master, host) of
+        (True, False, Just master, Just h) -> do
+          H.liftEffect (attachRow master h st.input.key False)
+          modify (\s -> s {attached = True})
+        (False, True, _, Just h) -> do
+          H.liftEffect (detachRow h)
+          modify (\s -> s {attached = False})
+        _ -> pass

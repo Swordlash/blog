@@ -68,20 +68,20 @@
 //   gutter of its own folds and unfolds, and so do Ctrl+Shift+[ and
 //   Ctrl+Shift+] (Cmd+Alt+[ and Cmd+Alt+] on a Mac) on the cursor's line.
 //   The component may fold any ranges of lines too (wikiEditor.fold,
-//   unfold and foldedLines), and is told by a "wiki-folds" event, whose
-//   detail is the folds as JSON [[first, last]], when the author folds or
-//   unfolds, or an edit moves or opens a fold. A fold changes what is
-//   shown, never the text: it makes no "wiki-input" event.
-// - a presentation's slides (WP5.97) have their controls at the start of
-//   their first lines: a handle to drag a slide by, and a button to open
-//   or close it (see slideMarks below). Which lines are slides, and what a
-//   move does to the text, are Haskell's (Wiki.Core.Slides).
+//   unfold and foldedLines). A fold changes what is shown, never the
+//   text: it makes no "wiki-input" event.
+// - a presentation edited slide by slide (WP5.103) is a list of rows, each
+//   a CodeMirror of its own over one slide's range of this one, the master
+//   (see attachRow below): one text, one history.
 // - each change of the cursor's line is told by a "wiki-cursor-line"
 //   event, whose detail is the line, from 1, so that the preview of a
 //   presentation shows the cursor's slide.
 // - once CodeMirror is in place, a "wiki-ready" event on the host says so:
-//   the component folds a presentation's slides then, which it cannot do
-//   before.
+//   the component gives a presentation's rows to it then, which it cannot
+//   do before. Its detail is 1 when the text had the focus as CodeMirror
+//   took its place (the author was typing in the textarea), 0 otherwise:
+//   slide by slide, the master is hidden and cannot take the focus, and
+//   the row the cursor is in takes it instead.
 //
 // The text is never normalised: the document's only line separator is
 // "\n", so a "\r" the page holds stays where it is and the text handed back
@@ -96,9 +96,9 @@ import {
   insertCompletionText,
   pickedCompletion,
 } from "@codemirror/autocomplete";
-import { Annotation, ChangeSet, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
-import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, standardKeymap } from "@codemirror/commands";
+import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, redo, redoSelection, standardKeymap, undo, undoSelection } from "@codemirror/commands";
 import {
   Language,
   LanguageSupport,
@@ -110,7 +110,6 @@ import {
   foldKeymap,
   foldNodeProp,
   foldService,
-  foldState,
   foldedRanges,
   syntaxHighlighting,
   syntaxTree,
@@ -122,7 +121,7 @@ import {
 // tag completion, none of which the editor wants.
 import { markdownLanguage } from "@codemirror/lang-markdown";
 import { tagHighlighter, tags } from "@lezer/highlight";
-import { forEachDiagnostic, lintGutter, nextDiagnostic, setDiagnostics } from "@codemirror/lint";
+import { forEachDiagnostic, lintGutter, nextDiagnostic, setDiagnostics, setDiagnosticsEffect } from "@codemirror/lint";
 
 // What each piece of Markdown's syntax is drawn as: classes of web/style.css,
 // stable, so that the tests and the style sheet can name them. A marker
@@ -323,12 +322,16 @@ class ChangeControls extends WidgetType {
   }
 }
 
+// A change's marks: what it replaced, struck through before it, the text
+// it put in, and its controls after it. A row of the slide mode shows the
+// part of a change in its range (rowChanges): what it replaced only where
+// the change starts in the row, and its controls only where it ends there.
 const changeDecorations = (changes, host) =>
   Decoration.set(
     changes.flatMap((change) => [
       ...(change.removed !== "" ? [Decoration.widget({ widget: new RemovedText(change.removed), side: -1 }).range(change.from)] : []),
       ...(change.to > change.from ? [Decoration.mark({ class: "cm-wiki-inserted", attributes: { "data-change": String(change.id) } }).range(change.from, change.to)] : []),
-      Decoration.widget({ widget: new ChangeControls(change.id, host), side: 1 }).range(change.to),
+      ...(change.controls === false ? [] : [Decoration.widget({ widget: new ChangeControls(change.id, host), side: 1 }).range(change.to)]),
     ]),
     true,
   );
@@ -488,7 +491,7 @@ const linesRange = (doc, first, last) =>
     : null;
 
 // A transaction of the component's own folding (wikiEditor.fold and
-// unfold), which the "wiki-folds" event does not report back.
+// unfold).
 const byProgram = Annotation.define();
 
 // The folds of a state, as [[first, last]], lines from 1, in the order of
@@ -512,12 +515,6 @@ const offeredFold = foldService.of((state, lineStart, lineEnd) => {
 
 // The mark a fold leaves at the end of its first line: three dots, which a
 // click unfolds, read out as how many lines are hidden.
-// Whether Ctrl or Cmd is held on the click on a fold's mark being
-// handled: the "wiki-folds" event it makes says so (wikiMore), so that
-// opening a presentation's slide that way keeps the others open, as its
-// button does.
-let foldClickMore = false;
-
 const foldMark = (view, onclick, hidden) => {
   const mark = document.createElement("span");
   mark.className = "cm-foldPlaceholder cm-wiki-folded";
@@ -526,14 +523,7 @@ const foldMark = (view, onclick, hidden) => {
   mark.title = label;
   mark.setAttribute("role", "button");
   mark.setAttribute("aria-label", label);
-  mark.onclick = (event) => {
-    foldClickMore = event.ctrlKey || event.metaKey;
-    try {
-      onclick(event);
-    } finally {
-      foldClickMore = false;
-    }
-  };
+  mark.onclick = onclick;
   return mark;
 };
 
@@ -614,218 +604,6 @@ const folding = [
   }),
 ];
 
-// A presentation's slides in the editor (WP5.97 of docs/PLAN.md). Which
-// lines are slides is Haskell's (Wiki.Core.Slides.slideSpans), set by the
-// component for the text they were found in (wikiEditor.slides) and never
-// computed here, as the folds are. Each slide's first line starts with its
-// controls: a handle to drag the slide by, when it can move (not the text
-// before the first heading, nor the title slide), a button that opens
-// or closes it, and a mark of whether its content fits on it, as the
-// preview measured it (grey until measured), and the button which tells the component by a "wiki-open-slide" event
-// ({line, open, more}: the slide's first line, from 1, and more when Ctrl
-// or Cmd was held). A slide dragged by its handle and dropped on another
-// slide is told by a "wiki-move-slide" event ({from, to, after}: the two
-// slides' first lines, and whether the drop was below the other's first
-// line, which puts the slide after it rather than before); the component
-// moves the text (Wiki.Core.Slides.moveSlide), as one edit. Slides are
-// told by their lines as the text has them now, not by their places in
-// the list, which an edit since the last marks may have changed. The marks
-// follow the text as it is typed, until the next ones come; a mark whose
-// line start is gone with an edit is dropped.
-const setSlides = StateEffect.define();
-
-const slideMarks = StateField.define({
-  create: () => [],
-  update(marks, tr) {
-    for (const effect of tr.effects) if (effect.is(setSlides)) return effect.value;
-    if (!tr.docChanged) return marks;
-    return marks
-      .map((mark) => ({ ...mark, from: tr.changes.mapPos(mark.from, -1) }))
-      .filter((mark, i, all) => tr.state.doc.lineAt(mark.from).from === mark.from && (i === 0 || all[i - 1].from !== mark.from));
-  },
-});
-
-// Where a dragged slide would go: {at, end}, the start of the line it
-// would go above, or with end the last line, which it would go below; or
-// null.
-const setDropTarget = StateEffect.define();
-
-const dropTarget = StateField.define({
-  create: () => null,
-  update(target, tr) {
-    for (const effect of tr.effects) if (effect.is(setDropTarget)) return effect.value;
-    return target === null || !tr.docChanged ? target : null;
-  },
-  provide: (field) =>
-    EditorView.decorations.from(field, (target) =>
-      target === null ? Decoration.none : Decoration.set([Decoration.line({ class: target.end ? "cm-wiki-slide-drop-end" : "cm-wiki-slide-drop" }).range(target.at)]),
-    ),
-});
-
-// The first line of the slide being dragged, while a drag of a handle
-// lasts. One at a time in a page: a drag is the pointer's.
-let draggedSlide = null;
-
-// What a slide's mark of its fit says, on hover, by the fit's name
-// (Wiki.Core.Slides.fitName).
-const fitTitles = {
-  unmeasured: "Not measured yet",
-  fits: "Fits on the slide",
-  tight: "May be cut slightly: less than half a line to spare, or up to a line beyond the slide",
-  overflowing: "Cut: more than a line beyond the slide",
-};
-
-class SlideControls extends WidgetType {
-  constructor(index, movable, open, fit, host) {
-    super();
-    this.index = index;
-    this.movable = movable;
-    this.open = open;
-    this.fit = fit;
-    this.host = host;
-  }
-
-  eq(other) {
-    return other.index === this.index && other.movable === this.movable && other.open === this.open && other.fit === this.fit;
-  }
-
-  // The controls are made once for a slide's line and then updated in
-  // place (updateDOM) when what they show changes (opened, closed, its
-  // fit measured): the button the author sees stays the same element, and
-  // a click on it is never on one being replaced. The listeners read the
-  // widget the element shows now (wikiControls), not the one it was made
-  // for.
-  toDOM(view) {
-    const controls = document.createElement("span");
-    controls.className = "cm-wiki-slide-controls";
-    controls.contentEditable = "false";
-    // The slide's first line as the text has it now.
-    const line = () => view.state.doc.lineAt(view.posAtDOM(controls)).number;
-    const handle = document.createElement("span");
-    handle.className = "cm-wiki-slide-handle";
-    handle.draggable = true;
-    handle.textContent = "\u283f";
-    handle.title = "Drag to move the slide (or Alt+Up and Alt+Down in it)";
-    handle.addEventListener("dragstart", (event) => {
-      draggedSlide = line();
-      event.dataTransfer?.setData("application/x-wiki-slide", String(draggedSlide));
-      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-    });
-    handle.addEventListener("dragend", () => {
-      draggedSlide = null;
-    });
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "cm-wiki-slide-toggle";
-    toggle.addEventListener("mousedown", (event) => event.preventDefault());
-    toggle.addEventListener("click", (event) => {
-      event.preventDefault();
-      const shown = controls.wikiControls;
-      const detail = { line: line(), open: !shown.open, more: event.ctrlKey || event.metaKey };
-      shown.host.dispatchEvent(new CustomEvent("wiki-open-slide", { detail }));
-    });
-    const fit = document.createElement("span");
-    controls.append(handle, toggle, fit);
-    this.paint(controls);
-    return controls;
-  }
-
-  updateDOM(dom) {
-    if (!dom.classList.contains("cm-wiki-slide-controls")) return false;
-    this.paint(dom);
-    return true;
-  }
-
-  // Show this widget's state in the controls' element.
-  paint(controls) {
-    controls.wikiControls = this;
-    const [handle, toggle, fit] = controls.children;
-    handle.hidden = !this.movable;
-    const arrow = this.open ? "\u25be" : "\u25b8";
-    if (toggle.textContent !== arrow) toggle.textContent = arrow;
-    toggle.title = this.open ? "Close the slide" : "Open the slide (with Ctrl or Cmd, keep the others open)";
-    toggle.setAttribute("aria-expanded", this.open ? "true" : "false");
-    // Whether the slide's content fits on it, as the preview measured it.
-    const name = Object.hasOwn(fitTitles, this.fit) ? this.fit : "unmeasured";
-    fit.className = `cm-wiki-slide-fit cm-wiki-fit-${name}`;
-    fit.title = fitTitles[name];
-  }
-
-  ignoreEvent() {
-    return true;
-  }
-}
-
-// A slide is open when no fold starts at the end of its first line.
-const slideControls = (host) =>
-  EditorView.decorations.compute([slideMarks, foldState], (state) => {
-    const folded = new Set();
-    foldedRanges(state).between(0, state.doc.length, (from) => {
-      folded.add(state.doc.lineAt(from).from);
-    });
-    return Decoration.set(
-      state.field(slideMarks).map((mark) =>
-        Decoration.widget({ widget: new SlideControls(mark.index, mark.movable, !folded.has(mark.from), mark.fit, host), side: -1 }).range(mark.from),
-      ),
-    );
-  });
-
-// Where a drag at a point of the page would put the slide: before the
-// slide whose first line the point is on, or after the slide whose other
-// lines it is on. {line, after, target}: that slide's first line, whether
-// after it, and the drop's mark (setDropTarget); or null before the first
-// slide.
-const dropAt = (view, event) => {
-  const { doc } = view.state;
-  // The start of the line shown at the point: a folded slide shows as one
-  // line, its first, where a position would be anywhere in what it hides.
-  const at = view.lineBlockAtHeight(event.clientY - view.documentTop).from;
-  const marks = view.state.field(slideMarks);
-  const index = marks.findLastIndex((mark) => mark.from <= at);
-  if (index < 0) return null;
-  const mark = marks[index];
-  const after = doc.lineAt(at).from !== mark.from;
-  const next = marks[index + 1];
-  const target = !after ? { at: mark.from, end: false } : next ? { at: next.from, end: false } : { at: doc.line(doc.lines).from, end: true };
-  return { line: doc.lineAt(mark.from).number, after, target };
-};
-
-// A slide's drag over the text and its drop, which only the handles start:
-// the drop is the component's, not CodeMirror's (which would put the
-// dragged text in).
-const slideDrops = (host) =>
-  Prec.high(
-    EditorView.domEventHandlers({
-      // A slide's drag is the text's alone: the panes around it, where
-      // files are dropped, do not hear it.
-      dragover: (event, view) => {
-        if (draggedSlide === null) return false;
-        event.preventDefault();
-        event.stopPropagation();
-        const drop = dropAt(view, event);
-        const target = drop === null ? null : drop.target;
-        const shown = view.state.field(dropTarget);
-        if (shown?.at !== target?.at || shown?.end !== target?.end) view.dispatch({ effects: setDropTarget.of(target) });
-        return true;
-      },
-      dragleave: (event, view) => {
-        if (draggedSlide !== null && !view.dom.contains(event.relatedTarget)) view.dispatch({ effects: setDropTarget.of(null) });
-        return false;
-      },
-      drop: (event, view) => {
-        if (draggedSlide === null) return false;
-        event.preventDefault();
-        event.stopPropagation();
-        const from = draggedSlide;
-        draggedSlide = null;
-        const drop = dropAt(view, event);
-        view.dispatch({ effects: setDropTarget.of(null) });
-        if (drop !== null && drop.line !== from) host.dispatchEvent(new CustomEvent("wiki-move-slide", { detail: { from, to: drop.line, after: drop.after } }));
-        return true;
-      },
-    }),
-  );
-
 // The selection, kept in sight while the text does not have the focus
 // (issue #120): the browser shows a selection only where the focus is, so
 // selecting lines and then writing to the assistant about them would hide
@@ -848,6 +626,53 @@ const keptSelection = ViewPlugin.fromClass(
   },
   { decorations: (plugin) => plugin.decorations },
 );
+
+// The same in a row of the slide mode (attachRow): the selection marked is
+// the master's, the one the assistant has, where it lies in the row, and
+// not the row's own. A row keeps its own selection when the focus goes to
+// another row, but the master's moves to that other row then, and the
+// first row shows nothing. The master tells each row to look again
+// (keptRefresh) when its selection or text changes (rowsSync).
+const keptRefresh = StateEffect.define();
+
+const keptInRow = (masterView, key) => {
+  const marks = (view) => {
+    const range = rangeOf(masterView.state, key);
+    if (view.hasFocus || range === null) return Decoration.none;
+    const length = view.state.doc.length;
+    const found = [];
+    for (const r of masterView.state.selection.ranges) {
+      const from = Math.max(r.from, range.from) - range.from;
+      const to = Math.min(r.to, range.to) - range.from;
+      if (from < to && to <= length) found.push(keptMark.range(from, to));
+    }
+    return Decoration.set(found, true);
+  };
+  return ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.decorations = marks(view);
+      }
+      update(update) {
+        const told = update.transactions.some((tr) => tr.effects.some((e) => e.is(keptRefresh)));
+        if (told || update.focusChanged || update.selectionSet || update.docChanged) this.decorations = marks(update.view);
+      }
+    },
+    { decorations: (plugin) => plugin.decorations },
+  );
+};
+
+// What the master and the rows of the slide mode share as typing fields:
+// the attributes that let the browser check and correct the words, and the
+// guard that leaves files dropped or pasted to the component, which
+// attaches them (the drop's and the paste's listeners on the panes);
+// CodeMirror would put a dropped file's text in, or a pasted file's name.
+const wordAttributes = { spellcheck: "true", autocapitalize: "sentences", autocorrect: "on" };
+
+const filesLeftToPanes = EditorView.domEventHandlers({
+  drop: (event) => Boolean(event.dataTransfer?.files?.length),
+  paste: (event) => Boolean(event.clipboardData?.files?.length),
+});
 
 // Inline math left open on its line (issue #120): a $ or a \( that nothing
 // closes on the same line is underlined in red from there to the line's
@@ -979,9 +804,9 @@ const labelKey = (label) => label.trim().replace(/\s+/g, " ").toLowerCase();
 
 // The labels the document defines ([label]: destination), found where
 // blocks are: a paragraph, a heading or code holds none.
-const definedLabels = (state) => {
+const definedLabels = (state, tree = syntaxTree(state)) => {
   const labels = new Set();
-  syntaxTree(state).iterate({
+  tree.iterate({
     enter: (node) => {
       if (node.name === "LinkReference") {
         const label = node.node.getChild("LinkLabel");
@@ -1012,11 +837,14 @@ const isLink = (state, node, labels) => {
 };
 
 // Whether a mention may be completed at a position: not inside any node
-// of notMentions, nor inside a link or an embed.
-const mentionCounts = (state, pos) => {
+// of notMentions, nor inside a link or an embed. `at` is where to ask
+// (wholeAt): the whole document, whose definitions say which [text] is a
+// link.
+const mentionCounts = (at) => {
+  const { state, pos, tree } = at;
   let defined = null;
-  const labels = () => (defined ??= definedLabels(state));
-  for (let node = syntaxTree(state).resolveInner(pos, -1); node; node = node.parent) {
+  const labels = () => (defined ??= definedLabels(state, tree));
+  for (let node = tree.resolveInner(pos, -1); node; node = node.parent) {
     if (notMentions.has(node.name)) return false;
     if ((node.name === "Link" || node.name === "Image") && isLink(state, node, labels)) return false;
     if (node.type.isTop) break;
@@ -1082,9 +910,30 @@ const asker = (host, eventName) => {
 const unlessAborted = (context, asked) =>
   Promise.race([asked, new Promise((resolve) => context.addEventListener("abort", () => resolve(null)))]);
 
+// Where a completion's context is read, {state, pos, tree}: the view's own
+// state, or for a row of the slide mode (attachRow) the master's, at the
+// row's place in the whole text. A row's text alone does not say whether
+// [text] is a link (its label may be defined on another slide), nor
+// whether the row is inside a fence a slide above left open. The master's
+// tree is parsed to the end first: the master is hidden, and parses only
+// as it is idle. When the master does not hold the row's text (a moment
+// between the two), the row's own state is read.
+const wholeAt = (host, context) => {
+  const own = { state: context.state, pos: context.pos, tree: syntaxTree(context.state) };
+  const editor = host.wikiEditor;
+  const { view } = context;
+  if (!editor || !view || view === editor.view) return own;
+  let key;
+  for (const [k, v] of host.wikiRows ?? []) if (v === view) key = k;
+  const master = editor.view.state;
+  const range = key === undefined ? null : rangeOf(master, key);
+  if (range === null || master.sliceDoc(range.from, range.to) !== context.state.doc.toString()) return own;
+  return { state: master, pos: range.from + context.pos, tree: ensureSyntaxTree(master, master.doc.length, 200) ?? syntaxTree(master) };
+};
+
 // The completion source of mentions, asking the component through
-// `people`.
-const mentionSource = (people) => {
+// `people`; `whole` says where the context is read (wholeAt).
+const mentionSource = (people, whole) => {
   // "@login", and a space unless one follows already.
   const choose = (login) => (view, completion, from, to) => {
     const next = view.state.sliceDoc(to, to + 1);
@@ -1095,7 +944,7 @@ const mentionSource = (people) => {
     const typed = context.matchBefore(typedMention);
     if (typed === null) return null;
     if (wordBefore.test(context.state.sliceDoc(Math.max(0, typed.from - 2), typed.from))) return null;
-    if (!mentionCounts(context.state, context.pos)) return null;
+    if (!mentionCounts(whole(context))) return null;
     const found = await unlessAborted(context, people.ask(typed.text.slice(1)));
     if (found === null || found.length === 0) return null;
     return {
@@ -1143,10 +992,12 @@ const enterAfter = 2;
 
 // Whether "-:" on this line may be a table's: the line before it or the
 // rest of this one has a "|", or the tree has a table here.
-const nearTable = (state, line, pos) => {
+const nearTable = (at) => {
+  const { state, pos, tree } = at;
+  const line = state.doc.lineAt(pos);
   if (state.sliceDoc(pos, line.to).includes("|")) return true;
   if (line.number > 1 && state.doc.line(line.number - 1).text.includes("|")) return true;
-  for (let node = syntaxTree(state).resolveInner(pos, -1); node; node = node.parent) {
+  for (let node = tree.resolveInner(pos, -1); node; node = node.parent) {
     if (node.name === "Table") return true;
     if (node.type.isTop) break;
   }
@@ -1155,13 +1006,14 @@ const nearTable = (state, line, pos) => {
 
 // What the emoji's list completes before `pos`, or null: where it starts
 // (the colon, or the "-" of "-:"), the letters typed of the name, and
-// whether it is the "-:" of a bullet.
-const emojiTyped = (state, pos) => {
+// whether it is the "-:" of a bullet. Whether "-:" is near a table is
+// asked where `at` says (wholeAt).
+const emojiTyped = (state, pos, at = { state, pos, tree: syntaxTree(state) }) => {
   const line = state.doc.lineAt(pos);
   const before = state.sliceDoc(line.from, pos);
   const bullet = typedBullet.exec(before);
   if (bullet !== null) {
-    return nearTable(state, line, pos) ? null : { from: line.from + bullet[1].length, letters: bullet[2], bullet: true };
+    return nearTable(at) ? null : { from: line.from + bullet[1].length, letters: bullet[2], bullet: true };
   }
   const colon = typedEmoji.exec(before);
   if (colon === null || (colon.index > 0 && !/\s/.test(before[colon.index - 1]))) return null;
@@ -1171,8 +1023,9 @@ const emojiTyped = (state, pos) => {
 // Whether the list shown is the emoji's: its entries carry their emoji.
 const emojiShown = (state) => completionStatus(state) === "active" && currentCompletions(state)[0]?.emoji !== undefined;
 
-// The completion source of emoji, asking the component through `names`.
-const emojiSource = (names) => {
+// The completion source of emoji, asking the component through `names`;
+// `whole` says where the context is read (wholeAt).
+const emojiSource = (names, whole) => {
   // ":name:", or for "-:" the item "- :name: ", with no second space where
   // one follows already.
   const choose = (name, bullet) => (view, completion, from, to) => {
@@ -1181,8 +1034,9 @@ const emojiSource = (names) => {
     view.dispatch({ ...insertCompletionText(view.state, text, from, to), annotations: pickedCompletion.of(completion) });
   };
   return async (context) => {
-    const typed = emojiTyped(context.state, context.pos);
-    if (typed === null || !mentionCounts(context.state, context.pos)) return null;
+    const at = whole(context);
+    const typed = emojiTyped(context.state, context.pos, at);
+    if (typed === null || !mentionCounts(at)) return null;
     const found = await unlessAborted(context, names.ask(typed.letters));
     if (found === null || found.length === 0) return null;
     return {
@@ -1210,27 +1064,40 @@ const emojiOfOption = {
 
 // The completion of one editor, of mentions and of emoji, in one of the
 // library's completions (two would fight over the keys and the list), and
-// how the component answers it.
+// how the component answers it. The master and the rows of the slide mode
+// share it (attachRow); slide by slide, the master's asks nothing and never
+// starts (masterCompletion, quiet), so that a row's typing, which reaches
+// the master as typing, starts no query of the master's: not even one that
+// would be "pending" until its sources answered nothing.
+
+// The master's completion: quiet while the presentation is edited slide by
+// slide, and the whole one for the raw Markdown.
+const masterCompletion = new Compartment();
+
 const completions = (host) => {
+  const whole = (context) => wholeAt(host, context);
   const people = asker(host, "wiki-mention");
   const names = asker(host, "wiki-emoji");
   // Whether the reader moved in the emoji's list with the keys (an arrow,
   // Page Up or Page Down) since it was shown for the letters typed: what
-  // was typed then ({from, letters}), or null. A move counts whichever
+  // was typed then ({from, letters}), by view. A move counts whichever
   // entry it lands on, the first too (ArrowDown in a list of one, or down
-  // and back up). It is forgotten when the list closes, and does not count
-  // once other letters are typed.
-  let moved = null;
+  // and back up). It is forgotten when the view's list closes, and does
+  // not count once other letters are typed. The extension is shared by
+  // the master and the rows of the slide mode (attachRow), and each has a
+  // list of its own: the hidden master's transactions (the check's
+  // problems after a pause) must not forget a row's move.
+  const moved = new WeakMap();
   const moving = (binding) => ({
     ...binding,
     run: (view) => {
       const done = binding.run(view);
-      if (done && emojiShown(view.state)) moved = emojiTyped(view.state, view.state.selection.main.head);
+      if (done && emojiShown(view.state)) moved.set(view, emojiTyped(view.state, view.state.selection.main.head));
       return done;
     },
   });
   const forgetMoves = EditorView.updateListener.of((update) => {
-    if (moved !== null && completionStatus(update.state) !== "active") moved = null;
+    if (moved.has(update.view) && completionStatus(update.state) !== "active") moved.delete(update.view);
   });
   // Enter chooses a mention at once, and an emoji as said above; when it
   // chooses nothing, it is a new line.
@@ -1238,7 +1105,8 @@ const completions = (host) => {
     if (!emojiShown(view.state)) return acceptCompletion(view);
     const typed = emojiTyped(view.state, view.state.selection.main.head);
     if (typed === null) return false;
-    const chosen = moved !== null && moved.from === typed.from && moved.letters === typed.letters;
+    const move = moved.get(view);
+    const chosen = move !== undefined && move !== null && move.from === typed.from && move.letters === typed.letters;
     if (typed.letters.length < enterAfter && !chosen) return false;
     return acceptCompletion(view);
   };
@@ -1272,17 +1140,18 @@ const completions = (host) => {
     { key: "Escape", run: escape },
     { key: "Tab", run: acceptCompletion },
   ];
+  const config = { icons: false, defaultKeymap: false, addToOptions: [emojiOfOption] };
+  const ownKeys = Prec.highest(keymap.of(keys.map((binding) => ({ ...binding, stopPropagation: true }))));
   return {
     extension: [
-      autocompletion({
-        override: [mentionSource(people), emojiSource(names)],
-        icons: false,
-        defaultKeymap: false,
-        addToOptions: [emojiOfOption],
-      }),
+      autocompletion({ ...config, override: [mentionSource(people, whole), emojiSource(names, whole)] }),
       forgetMoves,
-      Prec.highest(keymap.of(keys.map((binding) => ({ ...binding, stopPropagation: true })))),
+      ownKeys,
     ],
+    // The same, asking nothing and never starting on typing: the master's
+    // slide by slide (masterCompletion). The library's state stays, so that
+    // a query or a timer of its from before goes on finding it.
+    quiet: [autocompletion({ ...config, override: [], activateOnTyping: false }), forgetMoves, ownKeys],
     mentioned: people.answer,
     emojied: names.answer,
     status: (state) => completionStatus(state) ?? "",
@@ -1300,6 +1169,539 @@ const textKeys = standardKeymap.filter((binding) => !toolbarKeys.has(binding.mac
 // editor closed without its finalizer reaching it) is let go of: a view
 // listens on the window, which would keep it alive.
 const editors = new Set();
+
+// The rows of a presentation's slide mode (WP5.103 of docs/PLAN.md). A row
+// is a small CodeMirror over one range of the master: the CodeMirror that
+// attach() puts in the editor's host, which holds the whole text, its one
+// history, its problems and its completion. A row has no history of its
+// own. Each transaction a row makes is sent on to the master at once, its
+// changes and selection moved by the row's start, with its user event, so
+// that the master's history groups typing in a row as it groups typing in
+// the master. Each change of the master that a row did not make (an undo,
+// a toolbar command, the assistant) is put into the rows it touches. Which
+// text is which row is Haskell's (Wiki.Core.SlideRows): the master keeps
+// the rows' layout it was given (rowsLayout) and maps it through each
+// change; this only forwards and maps.
+//
+// Offsets cross to Haskell in characters (code points), and are UTF-16
+// units here: unitsOfAll and charactersOfAll convert them, each way, in
+// one pass over the text.
+//
+// `rowOf` marks a master transaction with the key of the row it came from,
+// and `mirrored` marks a row transaction that only copies the master's,
+// which is not sent back.
+const rowOf = Annotation.define();
+const mirrored = Annotation.define();
+
+// The UTF-16 offsets of some offsets in characters into a text, and the
+// other way, in the order given.
+const unitsOfAll = (text, counts) => {
+  const order = counts.map((count, index) => [count, index]).sort((a, b) => a[0] - b[0]);
+  const found = new Array(counts.length);
+  let at = 0;
+  let n = 0;
+  for (const [count, index] of order) {
+    while (n < count && at < text.length) {
+      at += text.codePointAt(at) > 0xffff ? 2 : 1;
+      n++;
+    }
+    found[index] = at;
+  }
+  return found;
+};
+
+const charactersOfAll = (text, units) => {
+  const order = units.map((unit, index) => [unit, index]).sort((a, b) => a[0] - b[0]);
+  const found = new Array(units.length);
+  let at = 0;
+  let n = 0;
+  for (const [unit, index] of order) {
+    while (at < unit && at < text.length) {
+      at += text.codePointAt(at) > 0xffff ? 2 : 1;
+      n++;
+    }
+    found[index] = n;
+  }
+  return found;
+};
+
+// The rows' layout, in the master's state: each row's key and range,
+// {key, from, to} in UTF-16 units, in the order of the text, as Haskell
+// last set it (setLayout), mapped through every change since: a start
+// stays before what is put in at it, and an end goes after it, so that
+// text typed at either end of a row is the row's.
+const setLayout = StateEffect.define();
+
+// A layout mapped through a change, as rowsLayout maps it.
+const mappedLayout = (rows, mapping) => rows.map((row) => ({ key: row.key, from: mapping.mapPos(row.from, -1), to: mapping.mapPos(row.to, 1) }));
+
+// A structural step (a slide moved, deleted or added; the editor's step): the
+// layout before the step's change and the layout after it, keys included.
+// The step's transaction carries it, and its inverse (invertedEffects),
+// with the two swapped, goes into the history with the change's, so that
+// an undo puts the rows back with their keys and a redo makes the step
+// again; the open rows keep their editors. History maps an effect it keeps
+// through changes made outside it; both layouts are mapped as positions,
+// which is right for the layout of the text the change applies to.
+const relayout = StateEffect.define({
+  map: (value, mapping) => ({ before: mappedLayout(value.before, mapping), after: mappedLayout(value.after, mapping) }),
+});
+
+const steps = invertedEffects.of((tr) =>
+  tr.effects.filter((effect) => effect.is(relayout)).map((effect) => relayout.of({ before: effect.value.after, after: effect.value.before })),
+);
+
+const rowsLayout = StateField.define({
+  create: () => [],
+  update: (rows, tr) => {
+    for (const effect of tr.effects) {
+      if (effect.is(setLayout)) return effect.value;
+      if (effect.is(relayout)) return effect.value.after;
+    }
+    if (!tr.docChanged || rows.length === 0) return rows;
+    return mappedLayout(rows, tr.changes);
+  },
+});
+
+// A row's range in a state's layout, or null for a key it does not have.
+const rangeOf = (state, key) => state.field(rowsLayout).find((row) => row.key === key) ?? null;
+
+// The key of the row a position is in: the last that starts at or before
+// it.
+const rowAtPosition = (state, at) => {
+  let found;
+  for (const row of state.field(rowsLayout)) if (row.from <= at) found = row.key;
+  return found;
+};
+
+// The master's transaction for a row's: the same changes, selection, user
+// event and history boundary, moved to where the row starts in the master.
+const forwarded = (key, offset, tr) => {
+  const changes = [];
+  tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+    changes.push({ from: fromA + offset, to: toA + offset, insert: inserted.toString() });
+  });
+  const annotations = [rowOf.of(key)];
+  const userEvent = tr.annotation(Transaction.userEvent);
+  if (userEvent !== undefined) annotations.push(Transaction.userEvent.of(userEvent));
+  const isolated = tr.annotation(isolateHistory);
+  if (isolated !== undefined) annotations.push(isolateHistory.of(isolated));
+  if (tr.annotation(Transaction.addToHistory) === false) annotations.push(Transaction.addToHistory.of(false));
+  return {
+    changes,
+    selection: tr.selection
+      ? EditorSelection.create(
+          tr.selection.ranges.map((range) => EditorSelection.range(range.anchor + offset, range.head + offset)),
+          tr.selection.mainIndex,
+        )
+      : undefined,
+    annotations,
+    // The master's own filters (the title line's guard) are for typing in
+    // the master: a row's edit is taken as it was made, that of the row
+    // that starts the text with the guard of its own.
+    filter: false,
+  };
+};
+
+// The master's selection made a row's, moved to where the row starts, and
+// kept out of the history: a row that takes the focus without a click (Tab,
+// a header's button) changes no selection of its own, and without this an
+// undo of what is typed next would put the master's cursor back in the row
+// the focus came from.
+const selectionToMaster = (key, view, masterView) => {
+  const range = rangeOf(masterView.state, key);
+  if (range === null) return;
+  const { ranges, mainIndex } = view.state.selection;
+  masterView.dispatch({
+    selection: EditorSelection.create(
+      ranges.map((r) => EditorSelection.range(r.anchor + range.from, r.head + range.from)),
+      mainIndex,
+    ),
+    annotations: [rowOf.of(key), Transaction.addToHistory.of(false)],
+    filter: false,
+  });
+};
+
+// Whether a position of a text is between the two halves of a surrogate
+// pair.
+const splitsPair = (text, at) => at > 0 && at < text.length && (text.charCodeAt(at) & 0xfc00) === 0xdc00;
+
+// Make a row's text the master's range again, after a change of the master
+// the row did not make: the part that differs replaced, as one change that
+// is not sent back, never between the halves of a character. The row's
+// selection follows the master's when the master's cursor is in the row.
+const mirror = (key, view, state) => {
+  const range = rangeOf(state, key);
+  if (range === null) return;
+  const now = state.sliceDoc(range.from, range.to);
+  const shown = view.state.doc.toString();
+  const { head, anchor } = state.selection.main;
+  const inside = head >= range.from && head <= range.to && anchor >= range.from && anchor <= range.to;
+  const mine = view.state.selection.main;
+  // Nothing to tell when the row shows the master's text and selection
+  // already: a selection set again would reset the row's completion.
+  if (now === shown && (!inside || (mine.anchor === anchor - range.from && mine.head === head - range.from))) return;
+  let start = 0;
+  while (start < now.length && start < shown.length && now[start] === shown[start]) start++;
+  let end = 0;
+  while (end < now.length - start && end < shown.length - start && now[now.length - 1 - end] === shown[shown.length - 1 - end]) end++;
+  if (splitsPair(now, start) || splitsPair(shown, start)) start--;
+  if (splitsPair(now, now.length - end) || splitsPair(shown, shown.length - end)) end--;
+  view.dispatch({
+    changes: now === shown ? undefined : { from: start, to: shown.length - end, insert: now.slice(start, now.length - end) },
+    selection: inside ? EditorSelection.single(anchor - range.from, head - range.from) : undefined,
+    annotations: mirrored.of(true),
+    // The master's change as it was made: no filter of the row's (the
+    // first row's title line guard) rewrites it.
+    filter: false,
+  });
+};
+
+// The assistant's changes a row shows: those of the master's in the row's
+// range, cut to it and moved to the row (changesToRow), each kept on its
+// text as the row is typed in until the next ones come. Accepting and
+// rejecting on a change in a row tells the master's host, which decides.
+const setRowChanges = StateEffect.define();
+
+// A row's changes as JSON, to tell whether new ones differ.
+const rowChangesShown = new WeakMap();
+
+const rowChanges = (masterHost) =>
+  StateField.define({
+    create: () => [],
+    update(changes, tr) {
+      for (const effect of tr.effects) if (effect.is(setRowChanges)) return effect.value;
+      return tr.docChanged ? changes.map((change) => moved(change, tr.changes)) : changes;
+    },
+    provide: (f) => EditorView.decorations.from(f, (changes) => changeDecorations(changes, masterHost)),
+  });
+
+// The master's changes in a row's range, moved to the row, as the row's: a
+// change across rows shows in each, its replaced text where it starts and
+// its controls where it ends.
+const changesToRow = (key, view, state, field) => {
+  const range = rangeOf(state, key);
+  if (range === null || !field) return;
+  const inside = state
+    .field(field)
+    .filter((change) => change.to >= range.from && change.from <= range.to)
+    .map((change) => ({
+      id: change.id,
+      from: Math.max(change.from, range.from) - range.from,
+      to: Math.min(change.to, range.to) - range.from,
+      removed: change.from >= range.from ? change.removed : "",
+      controls: change.to <= range.to,
+    }));
+  // The master's changes are a new list at each of its transactions, a
+  // keystroke's in a row too: the row is told only when its part of them
+  // is another than the one it shows.
+  const said = JSON.stringify(inside);
+  if (rowChangesShown.get(view) === said) return;
+  rowChangesShown.set(view, said);
+  view.dispatch({ effects: setRowChanges.of(inside), annotations: mirrored.of(true) });
+};
+
+// The master's problems in a row's range, moved to the row, as the row's.
+const problemsToRow = (key, view, state) => {
+  const range = rangeOf(state, key);
+  if (range === null) return;
+  const found = [];
+  forEachDiagnostic(state, (d, from, to) => {
+    if (from >= range.from && from <= range.to) found.push({ ...d, from: from - range.from, to: Math.min(to, range.to) - range.from });
+  });
+  view.dispatch({ ...setDiagnostics(view.state, found), annotations: mirrored.of(true) });
+};
+
+// The spoilers' folds the master offers in a row's range, moved to the
+// row, as the row's: a row's gutter and keys fold its spoilers.
+const foldsToRow = (key, view, state) => {
+  const range = rangeOf(state, key);
+  if (range === null) return;
+  const inside = state.field(offered).filter((fold) => fold.from >= range.from && fold.to <= range.to);
+  view.dispatch({ effects: offerFolds.of(inside.map((fold) => ({ from: fold.from - range.from, to: fold.to - range.from }))), annotations: mirrored.of(true) });
+};
+
+// The master's side: the rows a change did not come from shown the
+// master's text, its problems and its folds; and, slide by slide, a
+// "jump": a change the author did not make in the row with the focus (an
+// undo, a redo, the next problem, the toolbar writing) that put the
+// master's cursor in another row. The host then gets a "wiki-row-wanted"
+// event, {key, left, close, focus}: the row to open, the row that had the
+// focus (-1 for none), whether that row closes, which it does when the
+// author went to the other (an undo, a redo, the next problem) and not
+// when something was written there, and whether the row opened takes the
+// focus. A row already open takes the focus at once. The assistant's
+// edits move no cursor: the closed rows they write in open, without the
+// focus.
+const rowsSync = (host) =>
+  EditorView.updateListener.of((update) => {
+    const rows = host.wikiRows ?? new Map();
+    const problems = update.transactions.some((tr) => tr.effects.some((e) => e.is(setDiagnosticsEffect)));
+    const relaid = update.transactions.some((tr) => tr.effects.some((e) => e.is(relayout)));
+    const folds = relaid || update.transactions.some((tr) => tr.effects.some((e) => e.is(offerFolds) || e.is(setLayout)));
+    const field = host.wikiEditor?.changesField;
+    const tracked =
+      field !== undefined && JSON.stringify(update.startState.field(field, false) ?? []) !== JSON.stringify(update.state.field(field, false) ?? []);
+    if (!update.docChanged && !update.selectionSet && !problems && !folds && !tracked) return;
+    const origin = update.transactions.map((tr) => tr.annotation(rowOf)).find((key) => key !== undefined);
+    for (const [key, view] of rows) {
+      if (key !== origin) mirror(key, view, update.state);
+      if (problems) problemsToRow(key, view, update.state);
+      if (folds) foldsToRow(key, view, update.state);
+      if (tracked || folds) changesToRow(key, view, update.state, field);
+      // The master's selection, which a row without the focus marks
+      // (keptInRow), may have come into the row or left it.
+      if ((update.selectionSet || update.docChanged) && !view.hasFocus) view.dispatch({ effects: keptRefresh.of(null), annotations: mirrored.of(true) });
+    }
+    // A change of the master's that asks for its cursor to be seen (an
+    // undo, a redo, the next problem, the toolbar writing) scrolls the open
+    // row the cursor is in: the master itself is hidden.
+    if (origin === undefined && update.transactions.some((tr) => tr.scrollIntoView)) {
+      const shown = rows.get(rowAtPosition(update.state, update.state.selection.main.head));
+      if (shown) cursorIntoView(shown);
+    }
+    // A step, or its undo or redo: the component reads the rows again at
+    // once ("wiki-relayout"), and decides which open. The focus follows as
+    // for any other change, below; the event goes first, so that the
+    // component knows a row an undo brought back before it is asked to
+    // open it.
+    if (relaid) host.dispatchEvent(new CustomEvent("wiki-relayout"));
+    const editor = host.wikiEditor;
+    if (!editor?.slidesShown() || origin !== undefined) return;
+    // The row a jump leaves: the open row whose text has the focus now, if
+    // any. Not the row whose text had the focus last (wikiFocusedRow):
+    // that row may have been closed since, and a jump into it must open
+    // it.
+    const left = [...rows].find(([, view]) => view.hasFocus)?.[0];
+    const want = (key, close, focus, reason) =>
+      host.dispatchEvent(new CustomEvent("wiki-row-wanted", { detail: { key, left: left ?? -1, close, focus, reason } }));
+    if (update.docChanged && update.transactions.some((tr) => tr.isUserEvent("input.wiki.assistant"))) {
+      const written = new Set();
+      // Every row a change's text touches, from its start to its end.
+      update.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+        for (const row of update.state.field(rowsLayout)) if (row.to >= fromB && row.from <= toB) written.add(row.key);
+      });
+      for (const key of written) if (key !== undefined && !rows.has(key)) want(key, false, false, "assistant");
+      return;
+    }
+    // The rule this listener keeps, the one place every change of the
+    // master's passes: while a row's text has the focus, the master's
+    // selection is that row's, moved by the row's start. A row's own
+    // transactions keep it (forwarded); the master's changes the row did
+    // not make (an undo, a redo, a structural step or its undo, the next
+    // problem, a toolbar command) bring the row's selection with them when
+    // the cursor stays in the row (mirror, above), and otherwise move the
+    // focus to the cursor's row: an open row takes it, a closed one opens
+    // with it (the component, on "wiki-row-wanted"), and the row left
+    // closes after an undo, a redo or the next problem. With no row's text
+    // focused, a write at the cursor opens the cursor's row the same way.
+    if (!(update.docChanged || update.selectionSet)) return;
+    const target = rowAtPosition(update.state, update.state.selection.main.head);
+    if (target === undefined || target === left) return;
+    const undoing = update.transactions.some((tr) => tr.isUserEvent("undo"));
+    const redoing = update.transactions.some((tr) => tr.isUserEvent("redo"));
+    // A structural step of the component's own (a move, a delete, a new
+    // slide) made from a header or the toolbar: the step gives the focus
+    // itself (the next header, the new row).
+    if (relaid && left === undefined && !undoing && !redoing) return;
+    const reason = editor.jumping() ? "problem" : undoing ? "undo" : redoing ? "redo" : "write";
+    host.wikiFocusedRow = target;
+    const open = rows.get(target);
+    if (open) {
+      open.focus();
+      cursorIntoView(open);
+    }
+    want(target, reason !== "write" && left !== undefined, true, reason);
+  });
+
+// Scroll a row's cursor into view: CodeMirror's focus does not scroll, and
+// a row opened or focused by a jump (an undo, the next problem) may be
+// below or above the window.
+const cursorIntoView = (view) => view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: "nearest" }), annotations: mirrored.of(true) });
+
+// Put the row with this key of the master's layout in `rowHost`: a
+// CodeMirror over its range of the master's text, the master being the
+// CodeMirror in `masterHost`. With `focus`, the row takes the focus. Its
+// cursor starts where the master's is, when that is in the row (it opened
+// where an undo or a problem took the master's cursor), and at its start
+// otherwise. A row already in the host gives way. Nothing without a
+// master, or for a key the layout does not have.
+export function attachRow(masterHost, rowHost, key, focus) {
+  const master = masterHost.wikiEditor;
+  if (!master || !rowHost.isConnected) return;
+  rowHost.wikiRow?.destroy();
+  const masterView = master.view;
+  const range = rangeOf(masterView.state, key);
+  if (range === null) return;
+  // The history's keys, each run on the master's history: the undo and
+  // redo of changes and of selections.
+  const keys = historyKeymap.map((binding) => ({ ...binding, run: () => binding.run(masterView) }));
+  // Backspace at the row's start, and Delete at its end, delete the
+  // character before or after the row in the master's text, as they would
+  // in one editor: a row's edges are not the text's. Without this a key
+  // typed there did nothing, which loses a key a fast typist meant for
+  // the line break above a heading just taken away, before the pause after
+  // which the rows join. The change is the row's (rowOf): it moves no focus
+  // and opens no other row.
+  const acrossEdge = (forward) => (rowView) => {
+    const { selection } = rowView.state;
+    const cursor = selection.main;
+    if (selection.ranges.length > 1 || !cursor.empty || cursor.head !== (forward ? rowView.state.doc.length : 0)) return false;
+    const now = rangeOf(masterView.state, key);
+    if (now === null) return false;
+    const { doc } = masterView.state;
+    const at = forward ? now.to : now.from;
+    if (forward ? at >= doc.length : at <= 0) return false;
+    const pair = forward ? doc.sliceString(at, at + 2) : doc.sliceString(Math.max(0, at - 2), at);
+    const size = pair.length === 2 && pair.codePointAt(0) > 0xffff ? 2 : 1;
+    masterView.dispatch({
+      changes: forward ? { from: at, to: at + size } : { from: at - size, to: at },
+      annotations: rowOf.of(key),
+      userEvent: forward ? "delete.forward" : "delete.backward",
+    });
+    return true;
+  };
+  const { anchor, head } = masterView.state.selection.main;
+  const inside = (at) => at >= range.from && at <= range.to;
+  const titled = masterHost.dataset.titleLine !== "false";
+  const view = new EditorView({
+    state: EditorState.create({
+      doc: masterView.state.sliceDoc(range.from, range.to),
+      selection: inside(anchor) && inside(head) ? EditorSelection.single(anchor - range.from, head - range.from) : undefined,
+      extensions: [
+        // As the master's: a "\r" is a character of the text, not a line
+        // break, so that the row's offsets are the master's.
+        EditorState.lineSeparator.of("\n"),
+        EditorView.clipboardInputFilter.of((pasted) => pasted.replace(/\r\n?/g, "\n")),
+        // The page's title line is the first line of the row that starts
+        // the text, whichever row that is now.
+        titled ? titleLineWhile(() => rangeOf(masterView.state, key)?.from === 0) : [],
+        master.rowExtensions,
+        rowChanges(masterHost),
+        keptInRow(masterView, key),
+        keymap.of([
+          { key: "Enter", run: insertNewline, shift: insertNewline },
+          ...keys,
+          { key: "Backspace", run: acrossEdge(false) },
+          { key: "Delete", run: acrossEdge(true) },
+          ...textKeys,
+          ...foldKeys,
+        ]),
+        EditorView.lineWrapping,
+        // The row's text is named by its title on the header.
+        EditorView.contentAttributes.of({ "aria-labelledby": `slide-row-title-${key}`, ...wordAttributes }),
+        EditorView.domEventHandlers({
+          focus: (_event, focused) => {
+            masterHost.wikiFocusedRow = key;
+            selectionToMaster(key, focused, masterView);
+            return false;
+          },
+          // Selected text dragged out of this row: where it is in the
+          // master's text, and the text it is in, for a drop in another
+          // row (below). CodeMirror keeps a drag in the view it started in,
+          // and a row cannot take text out of another.
+          dragstart: (_event, dragged) => {
+            const now = rangeOf(masterView.state, key);
+            const { from, to } = dragged.state.selection.main;
+            masterHost.wikiRowDrag = now === null || from === to ? null : { key, from: now.from + from, to: now.from + to, doc: masterView.state.doc };
+            return false;
+          },
+          dragend: () => {
+            delete masterHost.wikiRowDrag;
+            return false;
+          },
+          // Text dragged from another row of the same master moves, as it
+          // does in one editor: one change of the master's, the source
+          // taken out and the text put in where it is dropped, one step of
+          // the history (move.drop), the text put in selected. With the
+          // platform's copy key (Alt on a Mac, Ctrl elsewhere, as
+          // CodeMirror decides), or when the master's text changed since
+          // the drag started, the drop is CodeMirror's own: the text is put
+          // in, and the source stays. A drop in the same row, and one from
+          // outside the page, are CodeMirror's own too.
+          drop: (event, here) => {
+            const drag = masterHost.wikiRowDrag;
+            if (!drag || drag.key === key || event.dataTransfer?.files?.length) return false;
+            delete masterHost.wikiRowDrag;
+            const copying = /Mac/.test(navigator.platform) ? event.altKey : event.ctrlKey;
+            const now = rangeOf(masterView.state, key);
+            if (copying || now === null || drag.doc !== masterView.state.doc) return false;
+            const at = now.from + here.posAtCoords({ x: event.clientX, y: event.clientY }, false);
+            const changes = masterView.state.changes([
+              { from: drag.from, to: drag.to },
+              { from: at, insert: masterView.state.sliceDoc(drag.from, drag.to) },
+            ]);
+            event.preventDefault();
+            here.focus();
+            masterView.dispatch({
+              changes,
+              selection: { anchor: changes.mapPos(at, -1), head: changes.mapPos(at, 1) },
+              userEvent: "move.drop",
+              scrollIntoView: true,
+            });
+            return true;
+          },
+          // The browser's own undo and redo (a menu, a gesture) are the
+          // master's too.
+          beforeinput: (event) => {
+            if (event.inputType === "historyUndo") undo(masterView);
+            else if (event.inputType === "historyRedo") redo(masterView);
+            else return false;
+            event.preventDefault();
+            return true;
+          },
+        }),
+      ],
+    }),
+    dispatchTransactions: (trs, rowView) => {
+      rowView.update(trs);
+      // What the master told the row (mirrored: its text, problems, folds,
+      // changes) goes no further, nor does a selection a filter of the row's
+      // own (the title line's guard) set on it.
+      for (const tr of trs) {
+        if (tr.annotation(mirrored) || (!tr.docChanged && !tr.selection)) continue;
+        const now = rangeOf(masterView.state, key);
+        if (now !== null) masterView.dispatch(forwarded(key, now.from, tr));
+      }
+    },
+  });
+  rowHost.replaceChildren(view.dom);
+  masterHost.wikiRows ??= new Map();
+  masterHost.wikiRows.set(key, view);
+  problemsToRow(key, view, masterView.state);
+  foldsToRow(key, view, masterView.state);
+  changesToRow(key, view, masterView.state, master.changesField);
+  const characterRange = () => {
+    const now = rangeOf(masterView.state, key);
+    return now === null ? [] : charactersOfAll(masterView.state.doc.toString(), [now.from, now.to]);
+  };
+  rowHost.wikiRow = {
+    view,
+    key,
+    text: () => view.state.doc.toString(),
+    range: characterRange,
+    selection: () => {
+      const { anchor: a, head: h } = view.state.selection.main;
+      return charactersOfAll(view.state.doc.toString(), [a, h]);
+    },
+    select: (a, h) => {
+      const [from, to] = unitsOfAll(view.state.doc.toString(), [a, h]);
+      view.dispatch({ selection: EditorSelection.single(from, to) });
+      view.focus();
+    },
+    completing: () => completionStatus(view.state) ?? "",
+    hasFocus: () => view.hasFocus,
+    destroy: () => {
+      if (masterHost.wikiRows?.get(key) === view) masterHost.wikiRows.delete(key);
+      view.destroy();
+      if (rowHost.wikiRow?.view === view) delete rowHost.wikiRow;
+    },
+  };
+  if (focus) {
+    view.focus();
+    cursorIntoView(view);
+  }
+}
 
 // Put CodeMirror in `host` in place of `textarea`, with `original`, the
 // Markdown the textarea was made with, if the textarea still holds it (the
@@ -1350,10 +1752,15 @@ function textStartOf(doc) {
 // a change that takes it away, or adds a "#" to it, is followed by one that
 // makes the start of the first line "# " again, and a selection that would
 // start inside the "# " starts after it.
+//
+// `applies` says, at each transaction, whether the guard is on: always in
+// the master, and in a row of the slide mode only while that row starts
+// the text, which a re-cut or an undo can change after the row's editor
+// was made.
 const titleMark = "# ";
-const titleLine = [
+const titleLineWhile = (applies) => [
   EditorState.transactionFilter.of((tr) => {
-    if (!tr.docChanged) return tr;
+    if (!tr.docChanged || !applies()) return tr;
     const first = tr.newDoc.line(1).text;
     if (first.startsWith(titleMark)) return tr;
     const marks = /^#*[ \t]*/.exec(first)[0];
@@ -1370,7 +1777,7 @@ const titleLine = [
   }),
   EditorState.transactionFilter.of((tr) => {
     const doc = tr.newDoc;
-    if (!doc.sliceString(0, titleMark.length).startsWith(titleMark)) return tr;
+    if (!applies() || !doc.sliceString(0, titleMark.length).startsWith(titleMark)) return tr;
     const sel = tr.newSelection;
     if (!sel.ranges.some((r) => r.from < titleMark.length)) return tr;
     const after = (at) => Math.max(at, titleMark.length);
@@ -1381,6 +1788,7 @@ const titleLine = [
     return [tr, { selection: moved, sequential: true }];
   }),
 ];
+const titleLine = titleLineWhile(() => true);
 
 // What the editor of a page tells the preview beside it and the preview in a
 // window of its own (WP5.36 of docs/PLAN.md): the line being written (the
@@ -1519,6 +1927,8 @@ export function attach(textarea, host, original, codeTokens) {
   if (!textarea.isConnected || !host.isConnected) return;
   const before = host.wikiEditor;
   if (before?.textarea === textarea) return;
+  // A new master has no rows yet, nor a row that had the focus.
+  delete host.wikiFocusedRow;
   const hadFocus = before ? before.hasFocus() : false;
   before?.destroy();
 
@@ -1528,14 +1938,18 @@ export function attach(textarea, host, original, codeTokens) {
   const clamp = (at) => Math.min(Math.max(at, 0), doc.length);
   const changes = tracking(host);
   const completion = completions(host);
+  // Whether a presentation is edited slide by slide, its rows typing into
+  // this master: the component says (slidesMode). The master's completion
+  // is quiet then (masterCompletion), and its focus goes to a row.
+  let bySlide = false;
+  // Whether the change being made is the author going somewhere (the next
+  // problem), which a jump from row to row closes the row left for.
+  let going = false;
   const follow = following(host);
   // The selection last told, in characters, as "from:to" ("" for none),
   // and whether it was empty.
   let toldSelection = "";
   let toldEmpty = true;
-  // The folds last told by a "wiki-folds" event, or made by the component,
-  // as JSON [[first, last]].
-  let toldFolds = "[]";
   // The cursor's line last told by a "wiki-cursor-line" event.
   let toldLine = 0;
 
@@ -1558,7 +1972,7 @@ export function attach(textarea, host, original, codeTokens) {
       history(),
       titled ? titleLine : [],
       changes.extensions,
-      completion.extension,
+      masterCompletion.of(completion.extension),
       // Enter is a line break and nothing more, as in the textarea, except
       // while the completion's list is open, when it may choose (the
       // completion's keys come first); Tab and the toolbar's shortcuts are
@@ -1572,23 +1986,11 @@ export function attach(textarea, host, original, codeTokens) {
       keptSelection,
       lintGutter(),
       folding,
-      slideMarks,
-      dropTarget,
-      slideControls(host),
-      slideDrops(host),
-      EditorView.contentAttributes.of({
-        "aria-label": textarea.getAttribute("aria-label") ?? "",
-        spellcheck: "true",
-        autocapitalize: "sentences",
-        autocorrect: "on",
-      }),
-      // Files dropped or pasted are the component's to attach (the drop's
-      // and the paste's listeners on the panes); CodeMirror would put a
-      // dropped file's text in, or a pasted file's name.
-      EditorView.domEventHandlers({
-        drop: (event) => Boolean(event.dataTransfer?.files?.length),
-        paste: (event) => Boolean(event.clipboardData?.files?.length),
-      }),
+      rowsLayout,
+      steps,
+      rowsSync(host),
+      EditorView.contentAttributes.of({ "aria-label": textarea.getAttribute("aria-label") ?? "", ...wordAttributes }),
+      filesLeftToPanes,
       EditorView.updateListener.of((update) => {
         if (update.docChanged || update.selectionSet) {
           follow.moved(update.state.doc.lineAt(update.state.selection.main.head).number, update.docChanged);
@@ -1603,30 +2005,6 @@ export function attach(textarea, host, original, codeTokens) {
           if (line !== toldLine) {
             toldLine = line;
             host.dispatchEvent(new CustomEvent("wiki-cursor-line", { detail: line }));
-          }
-        }
-        // The folds changed other than by the component (the gutter, the
-        // keys, the mark, or an edit that moved or opened one): told as
-        // JSON [[first, last]]. A fold that only moved within its lines
-        // (text typed before its mark) is nothing new. The event also says
-        // whether an edit made the change (wikiByEdit), whether Ctrl or Cmd
-        // was held on the mark's click (wikiMore), and, for a change no
-        // edit made, the first lines of the folds it opened, as JSON
-        // (wikiOpened): a presentation's editor closes the other slides
-        // when the author opens one (WP5.97).
-        if (foldedRanges(update.startState) !== foldedRanges(update.state)) {
-          const now = JSON.stringify(foldedLinesOf(update.state));
-          if (now !== toldFolds) {
-            toldFolds = now;
-            if (!update.transactions.some((tr) => tr.annotation(byProgram))) {
-              const event = new CustomEvent("wiki-folds", { detail: now });
-              const firsts = (state) => foldedLinesOf(state).map(([first]) => first);
-              const still = new Set(firsts(update.state));
-              event.wikiByEdit = update.docChanged;
-              event.wikiMore = foldClickMore;
-              event.wikiOpened = JSON.stringify(update.docChanged ? [] : firsts(update.startState).filter((first) => !still.has(first)));
-              host.dispatchEvent(event);
-            }
           }
         }
         const before = update.startState.field(changes.field).length;
@@ -1664,9 +2042,119 @@ export function attach(textarea, host, original, codeTokens) {
   });
   follow.start(view);
 
+  // The text takes the focus: the master's, or slide by slide the row the
+  // master's cursor is in, if it is open (the component opens it
+  // otherwise, on the "wiki-row-wanted" its change sent).
+  const focusText = () => {
+    if (!bySlide) return view.focus();
+    const key = rowAtPosition(view.state, view.state.selection.main.head);
+    const row = host.wikiRows?.get(key);
+    if (row) {
+      row.focus();
+      cursorIntoView(row);
+    }
+  };
+
   const editor = {
     textarea,
     host,
+    // The master's view, and what a row of the slide mode shares with it
+    // (attachRow): the completion, which asks the master's host, the
+    // Markdown as it is drawn, the words' attributes and the files' guard.
+    view,
+    changesField: changes.field,
+    rowExtensions: [
+      completion.extension,
+      new LanguageSupport(wikiMarkdown),
+      syntaxHighlighting(highlighter),
+      decorations(codeTokens),
+      unclosedMath,
+      lintGutter(),
+      folding,
+      filesLeftToPanes,
+    ],
+    // Whether the presentation is edited slide by slide, its rows typing
+    // into the master: the master's completion is then off, and its focus
+    // goes to a row (focus below).
+    slidesMode: (on) => {
+      if (on !== bySlide) {
+        if (on) closeCompletion(view);
+        view.dispatch({ effects: masterCompletion.reconfigure(on ? completion.quiet : completion.extension) });
+      }
+      bySlide = on;
+    },
+    slidesShown: () => bySlide,
+    // The whole text's undo (true) or redo (false), as Ctrl+Z and Ctrl+Y
+    // in a row run it.
+    history: (undoing) => (undoing ? undo(view) : redo(view)),
+    jumping: () => going,
+    // The rows' layout Haskell cut `text` into, as JSON [[key, from, to]]
+    // in characters, in the order of the text: taken only if the master
+    // still holds that text (a re-cut of an older text is dropped, and the
+    // next comes). Whether it was taken.
+    setRows: (text, json) => {
+      const all = view.state.doc.toString();
+      if (text !== all) return false;
+      let given = [];
+      try {
+        given = JSON.parse(json);
+      } catch {
+        return false;
+      }
+      const rows = (Array.isArray(given) ? given : []).filter((r) => Array.isArray(r) && r.length === 3);
+      const units = unitsOfAll(all, rows.flatMap((r) => [Number(r[1]) || 0, Number(r[2]) || 0]));
+      view.dispatch({ effects: setLayout.of(rows.map((r, i) => ({ key: Number(r[0]), from: units[2 * i], to: units[2 * i + 1] }))) });
+      return true;
+    },
+    // A structural step Haskell computed for `text` ("Wiki.Core.SlideRows":
+    // moveRow, deleteRow, newRow), as JSON {event, edits: [[from, to,
+    // insert]] in characters of `text`, rows: [[key, from, to]] in
+    // characters of the text after, select: [anchor, head] there or null}:
+    // one transaction, one step of the history, with its layout (relayout).
+    // Taken only while the master holds `text`: whether it was taken.
+    step: (text, json) => {
+      if (text !== view.state.doc.toString()) return false;
+      let given;
+      try {
+        given = JSON.parse(json);
+      } catch {
+        return false;
+      }
+      const edits = Array.isArray(given?.edits) ? given.edits : [];
+      const units = unitsOfAll(text, edits.flatMap((e) => [Number(e[0]) || 0, Number(e[1]) || 0]));
+      const changes = ChangeSet.of(
+        edits.map((e, i) => ({ from: units[2 * i], to: units[2 * i + 1], insert: String(e[2] ?? "") })),
+        text.length,
+      );
+      const next = changes.apply(view.state.doc).toString();
+      const rows = Array.isArray(given?.rows) ? given.rows : [];
+      const rowUnits = unitsOfAll(next, rows.flatMap((r) => [Number(r[1]) || 0, Number(r[2]) || 0]));
+      const after = rows.map((r, i) => ({ key: Number(r[0]), from: rowUnits[2 * i], to: rowUnits[2 * i + 1] }));
+      const select = Array.isArray(given?.select) ? unitsOfAll(next, given.select.map(Number)) : null;
+      view.dispatch({
+        changes,
+        selection: select ? EditorSelection.single(select[0], select[1]) : undefined,
+        effects: relayout.of({ before: view.state.field(rowsLayout), after }),
+        annotations: [isolateHistory.of("full"), Transaction.userEvent.of(String(given?.event ?? "input.slide"))],
+        filter: false,
+      });
+      return true;
+    },
+    // The master's text and its rows' layout as it is now, mapped through
+    // every change since the last setRows, the selection, and the key of
+    // the row whose editor had the focus last (-1 for none), as JSON {text,
+    // anchor, head, focused, rows: [[key, from]]}, in characters: what the
+    // component cuts again ("Wiki.Core.SlideRows.fromLayout").
+    rows: () => {
+      const all = view.state.doc.toString();
+      const layout = view.state.field(rowsLayout);
+      const { anchor, head } = view.state.selection.main;
+      const chars = charactersOfAll(all, [anchor, head, ...layout.map((r) => r.from)]);
+      return JSON.stringify({ text: all, anchor: chars[0], head: chars[1], focused: host.wikiFocusedRow ?? -1, rows: layout.map((r, i) => [r.key, chars[i + 2]]) });
+    },
+    // The rows' layout as it is now, [{key, from, to}] in UTF-16 units, for
+    // the browser tests.
+    rowRanges: () => view.state.field(rowsLayout),
     hasFocus: () => view.hasFocus,
     text: () => view.state.doc.toString(),
     selectionStart: () => view.state.selection.main.from,
@@ -1682,16 +2170,16 @@ export function attach(textarea, host, original, codeTokens) {
         userEvent: "input.wiki",
         scrollIntoView: true,
       });
-      view.focus();
+      focusText();
     },
-    focus: () => view.focus(),
+    focus: () => focusText(),
     // The caret at the end of the first line, the page's title line (after
     // its "# ", or wherever the line ends), the line scrolled into view and
     // the text focused: a click on the editor's title (WP5.55).
     titleLine: () => {
       const first = view.state.doc.line(1);
       view.dispatch({ selection: { anchor: first.to }, effects: EditorView.scrollIntoView(first.from, { y: "nearest" }) });
-      view.focus();
+      focusText();
     },
     // The component's answer to the question `id` about a mention: the
     // users, as [{login, name}], or null when they could not be found.
@@ -1750,7 +2238,7 @@ export function attach(textarea, host, original, codeTokens) {
     // ranges are taken in the order of the text, the longer first of two
     // that start on one line; a range that overlaps or lies inside one
     // folded before it (by this call or already) is left out, and so is the
-    // same range given twice. Not reported by a "wiki-folds" event.
+    // same range given twice.
     fold: (ranges) => {
       const { doc } = view.state;
       const taken = [];
@@ -1773,7 +2261,7 @@ export function attach(textarea, host, original, codeTokens) {
     },
     // Unfold the folds that start on the first line of a range of
     // `ranges`, JSON [[first, last]], in any order, a line given twice
-    // unfolding once. Not reported by a "wiki-folds" event.
+    // unfolding once.
     unfold: (ranges) => {
       const { doc } = view.state;
       const firsts = new Set(parsedRanges(ranges).map(([first]) => first));
@@ -1786,35 +2274,18 @@ export function attach(textarea, host, original, codeTokens) {
     // The folds, as JSON [[first, last]], lines from 1, in the order of the
     // text.
     foldedLines: () => JSON.stringify(foldedLinesOf(view.state)),
-    // A presentation's slides Haskell found in `text`
-    // (Wiki.Core.Slides.slideSpans), as JSON [[first line, movable, fit]],
-    // lines from 1, in place of those marked before; [] for none (a document, or
-    // the presentation's raw Markdown). Taken only for the text CodeMirror
-    // holds, as the folds are.
-    slides: (text, json) => {
-      if (text !== view.state.doc.toString()) return;
-      const { doc } = view.state;
-      let list = [];
-      try {
-        list = JSON.parse(json);
-      } catch {
-        list = [];
-      }
-      const marks = (Array.isArray(list) ? list : [])
-        .map((entry, index) => (Array.isArray(entry) && Number.isInteger(entry[0]) && entry[0] >= 1 && entry[0] <= doc.lines ? { from: doc.line(entry[0]).from, index, movable: entry[1] === true, fit: String(entry[2] ?? "unmeasured") } : null))
-        .filter((mark) => mark !== null);
-      view.dispatch({ effects: setSlides.of(marks) });
-    },
-    // The fits marked beside the slides' handles, by their names, in the
-    // order of the text, for the browser tests.
-    slideFits: () => view.state.field(slideMarks).map((mark) => mark.fit),
     // The cursor's line, from 1.
     cursorLine: () => view.state.doc.lineAt(view.state.selection.main.head).number,
     // The cursor to the next problem after it (or the first), with its
     // message shown, and the focus in the text.
     nextProblem: () => {
-      nextDiagnostic(view);
-      view.focus();
+      going = true;
+      try {
+        nextDiagnostic(view);
+      } finally {
+        going = false;
+      }
+      focusText();
     },
     // The problems marked, as {from, to, message} in UTF-16 units, for the
     // browser tests.
@@ -1867,6 +2338,8 @@ export function attach(textarea, host, original, codeTokens) {
     textShown: () => follow.textShown(),
     destroy: () => {
       editors.delete(editor);
+      for (const row of host.wikiRows?.values() ?? []) row.destroy();
+      host.wikiRows?.clear();
       follow.stop();
       view.destroy();
       if (host.wikiEditor === editor) delete host.wikiEditor;
@@ -1883,5 +2356,5 @@ export function attach(textarea, host, original, codeTokens) {
   editors.add(editor);
   // CodeMirror is ready: what the component does only once it is (folding
   // a presentation's slides, marking them) is done now.
-  host.dispatchEvent(new CustomEvent("wiki-ready"));
+  host.dispatchEvent(new CustomEvent("wiki-ready", { detail: focused ? 1 : 0 }));
 }

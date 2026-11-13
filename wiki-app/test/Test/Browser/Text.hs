@@ -22,7 +22,6 @@ module Test.Browser.Text
   , selectText
   , watchEditor
   , inputsSeen
-  , foldsTold
   , proposeText
   )
 where
@@ -49,7 +48,6 @@ $( browserJS
      , ("js_select", "wiki_test_editor_select", Safe, [t|Int -> Int -> IO ()|])
      , ("js_watch", "wiki_test_editor_watch", Safe, [t|IO ()|])
      , ("js_inputs", "wiki_test_editor_inputs", Safe, [t|IO Int|])
-     , ("js_folds_told", "wiki_test_editor_folds_told", Safe, [t|IO JSText|])
      , ("js_propose", "wiki_test_editor_propose", Safe, [t|Int -> Int -> JSText -> IO ()|])
      ]
  )
@@ -159,8 +157,7 @@ selectText ui start end = do
   unsafeIOToPageM (js_select start end)
   settle
 
--- | Count the editor's input events, and keep what each of its
--- @wiki-folds@ events tells, from now on.
+-- | Count the editor's input events from now on.
 watchEditor :: Mounted s q o m -> PageM s ()
 watchEditor ui = do
   _ <- editorText ui
@@ -172,13 +169,6 @@ inputsSeen :: Mounted s q o m -> PageM s Int
 inputsSeen ui = do
   _ <- editorText ui
   unsafeIOToPageM js_inputs
-
--- | The folds each @wiki-folds@ event told since 'watchEditor', in order.
-foldsTold :: Mounted s q o m -> PageM s [[(Int, Int)]]
-foldsTold ui = do
-  _ <- editorText ui
-  told <- unsafeIOToPageM (fromJSText <$> js_folds_told)
-  pure (fromMaybe [] (decodeStrict (encodeUtf8 told)))
 
 -- | Replace the editor's text from one position to another (in UTF-16
 -- units) with this, as the writing assistant's tracked change, which

@@ -244,11 +244,12 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID)
 import DOM.HTML.Indexed qualified as I
+import Data.List (lookup, zip3)
 import Data.Map.Strict qualified as Map
 import Data.Row (type (.+), type (.==))
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -277,14 +278,13 @@ import Wiki.App.Browser (replacingEntry)
 import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
-  , FoldsChange (..)
   , GridKey (..)
+  , Layout (..)
   , PickedFile (..)
-  , SlideToggle (..)
+  , RowWanted (..)
   , announceUpload
   , answerEmoji
   , answerMention
-  , appendSlide
   , applyCommand
   , attachEditor
   , changesLeft
@@ -294,23 +294,23 @@ import Wiki.App.Editor.Browser
   , cursorLineOf
   , decision
   , detachEditor
+  , dragCarries
   , droppedFiles
+  , editorAvailable
   , editorKey
   , emojiAsked
   , focusElement
+  , focusHeader
   , focusInView
   , focusText
-  , foldLines
-  , foldsChange
   , forgetPreviewEntry
   , goToTitleLine
   , gridKey
   , guardUnload
   , historyBack
+  , holdFocus
   , insertAtCursor
-  , markSlides
   , mentionAsked
-  , moveSlideIn
   , nextProblem
   , offerFolds
   , onPreviewEntry
@@ -322,14 +322,20 @@ import Wiki.App.Editor.Browser
   , previewShown
   , pushPreviewEntry
   , readPickedFile
+  , readyFocused
+  , restoreFocus
+  , rowKeyOf
+  , rowWanted
+  , rowsLayout
   , selectedSpan
+  , setRows
   , settleChanges
   , showProblems
-  , slideDropped
-  , slideToggled
+  , slidesModeIn
+  , stepIn
   , textShown
   , typedText
-  , unfoldLines
+  , undoIn
   )
 import Wiki.App.Editor.Problems (problemRanges)
 import Wiki.App.Islands (MonadIslands)
@@ -349,6 +355,7 @@ import Wiki.App.View.NewKindDialog qualified as NewKindDialog
 import Wiki.App.View.Popup (watchPopup)
 import Wiki.App.View.Preview qualified as Preview
 import Wiki.App.View.ProviderIcons (claudeColour, claudePath, openAiPath)
+import Wiki.App.View.SlideRow qualified as SlideRow
 import Wiki.Core.Access (Access (Closed))
 import Wiki.Core.Assistant
   ( AssistantError (kind)
@@ -398,6 +405,8 @@ import Wiki.Core.Page (Page, PageSummary, titleLine, withTitleLine)
 import Wiki.Core.Page qualified as P
 import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (GlobalPermission (Administer), Grants (access), hasGlobalPermission)
+import Wiki.Core.SlideRows (RowKey (..), Rows)
+import Wiki.Core.SlideRows qualified as SlideRows
 import Wiki.Core.Slides qualified as Slides
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (encryption, id))
@@ -431,6 +440,7 @@ type Slots =
     .+ ("newKind" .== H.Slot (Const Void) NewKindDialog.Output ())
     .+ ("linkDialog" .== H.Slot (Const Void) LinkDialog.Output ())
     .+ ("homeIcon" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("slideRow" .== H.Slot (Const Void) SlideRow.Output (Int, Int))
 
 -- | 'Work': the text being written, and the page it started from.
 data Work = Work
@@ -606,11 +616,46 @@ data State = State
   -- ^ CodeMirror's host element, once the text is loaded: the panel edits
   -- through it.
   , slidesMode :: Bool
-  -- ^ Whether a presentation is edited slide by slide (WP5.97 of
-  -- docs/PLAN.md): each slide folded but the open ones, with its controls
-  -- to open it and move it, and the preview showing the cursor's slide;
+  -- ^ Whether a presentation is edited slide by slide (WP5.103 of
+  -- docs/PLAN.md): a list of rows, one per slide, each with an editor of
+  -- its own while it is open, and the preview showing the cursor's slide;
   -- or as its raw Markdown. The browser keeps the choice. Either way the
   -- text is the same: the mode changes what is shown, never a byte.
+  , master :: Master
+  -- ^ Whether CodeMirror, the master the rows type into, is in place.
+  , rows :: Maybe Rows
+  -- ^ A presentation's rows ("Wiki.Core.SlideRows"), as last cut: the
+  -- master holds the same layout, mapped through each change since.
+  , rowHeads :: [SlideRow.Head]
+  -- ^ What the rows' headers show, from the rows and the last check.
+  , nextKey :: RowKey
+  -- ^ The key the next new row gets: no key is given twice.
+  , openRows :: [RowKey]
+  -- ^ The rows open, each with its CodeMirror.
+  , keptOpen :: [RowKey]
+  -- ^ The rows that were open when the Raw mode was chosen, opened again
+  -- on the way back when they are still there.
+  , focusRow :: Maybe RowKey
+  -- ^ The row that takes the focus as it opens: one a jump opened.
+  , rowsList :: H.RefLabel
+  -- ^ The rows' list, which gives the focus back to what had it when a
+  -- patch moved that element.
+  , dragging :: Maybe RowKey
+  -- ^ The row whose handle a drag started from, while the drag lasts.
+  , dropAt :: Maybe (RowKey, Bool)
+  -- ^ Where the row dragged would go: before or after ('True') this row.
+  , deletedOpen :: [RowKey]
+  -- ^ The rows a step took away (a delete, its redo, the undo of a new
+  -- slide) while they were open: an undo or redo that brings one back
+  -- opens it. Each removal by a step says again whether its row was open.
+  -- A key leaves the list when its row is there again, when a step takes
+  -- the row away closed, and with all the rows when the editor is loaded
+  -- again. Keys are never given twice, so a key the history no longer
+  -- reaches is never matched by mistake; the list holds at most one key
+  -- per row taken away.
+  , announcement :: Text
+  -- ^ What the rows' live region says last: a move, a delete, a new slide,
+  -- a jump.
   , cursorAt :: Int
   -- ^ The line the cursor is on, from 1, as CodeMirror last reported:
   -- the preview of a presentation shows the slide it is on.
@@ -711,25 +756,86 @@ data Action
   | SlidesMode Bool
   | OneSlide Bool
   | CursorAt Int
-  | ToggleSlide SlideToggle
-  | DropSlide Int Int Bool
-  | FoldsChanged FoldsChange
+  | EditorReady Bool
+  | EditorFailed
+  | FromRow SlideRow.Output
+  | RowWantedBy RowWanted
+  | MoveFromText RowKey Int
   | NewSlide
-  | EditorReady
+  | Relaid
 
 -- | The local storage key for whether the preview goes beside the
 -- Markdown.
 sideBySideKey :: Text
 sideBySideKey = "editor-side-by-side"
 
--- | Whether a presentation is edited slide by slide: its slides folded
--- but the open ones, with their controls, and the preview showing the
--- cursor's slide.
-editingSlides :: State -> Bool
-editingSlides st =
-  st.slidesMode && case st.loaded of
-    Ready w -> w.page.kind == Kind.Presentation
-    _ -> False
+-- | Whether a presentation is edited slide by slide: its rows shown, the
+-- master hidden, and the preview showing the cursor's slide. Not without
+-- CodeMirror, which the rows are: the presentation is then its Markdown,
+-- in the textarea.
+slidesShown :: State -> Bool
+slidesShown st = st.slidesMode && st.master /= Absent && isDeck st
+
+-- | Whether there is a text to write into at the cursor: what every
+-- control that writes there asks (the toolbar's buttons and menus, the
+-- dialogs that insert, an attachment's "Insert", a file's link after its
+-- upload). Slide by slide, the text is the rows': with no row open there
+-- is none, and those controls are disabled, their titles saying why. With
+-- a row open, they write at the editor's cursor; when the cursor's row is
+-- closed (the author closed it after typing there), the change opens it,
+-- as a jump does (@web/src/editor.js@'s rowsSync), so that nothing is
+-- written where it cannot be seen. The keyboard's shortcuts write only in
+-- a text ('Wiki.App.Editor.Browser.editorKey'), so never from a header.
+writesAtCursor :: State -> Bool
+writesAtCursor st = not (slidesShown st && null st.openRows)
+
+-- | 'Master' is where CodeMirror, the master, is: not in place yet, in
+-- place, or never to be, the page having no editor's script.
+data Master = Waiting | Attached | Absent
+  deriving stock (Eq)
+
+-- | A presentation's rows cut fresh from the text the textarea was made
+-- with, none open, and their headers; no rows for a document.
+freshRows :: State -> State
+freshRows st = case st.loaded of
+  Ready w
+    | w.page.kind == Kind.Presentation ->
+        let (rows, nextKey) = SlideRows.cutRows st.nextKey w.loadedBody
+         in st {rows = Just rows, nextKey, openRows = [], keptOpen = [], focusRow = Nothing, deletedOpen = [], rowHeads = headsOf st (problemsOf st) w.loadedBody rows}
+  _ -> st {rows = Nothing, rowHeads = [], openRows = [], keptOpen = [], focusRow = Nothing, deletedOpen = []}
+
+-- | The rows' headers of a text cut into rows, with what the last check
+-- and the last measures say of that text: the problems given, which are
+-- 'problemsOf' the state, counted on the rows they are in when the text
+-- is the one checked.
+headsOf :: State -> [Problems.Problem] -> Text -> Rows -> [SlideRow.Head]
+headsOf st problems text rows =
+  let checkedNow = st.checkedText == text && isDeck st
+      spans = if checkedNow then st.checked.slides else Slides.slideSpans text
+   in SlideRow.heads text rows spans (Slides.fitsNow st.measures text spans) (if checkedNow then problemRanges text problems else [])
+
+-- | The problems the editor marks: the last check's, the failed islands'
+-- in its text, the slides that do not fit, and the rows a block left open
+-- takes into the slide above.
+problemsOf :: State -> [Problems.Problem]
+problemsOf st = sort (Problems.allProblems st.checked st.failedIslands <> fitProblems st <> swallowProblems st)
+
+-- | A problem on the line that opens a block left open (a code fence, a
+-- box, an HTML comment) in a row, which takes the rows below it into its
+-- slide in the presentation read from the whole text, while the rows keep
+-- their own; on the row's heading line when that line cannot be found.
+-- Only for the text checked.
+swallowProblems :: State -> [Problems.Problem]
+swallowProblems st = case st.rows of
+  Just rows
+    | isDeck st && SlideRows.assemble rows == st.checkedText ->
+        [ Problems.Problem {from = line, to = line, kind = Problems.SlideSwallows, severity = Problems.Error, message = "A code block, a box or an HTML block on this slide is not closed: in the presentation it takes in the slides after it, up to the end."}
+        | holder <- ordNub (map snd (SlideRows.swallowed rows))
+        , Just startLine <- [atMay (SlideRows.rowLines rows) holder]
+        , Just row <- [atMay rows.rows holder]
+        , let line = startLine + T.count "\n" (T.take (fromMaybe 0 (SlideRows.leftOpenAt row)) row.text)
+        ]
+  _ -> []
 
 -- | Whether the page edited is a presentation: its preview is then
 -- always there, off the screen when it is not shown, measuring the slides.
@@ -759,7 +865,7 @@ deckBar :: State -> Maybe DeckBar
 deckBar st = case st.loaded of
   Ready w
     | w.page.kind == Kind.Presentation ->
-        Just DeckBar {bySlide = st.slidesMode, oneShown = st.oneSlide, carriageReturns = T.any (== '\r') w.body}
+        Just DeckBar {bySlide = slidesShown st, oneShown = st.oneSlide, noEditor = st.master == Absent}
   _ -> Nothing
 
 -- | What the preview shows of a presentation: the cursor's slide, slide
@@ -768,12 +874,23 @@ deckBar st = case st.loaded of
 previewSlides :: State -> Work -> Maybe Preview.Slides
 previewSlides st work
   | work.page.kind /= Kind.Presentation = Nothing
-  | st.slidesMode || st.oneSlide = Just (Preview.SlideAt (fromMaybe 0 (Slides.slideAtLine st.checked.slides st.cursorAt)))
+  | slidesShown st || st.oneSlide = Just (Preview.SlideAt (fromMaybe 0 (Slides.slideAtLine st.checked.slides st.cursorAt)))
   | otherwise = Just Preview.WholeDeck
 
 -- | The title a new slide gets, selected so that typing replaces it.
 newSlideTitle :: Text
 newSlideTitle = "New slide"
+
+-- | A slide as the live region names it: "slide 4, 'Results'"; at the
+-- start of a sentence, "Slide 4, 'Results'" ('capital').
+slideNamed :: RowKey -> State -> Text
+slideNamed key st = case head [h | h <- st.rowHeads, h.key == key] of
+  Just h -> "slide" <> maybe "" (\n -> " " <> show n) h.number <> ", '" <> SlideRow.titleOf h <> "'"
+  Nothing -> "the slide"
+
+-- | A text with its first letter a capital.
+capital :: Text -> Text
+capital t = maybe t (\(c, rest) -> T.cons (toUpper c) rest) (T.uncons t)
 
 -- | The browser's storage key of the way a presentation is edited: true
 -- for its raw Markdown, false (or nothing kept) for slide by slide.
@@ -820,8 +937,8 @@ draftDelay :: Int
 draftDelay = 2_000_000
 
 -- | How long the "Saved" notice stays: long enough to be read in passing.
-savedNoticeTime :: Int
-savedNoticeTime = 3_000_000
+savedNoticeTime :: NominalDiffTime
+savedNoticeTime = 3
 
 component
   :: forall m
@@ -835,12 +952,13 @@ component =
           fileInput <- H.newRefLabel "editor-files"
           backButton <- H.newRefLabel "editor-back"
           menuHolder <- H.newRefLabel "editor-menu"
+          rowsList <- H.newRefLabel "editor-slides"
           -- Loaded at once rather than in 'Initialize', when the backend
           -- can ('atOnce'), so that the first render is the editor a
           -- prerendered page shows (see "Wiki.App.Shell"); otherwise
           -- loaded in 'Initialize'.
           Fetched loaded found hasDraft <- fromMaybe (Fetched Loading Nothing False) <$> atOnce (fetchWork noUrlOwner input)
-          pure
+          pure . freshRows $
             State
               { input
               , owners = Body.ownersOf noUrlOwner
@@ -888,6 +1006,18 @@ component =
               , assistantMounted = False
               , hostElement = Nothing
               , slidesMode = True
+              , master = Waiting
+              , rows = Nothing
+              , rowHeads = []
+              , nextKey = RowKey 0
+              , openRows = []
+              , keptOpen = []
+              , focusRow = Nothing
+              , rowsList
+              , dragging = Nothing
+              , dropAt = Nothing
+              , deletedOpen = []
+              , announcement = ""
               , cursorAt = 1
               , oneSlide = False
               , measures = Nothing
@@ -950,7 +1080,7 @@ component =
     editing st work =
       [hh|
         <form
-          class="editor-form{% if st.mode == Previewing %} previewing{% end %}{% if st.sideBySide %} side-by-side{% end %}{% if isJust st.conflict %} conflicting{% end %}{% if st.assistantOpen %} assisting{% end %}{% if isDeck st %} deck{% end %}"
+          class="editor-form{% if st.mode == Previewing %} previewing{% end %}{% if st.sideBySide %} side-by-side{% end %}{% if isJust st.conflict %} conflicting{% end %}{% if st.assistantOpen %} assisting{% end %}{% if isDeck st %} deck{% end %}{% if slidesShown st %} slides{% end %}"
           style={{ "--editor-font-size: " <> fontSize st.fontStep }}
           {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}
           {{ HE.preventingDefault (HE.handler' (EventType "keydown") (keyAction st)) }}
@@ -975,7 +1105,7 @@ component =
               {% end %}
             </div>
           </div>
-          {{ toolbar st.menuHolder Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, emojiSearch = st.emojiQuery, deck = deckBar st} }}
+          {{ toolbar st.menuHolder Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, emojiSearch = st.emojiQuery, deck = deckBar st, textless = not (writesAtCursor st)} }}
           {{ cornerNotices st }}
           </div>
           <div class="editor-notices">
@@ -1002,7 +1132,7 @@ component =
           </div>
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
-            {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
+            {{ HE.preventingDefault (HE.handler' (EventType "dragover") (\ev -> if dragCarries "Files" ev then Just DragOver else Nothing)) }}
             {{ HE.handler' (EventType "dragleave") (const (Just DragLeave)) }}
             {{ HE.preventingDefault (HE.handler' (EventType "drop") dropped) }}
             {{ HE.preventingDefault (HE.handler' (EventType "paste") pasted) }}
@@ -1011,7 +1141,7 @@ component =
             {{ previewPane st work }}
             {{ conflictPane st }}
           </div>
-          {{ attachmentList work }}
+          {{ attachmentList (writesAtCursor st) work }}
           <div class="editor-assistant-holder">{{ assistantPane st work }}</div>
         </form>
       |]
@@ -1222,9 +1352,12 @@ component =
     keyAction st ev = case editorKey ev of
       Just EscapeKey | isJust st.menu -> Just CloseMenu
       Just EscapeKey -> Nothing
-      -- Alt+Up and Alt+Down move a slide only where there are slides to
-      -- move; elsewhere they are the browser's.
-      Just (MoveSlideKey _) | not (editingSlides st) -> Nothing
+      -- Alt+Up and Alt+Down are the browser's until slides move by them
+      -- again (WP5.103's next stage).
+      -- Alt+Up and Alt+Down in a row's text move its slide; elsewhere
+      -- they are the browser's.
+      Just (MoveSlideKey by) | slidesShown st -> (`MoveFromText` by) <$> rowKeyOf ev
+      Just (MoveSlideKey _) -> Nothing
       Just key -> Just (Key key)
       Nothing -> Nothing
 
@@ -1394,23 +1527,23 @@ component =
     toolbarOf holder bar =
       [hh|
         <div class="editor-toolbar" role="toolbar" aria-label="Formatting">
-          <div class="toolbar-group">{{ map toolButton textTools }}{{ colourMenu holder bar }}{{ emojiMenu holder bar }}</div>
-          <div class="toolbar-group">{{ map toolButton listTools }}</div>
-          <div class="toolbar-group">{{ map toolButton codeTools }}{{ linkPageButton }}{{ imageButton }}{{ toolButton tableTool }}</div>
-          <div class="toolbar-group">{{ map toolButton blockTools }}{{ boxMenu holder bar }}{{ macrosButton bar }}{{ htmlMenu holder bar }}</div>
+          <div class="toolbar-group">{{ map (toolButton bar) textTools }}{{ colourMenu holder bar }}{{ emojiMenu holder bar }}</div>
+          <div class="toolbar-group">{{ map (toolButton bar) listTools }}</div>
+          <div class="toolbar-group">{{ map (toolButton bar) codeTools }}{{ linkPageButton bar }}{{ imageButton bar }}{{ toolButton bar tableTool }}</div>
+          <div class="toolbar-group">{{ map (toolButton bar) blockTools }}{{ boxMenu holder bar }}{{ macrosButton bar }}{{ htmlMenu holder bar }}</div>
           <div class="toolbar-end">
             {% for d in maybeToList bar.deck %}
               <span class="editor-slides-mode" role="group" aria-label="How the presentation is edited">
-                <button type="button" aria-pressed={{ if d.bySlide then "true" else "false" :: Text }} title="Slide by slide: each slide folded but the open ones, to open and move" onClick={{ const (SlidesMode True) }}>Slides</button>
+                <button type="button" aria-pressed={{ if d.bySlide then "true" else "false" :: Text }} title="Slide by slide: a row for each slide, to open and edit" disabled={{ d.noEditor }} onClick={{ const (SlidesMode True) }}>Slides</button>
                 <button type="button" aria-pressed={{ if d.bySlide then "false" else "true" :: Text }} title="The presentation's Markdown as it is" onClick={{ const (SlidesMode False) }}>Raw</button>
               </span>
               {% if d.bySlide %}
-                <button type="button" class="editor-new-slide" title="A slide at the end of the presentation" onClick={{ const NewSlide }}>New slide</button>
+                <button type="button" class="editor-new-slide" title="A new slide after the one you were in, or at the end" onClick={{ const NewSlide }}>New slide</button>
               {% else %}
                 <button type="button" class="editor-one-slide" aria-pressed={{ if d.oneShown then "true" else "false" :: Text }} title="The preview shows the cursor's slide alone, or the whole deck" onClick={{ const (OneSlide (not d.oneShown)) }}>One slide</button>
               {% end %}
-              {% if d.bySlide && d.carriageReturns %}
-                <span class="editor-slides-note" role="note">This text has carriage returns, so its slides cannot be folded or moved here.</span>
+              {% if d.noEditor %}
+                <span class="editor-slides-note" role="note">Slide by slide needs the editor's script, which this page has not loaded: the presentation is shown as its Markdown.</span>
               {% end %}
             {% end %}
             <button type="button" class="editor-side-by-side" aria-pressed={{ if bar.twoPanes then "true" else "false" :: Text }} title="The preview beside the text, on a wide screen" onClick={{ const (SideBySide (not bar.twoPanes)) }}>{{ icon sideBySideIcon }}<span>Side by side</span></button>
@@ -1426,20 +1559,27 @@ component =
         </div>
       |]
 
-    toolButton :: Tool -> H.ComponentHTML Action Slots m
-    toolButton tool =
-      [hh|<button type="button" class="tool" title={{ toolTitle tool }} aria-label={{ tool.label }} onClick={{ const (Run tool.command) }}>{{ icon tool.icon }}</button>|]
+    -- A command's button, disabled while no text is shown to run it on
+    -- (slide by slide, with no row open).
+    toolButton :: Bar -> Tool -> H.ComponentHTML Action Slots m
+    toolButton bar tool =
+      [hh|<button type="button" class="tool" title={{ writingTitle bar (toolTitle tool) }} aria-label={{ tool.label }} disabled={{ bar.textless }} onClick={{ const (Run tool.command) }}>{{ icon tool.icon }}</button>|]
+
+    -- A writing control's title, which says why it is disabled when there
+    -- is no text to write into ('writesAtCursor').
+    writingTitle :: Bar -> Text -> Text
+    writingTitle bar title = if bar.textless then title <> ": open a slide to write in it" else title
 
     -- A link to a page of the wiki, chosen in a dialog
     -- ("Wiki.App.View.LinkDialog").
-    linkPageButton :: H.ComponentHTML Action Slots m
-    linkPageButton =
-      [hh|<button type="button" class="tool" title="Link to a page (Ctrl+Shift+K)" aria-label="Link to a page" onClick={{ const LinkPage }}>{{ icon linkPageIcon }}</button>|]
+    linkPageButton :: Bar -> H.ComponentHTML Action Slots m
+    linkPageButton bar =
+      [hh|<button type="button" class="tool" title={{ writingTitle bar "Link to a page (Ctrl+Shift+K)" }} aria-label="Link to a page" disabled={{ bar.textless }} onClick={{ const LinkPage }}>{{ icon linkPageIcon }}</button>|]
 
     -- An image, or any other file: an attachment, through the file input.
-    imageButton :: H.ComponentHTML Action Slots m
-    imageButton =
-      [hh|<button type="button" class="tool" title="Image or attachment: upload a file" aria-label="Image or attachment" onClick={{ const AttachOrImage }}>{{ icon imageIcon }}</button>|]
+    imageButton :: Bar -> H.ComponentHTML Action Slots m
+    imageButton bar =
+      [hh|<button type="button" class="tool" title={{ writingTitle bar "Image or attachment: upload a file" }} aria-label="Image or attachment" disabled={{ bar.textless }} onClick={{ const AttachOrImage }}>{{ icon imageIcon }}</button>|]
 
     -- The kinds of box, each writing its marker ('Box'), and for an
     -- administrator the way to define another.
@@ -1447,14 +1587,14 @@ component =
     boxMenu holder bar =
       [hh|
         <div class="toolbar-menu-holder" {{ [HP.ref holder | bar.menuOpen == Just BoxMenu] }}>
-          <button type="button" class="tool" title="Box" aria-label="Box" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just BoxMenu) }} onClick={{ const (ToggleMenu BoxMenu) }}>{{ icon boxIcon }}</button>
+          <button type="button" class="tool" title={{ writingTitle bar "Box" }} aria-label="Box" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just BoxMenu) }} disabled={{ bar.textless }} onClick={{ const (ToggleMenu BoxMenu) }}>{{ icon boxIcon }}</button>
           {% if bar.menuOpen == Just BoxMenu %}
             <div class="toolbar-menu box-menu" role="menu" aria-label="Box">
               {% for (marker, label) in bar.kinds %}
-                <button type="button" role="menuitem" data-kind={{ marker }} onClick={{ const (Run (Box marker)) }}>{{ label }}<code>{{ "[!" <> marker <> "]" }}</code></button>
+                <button type="button" role="menuitem" data-kind={{ marker }} disabled={{ bar.textless }} onClick={{ const (Run (Box marker)) }}>{{ label }}<code>{{ "[!" <> marker <> "]" }}</code></button>
               {% end %}
               {% if bar.newKind %}
-                <button type="button" role="menuitem" class="box-menu-new" onClick={{ const NewKind }}>New kind…</button>
+                <button type="button" role="menuitem" class="box-menu-new" disabled={{ bar.textless }} onClick={{ const NewKind }}>New kind…</button>
               {% end %}
             </div>
           {% end %}
@@ -1470,11 +1610,11 @@ component =
     htmlMenu holder bar =
       [hh|
         <div class="toolbar-menu-holder" {{ [HP.ref holder | bar.menuOpen == Just HtmlMenu] }}>
-          <button type="button" class="tool" title="HTML" aria-label="HTML" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just HtmlMenu) }} onClick={{ const (ToggleMenu HtmlMenu) }}>{{ icon htmlIcon }}</button>
+          <button type="button" class="tool" title={{ writingTitle bar "HTML" }} aria-label="HTML" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just HtmlMenu) }} disabled={{ bar.textless }} onClick={{ const (ToggleMenu HtmlMenu) }}>{{ icon htmlIcon }}</button>
           {% if bar.menuOpen == Just HtmlMenu %}
             <div class="toolbar-menu" role="menu" aria-label="HTML">
               {% for tag in htmlTags %}
-                <button type="button" role="menuitem" onClick={{ const (Run (Html tag)) }}>{{ htmlTagLabel tag }}<code>{{ "<" <> htmlTagName tag <> ">" :: Text }}</code></button>
+                <button type="button" role="menuitem" disabled={{ bar.textless }} onClick={{ const (Run (Html tag)) }}>{{ htmlTagLabel tag }}<code>{{ "<" <> htmlTagName tag <> ">" :: Text }}</code></button>
               {% end %}
             </div>
           {% end %}
@@ -1489,22 +1629,22 @@ component =
     colourMenu holder bar =
       [hh|
         <div class="toolbar-menu-holder" {{ [HP.ref holder | bar.menuOpen == Just ColourMenu] }}>
-          <button type="button" class="tool" title="Colour" aria-label="Colour" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just ColourMenu) }} onClick={{ const (ToggleMenu ColourMenu) }}>{{ icon colourIcon }}</button>
+          <button type="button" class="tool" title={{ writingTitle bar "Colour" }} aria-label="Colour" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just ColourMenu) }} disabled={{ bar.textless }} onClick={{ const (ToggleMenu ColourMenu) }}>{{ icon colourIcon }}</button>
           {% if bar.menuOpen == Just ColourMenu %}
             <div class="toolbar-menu colour-menu" role="menu" aria-label="Colour">
               <div class="colour-row" role="group" aria-label="Text colour">
                 <span class="colour-row-name" aria-hidden="true">Text</span>
                 {% for c in textColours %}
-                  <button type="button" role="menuitem" class="swatch" title={{ colourLabel c <> " text" }} aria-label={{ colourLabel c <> " text" }} onClick={{ const (Run (TextColour (Just c))) }}><span class="swatch-sample {{ textColourClass c }}" aria-hidden="true">A</span></button>
+                  <button type="button" role="menuitem" class="swatch" disabled={{ bar.textless }} title={{ colourLabel c <> " text" }} aria-label={{ colourLabel c <> " text" }} onClick={{ const (Run (TextColour (Just c))) }}><span class="swatch-sample {{ textColourClass c }}" aria-hidden="true">A</span></button>
                 {% end %}
-                <button type="button" role="menuitem" class="swatch swatch-none" title="No text colour" aria-label="No text colour" onClick={{ const (Run (TextColour Nothing)) }}>{{ icon noColourIcon }}</button>
+                <button type="button" role="menuitem" class="swatch swatch-none" disabled={{ bar.textless }} title="No text colour" aria-label="No text colour" onClick={{ const (Run (TextColour Nothing)) }}>{{ icon noColourIcon }}</button>
               </div>
               <div class="colour-row" role="group" aria-label="Highlight">
                 <span class="colour-row-name" aria-hidden="true">Highlight</span>
                 {% for c in highlightColours %}
-                  <button type="button" role="menuitem" class="swatch" title={{ colourLabel c <> " highlight" }} aria-label={{ colourLabel c <> " highlight" }} onClick={{ const (Run (Highlight (Just c))) }}><span class="swatch-sample {{ highlightClass c }}" aria-hidden="true">A</span></button>
+                  <button type="button" role="menuitem" class="swatch" disabled={{ bar.textless }} title={{ colourLabel c <> " highlight" }} aria-label={{ colourLabel c <> " highlight" }} onClick={{ const (Run (Highlight (Just c))) }}><span class="swatch-sample {{ highlightClass c }}" aria-hidden="true">A</span></button>
                 {% end %}
-                <button type="button" role="menuitem" class="swatch swatch-none" title="No highlight" aria-label="No highlight" onClick={{ const (Run (Highlight Nothing)) }}>{{ icon noColourIcon }}</button>
+                <button type="button" role="menuitem" class="swatch swatch-none" disabled={{ bar.textless }} title="No highlight" aria-label="No highlight" onClick={{ const (Run (Highlight Nothing)) }}>{{ icon noColourIcon }}</button>
               </div>
             </div>
           {% end %}
@@ -1520,7 +1660,7 @@ component =
     emojiMenu holder bar =
       [hh|
         <div class="toolbar-menu-holder" {{ [HP.ref holder | bar.menuOpen == Just EmojiMenu] }}>
-          <button type="button" class="tool" title="Emoji" aria-label="Emoji" aria-haspopup="dialog" aria-expanded={{ ariaBool (bar.menuOpen == Just EmojiMenu) }} onClick={{ const (ToggleMenu EmojiMenu) }}>{{ icon emojiIcon }}</button>
+          <button type="button" class="tool" title={{ writingTitle bar "Emoji" }} aria-label="Emoji" aria-haspopup="dialog" aria-expanded={{ ariaBool (bar.menuOpen == Just EmojiMenu) }} disabled={{ bar.textless }} onClick={{ const (ToggleMenu EmojiMenu) }}>{{ icon emojiIcon }}</button>
           {% if bar.menuOpen == Just EmojiMenu %}
             <div class="toolbar-menu emoji-menu" role="dialog" aria-label="Emoji" {{ HE.preventingDefault (HE.handler' (EventType "keydown") (emojiKey found)) }}>
               <input type="text" class="emoji-search" placeholder="Search emoji" aria-label="Search emoji" autocomplete="off" spellcheck="false" onValueInput={{ SearchEmoji }}>
@@ -1529,7 +1669,7 @@ component =
               {% else %}
                 <div class="emoji-grid" role="group" aria-label="Emoji found">
                   {% for (n, (name, emoji)) in zip [0 :: Int ..] found %}
-                    <button type="button" class="emoji-choice" title={{ ":" <> name <> ":" }} aria-label={{ name }} {{ attr "data-index" (show n) }} onClick={{ const (PickEmoji name) }}>{{ emoji }}</button>
+                    <button type="button" class="emoji-choice" disabled={{ bar.textless }} title={{ ":" <> name <> ":" }} aria-label={{ name }} {{ attr "data-index" (show n) }} onClick={{ const (PickEmoji name) }}>{{ emoji }}</button>
                   {% end %}
                 </div>
               {% end %}
@@ -1585,10 +1725,10 @@ component =
         @I.HTMLdiv
         (HH.ElemName "div")
         [HP.class_ "editor-source"]
-        [ ("providers", providerBar st)
-        ,
-          ( "cm"
-          , [hh|
+        ( [ ("providers", providerBar st)
+          ,
+            ( "cm"
+            , [hh|
               <div
                 class="editor-cm"
                 ref={{ st.host }}
@@ -1602,27 +1742,65 @@ component =
                 {{ HE.handler' (EventType "wiki-mention") (\ev -> uncurry MentionAsked <$> mentionAsked ev) }}
                 {{ HE.handler' (EventType "wiki-emoji") (\ev -> uncurry EmojiAsked <$> emojiAsked ev) }}
                 {{ HE.handler' (EventType "wiki-cursor-line") (fmap CursorAt . cursorLineOf) }}
-                {{ HE.handler' (EventType "wiki-open-slide") (fmap ToggleSlide . slideToggled) }}
-                {{ HE.handler' (EventType "wiki-move-slide") (fmap (\(i, j, after) -> DropSlide i j after) . slideDropped) }}
-                {{ HE.handler' (EventType "wiki-ready") (const (Just EditorReady)) }}
-                {{ HE.handler' (EventType "wiki-folds") (\ev -> Just $! FoldsChanged (foldsChange ev)) }}
+                {{ HE.handler' (EventType "wiki-ready") (\ev -> Just $! EditorReady (readyFocused ev)) }}
+                {{ HE.handler' (EventType "wiki-editor-failed") (const (Just EditorFailed)) }}
+                {{ HE.handler' (EventType "wiki-row-wanted") (fmap RowWantedBy . rowWanted) }}
+                {{ HE.handler' (EventType "wiki-relayout") (const (Just Relaid)) }}
               ></div>
             |]
-          )
-        ,
-          ( loadKey st
-          , HH.element
-              @I.HTMLtextarea
-              (HH.ElemName "textarea")
-              [ HP.class_ "editor-text"
-              , attr "aria-label" "The page's Markdown"
-              , HE.onValueInput Typed
-              , HP.autofocus True
+            )
+          ,
+            ( loadKey st
+            , HH.element
+                @I.HTMLtextarea
+                (HH.ElemName "textarea")
+                [ HP.class_ "editor-text"
+                , attr "aria-label" "The page's Markdown"
+                , HE.onValueInput Typed
+                , HP.autofocus True
+                ]
+                [HH.text work.loadedBody]
+            )
+          , ("hint", [hh|<p class="editor-hint">{{ hint st }}</p>|])
+          ]
+            <> [("slides", HH.div [HP.class_ "editor-slides-holder"] [slideList st, HH.p [HP.class_ "visually-hidden editor-slides-status", attr "role" "status"] [HH.text st.announcement]]) | slidesShown st]
+        )
+
+    -- A presentation's rows, slide by slide, one per slide, keyed by the
+    -- row's key (and the load: a reload makes new rows), so that a row
+    -- keeps its CodeMirror while the rows around it change. A row cannot
+    -- be opened before the master is in place.
+    slideList :: State -> H.ComponentHTML Action Slots m
+    slideList st =
+      HH.keyed
+        @I.HTMLol
+        (HH.ElemName "ol")
+        [HP.class_ "editor-slides", attr "aria-label" "Slides", HP.ref st.rowsList]
+        [ ( show st.loads <> ":" <> show k
+          , HH.li
+              [HP.class_ "editor-slide"]
+              [ HH.slot
+                  "slideRow"
+                  (st.loads, k)
+                  SlideRow.component
+                  SlideRow.Input
+                    { head = h
+                    , open = h.key `elem` st.openRows
+                    , master = if st.master == Attached then st.hostElement else Nothing
+                    , focus = st.focusRow == Just h.key
+                    , movable = i >= fixed
+                    , dropMark = case st.dropAt of
+                        Just (at, after) | at == h.key -> Just after
+                        _ -> Nothing
+                    }
+                  FromRow
               ]
-              [HH.text work.loadedBody]
           )
-        , ("hint", [hh|<p class="editor-hint">{{ hint st }}</p>|])
+        | (i, h) <- zip [0 ..] st.rowHeads
+        , let RowKey k = h.key
         ]
+      where
+        fixed = maybe 0 SlideRows.fixedRows st.rows
 
     loadKey :: State -> Text
     loadKey st = "load-" <> show st.loads
@@ -1664,8 +1842,8 @@ component =
       | st.uploading > 0 = "Uploading " <> show st.uploading <> (if st.uploading == 1 then " file…" else " files…")
       | otherwise = "Drop or paste files here to attach them. Ctrl+S saves; Tab indents."
 
-    attachmentList :: Work -> H.ComponentHTML Action Slots m
-    attachmentList work =
+    attachmentList :: Bool -> Work -> H.ComponentHTML Action Slots m
+    attachmentList writable work =
       [hh|
         <section class="editor-attachments">
           <h2>Attachments</h2>
@@ -1677,7 +1855,7 @@ component =
                 <li>
                   <a href={{ Body.linkUrlOf work.addresses a.id }} download={{ a.name.text }}>{{ a.name.text }}</a>
                   <span class="attachment-meta">{{ a.mediaType.text }}, {{ fileSize a.size }}</span>
-                  <button type="button" class="attachment-insert" onClick={{ const (Insert a) }}>Insert</button>
+                  <button type="button" class="attachment-insert" disabled={{ not writable }} title={{ if writable then "Insert a reference to it at the cursor" else "Open a slide to insert it there" :: Text }} onClick={{ const (Insert a) }}>Insert</button>
                 </li>
               {% end %}
             </ul>
@@ -1764,9 +1942,7 @@ component =
             Editing -> showPreview True
             Previewing -> backToEditing
         EscapeKey -> closeMenu
-        MoveSlideKey by -> withSlides $ \host spans -> do
-          line <- H.liftEffect (cursorLine host)
-          for_ (Slides.slideAtLine spans line) $ \i -> H.liftEffect (moveSlideIn host i (i + by))
+        MoveSlideKey _ -> pass
       Submit -> save Stay
       SaveAndClose -> save Close
       -- The work is discarded, and so is its draft.
@@ -1798,7 +1974,8 @@ component =
       ToggleMenu which -> do
         was <- gets (\st -> st.menu)
         closeMenu
-        unless (was == Just which) $ do
+        writable <- gets writesAtCursor
+        unless (was == Just which || not writable) $ do
           modify (\st -> st {menu = Just which, emojiQuery = ""})
           watch <- gets (\st -> st.menuHolder) >>= (`watchPopup` CloseMenu)
           modify (\st -> st {menuWatch = watch})
@@ -1820,7 +1997,7 @@ component =
       FromNewKind NewKindDialog.Closed -> modify (\st -> st {kindDialogOpen = False})
       LinkPage -> do
         closeMenu
-        whenM (gets (\st -> st.mode == Editing)) $ modify (\st -> st {linkDialogOpen = True})
+        whenM (gets (\st -> st.mode == Editing && writesAtCursor st)) $ modify (\st -> st {linkDialogOpen = True})
       FromLinkDialog LinkDialog.Closed -> modify (\st -> st {linkDialogOpen = False})
       ChoseHome homeChoice -> modify (\st -> st {homeChoice})
       -- The icon was saved: the shell reads the wiki again.
@@ -2026,7 +2203,6 @@ component =
       -- shows: marked beside the slides' handles and among the problems.
       FromPreview (Preview.SlidesMeasured text fits) -> do
         modify (\st -> st {measures = Just (Slides.measuresFor text fits)})
-        showSlides
         publishProblems
       FromPreview (Preview.IslandDrawn key out) -> do
         before <- gets (\st -> st.failedIslands)
@@ -2037,61 +2213,110 @@ component =
           modify (\st -> st {failedIslands = after})
           publishProblems
       NextProblem -> gets (\st -> st.hostElement) >>= traverse_ (H.liftEffect . nextProblem)
-      -- The mode changes the folds and the controls, never the text.
-      SlidesMode wanted -> do
-        modify (\st -> st {slidesMode = wanted})
+      -- The mode changes what is shown, never the text. The rows close on
+      -- the way to the Raw mode (their CodeMirrors go), and the ones open
+      -- then open again on the way back, if they are still there.
+      -- The mode already chosen, chosen again, changes nothing: the rows
+      -- open stay open, and those kept for the way back stay kept.
+      SlidesMode wanted -> unlessM (gets (\st -> st.slidesMode == wanted)) $ do
+        modify $ \st ->
+          if wanted
+            then st {slidesMode = True, openRows = [k | k <- st.keptOpen, k `elem` rowKeys st], keptOpen = [], focusRow = Nothing}
+            else st {slidesMode = False, keptOpen = st.openRows, openRows = []}
         H.liftEffect (Storage.setItem LocalStorage rawSlidesKey (not wanted))
-        if wanted
-          then showSlides >> foldAllBut []
-          else
-            gets (\st -> st.hostElement)
-              >>= traverse_
-                ( \host -> do
-                    spans <- currentSlides
-                    H.liftEffect (unfoldLines host [(sp.from, sp.to) | sp <- spans])
-                    showSlides
-                )
+        st <- get
+        for_ st.hostElement $ \host -> H.liftEffect (slidesModeIn host (slidesShown st))
       OneSlide wanted -> modify (\st -> st {oneSlide = wanted})
       CursorAt line -> modify (\st -> st {cursorAt = line})
-      -- A slide's button: opening a slide closes the others, unless Ctrl
-      -- or Cmd was held.
-      ToggleSlide toggle -> withSlides $ \host spans -> for_ (startingAt spans toggle.line) $ \(i, sp) ->
-        if not toggle.open
-          then H.liftEffect (foldLines host [(sp.from, sp.to)])
-          else
-            if toggle.more
-              then H.liftEffect (unfoldLines host [(sp.from, sp.to)])
-              else foldAllBut [i]
-      -- A slide opened by CodeMirror's own gestures (its fold's mark, the
-      -- keys) is opened as by its button: the others close, unless Ctrl or
-      -- Cmd was held on the click. A fold an edit opened (typing into it,
-      -- an undo) is not the author choosing a slide: the others stay.
-      FoldsChanged change -> unless (change.byEdit || change.more) $
-        withSlides $ \_ spans ->
-          for_ (head [i | line <- change.opened, Just (i, _) <- [startingAt spans line]]) $ \i -> foldAllBut [i]
-      -- A slide dropped before or after another: where it goes once it is
-      -- taken out of the list.
-      DropSlide fromLine toLine after -> withSlides $ \host spans ->
-        for_ ((,) <$> startingAt spans fromLine <*> startingAt spans toLine) $ \((i, _), (k, _)) ->
-          let j
-                | after = if k > i then k else k + 1
-                | otherwise = if k < i then k else k - 1
-           in unless (k == i) $ H.liftEffect (moveSlideIn host i j)
-      -- A new slide at the end, its title selected to be typed over, and
-      -- the only one open.
-      NewSlide -> withSlides $ \host _ -> do
-        H.liftEffect (appendSlide host newSlideTitle)
-        spans <- currentSlides
-        foldAllBut [length spans - 1]
-      -- CodeMirror has taken the textarea's place: a presentation's slides
-      -- are marked and, slide by slide, folded now, which could not be
-      -- done before.
-      EditorReady -> do
+      -- A row's header: it opens, or closes.
+      -- A key the rows no longer have (a click on a row being taken away)
+      -- opens nothing.
+      FromRow (SlideRow.Toggled key) ->
+        modify $ \st ->
+          if key `elem` st.openRows
+            then st {openRows = filter (/= key) st.openRows}
+            else
+              if key `elem` rowKeys st
+                then st {openRows = st.openRows <> [key], focusRow = Nothing}
+                else st
+      -- Ctrl+Z or Ctrl+Y on a header: the whole text's undo or redo.
+      FromRow (SlideRow.History undoing) -> gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (undoIn host undoing))
+      -- A change took the master's cursor to another row: that row opens,
+      -- with the focus, and the row left closes when the author went there
+      -- (an undo, a redo, the next problem); other open rows stay open.
+      RowWantedBy wanted -> whenM (gets (elem wanted.key . rowKeys)) $ do
+        keepingRowsFocus $
+          modify $ \st ->
+            let opened = if wanted.key `elem` st.openRows then st.openRows else st.openRows <> [wanted.key]
+                closed = if wanted.close then [l | Just l <- [wanted.left], l /= wanted.key] else []
+             in st
+                  { openRows = filter (`notElem` closed) opened
+                  , focusRow = if wanted.key `elem` st.openRows || not wanted.focus then st.focusRow else Just wanted.key
+                  }
+        for_ (lookup wanted.reason [("undo", "Undo"), ("redo", "Redo"), ("problem", "Problem")]) $ \what ->
+          gets (slideNamed wanted.key) >>= say . ((what <> " in ") <>)
+      -- Alt+Up or Alt+Down in a row's text, on its header or its handle.
+      MoveFromText key by -> moveRowBy key by
+      FromRow (SlideRow.Moved key by) -> moveRowBy key by
+      FromRow (SlideRow.Deleted key) -> deleteSlide key
+      FromRow (SlideRow.AddedAfter key) -> newSlideAfter (Just key)
+      NewSlide -> newSlideAfter Nothing
+      -- A row dragged by its handle, and dropped before or after another.
+      FromRow (SlideRow.DragStarted key) -> modify (\st -> st {dragging = Just key, dropAt = Nothing})
+      FromRow (SlideRow.DraggedOver key after) -> whenM (gets (\st -> isJust st.dragging)) $ modify (\st -> st {dropAt = Just (key, after)})
+      FromRow (SlideRow.DroppedOn target after) -> do
+        dragged <- gets (\st -> st.dragging)
+        modify (\st -> st {dragging = Nothing, dropAt = Nothing})
+        for_ dragged $ \key -> dropSlide key target after
+      FromRow SlideRow.DragEnded -> modify (\st -> st {dragging = Nothing, dropAt = Nothing})
+      -- A step, or its undo or redo, changed the master's layout: the rows
+      -- are read again at once, and a row brought back by the undo of its
+      -- delete opens again if it was open. Where the focus goes is the
+      -- master's rule (web/src/editor.js's rowsSync): an undo or a redo
+      -- takes it to the row the history put the cursor in, which the
+      -- "wiki-row-wanted" after this event opens.
+      Relaid -> recutRowsWith True
+      -- CodeMirror's module did not load: there will be no master, and the
+      -- presentation is its Markdown in the textarea, as on a page without
+      -- the editor's script. Only while the master is awaited: a failure
+      -- told late does not undo a master in place.
+      EditorFailed -> modify (\st -> if st.master == Waiting then st {master = Absent} else st)
+      -- CodeMirror has taken the textarea's place: the master is told the
+      -- mode and given the rows of the text it holds, which can open now,
+      -- the row its cursor starts in first.
+      -- When the textarea had the focus (the author typing while CodeMirror
+      -- loaded), the cursor's row opens with it, its caret where the
+      -- textarea's was: the master, which took the textarea's text and
+      -- selection, is hidden slide by slide.
+      EditorReady hadFocus -> do
         -- The cursor's line from the start: CodeMirror tells it only when
         -- it changes, and it may start below the title line.
         gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (cursorLine host) >>= \line -> modify (\st -> st {cursorAt = line}))
-        showSlides
-        whenM (gets editingSlides) (foldAllBut [])
+        -- Told again for the master in place, the rows open stay open.
+        already <- gets (\st -> st.master == Attached)
+        modify (\st -> st {master = Attached})
+        st <- get
+        for_ st.hostElement $ \host -> do
+          H.liftEffect (slidesModeIn host (slidesShown st))
+          when (isDeck st) $
+            H.liftEffect (rowsLayout host)
+              >>= traverse_
+                ( \layout -> do
+                    let (rows, nextKey) = case st.rows of
+                          Just kept | SlideRows.assemble kept == layout.text -> (kept, st.nextKey)
+                          _ -> SlideRows.cutRows st.nextKey layout.text
+                    taken <- H.liftEffect (setRows host layout.text rows)
+                    when taken $ do
+                      let start = atMay rows.rows (SlideRows.rowAt rows layout.cursor)
+                      modify $ \s ->
+                        s
+                          { rows = Just rows
+                          , nextKey
+                          , openRows = if already then [k | k <- s.openRows, k `elem` map (.key) rows.rows] else [r.key | Just r <- [start]]
+                          , focusRow = if hadFocus && slidesShown s then (.key) <$> start else s.focusRow
+                          }
+                      publishProblems
+                )
       DiscardOffered -> do
         withPage (void . discardDraft)
         modify (\st -> st {hasDraft = False, found = Nothing})
@@ -2159,7 +2384,9 @@ component =
       case st.loaded of
         Ready w -> do
           found <- H.getRef st.host
-          modify (\s -> s {hostElement = found, pendingChanges = 0, selection = Nothing})
+          available <- H.liftEffect editorAvailable
+          let master = if inBrowser && not available then Absent else Waiting
+          modify (\s -> freshRows s {hostElement = found, pendingChanges = 0, selection = Nothing, master})
           traverse_ (\host -> H.liftEffect (attachEditor host w.loadedBody)) found
           -- The text loaded is checked at once, the typing after a pause.
           -- Only in a browser: a page prerendered natively has no
@@ -2243,11 +2470,18 @@ component =
     -- Run a toolbar command on the text. Its input event, handled before
     -- this returns, brings the change into the work. A save in progress
     -- does not block it, just as it does not block typing.
+    --
+    -- A command that writes at the cursor runs only where there is a text
+    -- to write into ('writesAtCursor'); the page's macros have a place of
+    -- their own in the text, and are written wherever the cursor is.
     run :: Command -> H.HalogenM State Action Slots ViewOutput m ()
     run command = do
       closeMenu
       st <- get
-      when (st.mode == Editing) $
+      let ownPlace = case command of
+            PageMacros _ -> True
+            _ -> False
+      when (st.mode == Editing && (ownPlace || writesAtCursor st)) $
         H.getRef st.host >>= traverse_ (\host -> H.liftEffect (applyCommand host command))
 
     closeMenu :: H.HalogenM State Action Slots ViewOutput m ()
@@ -2358,51 +2592,188 @@ component =
         modify keepDrawnFailures
       modify (\st -> st {pending = Just waiting})
 
-    -- A presentation's slides in the text as it is now: those the last
-    -- check found, when it checked this text, or found again.
-    currentSlides :: H.HalogenM State Action Slots ViewOutput m [Slides.SlideSpan]
-    currentSlides =
-      gets $ \st -> case st.loaded of
-        Ready w
-          | w.page.kind /= Kind.Presentation -> []
-          | st.checkedText == w.body -> st.checked.slides
-          | otherwise -> Slides.slideSpans w.body
-        _ -> []
+    -- The rows the master holds now, cut again where their text changed
+    -- ("Wiki.Core.SlideRows.recut"), and given back to the master, which
+    -- takes them only if its text is still the one they were cut from: a
+    -- cut of an older text is dropped, and the next check cuts again. A
+    -- row that splits off an open row is open too. Run after the typing
+    -- has paused, with the check.
+    recutRows :: H.HalogenM State Action Slots ViewOutput m ()
+    recutRows = recutRowsWith False
 
-    -- Run an action of the slides with CodeMirror's host and the slides,
-    -- when a presentation is edited slide by slide.
-    withSlides :: (Element -> [Slides.SlideSpan] -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()
-    withSlides act = do
+    -- The same, after a structural step or its undo or redo ('True'): a row
+    -- that comes back opens only if it was open when it was deleted.
+    recutRowsWith :: Bool -> H.HalogenM State Action Slots ViewOutput m ()
+    recutRowsWith afterStep = do
       st <- get
-      when (editingSlides st) $ for_ st.hostElement $ \host -> currentSlides >>= act host
-
-    -- The slide that starts on a line, with its index.
-    startingAt :: [Slides.SlideSpan] -> Int -> Maybe (Int, Slides.SlideSpan)
-    startingAt spans line = head [(i, sp) | (i, sp) <- zip [0 ..] spans, sp.from == line]
-
-    -- Mark the slides in CodeMirror, with their controls, when a
-    -- presentation is edited slide by slide; take the marks away
-    -- otherwise. The slides before the first that can move have no handle.
-    showSlides :: H.HalogenM State Action Slots ViewOutput m ()
-    showSlides = do
-      st <- get
-      for_ st.hostElement $ \host -> case st.loaded of
-        Ready w -> do
-          spans <- if editingSlides st then currentSlides else pure []
-          let fixed = Slides.fixedSlides spans
-              fits = Slides.fitsNow st.measures w.body spans
-          H.liftEffect (markSlides host w.body [(sp.from, i >= fixed, Slides.fitName fit) | ((i, sp), fit) <- zip (zip [0 ..] spans) fits])
+      case (st.master, st.hostElement, st.rows) of
+        (Attached, Just host, Just old) ->
+          H.liftEffect (rowsLayout host)
+            >>= traverse_
+              ( \layout ->
+                  for_ (SlideRows.fromLayout layout.text layout.starts) $ \laid -> do
+                    let edited = SlideRows.changedSince old laid
+                        (cut', nextKey) = SlideRows.recut st.nextKey (Just layout.cursor) edited laid
+                        new = keepFocused st.openRows layout cut'
+                        keys = [r.key | r <- new.rows]
+                        wasOpen k = k `elem` st.openRows
+                        neighbours = zip3 (Nothing : map Just keys) keys (map Just (drop 1 keys) <> [Nothing])
+                        fresh k = k `notElem` [r.key | r <- old.rows]
+                        opened =
+                          [ k
+                          | (above, k, below) <- neighbours
+                          , wasOpen k || (fresh k && if afterStep then k `elem` st.deletedOpen else any (maybe False wasOpen) [above, below])
+                          ]
+                        -- After a step, each row the step took away is
+                        -- remembered as open or not as it was then, in place
+                        -- of what was remembered of it before, so that any
+                        -- number of undos and redos brings it back as it
+                        -- was when it went. A row that is there again is
+                        -- forgotten: the step that takes it away next says
+                        -- again whether it was open.
+                        gone = if afterStep then [r.key | r <- old.rows, r.key `notElem` keys] else []
+                        remembered s = [k | k <- gone, wasOpen k] <> filter (`notElem` (gone <> keys)) s.deletedOpen
+                    unless (new == old) $ do
+                      taken <- H.liftEffect (setRows host layout.text new)
+                      when taken $ do
+                        keepingRowsFocus $
+                          modify (\s -> s {rows = Just new, nextKey, openRows = opened, deletedOpen = remembered s})
+                        -- New rows, new headers, and maybe other rows a
+                        -- block left open swallows.
+                        publishProblems
+              )
         _ -> pass
 
-    -- Fold every slide but those given, by their indices, and the
-    -- cursor's when none is given; open those.
-    foldAllBut :: [Int] -> H.HalogenM State Action Slots ViewOutput m ()
-    foldAllBut keep = withSlides $ \host spans -> do
-      line <- H.liftEffect (cursorLine host)
-      let open = if null keep then maybeToList (Slides.slideAtLine spans line) else keep
-          ranges = [(i, (sp.from, sp.to)) | (i, sp) <- zip [0 ..] spans]
-      H.liftEffect (unfoldLines host [r | (i, r) <- ranges, i `elem` open])
-      H.liftEffect (foldLines host [r | (i, r) <- ranges, i `notElem` open])
+    -- The rows as the master holds them now, cut again first if typing
+    -- changed them, for a structural step: the master's host, its layout
+    -- and the rows, in the slide mode once CodeMirror is in place.
+    withRows :: (Element -> Layout -> Rows -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()
+    withRows act = do
+      recutRows
+      st <- get
+      case (st.master, st.hostElement, st.rows) of
+        (Attached, Just host, Just rows)
+          | slidesShown st ->
+              H.liftEffect (rowsLayout host) >>= traverse_ (\layout -> when (SlideRows.assemble rows == layout.text) (act host layout rows))
+        _ -> pass
+
+    -- Make a structural step on the master, one entry of its history, and
+    -- take its rows: the cursor where it was in its row, wherever that row
+    -- went, unless the step says where. Whether the master took it.
+    stepWith :: Element -> Layout -> Rows -> Text -> (Rows, [SlideRows.Edit]) -> Maybe (Int, Int) -> H.HalogenM State Action Slots ViewOutput m Bool
+    stepWith host layout old event (new, edits) chosen = do
+      let at = SlideRows.rowAt old layout.cursor
+          select =
+            chosen <|> do
+              row <- atMay old.rows at
+              wasAt <- atMay (SlideRows.rowStarts old) at
+              nowAt <- lookup row.key (zip [r.key | r <- new.rows] (SlideRows.rowStarts new))
+              moved <- find (\r -> r.key == row.key) new.rows
+              -- The selection, if it is all in that row.
+              guard (layout.anchor >= wasAt && layout.anchor <= wasAt + T.length row.text)
+              let shifted c = nowAt + min (c - wasAt) (T.length moved.text)
+              Just (shifted layout.anchor, shifted layout.cursor)
+      taken <- H.liftEffect (stepIn host layout.text event edits new select)
+      when taken $ do
+        keepingRowsFocus (modify (\s -> s {rows = Just new, dragging = Nothing}))
+        publishProblems
+      pure taken
+
+    -- Move a slide one place up (-1) or down (1), as one step.
+    moveRowBy :: RowKey -> Int -> H.HalogenM State Action Slots ViewOutput m ()
+    moveRowBy key by = withRows $ \host layout rows ->
+      for_ (indexOf key rows) $ \i -> for_ (SlideRows.moveRow i (i + by) rows) $ \moved -> do
+        taken <- stepWith host layout rows "move.slide" moved Nothing
+        when taken (announceMove key)
+
+    -- Move the slide dragged before or after the slide it was dropped on.
+    dropSlide :: RowKey -> RowKey -> Bool -> H.HalogenM State Action Slots ViewOutput m ()
+    dropSlide key target after = withRows $ \host layout rows ->
+      for_ ((,) <$> indexOf key rows <*> indexOf target rows) $ \(i, k) -> do
+        let j
+              | after = if k > i then k else k + 1
+              | otherwise = if k < i then k else k - 1
+        unless (k == i) . for_ (SlideRows.moveRow i j rows) $ \moved -> do
+          taken <- stepWith host layout rows "move.slide" moved Nothing
+          when taken (announceMove key)
+
+    -- Delete a slide, as one step, without asking: Ctrl+Z brings it back,
+    -- open if it was. The focus goes to the next row's header, or the
+    -- previous one's for the last row.
+    deleteSlide :: RowKey -> H.HalogenM State Action Slots ViewOutput m ()
+    deleteSlide key = withRows $ \host layout rows ->
+      for_ (indexOf key rows) $ \i -> for_ (SlideRows.deleteRow i rows) $ \deleted@(new, _) -> do
+        name <- gets (slideNamed key)
+        -- Whether it is open, read before the step: the master tells of
+        -- the step at once ("wiki-relayout"), and the rows read again then
+        -- may come before what follows here.
+        wasOpen <- gets (\s -> key `elem` s.openRows)
+        modify (\s -> s {deletedOpen = [key | wasOpen] <> filter (/= key) s.deletedOpen})
+        taken <- stepWith host layout rows "delete.slide" deleted Nothing
+        when taken $ do
+          modify (\s -> s {openRows = filter (/= key) s.openRows})
+          say (capital name <> " deleted. Ctrl+Z brings it back.")
+          shown <- gets (\s -> s.rowsList) >>= H.getRef
+          for_ ((,) <$> shown <*> (atMay new.rows i <|> atMay new.rows (i - 1))) $ \(l, r) -> H.liftEffect (focusHeader l r.key)
+
+    -- A new slide after a row (the one whose text had the focus last, when
+    -- none is given), or at the end, as one step: open, its title selected
+    -- and the focus in it.
+    newSlideAfter :: Maybe RowKey -> H.HalogenM State Action Slots ViewOutput m ()
+    newSlideAfter given = withRows $ \host layout rows -> do
+      key <- gets (\s -> s.nextKey)
+      let after = given <|> layout.focused
+          at = maybe (length rows.rows) (+ 1) (after >>= (`indexOf` rows))
+          made@(new, _) = SlideRows.newRow key newSlideTitle at rows
+          start = fromMaybe 0 (indexOf key new >>= atMay (SlideRows.rowStarts new))
+      taken <- stepWith host layout rows "input.slide" made (Just (start + 3, start + 3 + T.length newSlideTitle))
+      when taken $ do
+        modify (\s -> s {nextKey = succ s.nextKey, openRows = s.openRows <> [key], focusRow = Just key})
+        gets (slideNamed key) >>= say . (<> " added.") . capital
+
+    -- The index of the row with a key.
+    indexOf :: RowKey -> Rows -> Maybe Int
+    indexOf key rows = head [i | (i, r) <- zip [0 ..] rows.rows, r.key == key]
+
+    -- What the live region says of a moved slide: where it is now.
+    announceMove :: RowKey -> H.HalogenM State Action Slots ViewOutput m ()
+    announceMove key = do
+      st <- get
+      let total = length [() | h <- st.rowHeads, isJust h.number]
+      say (capital (slideNamed key st) <> " moved to " <> maybe "its place" (\(n :: Int) -> show n <> " of " <> show total) (head [n | h <- st.rowHeads, h.key == key, Just n <- [h.number]]))
+
+    say :: Text -> H.HalogenM State Action Slots ViewOutput m ()
+    say said = modify (\st -> st {announcement = said})
+
+    -- The row whose editor had the focus last keeps that editor through a
+    -- re-cut, if it is still open: when its key is gone (its start was
+    -- taken away, an undo joining it to the row above), the row the cursor
+    -- is in now takes that key, and so the editor. A row closed since has
+    -- no editor to keep, and its key is given to no other row.
+    keepFocused :: [RowKey] -> Layout -> Rows -> Rows
+    keepFocused open layout rows = case layout.focused of
+      Just focused
+        | focused `elem` open
+        , focused `elem` map fst layout.starts
+        , focused `notElem` [r.key | r <- rows.rows]
+        , Just here <- atMay rows.rows (SlideRows.rowAt rows layout.cursor) ->
+            SlideRows.Rows {SlideRows.rows = [if r.key == here.key then SlideRows.Row {SlideRows.key = focused, SlideRows.text = r.text} else r | r <- rows.rows], SlideRows.separators = rows.separators}
+      _ -> rows
+
+    -- The keys of the rows there are.
+    rowKeys :: State -> [RowKey]
+    rowKeys st = maybe [] (\rows -> [r.key | r <- rows.rows]) st.rows
+
+    -- A change of the rows that may move one of them in the list, the
+    -- focus given back to what had it in the list if the move took it
+    -- away, and only then: a focus the author moved out of the list stays
+    -- where it went.
+    keepingRowsFocus :: H.HalogenM State Action Slots ViewOutput m () -> H.HalogenM State Action Slots ViewOutput m ()
+    keepingRowsFocus change = do
+      shown <- gets (\st -> st.rowsList) >>= H.getRef
+      traverse_ (H.liftEffect . holdFocus) shown
+      change
+      traverse_ (H.liftEffect . restoreFocus) shown
 
     -- Check the text for problems once the typing has stopped for the
     -- given time (in microseconds), as the preview follows it: a wait of
@@ -2420,9 +2791,10 @@ component =
           Ready w -> do
             found <- liftIO (evaluate (force (Problems.checkText w.page.kind w.body)))
             modify $ \st -> keepDrawnFailures st {checkWait = Nothing, checked = found, checkedText = w.body}
-            publishProblems
             gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (offerFolds host w.body found.folds))
-            showSlides
+            -- Cut first: the rows a block left open swallows are problems.
+            recutRows
+            publishProblems
           _ -> modify (\st -> st {checkWait = Nothing})
       modify (\st -> st {checkWait = Just waiting})
 
@@ -2444,14 +2816,33 @@ component =
             st {failedIslands = Map.restrictKeys st.failedIslands (Map.keysSet st.checked.islands)}
       _ -> st
 
-    -- Mark the problems of the last check, and the failed islands' that are
-    -- in its text, in CodeMirror, and count them.
+    -- The problems, from one value ('problemsOf': the last check's, the
+    -- failed islands' in its text, the slides that do not fit, and the
+    -- rows a block left open swallows), shown everywhere they are shown:
+    -- marked in CodeMirror and counted on the "N problems" button, while
+    -- the editor holds the text checked, and counted on the rows' headers,
+    -- with the rows' fits. The headers are made only here, so that no
+    -- source of problems can change the button and leave the headers
+    -- behind. Run by everything that changes one of those: a check that
+    -- has finished, an island drawn or failed late, the slides measured,
+    -- the editor in place, a step, and a re-cut of the rows taken (after a
+    -- pause in the typing, or for a step's undo or redo). While the editor holds another text than the one checked
+    -- (a step, typing since the check), CodeMirror keeps its marks mapped
+    -- through the changes, and the next check marks them again.
     publishProblems :: H.HalogenM State Action Slots ViewOutput m ()
     publishProblems = do
       st <- get
-      let problems = sort (Problems.allProblems st.checked st.failedIslands <> fitProblems st)
-      traverse_ (\host -> H.liftEffect (showProblems host (problemRanges st.checkedText problems))) st.hostElement
-      when (length problems /= st.problemCount) $ modify (\s -> s {problemCount = length problems})
+      let problems = problemsOf st
+          holdsChecked = case st.loaded of
+            Ready w -> w.body == st.checkedText
+            _ -> False
+      when holdsChecked $ do
+        traverse_ (\host -> H.liftEffect (showProblems host (problemRanges st.checkedText problems))) st.hostElement
+        when (length problems /= st.problemCount) $ modify (\s -> s {problemCount = length problems})
+      for_ st.rows $ \rows -> do
+        let found = headsOf st problems (SlideRows.assemble rows) rows
+        _ <- liftIO (evaluate (sum [T.length h.title | h <- found]))
+        modify (\s -> s {rowHeads = found})
 
     cancelPreview :: H.HalogenM State Action Slots ViewOutput m ()
     cancelPreview = do
@@ -2614,7 +3005,7 @@ component =
     showSaved = do
       gets (\st -> st.notice) >>= traverse_ H.kill
       waiting <- H.fork $ do
-        liftIO (threadDelay savedNoticeTime)
+        H.delay savedNoticeTime
         modify (\st -> st {notice = Nothing})
       modify (\st -> st {notice = Just waiting})
 
@@ -2660,8 +3051,10 @@ component =
 
     -- Insert text at the text's cursor. The input event that puts it in the
     -- work is handled before this returns, like a keystroke.
+    -- Nothing where there is no text to write into ('writesAtCursor'): a
+    -- file uploaded then is attached, and its link not written.
     insert :: Text -> H.HalogenM State Action Slots ViewOutput m ()
-    insert text = do
+    insert text = whenM (gets writesAtCursor) $ do
       ref <- gets (\st -> st.host)
       H.getRef ref >>= traverse_ (\host -> H.liftEffect (insertAtCursor host text))
 
@@ -2860,6 +3253,9 @@ data Bar = Bar
   -- ^ What is typed in the "Emoji" menu's field.
   , deck :: Maybe DeckBar
   -- ^ A presentation's controls ('deckBar'); none for a document.
+  , textless :: Bool
+  -- ^ Whether no text is shown for the commands to write in: slide by
+  -- slide, with no row open. Their buttons are disabled then.
   }
   deriving stock (Eq)
 
@@ -2871,9 +3267,9 @@ data DeckBar = DeckBar
   -- ^ Whether the presentation is edited slide by slide.
   , oneShown :: Bool
   -- ^ Whether the preview of the raw Markdown shows one slide.
-  , carriageReturns :: Bool
-  -- ^ Whether the text has a carriage return, which leaves it without
-  -- slides to fold or move ('Wiki.Core.Slides.slideSpans').
+  , noEditor :: Bool
+  -- ^ Whether the page has no editor's script, without which there are
+  -- no rows: the presentation is then its Markdown, in the textarea.
   }
   deriving stock (Eq)
 

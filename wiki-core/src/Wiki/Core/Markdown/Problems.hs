@@ -103,6 +103,11 @@ data ProblemKind
     Box
   | -- | A presentation's slide whose content does not fit on it.
     SlideFit
+  | -- | A presentation's slide with a block left open (a code fence, a
+    -- box, an HTML comment), which takes the slides after it into itself
+    -- when the presentation is read from the whole text, while the
+    -- editor's rows keep them apart ("Wiki.Core.SlideRows.swallowed").
+    SlideSwallows
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 -- | The kind's name as the editor shows it beside a problem's message.
@@ -115,6 +120,7 @@ kindName = \case
   Marker -> "block"
   Box -> "box"
   SlideFit -> "slide"
+  SlideSwallows -> "slide"
 
 -- | 'IslandPlace' is where an island that can fail is written in the
 -- source: its first and last line, and its kind. Listings are not among

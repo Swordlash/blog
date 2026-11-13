@@ -671,13 +671,6 @@ jobs:
       if: matrix.group == 'deploy'
       run: sh toolchain/test-rehearse-ci.sh
 
-    # The README's screenshots are taken by hand (npm run screenshots, which
-    # needs a wasm build and Chromium), so nothing in CI runs the script:
-    # parsing it at least catches a syntax error before someone next needs it.
-    - name: Check screenshots.mjs parses
-      if: matrix.group == 'deploy'
-      run: node --check toolchain/screenshots.mjs
-
     # wiki-server with the cabal flag postgres off, as a deployment on
     # SQLite builds it (toolchain/deploy-local.sh --sqlite). CPP gives that
     # build other code, so a warning only it has fails here, and its unit
@@ -1077,6 +1070,25 @@ jobs:
       env:
         HSPEC_HALOGEN_JOBS: '2'
       run: npm run test-wasm
+
+    # The smoke suites in Haskell (wiki-smoke; WP5.98 of docs/PLAN.md):
+    # native programs, built here with the host GHC into
+    # dist-newstyle/native-fast, that drive the demo just built in Chromium
+    # through haskell-halogen-playwright, which waits after every action
+    # until the page's program says it is idle. toolchain/smoke-suite.sh
+    # requires the build, so a missing demo fails rather than passes as
+    # pending. The first checks that those waits hold on the wiki's own
+    # pages; the second takes the README's screenshots (into a directory of
+    # the runner's, not docs/screenshots) and checks each is under 300 KB.
+    - name: Check the smoke tests' waits on the demo
+      if: github.job == 'wasm'
+      run: sh toolchain/smoke-suite.sh waits
+
+    - name: Take the README's screenshots from the demo
+      if: github.job == 'wasm'
+      env:
+        WIKI_SCREENSHOTS_DIR: ${{ runner.temp }}/screenshots
+      run: sh toolchain/smoke-suite.sh screenshots
 
     # Independent SQLite and PostgreSQL smoke runs can overlap. PostgreSQL
     # uses the container toolchain/ci-postgres.sh starts, as the native job's

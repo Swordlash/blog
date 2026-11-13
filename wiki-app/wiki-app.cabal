@@ -160,6 +160,7 @@ library
       Wiki.App.View.Security
       Wiki.App.View.Server
       Wiki.App.View.SignIn
+      Wiki.App.View.SlideRow
       Wiki.App.View.Slides
       Wiki.App.View.History
       Wiki.App.View.HomeIcon
@@ -439,6 +440,7 @@ test-suite wiki-app-browser-test
       Test.Browser.EditorSettings
       Test.Browser.Shell
       Test.Browser.SlideEditor
+      Test.Browser.SlideRows
       Test.Browser.Slides
       Test.Browser.Source
       Test.Browser.Spaces

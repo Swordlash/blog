@@ -1,7 +1,7 @@
 -- | A presentation read as slides: where it is cut, what each slide's title, body
 -- and notes are, and what the deck's options say. These run on both
 -- backends: the browser cuts the deck too.
-module Test.Slides (spec) where
+module Test.Slides (spec, aDeck, aMove) where
 
 import Data.Text qualified as T
 import Protolude

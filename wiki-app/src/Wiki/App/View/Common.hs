@@ -3,6 +3,24 @@
 -- | What the shell's views share: the 'Context' the shell gives each of
 -- them, the 'ViewOutput' they send back, the permission checks they run on
 -- the context, and a few pieces of HTML they all render.
+--
+-- = Pauses
+--
+-- A view pauses in one of two ways, and which one says whether a test
+-- waits for the pause. The smoke tests drive the built page with
+-- haskell-halogen-playwright, whose @waitQuiet@ waits for every fiber of
+-- the program that waits in a @liftIO@, and not for one in @H.delay@.
+--
+-- * A pause followed by work a test waits for is
+--   @liftIO (threadDelay n)@, in microseconds: the preview's and a search's
+--   debounce, the editor's check and its draft, the backups' next look
+--   while one runs. @waitQuiet@ after typing then returns once that work
+--   is done and drawn.
+-- * A pause that only takes something off the screen, or ticks, is
+--   @H.delay@, in seconds (a @NominalDiffTime@): the \"Saved\" and \"Copied\"
+--   notices, the export's notice, the assistant's seconds counter.
+--   @waitQuiet@ after a save then returns with \"Saved\" still shown, and a
+--   ticker does not keep the page from ever being quiet.
 module Wiki.App.View.Common
   ( -- * From the shell to a view, and back
     Context (..)

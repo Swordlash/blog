@@ -14,6 +14,7 @@
 //   wikiIslands.renderTikz(element, source, preamble, picture): Promise<void>
 //   wikiIslands.highlight(element, language, code)
 //   wikiIslands.attachEditor(textarea, host, original)
+//   wikiIslands.attachRow(masterHost, rowHost, key, focus)
 //   wikiIslands.assistant(): Promise<module>
 //   wikiIslands.cropAvatar(host, file): Promise<void>
 //   wikiIslands.opaque(): Promise<module>
@@ -349,11 +350,26 @@ const codeTokens = (language, code) => {
 };
 
 // The editor's text, once its module has loaded; until then, and should it
-// not load, the textarea stays, and is typed into.
-const attachEditor = (textarea, host, original) => {
-  loadEditor()
+// not load, the textarea stays, and is typed into. The host is then told
+// with a "wiki-editor-failed" event: the component shows the textarea in
+// every mode, a presentation's slide by slide too, which needs CodeMirror.
+// `load` loads the module; a browser test gives one that fails.
+const attachEditor = (textarea, host, original, load = loadEditor) => {
+  load()
     .then((editor) => editor.attach(textarea, host, original, codeTokens))
-    .catch((error) => console.error("The editor's formatting could not be loaded:", error));
+    .catch((error) => {
+      console.error("The editor's formatting could not be loaded:", error);
+      host.dispatchEvent(new CustomEvent("wiki-editor-failed"));
+    });
+};
+
+// A row of a presentation's slide mode over the editor's text (editor.js's
+// attachRow), once the editor's module has loaded: the module is loaded
+// already when the master is in place, so this waits only for a task.
+const attachRow = (masterHost, rowHost, key, focus) => {
+  loadEditor()
+    .then((editor) => editor.attachRow(masterHost, rowHost, key, focus))
+    .catch((error) => console.error("A slide's row could not be shown:", error));
 };
 
 // The cropper in the avatar's dialog, once its module has loaded. A module
@@ -633,6 +649,7 @@ globalThis.wikiIslands = Object.freeze({
   renderTikz,
   highlight,
   attachEditor,
+  attachRow,
   assistant: loadAssistant,
   cropAvatar,
   opaque: loadOpaque,

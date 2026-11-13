@@ -3362,9 +3362,10 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 | [wiki-api/](wiki-api/) | `wiki-api` | Request and response types (aeson), shared by the client and the server. |
 | [wiki-app/](wiki-app/) | `wiki-app` | The Halogen application: `wiki-app` (the wasm program) and `wiki-app-prerender` (native: writes the page with the application already rendered into it). |
 | [wiki-server/](wiki-server/) | `wiki-server` | The server, native only: servant over PostgreSQL or SQLite (Beam), rendering each page per request, with pandoc for the exports. |
+| [wiki-smoke/](wiki-smoke/) | `wiki-smoke` | The smoke suites in Haskell, native only: the built page driven in headless Chromium through haskell-halogen-playwright, which waits on the page's program. `wiki-smoke-screenshots` takes the README's screenshots; `wiki-smoke-waits` checks that the waits hold on the wiki. |
 | [docs/](docs/) | | The authors' Markdown reference (`markdown.md`), the HTTP API (`api.md`), the export format (`export.md`), the plan of work (`PLAN.md`), and the README's screenshots. |
 | [web/](web/) | | The page around the application: `index.html`, `index.js` (loads `app.wasm`), CSS, and `bundle.sh`, which bundles the islands' libraries from `web/src/`; `licenses/`, the texts of TikZJax's licence and its fonts', which the bundle serves beside them. |
-| [toolchain/](toolchain/) | | Build, test and deploy scripts, adapted from haskell-halogen's, and `screenshots.mjs`, which takes the README's screenshots. |
+| [toolchain/](toolchain/) | | Build, test and deploy scripts, adapted from haskell-halogen's, and `smoke-suite.sh`, which runs a suite of `wiki-smoke`. |
 
 At the top, `Dockerfile` and `docker-compose.yml` run the server in Docker
 (above); `.dockerignore` keeps everything but the sources
@@ -3388,6 +3389,7 @@ npm run test-wasm               # the test suites on wasm, under Node; wiki-app-
 npm run test                    # test-native, then test-wasm
 npm run smoke-test              # the built page in headless Chromium: the demo (every prerendered route, a walk with back, forward and reload, dark and phone), and the server's build against a real wiki-server, in parallel
 npm run screenshots             # the README's screenshots, from the built demo in headless Chromium, into docs/screenshots
+npm run smoke-waits             # that the Haskell smoke suites' waits hold on the built demo (wiki-smoke-waits)
 npm run dev-test                # wiki-app-browser-test in browser GHCi, rerun on save (needs ghciwatch)
 npm run format                  # fourmolu over every package
 npm run format-check            # the same, failing on what it would change (as CI does)
@@ -3416,11 +3418,11 @@ runs its server on PostgreSQL too when `WIKI_TEST_DATABASE_URL` is set
 (`toolchain/smoke-test.sh`). `wiki-server-bench` times the storage on SQLite,
 or with `postgres URL` on an empty PostgreSQL database.
 
-`npm run screenshots` (`toolchain/screenshots.mjs`) takes the four screenshots at
+`npm run screenshots` (`wiki-smoke-screenshots`, through `toolchain/smoke-suite.sh`) takes the four screenshots at
 the top of this README from the page `npm run build-wasm` built, in headless
 Chromium at 1280 by 800, once KaTeX, Mermaid and highlight.js have drawn; take
 them again when the look changes, and commit them. Each has to stay under 300 KB,
-which the script and `wiki-app-test` check; the same test checks that every
+which the suite (in CI too) and `wiki-app-test` check; the same test checks that every
 example under [Writing pages](#writing-pages) and [Presentations](#presentations)
 is, word for word, on the demo's page it links to.
 

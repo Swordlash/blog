@@ -35,6 +35,7 @@ module Wiki.App.Editor.Browser
     -- * The text
   , attachEditor
   , detachEditor
+  , editorAvailable
   , typedText
   , applyCommand
   , insertAtCursor
@@ -81,19 +82,32 @@ module Wiki.App.Editor.Browser
   , foldLines
   , unfoldLines
   , foldedLines
-  , reportedFolds
-  , FoldsChange (..)
-  , foldsChange
 
     -- * Slides
-  , markSlides
   , cursorLine
   , cursorLineOf
-  , SlideToggle (..)
-  , slideToggled
-  , slideDropped
-  , moveSlideIn
-  , appendSlide
+  , readyFocused
+
+    -- * A presentation's rows
+  , attachRow
+  , detachRow
+  , Layout (..)
+  , rowsLayout
+  , setRows
+  , slidesModeIn
+  , holdFocus
+  , restoreFocus
+  , RowWanted (..)
+  , rowWanted
+  , historyKey
+  , undoIn
+  , moveKey
+  , rowKeyOf
+  , stepIn
+  , focusHeader
+  , dragCarries
+  , markDragged
+  , pointerAfter
 
     -- * Mentions
   , mentionAsked
@@ -113,10 +127,10 @@ import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict, eitherDecodeStrict,
 import Data.ByteString.Lazy qualified as BSL
 import Data.Coerce (coerce)
 import Data.Foreign (foreignToInt)
-import Data.List (elemIndex, lookup)
+import Data.List (lookup)
 import Data.Text qualified as T
 import Halogen.JSBits (Callback, Inert (..), JSText, JSVal, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, isNull, jsValText, mkSyncCallback, toJSText)
-import Halogen.JSBits.Fields (Member (..), jsFields)
+import Halogen.JSBits.Fields (Member (..), inlineJS, jsFields)
 import Halogen.JSBits.Promise (wait)
 import Halogen.Query.Event.Window qualified as WindowEvent
 import Halogen.Subscription (Emitter)
@@ -145,7 +159,8 @@ import Wiki.Core.Assistant.Edit (Change (..), Decision (..), Edit, Refusal, Repl
 import Wiki.Core.Assistant.Prompt (Span (..))
 import Wiki.Core.Markdown.Edit (Command (..), Selection (..), apply, cursor)
 import Wiki.Core.Markdown.Folds (Fold (..))
-import Wiki.Core.Slides qualified as Slides
+import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), rowStarts)
+import Wiki.Core.SlideRows qualified as SlideRows
 import Wiki.Core.User (Login (..), User (..))
 
 -- What works on the text as CodeMirror and the textarea count it, in
@@ -154,6 +169,17 @@ import Wiki.Core.User (Login (..), User (..))
 $( browserJS
      ["jsbits/editor.js"]
      [ ("js_attach", "wiki_editor_attach", Safe, [t|Element -> JSText -> IO ()|])
+     , ("js_attach_row", "wiki_editor_attach_row", Safe, [t|Element -> Element -> Int -> Bool -> IO ()|])
+     , ("js_detach_row", "wiki_editor_detach_row", Safe, [t|Element -> IO ()|])
+     , ("js_available", "wiki_editor_available", Safe, [t|IO Bool|])
+     , ("js_rows", "wiki_editor_rows", Safe, [t|Element -> IO JSText|])
+     , ("js_set_rows", "wiki_editor_set_rows", Safe, [t|Element -> JSText -> JSText -> IO Bool|])
+     , ("js_slides_mode", "wiki_editor_slides_mode", Safe, [t|Element -> Bool -> IO ()|])
+     , ("js_hold_focus", "wiki_editor_hold_focus", Safe, [t|Element -> IO ()|])
+     , ("js_restore_focus", "wiki_editor_restore_focus", Safe, [t|Element -> IO ()|])
+     , ("js_history", "wiki_editor_history", Safe, [t|Element -> Bool -> IO ()|])
+     , ("js_step", "wiki_editor_step", Safe, [t|Element -> JSText -> JSText -> IO Bool|])
+     , ("js_focus_header", "wiki_editor_focus_header", Safe, [t|Element -> Int -> IO ()|])
      , ("js_selection_start", "wiki_editor_selection_start", Safe, [t|Element -> IO Int|])
      , ("js_selection_end", "wiki_editor_selection_end", Safe, [t|Element -> IO Int|])
      , ("js_write", "wiki_editor_write", Safe, [t|Element -> JSText -> Int -> Int -> IO ()|])
@@ -172,6 +198,14 @@ $( browserJS
      , ("js_offer_folds", "wiki_editor_offer_folds", Safe, [t|Element -> JSText -> JSText -> IO ()|])
      ]
  )
+
+-- A drag's data and the pointer's place, read in a drag's listeners, for
+-- a slide's row dragged by its handle: what the Web types do not read.
+$(inlineJS "js_drag_carries" "Array.from($1.dataTransfer?.types ?? []).includes($2)" [t|Event -> JSText -> Bool|])
+
+$(inlineJS "js_mark_dragged" "(() => { if (!$1.dataTransfer) return false; $1.dataTransfer.setData(\"application/x-wiki-slide\", String($2)); $1.dataTransfer.effectAllowed = \"move\"; return true; })()" [t|Event -> Int -> Bool|])
+
+$(inlineJS "js_pointer_after" "(() => { const r = $1.currentTarget?.getBoundingClientRect?.(); return r ? $1.clientY > r.top + r.height / 2 : false; })()" [t|Event -> Bool|])
 
 -- | The host element, as @web/src/editor.js@ adds to it: the CodeMirror
 -- put in it, once the page's islands have loaded the editor.
@@ -216,9 +250,6 @@ $( jsFields
        Method "unfold" [t|Text -> IO ()|]
      , -- The folds, as JSON: [[first, last]], lines from 1.
        Method "foldedLines" [t|IO Text|]
-     , -- A presentation's slides found in a text, as JSON: [[first line,
-       -- movable, fit]].
-       Method "slides" [t|Text -> Text -> IO ()|]
      , -- The cursor's line, from 1.
        Method "cursorLine" [t|IO Int|]
      ]
@@ -232,41 +263,18 @@ newtype SelectionDetail = SelectionDetail JSVal
 newtype DecisionDetail = DecisionDetail JSVal
   deriving newtype (Inert)
 
--- | The detail of a @wiki-open-slide@ event: a slide's button clicked.
-newtype ToggleDetail = ToggleDetail JSVal
-  deriving newtype (Inert)
-
--- | The detail of a @wiki-move-slide@ event: a slide dropped on another.
-newtype MoveDetail = MoveDetail JSVal
+-- | The detail of a @wiki-row-wanted@ event: the row a change took the
+-- editor's cursor to.
+newtype RowWantedDetail = RowWantedDetail JSVal
   deriving newtype (Inert)
 
 $( jsFields
-     ''ToggleDetail
-     [ Fixed "line" ''Int
-     , Fixed "open" ''Bool
-     , Fixed "more" ''Bool
-     ]
- )
-
-$( jsFields
-     ''MoveDetail
-     [ Fixed "from" ''Int
-     , Fixed "to" ''Int
-     , Fixed "after" ''Bool
-     ]
- )
-
--- | A @wiki-folds@ event, with what CodeMirror adds to it: whether an
--- edit changed the folds, whether Ctrl or Cmd was held on the click on a
--- fold's mark, and the folds the change opened.
-newtype FoldsEvent = FoldsEvent JSVal
-  deriving newtype (Inert)
-
-$( jsFields
-     ''FoldsEvent
-     [ Fixed "wikiByEdit" ''Bool
-     , Fixed "wikiMore" ''Bool
-     , Fixed "wikiOpened" ''Text
+     ''RowWantedDetail
+     [ Fixed "key" ''Int
+     , Fixed "left" ''Int
+     , Fixed "close" ''Bool
+     , Fixed "focus" ''Bool
+     , Fixed "reason" ''Text
      ]
  )
 
@@ -378,6 +386,11 @@ attachEditor host original = liftIO (js_attach host (toJSText original))
 -- | Remove the host's CodeMirror, if it has one.
 detachEditor :: (MonadIO m) => Element -> m ()
 detachEditor host = liftIO $ codeMirror host >>= traverse_ (.destroy)
+
+-- | Whether the page can put CodeMirror in place of the textarea: its
+-- islands' script is there, with the editor. Natively, never.
+editorAvailable :: (MonadIO m) => m Bool
+editorAvailable = liftIO js_available
 
 -- | The whole text a @wiki-input@ event says the editor now has. Pure,
 -- since the event does not change.
@@ -541,14 +554,13 @@ offerFolds host text found =
 -- taken in the order of the text, the longer first of two that start on
 -- one line; one that overlaps or lies inside a fold made before it, by
 -- this call or already, is left out, and so is the same range twice. Folding changes what is shown,
--- never the text: no input event comes of it. No @wiki-folds@ event
--- either ('reportedFolds'): the component knows what it folded.
+-- never the text: no input event comes of it.
 foldLines :: (MonadIO m) => Element -> [(Int, Int)] -> m ()
 foldLines host ranges = liftIO $ codeMirror host >>= traverse_ (\cm -> cm.fold (encodeRanges ranges))
 
 -- | Unfold the editor's folds that start on the first line of one of these
 -- ranges, in any order (the last line is not compared, so a range read
--- before is enough), with no @wiki-folds@ event.
+-- before is enough).
 unfoldLines :: (MonadIO m) => Element -> [(Int, Int)] -> m ()
 unfoldLines host ranges = liftIO $ codeMirror host >>= traverse_ (\cm -> cm.unfold (encodeRanges ranges))
 
@@ -560,26 +572,6 @@ foldedLines host = liftIO $ do
   found <- codeMirror host >>= traverse (.foldedLines)
   pure (fromMaybe [] (found >>= decodeRanges))
 
--- | The folds a @wiki-folds@ event on the host reports, as 'foldedLines'
--- gives them: all the folds there are once the author folded or unfolded
--- with CodeMirror's own controls (the gutter, the keys, the mark), or an
--- edit moved a fold with its lines or opened one it touched. 'foldLines'
--- and 'unfoldLines' make no such event. Pure, as 'typedText' is.
-reportedFolds :: Event -> [(Int, Int)]
-reportedFolds = fromMaybe [] . (decodeRanges . jsValText <=< detailOf)
-
--- | Mark a presentation's slides found in a text
--- ("Wiki.Core.Slides.slideSpans") in the editor (WP5.97 of
--- docs/PLAN.md): each slide's first line gets a button that opens or
--- closes it ('slideToggled'), when it can move a handle to drag it by
--- ('slideDropped'), and a mark of whether it fits
--- ('Wiki.Core.Slides.fitName'). The marks replace those made before; none takes
--- them away (a document, or a presentation's raw Markdown). CodeMirror
--- takes them only while it holds that text. Before CodeMirror has loaded
--- nothing is marked: its @wiki-ready@ event says when to mark them.
-markSlides :: (MonadIO m) => Element -> Text -> [(Int, Bool, Text)] -> m ()
-markSlides host text marks = liftIO $ codeMirror host >>= traverse_ (\cm -> cm.slides text (decodeUtf8 (BSL.toStrict (encode marks))))
-
 -- | The line the editor's cursor is on, from 1: the first line before
 -- CodeMirror has loaded.
 cursorLine :: (MonadIO m) => Element -> m Int
@@ -589,94 +581,10 @@ cursorLine host = liftIO $ maybe (pure 1) (.cursorLine) =<< codeMirror host
 cursorLineOf :: Event -> Maybe Int
 cursorLineOf = fmap foreignToInt . detailOf
 
--- | 'SlideToggle' is a click on a slide's button in the editor: which
--- slide (its first line, from 1, in the text as it is now), whether to
--- open or close it, and whether Ctrl or Cmd was held, which keeps the
--- other slides open.
-data SlideToggle = SlideToggle
-  { line :: Int
-  , open :: Bool
-  , more :: Bool
-  }
-  deriving stock (Eq, Show)
-
--- | The click a @wiki-open-slide@ event reports.
-slideToggled :: Event -> Maybe SlideToggle
-slideToggled event = do
-  detail <- ToggleDetail <$> detailOf event
-  Just SlideToggle {line = detail.line, open = detail.open, more = detail.more}
-
--- | The drop a @wiki-move-slide@ event reports: the first line of the
--- slide dragged, that of the slide it was dropped on, and whether it goes
--- after that slide (dropped below its first line) or before it.
-slideDropped :: Event -> Maybe (Int, Int, Bool)
-slideDropped event = do
-  detail <- MoveDetail <$> detailOf event
-  Just (detail.from, detail.to, detail.after)
-
--- | Move a slide of the editor's presentation to another place
--- ("Wiki.Core.Slides.moveSlide"), as one edit that undo reverts. The
--- cursor goes with the slide: where it was in it, or at its start when it
--- was elsewhere. The slides folded before are folded after, at their new
--- places; the moved slide is open, the cursor being in it. A move that is
--- none (the title slide, an index out of range) changes nothing. Run it in
--- 'Halogen.liftEffect'.
-moveSlideIn :: (MonadIO m) => Element -> Int -> Int -> m ()
-moveSlideIn host i j = liftIO $ do
-  old <- currentText host
-  let spans = Slides.slideSpans old
-      new = Slides.moveSlide i j old
-  unless (new == old) $ do
-    folded <- foldedLines host
-    let firsts = map fst folded
-        closed = [k | (k, sp) <- zip [0 ..] spans, sp.from `elem` firsts]
-        newSpans = Slides.slideSpans new
-        -- The new index of the slide at an old one.
-        order = take j rest <> [i] <> drop j rest
-        rest = filter (/= i) [0 .. length spans - 1]
-        placed k = fromMaybe k (elemIndex k order)
-    s <- js_selection_start host
-    let startOf text sp = lineOffset text sp.from
-        within = case atMay spans i of
-          Just sp | s >= startOf old sp && maybe True (\next -> s < startOf old next) (atMay spans (i + 1)) -> s - startOf old sp
-          _ -> 0
-        at = maybe 0 (\sp -> startOf new sp + within) (atMay newSpans j)
-    js_write host (toJSText new) at at
-    foldLines host [(sp.from, sp.to) | k <- closed, k /= i, Just sp <- [atMay newSpans (placed k)]]
-  where
-    lineOffset text n = sum (map ((+ 1) . T.length) (take (n - 1) (T.splitOn "\n" text)))
-
--- | Put a new slide at the end of the editor's presentation: a heading of
--- level two with the given title, apart from what comes before it by a
--- blank line, as one edit that undo reverts, with the title selected so
--- that typing replaces it. Only line breaks and the slide are added. Run
--- it in 'Halogen.liftEffect'.
-appendSlide :: (MonadIO m) => Element -> Text -> m ()
-appendSlide host title = edit host $ \old _ ->
-  let gap
-        | T.null old || "\n\n" `T.isSuffixOf` old = ""
-        | "\n" `T.isSuffixOf` old = "\n"
-        | otherwise = "\n\n"
-      start = T.length old + T.length gap + 3
-   in (old <> gap <> "## " <> title <> "\n", Selection start (start + T.length title))
-
--- | 'FoldsChange' is how the folds changed, as a @wiki-folds@ event tells
--- it beside the folds ('reportedFolds'): whether an edit changed them
--- (typing into a fold, an undo), whether Ctrl or Cmd was held on the click
--- on a fold's mark, and, when no edit did, the first lines of the folds
--- the author opened (by the mark, the keys or the gutter).
-data FoldsChange = FoldsChange
-  { byEdit :: Bool
-  , more :: Bool
-  , opened :: [Int]
-  }
-  deriving stock (Eq, Show)
-
--- | The change a @wiki-folds@ event tells. Pure, as 'reportedFolds' is.
-foldsChange :: Event -> FoldsChange
-foldsChange (Event v) =
-  let e = FoldsEvent v
-   in FoldsChange {byEdit = e.wikiByEdit, more = e.wikiMore, opened = fromMaybe [] (decodeStrict (encodeUtf8 e.wikiOpened))}
+-- | Whether the text had the focus when CodeMirror took its place, as the
+-- @wiki-ready@ event says (@web/src/editor.js@).
+readyFocused :: Event -> Bool
+readyFocused = maybe False ((== 1) . foreignToInt) . detailOf
 
 -- | Ranges of lines as CodeMirror's side reads and writes them: JSON,
 -- @[[first, last]]@.
@@ -884,6 +792,177 @@ emojiAsked = questionOf
 answerEmoji :: (MonadIO m) => Element -> Int -> [(Text, Text)] -> m ()
 answerEmoji host i found =
   liftIO . js_emojied host i $ jsonText [object ["name" .= name, "emoji" .= emoji] | (name, emoji) <- found]
+
+----------------------------------------------------------------------
+-- A presentation's rows
+
+-- | Put a row of a presentation's slide mode (WP5.103) in an element: a
+-- CodeMirror over the range the editor's CodeMirror, the master, gives
+-- the row with this key in its layout ('setRows'). The row's edits are the
+-- master's: one text, one history. With 'True', the row takes the focus.
+-- Nothing before the master is in place, for a key its layout does not
+-- have, nor natively.
+attachRow :: (MonadIO m) => Element -> Element -> RowKey -> Bool -> m ()
+attachRow master row (RowKey key) focus = liftIO (js_attach_row master row key focus)
+
+-- | Let go of the row in an element, as its slide is closed or goes.
+detachRow :: (MonadIO m) => Element -> m ()
+detachRow = liftIO . js_detach_row
+
+-- | 'Layout' is the master's text as it is now, its cursor, and its rows'
+-- starts, mapped through every change since the layout was last set: what
+-- "Wiki.Core.SlideRows" cuts again ('fromLayout'). Offsets in characters.
+data Layout = Layout
+  { text :: Text
+  , anchor :: Int
+  -- ^ Where the selection starts, the cursor being where it ends.
+  , cursor :: Int
+  , focused :: Maybe RowKey
+  -- ^ The row whose editor had the focus last. It may have been closed
+  -- since: a use that needs an editor asks whether the row is open.
+  , starts :: [(RowKey, Int)]
+  }
+
+instance FromJSON Layout where
+  parseJSON = withObject "Layout" $ \o -> do
+    text <- o .: "text"
+    at <- o .: "head"
+    from' <- o .: "anchor"
+    pairs <- o .: "rows"
+    lastFocused <- o .: "focused"
+    pure Layout {text, anchor = from', cursor = at, focused = if lastFocused < 0 then Nothing else Just (RowKey lastFocused), starts = [(RowKey k, s) | (k, s) <- pairs]}
+
+-- | The master's 'Layout', once CodeMirror is in place.
+rowsLayout :: (MonadIO m) => Element -> m (Maybe Layout)
+rowsLayout host = liftIO $ do
+  json <- fromJSText <$> js_rows host
+  pure (decodeStrict (encodeUtf8 json))
+
+-- | Give the master the rows a text was cut into. The master takes them
+-- only while it holds that text, so that a cut of an older text is
+-- dropped: whether they were taken.
+setRows :: (MonadIO m) => Element -> Text -> Rows -> m Bool
+setRows host text rows =
+  liftIO . js_set_rows host (toJSText text) . jsonText $
+    [(k, s, s + T.length row.text) | (row, s) <- zip rows.rows (rowStarts rows), let RowKey k = row.key]
+
+-- | Tell the master whether the presentation is edited slide by slide: its
+-- own completion is off then, and its focus goes to the row its cursor is
+-- in.
+slidesModeIn :: (MonadIO m) => Element -> Bool -> m ()
+slidesModeIn host bySlide = liftIO (js_slides_mode host bySlide)
+
+-- | Keep what has the focus in the rows' list, if anything, before a
+-- change of the list, for 'restoreFocus'.
+holdFocus :: (MonadIO m) => Element -> m ()
+holdFocus = liftIO . js_hold_focus
+
+-- | Give the focus back to what had it in the rows' list before the
+-- change ('holdFocus'), when the list's patch moved that element and the
+-- focus went nowhere. Run it after a render that may have moved a row.
+restoreFocus :: (MonadIO m) => Element -> m ()
+restoreFocus = liftIO . js_restore_focus
+
+-- | 'RowWanted' is a row that a change the author did not make in the row
+-- with the focus took the editor's cursor to (an undo, a redo, the next
+-- problem, the toolbar writing elsewhere), or that the assistant wrote in:
+-- the row to open, the row that had the focus, if any, whether that one
+-- closes, which it does when the author went to the other row and not when
+-- something was written there, and whether the row opened takes the focus,
+-- which it does unless the assistant wrote in it.
+data RowWanted = RowWanted
+  { key :: RowKey
+  , left :: Maybe RowKey
+  , close :: Bool
+  , focus :: Bool
+  , reason :: Text
+  -- ^ What took the cursor there: @undo@, @redo@, @problem@ (the next
+  -- problem), @write@ (the toolbar) or @assistant@.
+  }
+
+-- | The row a @wiki-row-wanted@ event asks for. Pure, since the event does
+-- not change.
+rowWanted :: Event -> Maybe RowWanted
+rowWanted event = do
+  detail <- RowWantedDetail <$> detailOf event
+  Just RowWanted {key = RowKey detail.key, left = if detail.left < 0 then Nothing else Just (RowKey detail.left), close = detail.close, focus = detail.focus, reason = detail.reason}
+
+-- | Whether a keydown is the editor's undo ('True': Ctrl+Z, Cmd+Z) or redo
+-- ('False': Ctrl+Y, Ctrl+Shift+Z, Cmd+Shift+Z), pressed where CodeMirror
+-- does not take it (a row's header). Pure, as 'editorKey' is.
+historyKey :: Event -> Maybe Bool
+historyKey event
+  | pressed.isComposing || not command || pressed.altKey = Nothing
+  | key == "z" = Just (not pressed.shiftKey)
+  | key == "y" && not pressed.shiftKey = Just False
+  | otherwise = Nothing
+  where
+    pressed = KeyboardEvent event
+    command = pressed.ctrlKey || pressed.metaKey
+    key = T.toLower pressed.key
+
+-- | The editor's undo ('True') or redo ('False'), run on the master: the
+-- whole text's history.
+undoIn :: (MonadIO m) => Element -> Bool -> m ()
+undoIn host undoing = liftIO (js_history host undoing)
+
+-- | Whether a keydown is Alt+Up (-1) or Alt+Down (1), with no other
+-- modifier: a slide moved one place. Pure, as 'editorKey' is.
+moveKey :: Event -> Maybe Int
+moveKey event
+  | pressed.isComposing || not pressed.altKey || pressed.ctrlKey || pressed.metaKey || pressed.shiftKey = Nothing
+  | otherwise = lookup pressed.key [("ArrowUp", -1), ("ArrowDown", 1)]
+  where
+    pressed = KeyboardEvent event
+
+-- | The key of the presentation's row an event happened in: the
+-- @data-row-key@ of the nearest element around its target that has one.
+-- Pure, read in the event's listener.
+rowKeyOf :: Event -> Maybe RowKey
+rowKeyOf event = do
+  target <- Event.target event >>= Element.fromEventTarget
+  row <- Element.closestNow target "[data-row-key]"
+  RowKey <$> (readMaybe . T.unpack =<< Element.getAttributeNow row "data-row-key")
+
+-- | Make a structural step of a presentation's rows on the master's text,
+-- which "Wiki.Core.SlideRows" computed it for (a slide moved, deleted or
+-- added): the history's user event (@move.slide@, @delete.slide@ or
+-- @input.slide@), the edits of the text, the rows after it, and what to
+-- select then, in characters of the text after it. One entry of the
+-- history, with its layout. The master takes it only while it holds that
+-- text: whether it was taken.
+stepIn :: (MonadIO m) => Element -> Text -> Text -> [SlideRows.Edit] -> Rows -> Maybe (Int, Int) -> m Bool
+stepIn host text event edits after select =
+  liftIO . js_step host (toJSText text) . jsonText $
+    object
+      [ "event" .= event
+      , "edits" .= [(e.from, e.to, e.insert) | e <- edits]
+      , "rows" .= [(k, s, s + T.length row.text) | (row, s) <- zip after.rows (rowStarts after), let RowKey k = row.key]
+      , "select" .= fmap (\(a, b) -> [a, b]) select
+      ]
+
+-- | Give the focus to the header of a row in the rows' list, once the
+-- render that puts it there is done.
+focusHeader :: (MonadIO m) => Element -> RowKey -> m ()
+focusHeader rowsList (RowKey k) = liftIO (js_focus_header rowsList k)
+
+-- | Whether a drag carries data of this type: @Files@ for files, or
+-- 'slideType' for a slide's row. Pure, read in the drag's listener.
+dragCarries :: Text -> Event -> Bool
+dragCarries kind event = js_drag_carries event (toJSText kind)
+
+-- | Mark the drag a dragstart starts as a slide's row's, with the row's
+-- key, and the drag as a move, as browsers want a drag's data set in its
+-- dragstart's listener. It does this when it is forced, so force it there:
+-- it is pure only to be called from the listener ('HE.handler'').
+markDragged :: Event -> RowKey -> Bool
+markDragged event (RowKey k) = js_mark_dragged event k
+
+-- | Whether a drag's pointer is in the lower half of the element the
+-- listener is on: a row dropped there goes after that row. Pure, read in
+-- the listener.
+pointerAfter :: Event -> Bool
+pointerAfter = js_pointer_after
 
 -- | Whether the browser should warn before a reload or closing the tab,
 -- as browsers do for a page with unsaved changes.
