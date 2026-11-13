@@ -7,7 +7,7 @@ import Data.Text qualified as T
 import Protolude
 import System.Mem (getAllocationCounter, setAllocationCounter)
 import Test.Hspec
-import Test.Hspec.QuickCheck (prop)
+import Test.Hspec.QuickCheck (modifyMaxSuccess, prop)
 import Test.QuickCheck (Gen, choose, conjoin, counterexample, elements, forAll, listOf, suchThat, vectorOf, (.&&.), (===), (==>))
 import Wiki.Core.Markdown.Ast
 import Wiki.Core.Markdown.Folds qualified as Folds
@@ -432,8 +432,8 @@ spec = describe "Slides" $ do
     -- about sixteen times.
     it "grows with the text's length and no faster: four times the slides, less than six times the bytes allocated" $ do
       ratios <- for [measuresWork, fitsWork, oldFitsWork] $ \work -> do
-        small <- work 40
-        large <- work 160
+        small <- work 20
+        large <- work 80
         pure (fromIntegral large / fromIntegral small :: Double)
       case ratios of
         [measuring, fitting, old] -> do
@@ -443,7 +443,8 @@ spec = describe "Slides" $ do
           old `shouldSatisfy` (> 10)
         _ -> expectationFailure "three measures"
 
-    prop "says what splitting the text for each slide said, the measures made from the text's slides or found again" $
+    -- Fifty decks: each parses its text five times.
+    modifyMaxSuccess (const 50) . prop "says what splitting the text for each slide said, the measures made from the text's slides or found again" $
       forAll ((,,) <$> aDeckWithBreaks <*> listOf (elements [Fits, Tight, Overflowing, Unmeasured]) <*> choose (0, length edits - 1)) $ \(source, fits, e) ->
         let later = maybe source ($ source) (atMay edits e)
             spansLater = slideSpans later

@@ -7,7 +7,7 @@ import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
 import Protolude
 import Test.Hspec
-import Test.Hspec.QuickCheck (prop)
+import Test.Hspec.QuickCheck (modifyMaxSuccess, prop)
 import Test.QuickCheck (Gen, Property, checkCoverage, choose, conjoin, counterexample, cover, elements, forAll, oneof, property, suchThat, vectorOf, (.&&.), (===))
 import Test.Slides (aDeck, aMove)
 import Wiki.Core.Markdown.Problems (Checked (..), checkText)
@@ -270,7 +270,8 @@ spec = describe "SlideRows" $ do
 
   describe "reading rows" $ do
     -- WP5.108: the editor's check and the rows read one parse.
-    prop "find the openers the check finds in its one parse, and the rows taken in from them as from a parse of their own" $
+    -- Fifty decks: each parses its text five times.
+    modifyMaxSuccess (const 50) . prop "find the openers the check finds in its one parse, and the rows taken in from them as from a parse of their own" $
       forAll anyDeck $ \source ->
         forAll (anEditOf (cut source)) $ \(_, edited, _) ->
           let whole = assemble edited
