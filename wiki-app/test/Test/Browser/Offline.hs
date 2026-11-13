@@ -9,7 +9,7 @@
 --
 -- The service worker itself is JavaScript (web/src/sw.js), tested in a real
 -- browser against a real server by the smoke test
--- (toolchain/smoke-test-server.mjs), which goes offline and reloads. Here
+-- (wiki-smoke's server suite, Server.Offline), which goes offline and reloads. Here
 -- the page is given what the worker and the browser would give it
 -- (test/jsbits/test-offline.js): the mark in its head, the offer, and the
 -- caches.

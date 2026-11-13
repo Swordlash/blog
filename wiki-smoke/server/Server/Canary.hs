@@ -163,7 +163,13 @@ since c = do
   Since . Seq.length <$> readIORef c.seen
 
 -- | What a check read: how many markers, in how many places.
-data Checked = Checked {markers :: Int, places :: Int}
+data Checked = Checked
+  { markers :: Int
+  , places :: Int
+  , kinds :: [(Text, Int)]
+  -- ^ How many places of each kind: files, the database's dump, requests,
+  -- frames, and what the suite read itself.
+  }
 
 -- | Fail, naming each marker and where it was found, if any marker made so
 -- far is in the data directory, the database or what was seen. The
@@ -179,7 +185,7 @@ assertNoCanary c dataDir database shown = do
   collect c
   ps <- places dataDir database (const False) (Since 0) c
   leaks ms ps "a marker of an encrypted space was found in plain text"
-  pure Checked {markers = length ms, places = length ps}
+  pure Checked {markers = length ms, places = length ps, kinds = kindsOf ps}
 
 -- | Fail, naming each marker and where it was found, if a marker given is
 -- in a file of the data directory but those left out, in the database's
@@ -204,6 +210,19 @@ places dataDir database leftOut (Since from) c = do
       pure [Place "the database's dump" (LazyByteString.toStrict out)]
   seen' <- toList . Seq.drop from <$> readIORef c.seen
   pure (fileBytes <> dump <> seen')
+
+-- | How many places of each kind there are, by the first word of what
+-- each is: @the file@, @the database's dump@, @request@, @frame@, and
+-- anything else the suite read itself.
+kindsOf :: [Place] -> [(Text, Int)]
+kindsOf ps = [(k, length (filter ((== k) . kind) ps)) | k <- ["files", "the database's dump", "requests", "frames", "read by the suite"], any ((== k) . kind) ps]
+  where
+    kind p
+      | "the file " `Text.isPrefixOf` p.what = "files"
+      | "the database's dump" == p.what = "the database's dump"
+      | "request " `Text.isPrefixOf` p.what = "requests"
+      | "frame " `Text.isPrefixOf` p.what = "frames"
+      | otherwise = "read by the suite"
 
 leaks :: [Text] -> [Place] -> String -> IO ()
 leaks ms ps message = do

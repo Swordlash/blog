@@ -77,7 +77,7 @@
 -- document of another origin.
 --
 -- What keeps the SVG's scripts away from the wiki, each line tried in
--- Chromium (the server's smoke test, @toolchain\/smoke-test-server.mjs@,
+-- Chromium (the server's smoke test, wiki-smoke's @Server.Svg@,
 -- loads a hostile SVG that tries each and writes what happened into its
 -- own text):
 --

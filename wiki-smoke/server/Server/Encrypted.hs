@@ -767,6 +767,7 @@ encryptedWalk w step' = do
     shown <- Text.unlines <$> readIORef w.shown
     checked <- assertNoCanary smoke.canary smoke.dataDir smoke.database shown
     report ("none of " <> tshow checked.markers <> " markers of the encrypted space is in any of " <> tshow checked.places <> " files, requests, frames and answers")
+    report ("the places: " <> Text.intercalate ", " [tshow n <> " " <> k | (k, n) <- checked.kinds])
 
 ----------------------------------------------------------------------
 -- A space that has pages, encrypted, and turned plain again

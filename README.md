@@ -3362,7 +3362,7 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 | [wiki-api/](wiki-api/) | `wiki-api` | Request and response types (aeson), shared by the client and the server. |
 | [wiki-app/](wiki-app/) | `wiki-app` | The Halogen application: `wiki-app` (the wasm program) and `wiki-app-prerender` (native: writes the page with the application already rendered into it). |
 | [wiki-server/](wiki-server/) | `wiki-server` | The server, native only: servant over PostgreSQL or SQLite (Beam), rendering each page per request, with pandoc for the exports. |
-| [wiki-smoke/](wiki-smoke/) | `wiki-smoke` | The smoke suites in Haskell, native only: the built page driven in headless Chromium through haskell-halogen-playwright, which waits on the page's program. `wiki-smoke-screenshots` takes the README's screenshots; `wiki-smoke-waits` checks that the waits hold on the wiki; `wiki-smoke-demo` is the demo's smoke test (`npm run smoke-test` runs it), also run weekly with the processor four times slower. |
+| [wiki-smoke/](wiki-smoke/) | `wiki-smoke` | The smoke suites in Haskell, native only: the built page driven in headless Chromium through haskell-halogen-playwright, which waits on the page's program. `wiki-smoke-screenshots` takes the README's screenshots; `wiki-smoke-waits` checks that the waits hold on the wiki; `wiki-smoke-demo` is the demo's smoke test, `wiki-smoke-passkeys` the assistant's keys synced with real passkeys against a real wiki-server, and `wiki-smoke-server` the server's smoke test, with the encrypted spaces' walk and their canary (`npm run smoke-test` runs the three), the demo's and the server's also run weekly with the processor four times slower. |
 | [docs/](docs/) | | The authors' Markdown reference (`markdown.md`), the HTTP API (`api.md`), the export format (`export.md`), the plan of work (`PLAN.md`), and the README's screenshots. |
 | [web/](web/) | | The page around the application: `index.html`, `index.js` (loads `app.wasm`), CSS, and `bundle.sh`, which bundles the islands' libraries from `web/src/`; `licenses/`, the texts of TikZJax's licence and its fonts', which the bundle serves beside them. |
 | [toolchain/](toolchain/) | | Build, test and deploy scripts, adapted from haskell-halogen's, and `smoke-suite.sh`, which runs a suite of `wiki-smoke`. |
@@ -3387,7 +3387,7 @@ npm run build-wasm-opt          # the same with every package at -O2 (cabal-wasm
 npm run serve-wasm              # build-wasm, then serve it on http://127.0.0.1:8080
 npm run test-wasm               # the test suites on wasm, under Node; wiki-app-browser-test in Chromium
 npm run test                    # test-native, then test-wasm
-npm run smoke-test              # the built page in headless Chromium: the demo (wiki-smoke-demo: every prerendered route, a walk with back, forward and reload, dark and phone), then the server's build against a real wiki-server
+npm run smoke-test              # the built page in headless Chromium: the demo (wiki-smoke-demo: every prerendered route, a walk with back, forward and reload, dark and phone), passkeys (wiki-smoke-passkeys), then the server's build against a real wiki-server (wiki-smoke-server, on SQLite and on PostgreSQL)
 npm run screenshots             # the README's screenshots, from the built demo in headless Chromium, into docs/screenshots
 npm run smoke-waits             # that the Haskell smoke suites' waits hold on the built demo (wiki-smoke-waits)
 npm run dev-test                # wiki-app-browser-test in browser GHCi, rerun on save (needs ghciwatch)
@@ -3415,7 +3415,7 @@ directory when `initdb` and
 as Debian's `postgresql` package puts them), and stop it at the end; without
 either, the PostgreSQL half is reported as pending, not passed. The smoke test
 runs its server on PostgreSQL too when `WIKI_TEST_DATABASE_URL` is set
-(`toolchain/smoke-test.sh`). `wiki-server-bench` times the storage on SQLite,
+(`toolchain/smoke-test.sh`, `sh toolchain/smoke-suite.sh server-postgres`). `wiki-server-bench` times the storage on SQLite,
 or with `postgres URL` on an empty PostgreSQL database.
 
 `npm run screenshots` (`wiki-smoke-screenshots`, through `toolchain/smoke-suite.sh`) takes the four screenshots at
@@ -3488,8 +3488,9 @@ request, and one page besides, the application as it shows before it has loaded
 anything, as `index.html` and `404.html`, which the server sends when it cannot
 render a page.
 `WIKI_PUBLIC_DIR` writes the build somewhere other than
-`dist-newstyle/wasm/public/app`. The smoke test's server mode
-(`toolchain/smoke-test-server.mjs`) makes that build from the demo's in a temporary
+`dist-newstyle/wasm/public/app`. The smoke test's server suites
+(`wiki-smoke-server` and `wiki-smoke-passkeys`, through wiki-smoke's
+`Wiki.Smoke.Server`) make that build from the demo's in a temporary
 directory, so one `npm run build-wasm` serves both.
 
 `build-wasm-opt` is the production build, the one `toolchain/deploy-local.sh`

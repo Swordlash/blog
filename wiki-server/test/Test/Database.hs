@@ -367,7 +367,7 @@ databaseUrl base name =
 -- other runs may share: @wiki_test_<began>_<random>_@, with the seconds
 -- since 1970 when the run began and eight random lower-case letters and
 -- digits. A run's names are this and a count, or this and @template@.
--- toolchain/rehearse-ci.sh and toolchain/smoke-test-postgres.mjs make
+-- toolchain/rehearse-ci.sh and wiki-smoke's Wiki.Smoke.Server make
 -- their names in the same shape, so that 'sweepOnce' drops their
 -- leftovers too.
 namespaceFor :: Integer -> Text -> Text
