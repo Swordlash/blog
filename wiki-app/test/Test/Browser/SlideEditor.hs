@@ -1152,6 +1152,16 @@ spec m = do
     eventually $ searchFocus `shouldReturn` "text 1"
     unsafeIOToPageM (fromJSText <$> js_slide_invariants) `shouldReturn` ""
 
+  it "says on a closed row's header that its matches were not counted when the count stopped before its end" $ runPage $ do
+    let crowded = T.intercalate "\n" ["# Deck", "", "## A", "", "x", "", "## B", "", T.unwords (replicate 1100 "x"), "", "## C", "", "x"]
+    (ui, _) <- openDeck crowded
+    eventually $ openTitles ui `shouldReturn` ["A"]
+    rowHeader ui "Deck" >>= focus
+    press "Control+f"
+    find ui ".editor-search-find" >>= (`typeText` "x")
+    eventually $ said ui `shouldReturn` "1000+ matches"
+    eventually $ headerCounts ui `shouldReturn` [("B", "matches not counted"), ("C", "matches not counted")]
+
   it "selects a regular expression's match across two slides in the row it starts in" $ runPage $ do
     (ui, _) <- openDeck searchDeck
     eventually $ openTitles ui `shouldReturn` ["Deck 😀"]
