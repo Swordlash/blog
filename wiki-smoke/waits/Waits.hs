@@ -66,14 +66,17 @@ spec demo = playwright $ do
       settle page
       second' <- timed (waitQuiet page)
       report (printf "waitQuiet with the counter ticking: %.2f s" second')
-      -- The model is still at work: the answer has not ended.
-      count (locator page "#app .assistant-took") `shouldReturn` 0
-      -- The answer arrives through the provider's callbacks, not a fiber
-      -- of the program's waiting for it, so its end is a condition too.
-      waitFor (locator page "#app .assistant-took") Visible
+      -- The model is still at work: the script holds the turn until it is
+      -- stopped, so this holds however slow the machine.
+      count (locator page "#app .assistant-message.from-model .assistant-thinking") `shouldReturn` 1
+      count (locator page "#app .assistant-stopped") `shouldReturn` 0
+      -- Stopped, the turn ends through the provider's callbacks, not a
+      -- fiber of the program's waiting for it: its end is a condition.
+      click (locator page "#app .assistant-stop")
+      waitFor (locator page "#app .assistant-stopped") Visible
       settle page
-      textContent (locator page "#app .assistant-message.from-model .assistant-text") `shouldReturn` "Done thinking."
       waitQuiet page
+      count (locator page "#app .assistant-waited") `shouldReturn` 0
       nothingThrown page
   where
     openEditor page = do
@@ -87,13 +90,13 @@ spec demo = playwright $ do
 
 -- | The scripted provider (wiki-app's @jsbits/assistant.js@), installed
 -- before the program starts, as no page served to anyone has it: one turn
--- that thinks for six seconds, long enough for the seconds counter to show,
--- then answers.
+-- that thinks, then holds until it is stopped, so that the seconds counter
+-- shows and the model is still at work whenever the test reads the page.
 assistantScript :: Text
 assistantScript =
   "globalThis.wikiAssistantScript = {\
   \  lists: { scripted: [{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5', created: 300 }] },\
-  \  turns: [[{ thinking: 'Weighing the words.', wait: 6000 }, { text: 'Done thinking.' }]],\
+  \  turns: [[{ thinking: 'Weighing the words.' }, { hold: true }]],\
   \};"
 
 -- | How long an action took, in seconds.
