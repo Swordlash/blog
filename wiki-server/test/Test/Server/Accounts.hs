@@ -644,7 +644,8 @@ renamedLogins :: Backing -> Spec
 renamedLogins backing = describe "a login step 15 of the schema renamed" $
   it "signs in with the same password under the new login, an OPAQUE record and a hash from before OPAQUE alike, and keeps its sessions, personal space and identity" $
     withDemoPlace backing $ \at serve -> do
-      let setLogin r uid login = withStorageAside r.place $ \st -> writing st (runUpdate (update wikiDb.users (\x -> x.login <-. val_ login) (\x -> x.id ==. val_ uid)))
+      let setLogin :: Running -> Text -> Text -> IO ()
+          setLogin r uid login = withStorageAside r.place $ \st -> writing st (runUpdate (update wikiDb.users (\x -> x.login <-. val_ login) (\x -> x.id ==. val_ uid)))
       (session, space) <- serve $ \r -> do
         givePassword r "user-editor" "editor's password"
         legacyAccount r "user-reader" "reader's old password"
