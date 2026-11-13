@@ -8,7 +8,8 @@
 // checkout or its node_modules.
 //
 // It serves the built directory as GitHub Pages does, and as the smoke test's
-// server does (toolchain/smoke-test.mjs): a directory's address serves its
+// server does (haskell-halogen-playwright's Halogen.Playwright.Serve, which
+// wiki-smoke's suites use): a directory's address serves its
 // index.html, a directory's address without its slash is redirected to the one
 // with it, and an address with no file serves 404.html with a 404, which the
 // application reads as its own route. On top of that it serves a file's

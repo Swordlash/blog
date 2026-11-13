@@ -311,6 +311,10 @@ data State = State
   , ticker :: Maybe H.ForkId
   -- ^ The ticker, while the model is working: a fork that reads the time
   -- every second.
+  , ended :: Maybe (MVar ())
+  -- ^ The turn's end, while the model is working: an empty variable that
+  -- 'finish' fills. A fork waits on it ('countTurn'), so that the turn
+  -- counts as the program's work for as long as the model works.
   , field :: H.RefLabel
   }
 
@@ -358,6 +362,7 @@ component =
               , effortChoice = Nothing
               , now = Nothing
               , ticker = Nothing
+              , ended = Nothing
               , field
               }
       , render
@@ -688,7 +693,9 @@ component =
         channel <- liftIO HS.create
         void (H.subscribe (FromTalk <$> channel.emitter))
         modify (\st -> st {listener = Just channel.listener})
-      Finalize -> gets (\st -> st.talk) >>= traverse_ (H.liftEffect . closeTalk)
+      Finalize -> do
+        gets (\st -> st.talk) >>= traverse_ (H.liftEffect . closeTalk)
+        endTurn
       Receive input -> modify $ \st ->
         -- A detached selection stays detached until another is made.
         st {input, detached = if input.selection == st.input.selection then st.detached else Nothing}
@@ -703,6 +710,7 @@ component =
       Decided d -> H.raise (DecideAll d)
       Close -> do
         stop
+        endTurn
         H.raise Closed
         -- Back to the page's text, where the user was before the panel.
         gets (\st -> st.input.host) >>= traverse_ (H.liftEffect . focusText)
@@ -778,6 +786,7 @@ component =
                 , turnMode = md
                 }
             startTicker
+            countTurn
             H.liftEffect (sayTo talk (requestFor md r) (userTurn md decided context text))
         (Just (Left why), _) -> addEntry (Trouble why)
         _ -> pass
@@ -880,6 +889,28 @@ component =
       modifyReply (\r -> (settle r) {stage, took = Just (diffUTCTime t r.began)})
       gets (\st -> st.ticker) >>= traverse_ H.kill
       modify (\st -> st {talking = False, ticker = Nothing, now = Nothing})
+      endTurn
+
+    -- The model's turn counted as the program's work. The turn's events
+    -- arrive through an emitter, which no fiber waits on, so without this
+    -- fork the page is idle the moment Send has rendered, and a test that
+    -- waits for the program to be quiet (haskell-halogen-playwright's
+    -- waitQuiet) would read the panel before the answer. The fork waits in
+    -- a liftIO until 'endTurn' fills the turn's variable: when the turn
+    -- ends ('finish': done, stopped or failed), the panel closes, or the
+    -- component goes.
+    countTurn :: H.HalogenM State Action Empty Output m ()
+    countTurn = do
+      endTurn
+      ended <- liftIO newEmptyMVar
+      modify (\st -> st {ended = Just ended})
+      void (H.fork (liftIO (takeMVar ended)))
+
+    -- Let the fork of 'countTurn' end, if a turn is counted.
+    endTurn :: H.HalogenM State Action Empty Output m ()
+    endTurn = do
+      gets (\st -> st.ended) >>= traverse_ (\ended -> liftIO (void (tryPutMVar ended ())))
+      modify (\st -> st {ended = Nothing})
 
     -- Read the time every second while the model is at work, for the
     -- seconds counter.

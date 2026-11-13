@@ -781,8 +781,9 @@ jobs:
       run: cd maker && cabal build all --enable-tests --builddir=dist-newstyle/floor
 
   # The page, built and tested on the runner plan picked (see the top). Its
-  # steps are shared with wasm-warm below (the anchor wasm-steps); the steps
-  # that test the page, or keep it, run only here (github.job is wasm).
+  # steps are shared with wasm-warm and smoke-throttled below (the anchor
+  # wasm-steps); the steps that test the page, or keep it, run only here
+  # (github.job is wasm), but for smoke-throttled's own.
   wasm:
     needs: plan
     if: needs.plan.outputs.tested != 'true'
@@ -1028,7 +1029,7 @@ jobs:
         )
 
     - name: Save cached dependencies
-      if: runner.environment == 'github-hosted'
+      if: runner.environment == 'github-hosted' && github.job != 'smoke-throttled'
       uses: actions/cache/save@v5
       with:
         path: ${{ env.CABAL_DIR }}/store
@@ -1051,14 +1052,14 @@ jobs:
     # them), and the bootstrap has already installed this Chromium and checked
     # that it starts, so there the install only confirms it.
     - name: Cache Chromium
-      if: runner.environment == 'github-hosted' && github.job == 'wasm'
+      if: runner.environment == 'github-hosted' && github.job != 'wasm-warm'
       uses: actions/cache@v5
       with:
         path: ~/.cache/ms-playwright
         key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
 
     - name: Install Chromium
-      if: runner.environment == 'github-hosted' && github.job == 'wasm'
+      if: runner.environment == 'github-hosted' && github.job != 'wasm-warm'
       run: npx playwright install --only-shell chromium
 
     - name: Install Chromium (self-hosted)
@@ -1090,6 +1091,18 @@ jobs:
         WIKI_SCREENSHOTS_DIR: ${{ runner.temp }}/screenshots
       run: sh toolchain/smoke-suite.sh screenshots
 
+    # The demo's smoke test with every page's processor four times slower,
+    # in smoke-throttled's run of these steps only (see that job). Each call
+    # of the driver may take four times as long too: the plain 30 seconds
+    # times the throttle, the rule wiki-smoke's Wiki.Smoke.Demo applies by
+    # itself when no timeout is given, written here so the job says it.
+    - name: Smoke-test the demo with the processor throttled
+      if: github.job == 'smoke-throttled'
+      env:
+        HALOGEN_PLAYWRIGHT_THROTTLE: '4'
+        HALOGEN_PLAYWRIGHT_TIMEOUT: '120000'
+      run: sh toolchain/smoke-suite.sh demo
+
     # Independent SQLite and PostgreSQL smoke runs can overlap. PostgreSQL
     # uses the container toolchain/ci-postgres.sh starts, as the native job's
     # tests do; without Docker (a self-hosted runner) only on SQLite, and
@@ -1105,6 +1118,9 @@ jobs:
           echo "::warning::Docker does not answer on this runner: the smoke test's server runs on SQLite only."
         fi
 
+    # The demo's smoke test (wiki-smoke-demo, in Haskell), then the
+    # server's build against a real wiki-server and the other node programs
+    # (toolchain/smoke-test.sh).
     - name: Smoke-test the page in a browser
       if: github.job == 'wasm'
       run: npm run smoke-test
@@ -1120,7 +1136,7 @@ jobs:
 
     # The paths are the restore step's.
     - name: Save wasm and native build directories
-      if: runner.environment == 'github-hosted'
+      if: runner.environment == 'github-hosted' && github.job != 'smoke-throttled'
       uses: actions/cache/save@v5
       with:
         path: |
@@ -1164,6 +1180,32 @@ jobs:
     name: wasm (hosted cache)
     continue-on-error: true
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HALOGEN_BASE_PATH: /${{ github.event.repository.name }}/
+    steps: *wasm-steps
+
+  # The demo's smoke test again, with every page's processor four times
+  # slower (HALOGEN_PLAYWRIGHT_THROTTLE=4; WP5.98 of docs/PLAN.md): a test
+  # that passes only because the page is quick enough fails here, so races
+  # between the test and the page, or within the page, are found on purpose
+  # rather than on someone's pull request. It runs the wasm job's steps on
+  # the same runner, after it, so the build is the one wasm saved or left
+  # there, and its own step is the only test it runs. Weekly (the schedule
+  # above) and by hand only, and never for a pull request, which does not
+  # wait for it: on a push to main the plan usually skips wasm, as the pull
+  # request's run tested the tree, and a throttled run for every merge would
+  # then build the page again for a check whose purpose is a regular search,
+  # which the weekly run makes. A failure fails the run it is in; deploy does
+  # not wait for it.
+  smoke-throttled:
+    needs: [plan, wasm]
+    if: >-
+      ${{ !cancelled() && needs.wasm.result == 'success' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    name: smoke test, throttled
+    runs-on: ${{ needs.plan.outputs.runner }}
     permissions:
       contents: read
     env:

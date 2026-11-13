@@ -22,12 +22,18 @@ module Wiki.Smoke.Demo
   ( -- * The built demo
     Demo (..)
   , withDemo
+  , withDemoIO
   , address
+  , basePath
+  , localPath
 
     -- * Its pages
   , demoContext
   , onDemoPage
+  , standIns
   , nothingThrown
+  , nothingWrong
+  , nothingWrongBut
   )
 where
 
@@ -46,6 +52,7 @@ import System.Directory (doesFileExist)
 import System.Environment (lookupEnv, setEnv)
 import System.FilePath ((</>))
 import System.IO (hSetEncoding, stderr, stdout, utf8)
+import Text.Read (readMaybe)
 
 -- | The demo, served for the suite.
 data Demo = Demo
@@ -67,8 +74,16 @@ data Demo = Demo
 -- may take 30 seconds (@HALOGEN_PLAYWRIGHT_TIMEOUT@, when it is not set),
 -- the time the JavaScript smoke tests allowed: the application is a few
 -- megabytes of WebAssembly, and the islands load libraries of their own.
+-- A run slowed down on purpose (@HALOGEN_PLAYWRIGHT_THROTTLE@, a factor)
+-- gets that time times the factor: 120 seconds at 4, so that a throttled
+-- run by hand waits as CI's throttled job does ('defaultTimeout').
 withDemo :: String -> (Demo -> Spec) -> IO ()
-withDemo name spec = do
+withDemo name spec = withDemoIO name (pure . spec)
+
+-- | 'withDemo', for a suite that reads something before it says its
+-- examples: the built directory's pages, say.
+withDemoIO :: String -> (Demo -> IO Spec) -> IO ()
+withDemoIO name spec = do
   -- The report quotes the pages, which write "…" and hspec's "✔": in UTF-8
   -- whatever the locale.
   hSetEncoding stdout utf8
@@ -76,7 +91,8 @@ withDemo name spec = do
   dir <- fromMaybe "../dist-newstyle/wasm/public/app" <$> lookupEnv "WIKI_DEMO_DIR"
   required <- (== Just "1") <$> lookupEnv "WIKI_SMOKE_REQUIRED"
   timeout <- lookupEnv "HALOGEN_PLAYWRIGHT_TIMEOUT"
-  when (isNothing timeout) $ setEnv "HALOGEN_PLAYWRIGHT_TIMEOUT" "30000"
+  throttle <- lookupEnv "HALOGEN_PLAYWRIGHT_THROTTLE"
+  when (isNothing timeout) $ setEnv "HALOGEN_PLAYWRIGHT_TIMEOUT" (show (defaultTimeout throttle))
   built <- (&&) <$> doesFileExist (dir </> "index.html") <*> doesFileExist (dir </> "app.wasm")
   if not built
     then
@@ -89,7 +105,14 @@ withDemo name spec = do
       base <- baseOf <$> Text.readFile (dir </> "index.html")
       hasNotFound <- doesFileExist (dir </> "404.html")
       let options = defaultServeOptions {basePath = base, notFound = if hasNotFound then Just "404.html" else Nothing}
-      serveDirectoryWith options dir $ \site -> hspec (describe name (spec Demo {url = site, dir}))
+      serveDirectoryWith options dir $ \site -> spec Demo {url = site, dir} >>= hspec . describe name
+
+-- | The time a call of the driver may take when @HALOGEN_PLAYWRIGHT_TIMEOUT@
+-- is not set, in milliseconds: 30 seconds, times the throttle's factor when
+-- the run is slowed down (@HALOGEN_PLAYWRIGHT_THROTTLE@, read as the driver
+-- reads it; a factor below 1, or none, counts as 1).
+defaultTimeout :: Maybe String -> Int
+defaultTimeout throttle = ceiling (30000 * max 1 (fromMaybe 1 (throttle >>= readMaybe)) :: Double)
 
 -- | The base path a built page names in its @<base href>@ (@/@ without
 -- one): the path it was built to be served under (@HALOGEN_BASE_PATH@).
@@ -102,6 +125,21 @@ baseOf index = case Text.breakOn "<base href=\"" index of
 -- @address demo "/admin/users/"@.
 address :: Demo -> Text -> Text
 address demo path = demo.url <> Text.dropWhile (== '/') path
+
+-- | The base path the demo is served under, a slash at each end: @/@, or
+-- @/blog/@ for a build made for that base path.
+basePath :: Demo -> Text
+basePath demo = case Text.breakOn "://" demo.url of
+  (_, rest) | not (Text.null rest) -> Text.dropWhile (/= '/') (Text.drop 3 rest)
+  _ -> "/"
+
+-- | The wiki's route an address of the demo is, with its query: the
+-- address's path taken out of the base path (@/s/docs/?x=1@), as
+-- 'address' puts it in. An address of another site is given back whole.
+localPath :: Demo -> Text -> Text
+localPath demo full = case Text.stripPrefix demo.url full of
+  Just rest -> "/" <> Text.takeWhile (/= '#') rest
+  Nothing -> full
 
 -- | A window of 1280 by 800 (at Playwright's device scale of 1), motion
 -- reduced, so that a page that animates shows where the animation ends,
@@ -122,19 +160,44 @@ demoContext =
 -- A failure says the page's state, as 'inPage''s does.
 onDemoPage :: (HasCallStack) => ContextOptions -> (Page -> IO a) -> Playwright -> IO a
 onDemoPage options body pw = withContext pw options $ \ctx -> do
+  standIns ctx
+  page <- newPage ctx
+  withFailureContext page (body page)
+
+-- | The demo's photograph on Wikimedia Commons answered with a stand-in, and
+-- its video with nothing (which a page shows as a player with nothing in
+-- it, as it would offline), so that no suite needs the network.
+standIns :: Context -> IO ()
+standIns ctx = do
   _ <- route ctx "https://upload.wikimedia.org/**" $ \request ->
     pure $
       if ".webm" `Text.isSuffixOf` request.url
         then fulfill 204 Nothing ""
         else fulfill 200 (Just "image/png") standIn
-  page <- newPage ctx
-  withFailureContext page (body page)
+  pure ()
 
 -- | Fail if the page has thrown an error it did not catch.
 nothingThrown :: (HasCallStack) => Page -> Expectation
 nothingThrown page = do
   thrown <- pageErrors page
   unless (null thrown) $ expectationFailure ("the page threw: " <> show thrown)
+
+-- | Fail if the page has thrown an error it did not catch, or written an
+-- error on its console. An address with no file of its own is served
+-- @404.html@ with a 404, which Chromium reports on the console; that is
+-- how it is meant to work, so an error that names a 404 is not counted.
+nothingWrong :: (HasCallStack) => Page -> Expectation
+nothingWrong = nothingWrongBut ["404"]
+
+-- | 'nothingWrong', leaving out the console's errors that hold any of these
+-- words: what a test makes happen on purpose (a page read offline cannot
+-- load what was not kept).
+nothingWrongBut :: (HasCallStack) => [Text] -> Page -> Expectation
+nothingWrongBut expected page = do
+  nothingThrown page
+  errors <- filter (\m -> m.kind == "error" && not (any (`Text.isInfixOf` m.text) expected)) <$> consoleMessages page
+  unless (null errors) $
+    expectationFailure ("the page wrote errors on its console:\n" <> unlines [Text.unpack (m.text <> maybe "" (" at " <>) m.url) | m <- errors])
 
 -- | A 32 by 32 PNG, standing in for the demo's photograph.
 standIn :: ByteString

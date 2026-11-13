@@ -115,7 +115,16 @@ spec m = do
     ui <- startServer m (Page docs guide)
     _ <- find ui "article.page-body h1"
     bringNear ui
-    eventually $ ((\r -> r.url) <$>) <$> asked >>= (`shouldSatisfy` elem refused)
+    -- The request starts when the browser's IntersectionObserver says the
+    -- link has come near the window, which takes the browser its own time
+    -- on a loaded machine: a long deadline, not the two seconds of
+    -- 'eventually' (seen to run out in CI on 2026-11-12).
+    eventuallyWithin 30000 $ ((\r -> r.url) <$>) <$> asked >>= (`shouldSatisfy` elem refused)
+    -- The test's fetch answers at once, in promises; settle lets the tasks
+    -- queued by then run (the program's handling of the answer among them,
+    -- as a task of the wasm runtime) before anything is read. hspec-halogen
+    -- has no wait for the program to be quiet; this is the nearest.
+    settle
     -- Refused: the link, as without the class, and no banner.
     eventually $ find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child" >>= (`shouldHaveText` "Presentations")
     length <$> findAll ui ".deck-embed" `shouldReturn` 0

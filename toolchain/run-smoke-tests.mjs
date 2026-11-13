@@ -1,6 +1,8 @@
 // Run independent smoke programs in isolated processes, using Node's test
 // runner for bounded concurrency and failure reporting. Each program keeps
-// its own browser, server and data directory.
+// its own browser, server and data directory. The demo's smoke test is
+// wiki-smoke's demo suite, in Haskell, which toolchain/smoke-test.sh runs
+// before these.
 import { run } from "node:test";
 import { spec } from "node:test/reporters";
 import { pipeline } from "node:stream/promises";
@@ -13,7 +15,6 @@ delete process.env.WIKI_DATABASE_URL;
 delete process.env.WIKI_SMOKE_RESTORE_DATABASE_URL;
 const tests = run({
   files: [
-    "toolchain/smoke-test.mjs",
     "toolchain/smoke-test-server.mjs",
     "toolchain/smoke-test-postgres.mjs",
     "toolchain/test-passkeys.mjs",

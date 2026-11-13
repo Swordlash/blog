@@ -44,13 +44,16 @@ library
   import:           shared
   hs-source-dirs:   src
   exposed-modules:
+      Wiki.Smoke.Adoption
       Wiki.Smoke.Demo
   if arch(wasm32) || arch(javascript)
     buildable: False
   else
     build-depends:
         base >= 4.20 && < 5,
+        aeson,
         base64-bytestring,
+        http-types,
         bytestring,
         directory,
         filepath,
@@ -81,7 +84,7 @@ test-suite wiki-smoke-screenshots
 
 -- That the driver's waits hold on the wiki: waitQuiet after typing returns
 -- once the debounced preview is drawn, after a save with "Saved" still
--- shown, and while the writing assistant's seconds counter ticks.
+-- shown, and after the writing assistant's Send once the answer has ended.
 test-suite wiki-smoke-waits
   import:           shared
   type:             exitcode-stdio-1.0
@@ -94,5 +97,58 @@ test-suite wiki-smoke-waits
     build-depends:
         base,
         text,
+        haskell-halogen-playwright,
+        wiki-smoke
+
+-- The demo's smoke test, as toolchain/smoke-test.mjs had it: every page the
+-- build wrote adopted by the program, one long walk through the demo, a
+-- dark scheme and a phone, slides, the clipboard and comments, the
+-- service worker offline, and the writing assistant (Main's haddock says
+-- what each part checks). npm run smoke-test runs it.
+test-suite wiki-smoke-demo
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   demo
+  main-is:          Main.hs
+  other-modules:
+      Demo.Assistant
+      Demo.Looks
+      Demo.Offline
+      Demo.Prerendered
+      Demo.Site
+      Demo.Walk
+  ghc-options:      -threaded
+  if arch(wasm32) || arch(javascript)
+    buildable: False
+  else
+    build-depends:
+        base,
+        aeson,
+        bytestring,
+        directory,
+        filepath,
+        http-client,
+        http-types,
+        network-uri,
+        process,
+        text,
+        time,
+        zip-archive,
+        haskell-halogen-playwright,
+        wiki-smoke
+
+-- The rules of Wiki.Smoke.Adoption that need no browser (which changes
+-- adoption may make, which pages a page embeds as presentations, which
+-- requests are a viewer's): pure examples, run by cabal test with no build.
+test-suite wiki-smoke-adoption
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Adoption.hs
+  if arch(wasm32) || arch(javascript)
+    buildable: False
+  else
+    build-depends:
+        base,
         haskell-halogen-playwright,
         wiki-smoke

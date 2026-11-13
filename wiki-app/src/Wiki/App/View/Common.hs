@@ -21,6 +21,12 @@
 --   notices, the export's notice, the assistant's seconds counter.
 --   @waitQuiet@ after a save then returns with \"Saved\" still shown, and a
 --   ticker does not keep the page from ever being quiet.
+--
+-- Work that reaches a view through an emitter, with no fiber waiting for
+-- it, is not counted by itself. The writing assistant's turn is such work:
+-- its panel forks a fiber that waits in a @liftIO@ until the turn ends
+-- ("Wiki.App.View.Assistant"), so that @waitQuiet@ after Send returns once
+-- the answer has ended.
 module Wiki.App.View.Common
   ( -- * From the shell to a view, and back
     Context (..)
