@@ -303,6 +303,7 @@ import Wiki.App.Editor.Browser
   , changesLeft
   , chosenFiles
   , clickElement
+  , currentText
   , cursorLine
   , cursorLineOf
   , decision
@@ -697,7 +698,7 @@ data State = State
   , rowMatches :: Map RowKey Int
   -- ^ How many of the matches start in each row, for the rows' headers:
   -- only rows counted whole.
-  , searchNote :: Text
+  , searchNote :: Maybe (Text, Text)
   -- ^ What the panel says after its count: that the last step went past
   -- the end or the start, or how many matches Replace all replaced.
   , searchStepped :: Bool
@@ -867,7 +868,12 @@ searchSaid st = case st.matches of
               _ | n == 0 -> "No matches"
               Just i -> show (i + 1) <> " of " <> total
               Nothing -> total <> (if n == 1 && not found.capped then " match" else " matches")
-         in counted <> (if T.null st.searchNote then "" else ", " <> st.searchNote)
+            -- The note of the last step or replacement, while the text is
+            -- the one it was said of.
+            noted = case (st.searchNote, st.loaded) of
+              (Just (said, text), Ready w) | w.body == text -> ", " <> said
+              _ -> ""
+         in counted <> noted
 
 -- | How many of the matches start in each row, from the rows' starts the
 -- count was made with. A count that stopped at its limit counts only the
@@ -1132,7 +1138,7 @@ component =
               , searchFor = Find {query = "", replacement = "", caseSensitive = False, regexp = False, wholeWord = False}
               , matches = Nothing
               , rowMatches = mempty
-              , searchNote = ""
+              , searchNote = Nothing
               , searchStepped = False
               , measures = Nothing
               , selection = Nothing
@@ -1460,11 +1466,19 @@ component =
 
     -- The keys the editor handles, recognised in the keydown's listener,
     -- which stops the browser's own action for them. Any other key makes no
-    -- action and is left to the browser. Escape belongs to the editor only
-    -- while a menu is open, to close it.
+    -- action and is left to the browser.
+    --
+    -- Escape is taken by the innermost open thing: a list of the
+    -- completion, in the text, stops it there (@web/src/editor.js@); then
+    -- a toolbar's menu closes; then a dialog of the editor's (a link to a
+    -- page, a new kind of box) closes itself; then, outermost, the search
+    -- closes, from anywhere in the editor's form (its panel, the text, a
+    -- row's text or header, the toolbar), the focus going where it came
+    -- from, or to the match after a step. Otherwise it is the browser's.
     keyAction :: State -> Event -> Maybe Action
     keyAction st ev = case editorKey ev of
       Just EscapeKey | isJust st.menu -> Just CloseMenu
+      Just EscapeKey | st.searchOpen && not (st.linkDialogOpen || st.kindDialogOpen) -> Just (FromSearch SearchPanel.Closed)
       Just EscapeKey -> Nothing
       -- Alt+Up and Alt+Down are the browser's until slides move by them
       -- again (WP5.103's next stage).
@@ -1845,9 +1859,11 @@ component =
         (HH.ElemName "div")
         [HP.class_ "editor-source"]
         ( [("providers", providerBar st)]
-            -- Kept while the preview is shown alone, hidden with the text, so
-            -- that its fields are there on the way back.
-            <> [("search", searchPanel st) | st.searchOpen && st.master == Attached]
+            -- Kept while the preview is shown alone, hidden with the text,
+            -- and while CodeMirror is put in place again (a reload): the
+            -- search is the editor's state ('searchFor'), which the panel is
+            -- drawn from and CodeMirror is given ('EditorReady').
+            <> [("search", searchPanel st) | st.searchOpen]
             <> [
                  ( "cm"
                  , [hh|
@@ -1899,7 +1915,8 @@ component =
         ()
         SearchPanel.component
         SearchPanel.Input
-          { said = searchSaid st
+          { find = st.searchFor
+          , said = searchSaid st
           , invalid = st.searchFor.regexp && maybe False (\found -> not found.valid) st.matches && not (T.null st.searchFor.query)
           }
         FromSearch
@@ -2424,32 +2441,30 @@ component =
       -- or a replacement goes from the editor's selection, and slide by
       -- slide opens the match's row ("web/src/editor.js"'s rowsSync).
       FromSearch (SearchPanel.Changed s) -> do
-        modify (\st -> st {searchFor = s, searchNote = ""})
+        modify (\st -> st {searchFor = s, searchNote = Nothing})
         gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (searchIn host s))
       FromSearch (SearchPanel.Step forward) ->
         withHost $ \host -> do
           went <- H.liftEffect (searchStep host forward)
-          modify $ \st ->
-            st
-              { searchNote = if went == Wrapped then (if forward then "from the start" else "from the end") else ""
-              , searchStepped = st.searchStepped || went /= NoMatch
-              }
+          noting host (if went == Wrapped then Just (if forward then "from the start" else "from the end") else Nothing)
+          modify (\st -> st {searchStepped = st.searchStepped || went /= NoMatch})
       FromSearch SearchPanel.Replace ->
         withHost $ \host -> do
           done <- H.liftEffect (searchReplace host)
-          modify (\st -> st {searchNote = "", searchStepped = st.searchStepped || done})
+          noting host Nothing
+          modify (\st -> st {searchStepped = st.searchStepped || done})
           -- A replacement can make a heading, or take one away.
           recutRows
       FromSearch SearchPanel.ReplaceAll ->
         withHost $ \host -> do
           n <- H.liftEffect (searchReplaceAll host)
-          modify (\st -> st {searchNote = if n == 1 then "1 replaced" else show n <> " replaced"})
+          noting host (Just (if n == 1 then "1 replaced" else show n <> " replaced"))
           recutRows
       -- Closed: the marks go, and the focus goes back where it came from,
       -- or after a step to the match ('searchClosed').
       FromSearch SearchPanel.Closed -> do
         st <- get
-        modify (\s -> s {searchOpen = False, matches = Nothing, rowMatches = mempty, searchNote = ""})
+        modify (\s -> s {searchOpen = False, matches = Nothing, rowMatches = mempty, searchNote = Nothing})
         for_ st.hostElement $ \host -> H.liftEffect (searchClosed host st.searchStepped)
       MatchesFound found -> whenM (gets (\st -> st.searchOpen)) $ modify (\st -> st {matches = Just found, rowMatches = countsPerRow found})
       -- CodeMirror's module did not load: there will be no master, and the
@@ -2564,7 +2579,9 @@ component =
           found <- H.getRef st.host
           available <- H.liftEffect editorAvailable
           let master = if inBrowser && not available then Absent else Waiting
-          modify (\s -> freshRows s {hostElement = found, pendingChanges = 0, selection = Nothing, master})
+          -- The search's count and notes were of the text before; the
+          -- search itself stays, and is given to the CodeMirror coming.
+          modify (\s -> freshRows s {hostElement = found, pendingChanges = 0, selection = Nothing, master, matches = Nothing, rowMatches = mempty, searchNote = Nothing})
           traverse_ (\host -> H.liftEffect (attachEditor host w.loadedBody)) found
           -- The text loaded is checked at once, the typing after a pause.
           -- Only in a browser: a page prerendered natively has no
@@ -2939,12 +2956,19 @@ component =
           s
             { searchOpen = True
             , searchFor = asked
-            , searchNote = ""
+            , searchNote = Nothing
             , searchStepped = st.searchOpen && st.searchStepped
             , matches = if st.searchOpen && asked == st.searchFor then st.matches else Nothing
             }
         H.tell "search" () (SearchPanel.Open asked)
         H.liftEffect (searchIn host asked)
+
+    -- Say this of the last step or replacement of the search, of the text
+    -- CodeMirror holds now: shown while the editor's text is that one.
+    noting :: Element -> Maybe Text -> H.HalogenM State Action Slots ViewOutput m ()
+    noting host said = do
+      text <- H.liftEffect (currentText host)
+      modify (\st -> st {searchNote = (,text) <$> said})
 
     -- Act on CodeMirror's host, once the text is loaded.
     withHost :: (Element -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()

@@ -11,8 +11,9 @@
 --
 -- Keys: Enter in the text to find goes to the next match and Shift+Enter
 -- to the previous one, the focus staying in the field, so that Enter goes
--- on stepping; Enter in the replacement replaces; Escape anywhere in the
--- panel closes it. Enter with another modifier does nothing: in a field of
+-- on stepping; Enter in the replacement replaces. Escape is the editor's,
+-- from anywhere in its form, the panel's fields included
+-- ('Wiki.App.View.Editor''s keys): it closes the search. Enter with another modifier does nothing: in a field of
 -- the editor's form it would submit the form, which saves the page. Ctrl+F
 -- and F3 are the editor's own keys ('Wiki.App.Editor.Browser.editorKey').
 --
@@ -40,11 +41,14 @@ import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
 import Wiki.App.Editor.Browser (Find (..), focusElement)
 import Wiki.App.View.Common (ariaBool)
 
--- | The panel's input: what the search found, as the panel says it ("3
--- of 12", "No matches"), and whether the text to find is a regular
--- expression that is not one.
+-- | The panel's input: the search, the editor's ('Wiki.App.View.Editor'
+-- holds it, and gives it to CodeMirror), which the panel shows as it is
+-- mounted; what the search found, as the panel says it ("3 of 12", "No
+-- matches"); and whether the text to find is a regular expression that is
+-- not one.
 data Input = Input
-  { said :: Text
+  { find :: Find
+  , said :: Text
   , invalid :: Bool
   }
 
@@ -73,7 +77,8 @@ data State = State
 data Toggle = CaseToggle | RegexpToggle | WordToggle
 
 data Action
-  = Receive Input
+  = Initialize
+  | Receive Input
   | TypedFind Text
   | TypedReplacement Text
   | Toggled Toggle
@@ -89,13 +94,13 @@ component =
           replaceField <- H.newRefLabel "search-replace"
           pure State {input, search = Find {query = "", replacement = "", caseSensitive = False, regexp = False, wholeWord = False}, findField, replaceField}
       , render
-      , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.handleQuery = handleQuery, H.receive = Just . Receive}
+      , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.handleQuery = handleQuery, H.receive = Just . Receive, H.initialize = Just Initialize}
       }
   where
     render :: State -> H.ComponentHTML Action Empty m
     render st =
       [hh|
-        <div class="editor-search" role="search" aria-label="Find and replace" {{ HE.preventingDefault (HE.handler' (EventType "keydown") escapeKey) }}>
+        <div class="editor-search" role="search" aria-label="Find and replace">
           <div class="editor-search-line">
             <input
               type="text"
@@ -143,6 +148,14 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Empty Output m ()
     handleAction = \case
+      -- Mounted (opened, or drawn again after CodeMirror was put in place
+      -- again): the editor's search in the fields and the toggles.
+      Initialize -> do
+        found <- gets (\st -> st.input.find)
+        modify (\st -> st {search = found})
+        st <- get
+        fill st.findField found.query
+        fill st.replaceField found.replacement
       Receive input -> modify (\st -> st {input})
       TypedFind t -> change (\s -> s {query = t})
       TypedReplacement t -> change (\s -> s {replacement = t})
@@ -182,14 +195,5 @@ fieldKey inFind event
   | inFind = Just (Ask (Step (not pressed.shiftKey)))
   | pressed.shiftKey = Just Ignore
   | otherwise = Just (Ask Replace)
-  where
-    pressed = KeyboardEvent event
-
--- | Escape, without a modifier, anywhere in the panel: it closes.
-escapeKey :: Event -> Maybe Action
-escapeKey event
-  | pressed.isComposing || pressed.key /= "Escape" = Nothing
-  | pressed.ctrlKey || pressed.metaKey || pressed.altKey || pressed.shiftKey = Nothing
-  | otherwise = Just (Ask Closed)
   where
     pressed = KeyboardEvent event

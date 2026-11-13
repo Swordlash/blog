@@ -21,7 +21,7 @@ import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
 import Test.Browser.Mount (slugs, startOn, startWith)
-import Test.Browser.Text (editorHost, editorSelection, editorText, inputsSeen, markdown, selectText, setMarkdown, utf16Length, watchEditor)
+import Test.Browser.Text (completing, editorHost, editorSelection, editorText, inputsSeen, markdown, selectText, setMarkdown, utf16Length, watchEditor)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
@@ -312,6 +312,68 @@ spec m = do
     setMarkdown ui "# T\n\nbb"
     find ui ".editor-search-replace-all" >>= click
     markdown ui `shouldReturn` "# T\n\naa"
+
+  -- The search is the editor's: CodeMirror put in place again (a draft
+  -- discarded, which loads the page again) keeps it open, its panel
+  -- showing what it searches, which is what it runs.
+  it "keeps the search open through the text loaded again, the panel showing what it searches and runs" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    setMarkdown ui "# Hello, world\n\nHello again."
+    find ui ".editor-cancel" >>= click
+    keep <- eventually (findAll ui ".editor-cancel-confirm button") >>= filterM (fmap (T.isInfixOf "Keep the draft") . textContent)
+    maybe (expectationFailure "no Keep the draft") click (head keep)
+    eventually $ find ui ".page-view .actions a[href$='/edit/']" >>= click
+    eventually $ find ui ".editor-draft-found" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Restored your unsaved draft")
+    selectText ui 2 2
+    press "Control+f"
+    find ui ".editor-search-regexp" >>= click
+    find ui ".editor-search-find" >>= (`typeText` "Hel+o")
+    find ui ".editor-search-replacement" >>= (`typeText` "Bye")
+    eventually $ said ui `shouldReturn` "2 matches"
+    -- Back to the page as saved: CodeMirror is put in place again.
+    find ui ".editor-draft-discard" >>= click
+    eventually $ markdown ui >>= (`shouldSatisfy` (not . T.isInfixOf "Hello again."))
+    find ui ".editor-search-find" >>= (`getProperty` "value") >>= (`shouldBe` "Hel+o")
+    find ui ".editor-search-replacement" >>= (`getProperty` "value") >>= (`shouldBe` "Bye")
+    find ui ".editor-search-regexp" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
+    eventually $ said ui >>= (`shouldSatisfy` \shown -> " match" `T.isInfixOf` shown && shown /= "No matches")
+    find ui ".editor-search-replace-all" >>= click
+    eventually $ markdown ui >>= (`shouldSatisfy` \text -> not ("Hello" `T.isInfixOf` text) && "Bye" `T.isInfixOf` text)
+
+  -- Escape closes the search from anywhere in the editor, after whatever
+  -- is more inside has taken it: a completion's list open in the text
+  -- closes first.
+  it "closes the search on Escape in the text and on the toolbar, after a completion's list open in the text" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    setMarkdown ui "# T\n\nA needle."
+    let opened = do
+          press "Control+f"
+          eventually $ length <$> findAll ui ".editor-search" `shouldReturn` 1
+        closed = eventually $ length <$> findAll ui ".editor-search" `shouldReturn` 0
+    selectText ui 2 2
+    opened
+    find ui ".editor-search-find" >>= (`typeText` "needle")
+    -- In the text.
+    selectText ui 2 2
+    press "Escape"
+    closed
+    searchFocus `shouldReturn` "master"
+    -- On the toolbar.
+    opened
+    find ui ".editor-toolbar button.tool" >>= focus
+    press "Escape"
+    closed
+    -- A completion's list first, then the search.
+    opened
+    let end = T.length "# T\n\nA needle."
+    selectText ui end end
+    editorText ui >>= (`typeText` " :smi")
+    eventually $ completing ui `shouldReturn` "active"
+    press "Escape"
+    eventually $ completing ui `shouldReturn` ""
+    length <$> findAll ui ".editor-search" `shouldReturn` 1
+    press "Escape"
+    closed
 
   it "counts no match in the title line's guarded \"# \", steps to none and replaces none, and finds the title's own text, in the raw Markdown" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor

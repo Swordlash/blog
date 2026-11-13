@@ -1174,9 +1174,13 @@ const completions = (host) => {
 // CodeMirror's standard keys, but for the Emacs keys a Mac has that are
 // the toolbar's shortcuts there too: Ctrl+B, Ctrl+E and Ctrl+K are bold,
 // code and link (wiki-app/jsbits/editor.js, which takes Ctrl or Cmd), not
-// a move left, to the line's end, or a deletion to it.
+// a move left, to the line's end, or a deletion to it; and but for
+// Escape, which CodeMirror spends on making a selection a cursor: Escape
+// is the editor's, which closes its menu or its search
+// (Wiki.App.View.Editor's keys), and a completion's list, open, takes it
+// first (completions, above).
 const toolbarKeys = new Set(["Ctrl-b", "Ctrl-e", "Ctrl-k"]);
-const textKeys = standardKeymap.filter((binding) => !toolbarKeys.has(binding.mac));
+const textKeys = standardKeymap.filter((binding) => !toolbarKeys.has(binding.mac) && binding.key !== "Escape");
 
 // The editors attached, so that one whose host has left the page (the
 // editor closed without its finalizer reaching it) is let go of: a view

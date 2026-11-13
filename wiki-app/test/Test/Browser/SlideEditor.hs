@@ -1185,6 +1185,36 @@ spec m = do
     markdown ui `shouldReturn` T.replace "# Deck" "# Card" searchDeck
     unsafeIOToPageM (fromJSText <$> js_slide_invariants) `shouldReturn` ""
 
+  it "closes the search on Escape in a row's text and on a row's header, after F3 with the focus at the match" $ runPage $ do
+    (ui, _) <- openDeck searchDeck
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀", "One"]
+    let opened = do
+          press "Control+f"
+          eventually $ length <$> findAll ui ".editor-search" `shouldReturn` 1
+        closed = eventually $ length <$> findAll ui ".editor-search" `shouldReturn` 0
+    rowSelect 1 10 16
+    opened
+    -- In a row's text.
+    rowSelect 1 0 0
+    press "Escape"
+    closed
+    -- On a row's header.
+    opened
+    rowHeader ui "Two" >>= focus
+    press "Escape"
+    closed
+    -- After F3 in a row's text: the focus at the match, in its row.
+    rowSelect 1 10 16
+    opened
+    rowSelect 1 10 16
+    press "F3"
+    eventually $ searchFocus `shouldReturn` "text 3"
+    press "Escape"
+    closed
+    searchFocus `shouldReturn` "text 3"
+    rowSelection 3 `shouldReturn` (10, 16)
+
   it "selects a regular expression's match across two slides in the row it starts in" $ runPage $ do
     (ui, _) <- openDeck searchDeck
     eventually $ openTitles ui `shouldReturn` ["Deck 😀"]
