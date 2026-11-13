@@ -1695,6 +1695,10 @@ component =
       -- its keys do ('sealScreen').
       when closed sealScreen
       modify (shut . \st -> st {route = settledRoute r, settled = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
+      -- The route left keeps no title of its own in the tab, nor in the
+      -- history's entry, until the route arrived at sets its title
+      -- ('announce').
+      H.liftEffect (setDocumentTitle bareTitle)
       canonicalAdmin
       whatsNewSeen
       loadHere False
@@ -1734,6 +1738,10 @@ component =
           modify (\s -> s {here = LoadingSpace path, shown = Nothing, stale = Nothing, leaving = Nothing, droppedUnsaved = s.droppedUnsaved || dirty})
         _ -> pass
       modify (\s -> s {generation = s.generation + 1})
+      -- The tab's title, and the history's entry, named what was shown
+      -- (a page's title, decrypted): the wiki's bare name until the
+      -- reload sets the title again ('announce').
+      H.liftEffect (setDocumentTitle bareTitle)
 
     -- After a change: reload everything, and every view's own data too.
     reload :: Maybe Route -> H.HalogenM (State m) Action Slots output m ()
@@ -2170,6 +2178,11 @@ crumbs st = case st.route of
         , Just p.id /= rootPage space
         ]
       _ -> []
+
+-- | The tab's title while nothing of a route is shown yet: the wiki's bare
+-- name.
+bareTitle :: Text
+bareTitle = "Wiki"
 
 documentTitle :: State m -> Text
 documentTitle st | st.route == Home && not (isShut st) && st.session.homePage.title /= "Spaces" = st.session.homePage.title <> " · Wiki"

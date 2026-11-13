@@ -75,7 +75,7 @@ import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Encrypted (KeyState (..), MonadEncryption (..), keyStateText)
-import Wiki.App.Backend.Http (HeldNow (..), HttpEnv, HttpWiki, browserTransport, heldNow, newHttpEnv, ownersHeld, runHttpWiki)
+import Wiki.App.Backend.Http (HeldNow (..), HttpEnv, HttpWiki, PageRead (..), browserTransport, heldNow, newHttpEnv, ownersHeld, runHttpWiki)
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State qualified as M
@@ -1229,6 +1229,29 @@ spec m = do
       length <$> findAll ui ".dropped-unsaved" `shouldReturn` 0
       unmount ui
 
+  -- #213: what the tab's title said of an encrypted space goes with the
+  -- screen when the keys go: the wiki's bare name until the reload sets
+  -- the title again, never the page's title, decrypted, which the tab's
+  -- title and the history's entry otherwise keep.
+  it "titles the tab with the wiki's bare name the moment the keys go, never with the page's title" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Titled secret" "Body of it.")
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    tab <- unsafeIOToPageM (newHttpEnv browserTransport)
+    ui <- startServerOver m tab (R.Page [secretSlug] [made.slug])
+    let title = unsafeIOToPageM (fromJSText <$> js_document_title)
+    eventually (find ui ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Body of it."))
+    eventually (title >>= (`shouldSatisfy` T.isInfixOf "Titled secret"))
+    -- The reload after the keys go, held at its first request.
+    holdAt "GET" "api/v1/session"
+    unsafeIOToPageM (js_tell_dropped (toJSText ("vault:user-admin" :: Text)))
+    eventually (find ui ".wiki" >>= textContent >>= (`shouldSatisfy` (not . T.isInfixOf "Body of it.")))
+    title `shouldReturn` "Wiki"
+    release
+    unmount ui
+
   -- The preview of a page detached from its editor, in a window of its own,
   -- shows nothing of a page of an encrypted space once its editor goes:
   -- the editor's reader may have left the space or signed out.
@@ -1306,8 +1329,10 @@ spec m = do
     ui <- startServerOver m gated (R.Page [secretSlug] [made.slug])
     eventually (find ui ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Changed."))
     -- The tab's title names the space alone, which the browser keeps in
-    -- its history.
-    unsafeIOToPageM (fromJSText <$> js_document_title) >>= (`shouldSatisfy` \t -> "Secret" `T.isInfixOf` t && not ("Under the bell" `T.isInfixOf` t))
+    -- its history: once the route has set it, after the page shows
+    -- (the title waits for the page's backlinks), never the page's.
+    eventually (unsafeIOToPageM (fromJSText <$> js_document_title) >>= (`shouldSatisfy` T.isInfixOf "Secret"))
+    unsafeIOToPageM (fromJSText <$> js_document_title) >>= (`shouldSatisfy` (not . T.isInfixOf "Under the bell"))
     -- Inside: the bell and the stars show the title, decrypted.
     find ui ".notifications-toggle" >>= click
     eventually (find ui ".notification-list .notification-page" >>= (`shouldHaveText` "Under the bell"))
@@ -1567,6 +1592,57 @@ spec m = do
       unsafeIOToPageM (js_sealed_again (toJSText first'.id.text))
       ((\p -> p.body) <$> (ok =<< run tab (getPage secret.id [first'.slug]))) `shouldReturn` "First text."
       sort <$> titles tab `shouldReturn` ["First", "Second"]
+
+  -- #213, the review's P2: every read of a page by its id ('PageRead', the
+  -- list a native test keeps complete against the API's routes of a page),
+  -- on a tab left open while the page changed state, ends after one more
+  -- try with the page's content, or with the refusal a tab opened afresh
+  -- would get: never the same refusal twice. A page encrypted since: the
+  -- page is learnt, and read by the encrypted route, with the key; without
+  -- it, refused as a locked page is. A page made plain since: read by the
+  -- plain route.
+  describe "a page's reads by its id, on a tab left open while the page changed state" $
+    for_ [minBound .. maxBound] $ \read' -> do
+      let readBy :: HttpEnv -> Page -> PageRead -> PageM s (Either WikiError ())
+          readBy tab page = \case
+            ReadHistory -> void <$> run tab (listVersions page.id (VersionsQuery Nothing 50))
+            ReadVersion -> void <$> run tab (getVersion page.id page.updatedAt)
+            ReadThreads -> void <$> run tab (listThreads page.id)
+          setUp way = do
+            env <- encryptedSpace "user-admin"
+            void (ok =<< run env (encryptSpace secret.id))
+            unsafeIOToPageM (js_strip_home (toJSText secret.id.text))
+            made <- ok =<< run env (createPage secret.id Nothing "Doc" "First.")
+            latest <- ok =<< run env (savePage made.id made.updatedAt "Doc" "Second.")
+            unsafeIOToPageM (js_converting (toJSText secret.id.text) (toJSText (way :: Text)))
+            pure latest
+          madePlain page = unsafeIOToPageM (js_made_plain (toJSText page.id.text) (toJSText ("Doc" :: Text)) (toJSText ("Plain." :: Text)))
+      it ("reads a page encrypted since this tab read it plain, by the encrypted route, the page learnt: " <> show read') $ runPage $ do
+        latest <- setUp "encrypting"
+        madePlain latest
+        for_ [("user-admin" :: Text, True), ("user-reader", False)] $ \(who, holds) -> do
+          unsafeIOToPageM (js_made_plain (toJSText latest.id.text) (toJSText ("Doc" :: Text)) (toJSText ("Plain." :: Text)))
+          tab <- as who
+          run tab endPreload
+          void (run tab listSpaces)
+          -- The page read as it was: plain.
+          ((\p -> p.body) <$> (ok =<< run tab (getPage secret.id [latest.slug]))) `shouldReturn` "Plain."
+          -- Encrypted since, elsewhere.
+          unsafeIOToPageM (js_sealed_again (toJSText latest.id.text))
+          readBy tab latest read' >>= \case
+            Right () | holds -> pass
+            Left (Invalid _) | not holds -> pass
+            other -> panic (who <> ": " <> show other)
+      it ("reads a page made plain since this tab read it encrypted, by the plain route: " <> show read') $ runPage $ do
+        latest <- setUp "decrypting"
+        tab <- as "user-admin"
+        run tab endPreload
+        void (run tab listSpaces)
+        -- The page read as it was: encrypted.
+        ((\p -> p.body) <$> (ok =<< run tab (getPage secret.id [latest.slug]))) `shouldReturn` "Second."
+        -- Made plain since, elsewhere.
+        madePlain latest
+        readBy tab latest read' >>= (`shouldSatisfy` isRight)
 
   -- #213, the review's P2: a conversion paused halfway leaves pages of
   -- both kinds in one space, a page of one kind under a page of the other.

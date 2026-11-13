@@ -807,7 +807,10 @@ for that reason (each such refusal carries a code, `Stale` in
 `docs/api.md`): it reads the spaces again, lets go of the keys and pages
 of a space plain now, and sends a read once more by the route the space
 now takes; a write is not sent again, and the author is told to reload
-the page. A tab that believed the space encrypted lists its pages after
+the page. A read of a page by its id (its history, a version, its
+comments) refused because the page now reads encrypted first reads the
+page as opening it does, through its space's gate and key, and then goes
+by the encrypted route; without the key it ends as a locked page does. A tab that believed the space encrypted lists its pages after
 asking the server whether it is being converted, so the pages a
 conversion made plain since are in its list; one that believed it plain
 lists the plain pages until a request of it is refused, or the spaces are

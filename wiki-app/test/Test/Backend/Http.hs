@@ -16,17 +16,22 @@ import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import GHC.Generics (C, D, S)
+import GHC.Generics qualified as Generics
 import Halogen.Net.Fetch qualified as Fetch
 import Halogen.Subscription qualified as HS
 import Protolude
+import Servant.API.Generic (AsApi)
 import Servant.Client.Core (Response)
+import Servant.Multipart.API (Mem)
 import Test.Backend.Opaque (opaqueServer)
 import Test.Browser.Opaque (fakeChallenge, fakeRegistration)
 import Test.Hspec
 import Test.Opaque (fakeChallengeMade, fakeRegistrationMade)
 import Test.Scripted (bodyOf, formOf, headersOf, jsonResponse, methodOf, responseWith)
-import Wiki.Api (NotificationsApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (EncryptedApi, NotificationsApi (..), PagesApi, SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (PasswordChange (..), SignInMethods (..))
+import Wiki.Api.Comments (CommentsApi)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Export (ExportFormat (..))
@@ -110,6 +115,7 @@ demoVault = withSealed Sealed {nonce = "nonce", ciphertext = "ciphertext"} Vault
 
 spec :: Spec
 spec = describe "Wiki.App.Backend.Http" $ do
+  pageReads
   requests
   answers
   browserFetch
@@ -743,3 +749,51 @@ preload = describe "what a page it is rendered into carries" $ do
 
   it "says why a payload cannot be read" $
     decodePreload "{\"spaces\": 3}" `shouldSatisfy` isLeft
+
+-- | The reads of a page by its id whose route depends on how the page
+-- reads ('PageRead'), against the API's records of the routes of a page:
+-- every field of those records is either such a read, named by a
+-- 'PageRead' (which the browser tests go through, both ways, from
+-- 'PageRead''s every value), or listed here as no such read, with why. A
+-- route added to a page later fails this until it is put in one or the
+-- other.
+pageReads :: Spec
+pageReads = describe "the reads of a page by its id" $
+  it "names every route of a page as a read the page's state reroutes, or as none, with why" $ do
+    let covered record = sort [field | r <- [minBound .. maxBound], (record', field) <- pageReadRoutes r, record' == record]
+        -- Writes, refused by the server while the page is in another
+        -- state, and never sent again ('writeOnce').
+        writes = ["save", "move", "shift", "template", "kind", "delete", "upload", "saveDraft", "discardDraft", "restore"]
+        -- A page's location, its backlinks and its draft: the same route
+        -- whatever the page's state (a page of an encrypted space has no
+        -- backlinks, and no draft, which the server answers so); its
+        -- export: a plain one, which an encrypted space does not offer.
+        samePlain = ["location", "backlinks", "draft", "export"]
+    sort (fieldNames (Proxy @(Rep (PagesApi Mem AsApi)))) `shouldBe` sort (covered "PagesApi" <> writes <> samePlain)
+    -- A thread's writes, and its resolving and deleting, which carry no
+    -- text: by the routes the page's state names, never sent again.
+    sort (fieldNames (Proxy @(Rep (CommentsApi AsApi)))) `shouldBe` sort (covered "CommentsApi" <> ["open", "reply", "edit", "deleteComment", "delete", "resolve"])
+    let spaceLevel = ["space", "encrypt", "subspace", "home", "grant", "rotation", "rotate", "pages", "contents", "readers", "createPage", "conversion", "startEncrypting", "startDecrypting", "reverseConversion", "setEntry", "lease"]
+        -- By a page's path, through the space's route ('getPage', which
+        -- the space's state reroutes); by many pages' ids, answered with
+        -- those of them that read encrypted, never refused for it.
+        byPathOrMany = ["pageAt", "headings"]
+        sealedWrites = ["save", "openThread", "reply", "editComment", "upload"]
+        conversion = ["stageSealed", "stagePlain", "stageBytes", "staged", "stagedBytes", "commit"]
+    sort (fieldNames (Proxy @(Rep (EncryptedApi Mem AsApi)))) `shouldBe` sort (covered "EncryptedApi" <> spaceLevel <> byPathOrMany <> sealedWrites <> conversion)
+
+-- | The names of the fields of a record, from its generic representation.
+class FieldNames f where
+  fieldNames :: Proxy f -> [Text]
+
+instance (FieldNames f) => FieldNames (M1 D c f) where
+  fieldNames _ = fieldNames (Proxy @f)
+
+instance (FieldNames f) => FieldNames (M1 C c f) where
+  fieldNames _ = fieldNames (Proxy @f)
+
+instance (FieldNames f, FieldNames g) => FieldNames (f :*: g) where
+  fieldNames _ = fieldNames (Proxy @f) <> fieldNames (Proxy @g)
+
+instance (Generics.Selector s) => FieldNames (M1 S s (K1 i a)) where
+  fieldNames _ = [toS (selName (M1 (K1 (panic "never read")) :: M1 S s (K1 i a) ()))]

@@ -64,6 +64,8 @@ module Wiki.App.Backend.Http
   , ownersHeld
   , HeldNow (..)
   , heldNow
+  , PageRead (..)
+  , pageReadRoutes
   , frameUrlIn
   , FrameReach (..)
 
@@ -399,15 +401,61 @@ stateChanged = (`elem` [SpaceIsPlain, SpaceIsEncrypted, PageReadsPlain, PageRead
 -- (encrypted or plain, a page read one way or the other), sent once more
 -- when it was refused because that is no longer so ('stateChanged'): the
 -- tab has learnt the space's state again by then ('send'), so the route is
--- chosen anew. A second refusal is the answer. A page of the space that
--- reads plain now is forgotten as one read encrypted first.
+-- chosen anew. A second refusal is the answer.
+--
+-- For a read of a page by its id ('PageRead'), the route is chosen by
+-- what this tab holds of the page ('heldPages'), which the list of spaces
+-- does not tell, so the page itself is learnt first. A page that reads
+-- plain now is forgotten as one read encrypted. A page that reads
+-- encrypted now is read, by its location, as any opening of a page reads
+-- it ('getPage': through its space's gate and 'withSpaceKey'), which
+-- remembers its encrypted record and keys; when that read is refused (no
+-- key here, a gate not confirmed), its refusal is the answer, as a page
+-- opened afresh would give.
 afterStale :: (MonadIO m) => Maybe PageId -> HttpWiki m (Either WikiError a) -> HttpWiki m (Either WikiError a)
 afterStale page request =
   request >>= \case
     Left (Stale st _) | stateChanged st -> do
-      when (st `elem` [SpaceIsPlain, PageReadsPlain]) (traverse_ forgetSealedPage page)
-      request
+      learnt <- case page of
+        Just pid
+          | st `elem` [SpaceIsPlain, PageReadsPlain] -> forgetSealedPage pid $> Right ()
+          | st `elem` [SpaceIsEncrypted, PageReadsEncrypted] -> learnSealed pid
+        _ -> pure (Right ())
+      either (pure . Left) (const request) learnt
     other -> pure other
+
+-- | Learn what a page that reads encrypted now is: read it, where it is
+-- now, as an opening of it does, which remembers its encrypted record and
+-- keys ('afterStale').
+learnSealed :: (MonadIO m) => PageId -> HttpWiki m (Either WikiError ())
+learnSealed pid = runExceptT $ do
+  at <- ExceptT (send (endpoints.pages.location pid))
+  spaces <- ExceptT spacesNow
+  sid <- maybe (throwError NotFound) pure (spaceAtPath spaces at.space)
+  void (ExceptT (getPage sid at.page))
+
+-- | 'PageRead': the reads of a page by its id whose route depends on how
+-- the page reads now, plain or encrypted, during a conversion or after
+-- one: each is sent once more after such a refusal ('afterStale'), the
+-- page learnt first. Each names the routes of the API it reads by
+-- ('pageReadRoutes'), so that a test tells a route of a page added since
+-- from these, and goes through each read both ways.
+data PageRead
+  = -- | A page of the page's history ('listVersions').
+    ReadHistory
+  | -- | A version, and so a diff of two ('getVersion').
+    ReadVersion
+  | -- | The page's threads and comments ('listThreads').
+    ReadThreads
+  deriving stock (Eq, Show, Enum, Bounded)
+
+-- | The routes of the API a 'PageRead' reads by: the record of the API's
+-- and its field, the plain route and the encrypted one.
+pageReadRoutes :: PageRead -> [(Text, Text)]
+pageReadRoutes = \case
+  ReadHistory -> [("PagesApi", "versions"), ("EncryptedApi", "versions")]
+  ReadVersion -> [("PagesApi", "version"), ("EncryptedApi", "version")]
+  ReadThreads -> [("CommentsApi", "list"), ("EncryptedApi", "threads")]
 
 -- | A write refused because the space is no longer in the state this tab
 -- believed ('stateChanged'): never sent again, nor by another route, which

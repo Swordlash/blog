@@ -187,6 +187,9 @@ function wikiTestEncServer(request) {
   if (plain) {
     const id = decodeURIComponent(plain[1]);
     const s = wikiTestEncrypted.spaces.get(id) ?? wikiTestEncrypted.spaces.get(wikiTestEncrypted.pages.get(id)?.space);
+    // A page's backlinks: none for a page of a space with a key, as the
+    // server answers (Wiki.App.Backlinks's counted), never a refusal.
+    if (s && s.space.encryption && s.readers.includes(me) && request.method === "GET" && /^pages\/[^/]+\/backlinks$/.test(path)) return wikiTestEncJson(200, []);
     if (s && s.space.encryption && s.readers.includes(me)) {
       // While its encryption is turned off, the pages made plain already
       // answer by the plain routes: listed, with their history and
@@ -199,6 +202,7 @@ function wikiTestEncServer(request) {
         }
         if (p?.plain && path === `pages/${plain[1]}/versions`) return wikiTestEncJson(200, [{ page: p.id, updatedAt: p.versions.at(-1).updatedAt, title: p.plain.title, author: null, number: 1 }]);
         if (p?.plain && path === `pages/${plain[1]}/threads`) return wikiTestEncJson(200, []);
+        if (p?.plain && path.startsWith(`pages/${plain[1]}/versions/`)) return wikiTestEncJson(200, { page: p.id, updatedAt: p.versions.at(-1).updatedAt, title: p.plain.title, body: p.plain.body, author: null });
       }
       return wikiTestEncJson(409, { error: "Stale", state: "space-encrypted", message: "This page is in an encrypted space." });
     }
@@ -411,6 +415,8 @@ function wikiTestEncServer(request) {
     const s = p && wikiTestEncrypted.spaces.get(p.space);
     if (!p || !(s.readers.includes(me) || s.leaked.includes(me))) return wikiTestEncJson(404, { error: "NotFound" });
     if (!s.space.encryption) return wikiTestEncJson(409, { error: "Stale", state: "space-plain", message: "This space is not encrypted." });
+    // A page a conversion made plain is read by the plain routes.
+    if (s.space.conversion && p.plain) return wikiTestEncJson(409, { error: "Stale", state: "page-plain", message: "This page is read as plain text while its space is converted: read it by the plain routes." });
     const rest = m[2] ?? "";
     if (rest === "" && request.method === "PUT") {
       const latest = p.versions[p.versions.length - 1];
