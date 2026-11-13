@@ -17,7 +17,6 @@ const tests = run({
   files: [
     "toolchain/smoke-test-server.mjs",
     "toolchain/smoke-test-postgres.mjs",
-    "toolchain/test-passkeys.mjs",
     "toolchain/test-assistant.mjs",
     "toolchain/test-tikz-letters.mjs",
   ],

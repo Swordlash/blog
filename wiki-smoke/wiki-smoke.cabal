@@ -38,14 +38,21 @@ common shared
       StrictData
 
 -- What the suites share: finding the built demo, serving it as a static
--- host does, and a page of it at a fixed size. Native only, as
--- haskell-halogen-playwright is: it drives Chromium from outside the page.
+-- host does, and a page of it at a fixed size; a walk of examples on one
+-- page; and for the server's suites, the server's build, a real
+-- wiki-server on free ports, its API over http-client, and signing in
+-- through the header's form. Native only, as haskell-halogen-playwright
+-- is: it drives Chromium from outside the page.
 library
   import:           shared
   hs-source-dirs:   src
   exposed-modules:
       Wiki.Smoke.Adoption
+      Wiki.Smoke.Api
+      Wiki.Smoke.Browser
       Wiki.Smoke.Demo
+      Wiki.Smoke.Server
+      Wiki.Smoke.Walk
   if arch(wasm32) || arch(javascript)
     buildable: False
   else
@@ -53,11 +60,21 @@ library
         base >= 4.20 && < 5,
         aeson,
         base64-bytestring,
-        http-types,
         bytestring,
+        case-insensitive,
+        crypton,
         directory,
         filepath,
+        hspec,
+        http-client,
+        http-types,
+        scientific,
+        stm,
+        temporary,
         text,
+        time,
+        process,
+        typed-process,
         haskell-halogen-playwright
 
 -- The README's screenshots, from the built demo (npm run screenshots, which
@@ -134,6 +151,26 @@ test-suite wiki-smoke-demo
         text,
         time,
         zip-archive,
+        haskell-halogen-playwright,
+        wiki-smoke
+
+-- The assistant's keys synced with real passkeys, from Chromium's virtual
+-- authenticator, against a real wiki-server (Main's haddock says what it
+-- checks). npm run smoke-test runs it.
+test-suite wiki-smoke-passkeys
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   passkeys
+  main-is:          Main.hs
+  ghc-options:      -threaded
+  if arch(wasm32) || arch(javascript)
+    buildable: False
+  else
+    build-depends:
+        base,
+        aeson,
+        filepath,
+        text,
         haskell-halogen-playwright,
         wiki-smoke
 

@@ -56,12 +56,9 @@ module Demo.Site
   )
 where
 
-import Control.Exception (onException)
-import Control.Monad (unless)
 import Data.ByteString (ByteString)
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (chr)
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -80,6 +77,7 @@ import System.Process (readProcess)
 import Text.Read (readMaybe)
 import Wiki.Smoke.Adoption
 import Wiki.Smoke.Demo
+import Wiki.Smoke.Walk
 
 -- | The demo as the suite sees it.
 data Site = Site
@@ -157,58 +155,14 @@ contentType site path = do
   pure (Text.decodeUtf8With Text.lenientDecode <$> lookup hContentType (responseHeaders response))
 
 ----------------------------------------------------------------------
--- The report
-
--- | A line of the report, under the example's own: what the script
--- printed as a note.
-report :: Text -> IO ()
-report line = putStrLn ("      " <> Text.unpack line)
-
--- | Fail with the message unless the condition holds.
-expect :: (HasCallStack) => Bool -> String -> IO ()
-expect holds message = unless holds (expectationFailure message)
-
-----------------------------------------------------------------------
--- A walk of examples
-
--- | Examples that go on one from another on one page ('onOnePage'): once
--- one has failed, the ones after it are pending, saying which, rather
--- than each failing after its own timeout on a page left elsewhere.
-newtype Chain = Chain (IORef (Maybe String))
-
-newChain :: IO Chain
-newChain = Chain <$> newIORef Nothing
-
--- | An example of the chain, by its name.
-step :: Chain -> String -> (Page -> IO ()) -> SpecWith Page
-step (Chain failed) name body = it name $ \page ->
-  readIORef failed >>= \case
-    Just before -> pendingWith ("the walk stopped at: " <> before)
-    Nothing -> body page `onException` writeIORef failed (Just name)
-
-----------------------------------------------------------------------
 -- Pages
 
--- | The gate a page's program is held at while the page is read as the
--- server sent it: one for the page, made when the page is, armed again
--- for every load ('adoptedAfter'), and never taken away while the page
--- loads.
-newtype ProgramGate = ProgramGate (IORef (Maybe Gate))
-
-newProgramGate :: IO ProgramGate
-newProgramGate = ProgramGate <$> newIORef Nothing
-
--- | Hold the page's program at its gate: an 'onOnePage' setup, which also
--- answers the demo's photograph with its stand-in.
+-- | Hold the page's program at its gate ('armProgram'): an 'onOnePage'
+-- setup, which also answers the demo's photograph with its stand-in.
 holdProgram :: ProgramGate -> Page -> IO ()
-holdProgram (ProgramGate ref) page = do
+holdProgram gate page = do
   standIns (pageContext page)
-  gate <- hold page (adoptionOptions.program)
-  release gate
-  writeIORef ref (Just gate)
-
-gateOf :: ProgramGate -> IO Gate
-gateOf (ProgramGate ref) = readIORef ref >>= maybe (fail "the page has no gate: holdProgram in its setup") pure
+  armProgram gate page
 
 -- | Go to a route of the demo with its program held back, and say what
 -- adopting the page changed ('adoptedAfter').
