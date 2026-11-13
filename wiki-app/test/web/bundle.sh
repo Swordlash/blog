@@ -122,9 +122,9 @@ elif [ ! -e node_modules/.package-lock.json ]; then
 elif [ -d "$kept" ]; then
   # Reused: copied, not linked, since the output directory is written to
   # after this script (dev-test.sh copies into it), and a link would write
-  # into the kept bundle. The kept bundle's time is renewed, and its list
-  # of inputs', so that the pruning below keeps the bundles in use and the
-  # next build says what changed since this one.
+  # into the kept bundle. The times of the kept bundle and of its list of
+  # inputs are renewed: the pruning below keeps the bundles used last, and
+  # the next build names what changed since the list used last.
   cp -R "$kept/." "$out"
   touch "$kept" "$keep/$key.inputs"
   say "reused ${key%"${key#????????????}"} (the inputs are unchanged)"
@@ -160,12 +160,16 @@ if ! cmp -s "$list" "$list.after"; then
 fi
 rm -f "$list.after"
 if [ ! -e node_modules/.package-lock.json ]; then exit 0; fi
-rm -rf "$kept"
+# A forced build replaces the bundle kept under its digest. Otherwise a
+# directory there was kept by a run beside this one, and stays.
+if [ -n "${WIKI_TEST_BUNDLE_REBUILD:-}" ]; then rm -rf "$kept"; fi
 # mv -T renames onto the digest's name, and fails rather than move the
 # directory into one that a run beside this one has just kept.
 if mv -T "$build" "$kept" 2>/dev/null; then
   build=''
   mv "$list" "$keep/$key.inputs"
+else
+  say "not kept: the build could not be renamed to $kept (kept meanwhile by a run beside this one?)"
 fi
 
 # The three bundles used last are kept (about 20 MB each), so that going
