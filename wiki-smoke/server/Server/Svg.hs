@@ -205,11 +205,11 @@ svgs smoke pw elsewhere stun = do
     entriesNow :: Int <- evaluate page "history.length"
     entriesNow - entriesBefore `shouldBe` 2
     report "the preview's history: its own entry, and the wandering frame's navigation after it"
-    _ :: Value <- evaluate page "(() => { history.go(-2); return null; })()"
-    -- The page's popstate, which the history's traversal fires, brings
-    -- the text back: the program's, once the event has come.
-    waitFor (editorText page) Visible
-    settle page
+    -- The page's popstate, which the history's traversal fires once it
+    -- has gone through, brings the text back: the program's, once the
+    -- event has come.
+    afterEvent page "window" "popstate" (evaluate page "(() => { history.go(-2); return null; })()" >>= \(_ :: Value) -> pure ())
+    isVisible (editorText page) `shouldReturn` True
     count (locator page "#app .editor-preview iframe.wiki-svg") >>= \n -> expect (n == 0 || n == 3) "the preview's frames"
     click (locator page "#app .editor-cancel")
     waitQuiet page

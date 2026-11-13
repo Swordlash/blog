@@ -16,6 +16,7 @@ import Demo.Site
 import Halogen.Playwright
 import Halogen.Playwright.Hspec
 import Wiki.Smoke.Adoption
+import Wiki.Smoke.Browser (afterEvent)
 import Wiki.Smoke.Demo
 
 spec :: Site -> SpecWith Playwright
@@ -230,29 +231,6 @@ spec site = do
     nothingWrong page
   where
     clipboard = ["clipboard-read", "clipboard-write"]
-
--- | Run an action whose effect reaches the program through an event the
--- browser fires later, on a schedule of its own, and wait until the
--- program has handled that event. A dialog's close event comes at the next
--- animation frame after Escape closes the dialog; a popstate comes once a
--- @history.back()@ the page called has gone through. The driver's settle
--- after the action waits for a background-priority task and then for the
--- program to be idle, and the background task often runs before the next
--- animation frame: the program, which has heard nothing yet, is idle then,
--- and a read finds the page as it was. So a listener of the test's own,
--- added after the program's, resolves a promise on the event; the test
--- waits for the promise, and then settles, for whatever the program's own
--- listener started. A promise, and not 'waitForFunction': the page's
--- Content Security Policy forbids the eval that polling a function needs.
-afterEvent :: Page -> Text -> Text -> IO () -> IO ()
-afterEvent page target event act = do
-  _ :: Bool <-
-    evaluate
-      page
-      ("(() => { const target = " <> target <> "; globalThis.smokeHeard = new Promise((heard) => target.addEventListener('" <> event <> "', () => heard(true), { once: true })); return true; })()")
-  act
-  _ :: Bool <- evaluate page "globalThis.smokeHeard"
-  settle page
 
 -- | The colours of a page: its background, its text's, its sidebar's.
 data Colours = Colours {background :: Text, text :: Text, sidebar :: Text}

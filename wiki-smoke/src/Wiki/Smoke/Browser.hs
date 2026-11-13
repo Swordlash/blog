@@ -24,6 +24,7 @@ module Wiki.Smoke.Browser
   , nothingWrongOnServer
   , expectedOnServer
   , holdsInPage
+  , afterEvent
   )
 where
 
@@ -114,6 +115,32 @@ holdsInPage page expression = do
   eventually page $ do
     holds :: Bool <- evaluate page expression
     unless holds $ expectationFailure ("not yet: " <> Text.unpack expression)
+  settle page
+
+-- | Run an action whose effect reaches the program through an event the
+-- browser fires later, on a schedule of its own, and wait until the
+-- program has handled that event. A dialog's close event comes at the next
+-- animation frame after Escape closes the dialog; a popstate comes once a
+-- @history.back()@ the page called has gone through. The driver's settle
+-- after the action waits for a background-priority task and then for the
+-- program to be idle, and the background task often runs before the next
+-- animation frame: the program, which has heard nothing yet, is idle then,
+-- and a read finds the page as it was. So a listener of the test's own,
+-- added after the program's, resolves a promise on the event; the test
+-- waits for the promise, and then settles, for whatever the program's own
+-- listener started. A promise, and not 'waitForFunction': the page's
+-- Content Security Policy forbids the eval that polling a function needs.
+--
+-- The target is JavaScript that names the element or object the event
+-- comes to (@window@, @document.querySelector('#app .user-dialog')@).
+afterEvent :: Page -> Text -> Text -> IO () -> IO ()
+afterEvent page target event act = do
+  _ :: Bool <-
+    evaluate
+      page
+      ("(() => { const target = " <> target <> "; globalThis.smokeHeard = new Promise((heard) => target.addEventListener('" <> event <> "', () => heard(true), { once: true })); return true; })()")
+  act
+  _ :: Bool <- evaluate page "globalThis.smokeHeard"
   settle page
 
 -- | Fail if a page of the server's threw an error or wrote one on its
