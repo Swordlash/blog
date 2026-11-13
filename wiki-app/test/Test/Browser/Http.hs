@@ -31,6 +31,7 @@ module Test.Browser.Http
   , startServer
   , startServerWith
   , startServerOver
+  , startServerThrough
   , tellServer
   , holdAt
   , release
@@ -74,7 +75,7 @@ import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
-import Wiki.App.Backend.Http (HttpEnv, browserTransport, cacheOf, fetchTransport, newHttpEnv, newHttpEnvWith, runHttpWiki)
+import Wiki.App.Backend.Http (HttpEnv, HttpWiki, browserTransport, cacheOf, fetchTransport, newHttpEnv, newHttpEnvWith, runHttpWiki)
 import Wiki.App.Backend.Http.Cache (Cache)
 import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
@@ -321,9 +322,20 @@ startServerOver
   => HttpEnv
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
-startServerOver m env at = do
+startServerOver m env at = startServerThrough m (runHttpWiki env) at
+
+-- | 'startServer', with each of the backend's actions run through the
+-- function given: the test's own way to run them, which can watch what
+-- each one did and act at that moment.
+startServerThrough
+  :: forall m
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
+  => (forall a. HttpWiki m a -> m a)
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+startServerThrough m run at = do
   router <- prepare at
-  mount m (H.hoist (NT (runHttpWiki env)) component) (serverInput router)
+  mount m (H.hoist (NT run) component) (serverInput router)
 
 -- | 'startServer', with the demo's wiki in this browser looked for in this
 -- database rather than the demo's own.

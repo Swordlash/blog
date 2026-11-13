@@ -163,6 +163,16 @@ attachmentAddresses owner attachments = do
 -- closes, lets go of every address the view made, those of a fetch that
 -- was cut short included. Every view that shows attachments keeps its
 -- owners this way.
+--
+-- The backend registers an owner ('newUrlOwner') and lets one go
+-- ('releaseUrls') in the same step of the view's program that writes the
+-- change here: through 'H.liftEffect', on the component's loop, without a
+-- wait. Through 'lift', the backend's part would run on a worker thread,
+-- and the write to the state in a later step. A view closed between the
+-- two never takes that later step (the close cancels its program), and the
+-- backend would hold an owner the state does not name, which nothing then
+-- lets go. Nothing else of the view runs inside one step, so a close comes
+-- before both or after both.
 data Owners = Owners
   { shown :: UrlOwner
   , pending :: [UrlOwner]
@@ -175,26 +185,26 @@ ownersOf o = Owners {shown = o, pending = []}
 
 -- | A new owner for a fetch of the view's, registered in its state, through
 -- the field given, before anything is asked under it.
-beginOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m UrlOwner
+beginOwned :: (MonadWiki m) => (st -> Owners) -> (Owners -> st -> st) -> H.HalogenM st act slots output m UrlOwner
 beginOwned get' set' = do
-  o <- newUrlOwner
+  o <- H.liftEffect newUrlOwner
   modify (\st -> let os = get' st in set' Owners {shown = os.shown, pending = o : os.pending} st)
   pure o
 
 -- | A fetch answered: its owner is no longer pending. Taken ('True'), its
 -- addresses are the ones the view shows, and those shown before are let
 -- go; dropped ('False'), its own are.
-settleOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> UrlOwner -> Bool -> m ()
+settleOwned :: (MonadWiki m) => (st -> Owners) -> (Owners -> st -> st) -> UrlOwner -> Bool -> H.HalogenM st act slots output m ()
 settleOwned get' set' o taken = do
   before <- gets get'
   let pending' = filter (/= o) before.pending
   if taken
     then do
       modify (set' Owners {shown = o, pending = pending'})
-      when (before.shown /= o) (releaseUrls before.shown)
+      when (before.shown /= o) (H.liftEffect (releaseUrls before.shown))
     else do
       modify (set' Owners {shown = before.shown, pending = pending'})
-      releaseUrls o
+      H.liftEffect (releaseUrls o)
 
 -- | The owner a view asks under for what it shows, registered the first
 -- time it is asked for. A view's initial state asks under 'noUrlOwner',
@@ -204,13 +214,13 @@ settleOwned get' set' o taken = do
 -- what the server's rendering waits for, and what the first render shows
 -- is decided before it. So the owner is registered where the view first
 -- asks for addresses under it.
-ensureOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m UrlOwner
+ensureOwned :: (MonadWiki m) => (st -> Owners) -> (Owners -> st -> st) -> H.HalogenM st act slots output m UrlOwner
 ensureOwned get' set' = do
   os <- gets get'
   if os.shown /= noUrlOwner
     then pure os.shown
     else do
-      o <- newUrlOwner
+      o <- H.liftEffect newUrlOwner
       modify (set' Owners {shown = o, pending = os.pending})
       pure o
 
@@ -220,10 +230,10 @@ ensureOwned get' set' = do
 -- ('beginOwned', 'ensureOwned'). What a view registers, the view releases,
 -- and a view that is going away registers nothing, so the backend's owners
 -- are as many after a view as before.
-releaseOwned :: (MonadWiki m, MonadState st m) => (st -> Owners) -> (Owners -> st -> st) -> m ()
+releaseOwned :: (MonadWiki m) => (st -> Owners) -> (Owners -> st -> st) -> H.HalogenM st act slots output m ()
 releaseOwned get' set' = do
   os <- gets get'
-  traverse_ releaseUrls (filter (/= noUrlOwner) (os.shown : os.pending))
+  traverse_ (H.liftEffect . releaseUrls) (filter (/= noUrlOwner) (os.shown : os.pending))
   modify (set' (ownersOf noUrlOwner))
 
 -- | The URL a link to an attachment leads to: its download's, or its own.

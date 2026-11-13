@@ -53,14 +53,18 @@ import Control.Monad.UUID (MonadUUID)
 import Data.Aeson (Value (..), decodeStrict', encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import GHC.Clock (getMonotonicTime)
+import GHC.Conc (ThreadStatus (..), threadStatus)
 import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
-import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, offline, release, serveDemo, serverStarts, startServer, startServerOver, tellServer)
+import System.Timeout (timeout)
+import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, offline, release, serveDemo, serverStarts, startServer, startServerOver, startServerThrough, tellServer)
 import Test.Browser.Mount (clickButton)
 import Test.Browser.Text (editorText)
 import Test.Hspec.Halogen
@@ -547,6 +551,58 @@ spec m = do
     release
     settle
     held `shouldReturn` before
+
+  -- A view closed at the instant it registers the owner of its addresses.
+  -- The backend registers the owner on a thread of its own, apart from the
+  -- view's program, and the view writes the owner into its state in the
+  -- step after: closed between the two, a view that has not written it
+  -- cannot let it go. The backend's actions run here through 'closeAt',
+  -- which holds the first one that registers an owner until the test has
+  -- closed the view, or waits for the view's components to run the close:
+  -- the close comes at that instant, for every view, every time.
+  --
+  -- Each view starts in a tab of its own, with the session's answer held
+  -- until the mount has returned: the test's thread runs the components'
+  -- work while it mounts them, and a view that the shell could show from
+  -- a tab's cache would register on that thread, where no close can come
+  -- ('closeAt' then gives up, and the example fails with why).
+  it "leaves no owner of addresses behind a view closed as it registers one" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPageOf Kind.Presentation secret.id Nothing "Deck" "First.")
+    void (ok =<< run env (getPage secret.id [made.slug]))
+    void (ok =<< run env (uploadAttachment made.id "a.svg" "image/svg+xml" (svgOf 3 "A")))
+    again <- ok =<< run env (getPage secret.id [made.slug])
+    void (ok =<< run env (savePage made.id again.updatedAt "Deck" "![a](attachment:a.svg)"))
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    let docs = either (const (panic "not a slug")) identity . mkSlug
+        routes =
+          [ R.Page [docs "docs"] [docs "tour"]
+          , R.EditPage [docs "docs"] [docs "tour"]
+          , R.PageSlides [docs "docs"] [docs "tour"] 1 1
+          , R.LivePreview [docs "docs"] [docs "tour"]
+          , R.Page [secretSlug] [made.slug]
+          , R.EditPage [secretSlug] [made.slug]
+          , R.PageSlides [secretSlug] [made.slug] 1 1
+          , R.LivePreview [secretSlug] [made.slug]
+          ]
+    -- Each view, and how many owners it left behind: none.
+    left <- for routes $ \route -> do
+      tab <- unsafeIOToPageM (newHttpEnv browserTransport)
+      gate <- unsafeIOToPageM newGate
+      armed <- unsafeIOToPageM (newIORef (Just gate))
+      holdAt "GET" "api/v1/session"
+      ui <- startServerThrough m (closeAt tab armed) route
+      release
+      registered <- unsafeIOToPageM (timeout 8_000_000 (takeMVar gate.registered))
+      when (isNothing registered) $ expectationFailure ("No owner of addresses registered for " <> show route)
+      unsafeIOToPageM (claimClose gate) >>= traverse_ (\why -> expectationFailure (show route <> " was not closed at the hold: " <> why))
+      unmount ui
+      unsafeIOToPageM (writeIORef gate.phase Shut)
+      settle
+      (route,) <$> unsafeIOToPageM (ownersHeld tab)
+    left `shouldBe` map (,0) routes
 
   -- The live channel says only that a page's threads changed: the page
   -- reads them again, and shows another reader's comment, decrypted,
@@ -2117,3 +2173,78 @@ secret =
     , blog = False
     , boxNumbering = InPage
     }
+
+-- | 'Gate' is what 'closeAt' holds the backend's action at: the test's
+-- thread, which closes the view; told once an owner is registered; and
+-- how far the close has got.
+data Gate = Gate {tester :: ThreadId, registered :: MVar (), phase :: IORef Phase}
+
+-- | How far the close has got: not yet; under way on the test's thread;
+-- done; or not to come, because the hold gave up, for the reason given.
+data Phase = NotYet | Closing | Shut | GaveUp Text
+
+-- | A gate for a view the calling thread closes.
+newGate :: IO Gate
+newGate = Gate <$> myThreadId <*> newEmptyMVar <*> newIORef NotYet
+
+-- | The test takes the close on itself, if the hold still waits for it:
+-- 'Nothing' then, and otherwise why the close cannot come at the hold.
+claimClose :: Gate -> IO (Maybe Text)
+claimClose gate =
+  atomicModifyIORef' gate.phase $ \case
+    NotYet -> (Closing, Nothing)
+    GaveUp why -> (GaveUp why, Just why)
+    other -> (other, Just "the gate was past its hold")
+
+-- | How long a hold waits for the test before it gives up: far longer than
+-- the test takes to close a view, so it ends only a hold that nothing can
+-- release, as a failure with its reason rather than a run that never ends.
+holdLimit :: Double
+holdLimit = 5
+
+-- | Run a backend action, and when the gate is armed and the action has
+-- registered an owner of addresses, hold its answer until the test has
+-- closed the view (the close is done), or the test's thread is blocked
+-- waiting for the view's components to run the close (they run it after
+-- this action and what follows it in the same step). The gate is then
+-- disarmed: one hold per view.
+--
+-- A hold on the test's own thread could never be released: the test's
+-- thread runs the components' work while it mounts them, and a view that
+-- registers then would hold the thread that is to close it. Such a hold,
+-- and one the test does not come to within 'holdLimit', gives up at once,
+-- with the reason, which the test reports.
+closeAt :: (MonadIO m) => HttpEnv -> IORef (Maybe Gate) -> HttpWiki m a -> m a
+closeAt tab armed act = do
+  owners <- liftIO (ownersHeld tab)
+  answer <- runHttpWiki tab act
+  liftIO $ do
+    now <- ownersHeld tab
+    when (now > owners) $ atomicModifyIORef' armed (Nothing,) >>= traverse_ hold
+  pure answer
+  where
+    hold gate = do
+      putMVar gate.registered ()
+      me <- myThreadId
+      if me == gate.tester
+        then giveUp "the owner was registered on the test's own thread, while it mounted the view, where no close can come"
+        else (+ holdLimit) <$> getMonotonicTime >>= untilClosing
+      where
+        giveUp why = atomicModifyIORef' gate.phase (\p -> (case p of NotYet -> GaveUp why; _ -> p, ()))
+        untilClosing deadline =
+          readIORef gate.phase >>= \case
+            NotYet -> do
+              late <- (> deadline) <$> getMonotonicTime
+              if late
+                then giveUp "the test did not come to close the view while the hold waited" >> untilClosing deadline
+                else yield >> untilClosing deadline
+            Closing -> do
+              -- The test's thread runs the close itself, or waits for the
+              -- components to run it; past the deadline the hold lets go
+              -- either way, and the count tells what happened.
+              late <- (> deadline) <$> getMonotonicTime
+              threadStatus gate.tester >>= \case
+                ThreadRunning | not late -> yield >> untilClosing deadline
+                _ -> pass
+            Shut -> pass
+            GaveUp _ -> pass
