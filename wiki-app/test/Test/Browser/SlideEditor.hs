@@ -905,11 +905,15 @@ spec m = do
           settle
           unsafeIOToPageM js_stall
     -- Each change of the slide shown parsed the whole deck twice in the
-    -- preview: about 2.3 seconds in one hold of the page on a fast machine.
+    -- preview: each jump held the page for 2.8 seconds here. The deck is
+    -- parsed once for each text now: 85 to 200 milliseconds. The bound
+    -- leaves room for a slow machine.
     toLast <- jumpTo 60
-    -- Another far slide, the first one's row left open: no slower.
+    -- Another far slide, the first one's row left open: no slower (a
+    -- second jump that costs more than twice the first, beyond a floor,
+    -- would be work that grows with each jump).
     toTwentieth <- jumpTo 20
-    (toLast, toTwentieth) `shouldSatisfy` (\(a, b) -> a < 500 && b < 500 && b <= max 150 (2 * a))
+    (toLast, toTwentieth) `shouldSatisfy` (\(a, b) -> a < 500 && b < 500 && b <= max 300 (2 * a))
 
   it "takes the emoji or the mention chosen with the arrows in a row, though the hidden editor changes before Enter, with another row open" $ runPage $ do
     (ui, _) <- openDeck deck

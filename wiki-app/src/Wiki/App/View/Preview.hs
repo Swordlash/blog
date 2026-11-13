@@ -33,6 +33,7 @@ where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Aeson (decodeStrict)
+import Data.Set qualified as Set
 import Halogen qualified as H
 import Halogen.JSBits (inBrowser)
 import Halogen.Subscription qualified as HS
@@ -49,6 +50,7 @@ import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common (Context (..))
 import Wiki.App.View.Slides (deckClasses, slideCard)
 import Wiki.Core.Markdown (parseMarkdown)
+import Wiki.Core.Markdown.Ast (mentions)
 import Wiki.Core.Markdown.Render (IslandKey)
 import Wiki.Core.Slides (Deck (..), Fit (..), Slide (..), deckOf, fitOf, showingStep)
 
@@ -75,6 +77,8 @@ data Slides
 
 data State = State
   { input :: Input
+  , parsed :: Parsed
+  -- ^ The draft's Markdown, parsed once for each text.
   , known :: Body.People
   -- ^ The people the draft mentions, as far as they have been looked up.
   , root :: H.RefLabel
@@ -85,6 +89,27 @@ data State = State
   -- ^ Whether each slide fits, by its place in the deck, and the text it
   -- was measured for.
   }
+
+-- | 'Parsed' is the preview's draft parsed once: the text, the deck its
+-- slides are cut from, and the logins it mentions. A render reads the deck
+-- from here and the look-up of people reads the logins. The parse runs again
+-- only when the text changes. Showing another slide, a measure taken or a
+-- person found renders the preview again; none of them parses the text again.
+-- On a deck of sixty slides of a hundred lines one parse holds the page for
+-- about a second in the browser, and there were two for each move of the
+-- cursor to another slide (WP5.105 of docs/PLAN.md).
+data Parsed = Parsed
+  { text :: Text
+  , deck :: Deck
+  , mentioned :: Set Text
+  }
+
+-- | The draft's Markdown parsed: a text that cannot be parsed has no slides
+-- and mentions nobody.
+parse :: Text -> Parsed
+parse body =
+  let doc = parseMarkdown body
+   in Parsed {text = body, deck = either (const (deckOf [])) deckOf doc, mentioned = either (const mempty) mentions doc}
 
 -- | What the preview tells its parent: an island's output, with the
 -- island's key in the draft; and whether each slide of a presentation
@@ -105,7 +130,7 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           root <- H.newRefLabel "slides-preview"
-          pure State {input, known = Body.noPeople, root, watch = Nothing, measured = Nothing}
+          pure State {input, parsed = parse input.body, known = Body.noPeople, root, watch = Nothing, measured = Nothing}
       , render
       , eval =
           H.mkEval
@@ -129,7 +154,7 @@ component =
       -- same; the cards not asked for are laid out off the pane, where
       -- they are measured too.
       Just shown ->
-        let d = either (const (deckOf [])) deckOf (parseMarkdown body)
+        let d = st.parsed.deck
             count = length d.slides
             picked n = case shown of
               WholeDeck -> True
@@ -152,15 +177,19 @@ component =
     handleAction = \case
       Initialize -> resolvePeople >> startWatch
       Finalize -> gets (\st -> st.watch) >>= traverse_ stopFits
+      -- Another slide shown is only another card in sight: the deck is
+      -- not parsed again, and the cards, laid out the same, are not
+      -- measured again.
       Receive new -> do
         old <- gets (\st -> st.input)
         unless (same old new) $ do
-          modify (\st -> st {input = new})
-          resolvePeople
+          modify (\st -> st {input = new, parsed = if new.body == st.parsed.text then st.parsed else parse new.body})
           startWatch
-          -- Each text shown is measured, also when its cards are laid out
-          -- as the last ones were.
-          gets (\st -> st.watch) >>= traverse_ measureAgain
+          unless (sameDraft old new) $ do
+            resolvePeople
+            -- Each text shown is measured, also when its cards are laid
+            -- out as the last ones were.
+            gets (\st -> st.watch) >>= traverse_ measureAgain
       -- A link in the preview is followed as in the page: the shell asks
       -- before it leaves unsaved changes behind.
       FollowLink target -> do
@@ -193,20 +222,25 @@ component =
     resolvePeople :: H.HalogenM State Action IslandSlots Output m ()
     resolvePeople = do
       st <- get
-      let logins = Body.unasked st.known [st.input.body]
+      let logins = Set.toList (st.parsed.mentioned `Set.difference` st.known.asked)
       unless (null logins) . void . H.fork $
         lift (attempt (Body.askPeople st.input.place.space logins)) >>= \case
           Right found -> modify (\s -> s {known = Body.answered logins found s.known})
           Left _ -> pass
 
--- | Whether two inputs show the same thing: the same draft, read in the
--- same place, at the same revision of the wiki. (The router, the one part
--- of the context that cannot be compared, is the application's only one.)
+-- | Whether two inputs show the same thing: the same draft, and the same
+-- slides of it.
 same :: Input -> Input -> Bool
-same a b =
+same a b = sameDraft a b && a.slides == b.slides
+
+-- | Whether two inputs hold the same draft, read in the same place, at the
+-- same revision of the wiki, whichever slides they show. (The router, the
+-- one part of the context that cannot be compared, is the application's
+-- only one.)
+sameDraft :: Input -> Input -> Bool
+sameDraft a b =
   a.title == b.title
     && a.body == b.body
-    && a.slides == b.slides
     && a.place.context.revision == b.place.context.revision
     && a.place.context.session == b.place.context.session
     && a.place.context.spaces == b.place.context.spaces
