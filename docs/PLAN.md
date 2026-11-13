@@ -1821,8 +1821,24 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
+- **WP5.106 Components without JavaScript tested natively, over
+  haskell-halogen's `remote` (the owner, 2026-11-13: "jeśli będzie to
+  szybsze. Wszystkie pure halogen testy").** haskell-halogen's `remote`
+  package runs a component natively and sends its DOM operations to a
+  thin client in a real page; with the Playwright driver a spec is a
+  native process that holds the component (its state, its outputs) and
+  drives a real browser, with no wasm build. It cannot serve a view
+  that hands a node to JavaScript (the editor, the islands, the vault,
+  the preview). First a spike: one existing spec of a view of Halogen
+  alone, written this way beside the wasm one, with the time from an
+  edit to a result measured both ways and what had to be worked around
+  written down. If it is faster by a clear margin, every browser spec
+  of a view without JavaScript moves, and the rule is written into
+  AGENTS.md's gate; if not, the entry is closed with the numbers.
+  After WP5.98's (c).
 - **WP5.105 A jump to a far slide holds the page for seconds (found
-  by #263's measures, from #259).** On a deck of 60 slides of 100
+  by #263's measures, from #259; the owner, 2026-11-13: after WP5.98's
+  (c), one after the other).** On a deck of 60 slides of 100
   lines, moving the cursor to a far slide (a jump that opens its row,
   a search step, "next problem") held the page 4.6, 11.5 and 23.6
   seconds in three measures; a near one costs 18 to 55 ms, and a
