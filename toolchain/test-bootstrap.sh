@@ -995,7 +995,7 @@ readiness_fixture() {
   printf 'export PATH="%s/compiler/bin:$PATH"\nexport CC=wasm-only-cc\n' "$HOME/.ghc-wasm" >"$HOME/.ghc-wasm/env"
   unset CC
   for package in esbuild katex highlight.js mermaid fflate @drgrice1/tikzjax http-server @bjorn3/browser_wasi_shim \
-    @codemirror/state @codemirror/view @codemirror/commands @codemirror/language @codemirror/lang-markdown @codemirror/lint @lezer/highlight \
+    @codemirror/state @codemirror/view @codemirror/commands @codemirror/language @codemirror/lang-markdown @codemirror/lint @codemirror/search @lezer/highlight \
     @anthropic-ai/sdk openai cropperjs @serenity-kit/opaque @hpke/core; do
     mkdir -p "$case_dir/repo/node_modules/$package"
     printf '{"main":"index.js"}\n' >"$case_dir/repo/node_modules/$package/package.json"
