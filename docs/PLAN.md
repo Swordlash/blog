@@ -3030,7 +3030,19 @@ needs. Each was true when its package merged; check before relying on one.
   would be torn down (read in the code, not run; haskell-halogen
   should carry a skipped thunk's slots over). A keystroke's own
   handler on that deck is 47 to 90 ms. The pause after typing is
-  WP5.108.
+  WP5.108. After the merge an example about the slides' fits failed
+  two CI runs of five, and #269's skipped measure was suspected
+  wrongly (#272): the slides' watch measures again by itself when a
+  diagram draws late, which an example now holds with Mermaid held
+  back; the failing example waited the default two seconds for a
+  diagram fetched, drawn and measured, which takes up to three on a
+  loaded machine, and the load was #269's own example, a deck of
+  300,000 characters open for 35 seconds in the page CI runs beside
+  the others. An example that draws a Mermaid diagram waits with
+  `eventuallyWithin 15000`; an example on that deck waits for the
+  editor a minute. Since #269 a look-up of mentioned people that
+  failed is tried again at the next change of the draft, not at a
+  change of the shown slide.
 - **A view closed as it opens, after #268.** CI met it twice in a row:
   a view unmounted within milliseconds of its mount left one owner of
   attachments' addresses registered in the tab. Nothing of a view runs
