@@ -142,6 +142,14 @@ class (Monad m) => MonadEncryption m where
   default convertNext :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> m (Either WikiError Int)
   convertNext = lift . convertNext
 
+  -- | Take the conversion of the space over from another browser of the
+  -- user's, which holds its lease ("Wiki.Api.Encrypted"'s
+  -- 'ConversionLease'): that browser's requests are refused from then on,
+  -- and 'convertNext' goes on here.
+  takeOverConversion :: SpaceId -> m (Either WikiError ())
+  default takeOverConversion :: (MonadTrans t, m ~ t n, MonadEncryption n) => SpaceId -> m (Either WikiError ())
+  takeOverConversion = lift . takeOverConversion
+
   -- | Turn the conversion the space is in round ("Stop and turn back"):
   -- it goes the other way over the pages converted so far, which
   -- 'convertNext' then converts back, and the space ends as it began.

@@ -470,6 +470,7 @@ instance (Monad m) => MonadEncryption (MemWiki m) where
   conversionOf _ = pure (Left noServer)
   startConversion _ _ = pure (Left noServer)
   convertNext _ = pure (Left noServer)
+  takeOverConversion _ = pure (Left noServer)
   reverseConversion _ = pure (Left noServer)
   setEntry _ _ = pure (Left noServer)
 

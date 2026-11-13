@@ -399,11 +399,13 @@ stubs =
           , startDecrypting = \_ -> refuse NotFound
           , reverseConversion = \_ -> refuse NotFound
           , setEntry = \_ _ -> refuse NotFound
-          , stageSealed = \_ _ -> refuse NotFound
-          , stagePlain = \_ _ -> refuse NotFound
-          , stageBytes = \_ _ _ -> refuse NotFound
-          , staged = \_ -> refuse NotFound
-          , commit = \_ _ -> refuse NotFound
+          , lease = \_ _ -> refuse NotFound
+          , stageSealed = \_ _ _ -> refuse NotFound
+          , stagePlain = \_ _ _ -> refuse NotFound
+          , stageBytes = \_ _ _ _ -> refuse NotFound
+          , staged = \_ _ -> refuse NotFound
+          , stagedBytes = \_ _ _ _ respond -> liftIO (respond (responseLBS (toEnum 404) [(hContentType, "application/json")] (encode NotFound)))
+          , commit = \_ _ _ -> refuse NotFound
           }
     }
 

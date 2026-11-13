@@ -179,10 +179,15 @@ component =
       traverse_ H.unsubscribe st.listWatch
       when st.open $ modify (\s -> s {open = False, listWatch = Nothing})
 
+    -- A list read under another revision of the wiki than the one now (the
+    -- reader left a space that asks each time it is opened while titles
+    -- were decrypted for it) is dropped: the list stays as the server
+    -- names its pages until it is read again.
     reload :: H.HalogenM State Action Empty output m ()
     reload = do
+      asked <- gets (\st -> st.input.context.revision)
       stars <- lift starred
-      modify (\st -> st {stars = Just stars})
+      modify (\st -> if st.input.context.revision /= asked then st else st {stars = Just stars})
 
 -- | A starred page as the server lists it, when it is in an encrypted
 -- space: named as a notification names it, not by its title decrypted.

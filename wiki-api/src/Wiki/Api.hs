@@ -99,7 +99,7 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, MacroUse, NewInvitation, ServerStatus, TexEngine, UserPage, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
-import Wiki.Api.Encrypted (ConversionCommit, ConversionInfo, ConversionProgress, EncryptSpace, HeadingsQuery, NewEncryptedSubspace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, PageHeading, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedThreads, SealedVersion, SealedVersionInfo, SpaceEncryption, SpaceEntry, StagedPage, StagedPlain, StagedSealed, StartEncrypting, sealedVersion)
+import Wiki.Api.Encrypted (ConversionCommit, ConversionInfo, ConversionLease, ConversionProgress, EncryptSpace, HeadingsQuery, LeaseRequest, LeaseToken, NewEncryptedSubspace, NewGrants, NewSealedComment, NewSealedPage, NewSealedThread, PageHeading, Rotation, RotationInfo, SealedAttachment, SealedCommentEdit, SealedCommentInfo, SealedEdit, SealedPage, SealedSummary, SealedThread, SealedThreads, SealedVersion, SealedVersionInfo, SpaceEncryption, SpaceEntry, StagedPage, StagedPlain, StagedSealed, StartEncrypting, sealedVersion)
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -397,18 +397,29 @@ data EncryptedApi form mode = EncryptedApi
   -- the password each time they open it, it and the spaces under it
   -- ('Wiki.Core.Space.Entry'): set by the space's administrators. The
   -- browser asks; the server only keeps the setting.
-  , stageSealed :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "sealed" :> ReqBody '[JSON] StagedSealed :> PostNoContent
+  , lease :: mode :- "spaces" :> Capture "space" SpaceId :> "conversion" :> "lease" :> ReqBody '[JSON] LeaseRequest :> Post '[JSON] ConversionLease
+  -- ^ The lease on the conversion the space is in: the right to stage and
+  -- commit its pages, which one browser holds at a time
+  -- ('ConversionLease'). Given when no browser holds it, when it has run
+  -- out, or when the same user asks to take it over ('LeaseRequest');
+  -- refused otherwise ('leaseRefusal'). Asked of a converter, as the
+  -- requests below are.
+  , stageSealed :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "sealed" :> Lease :> ReqBody '[JSON] StagedSealed :> PostNoContent
   -- ^ Stage ciphertexts of a page while its space is encrypted.
-  , stagePlain :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "plain" :> ReqBody '[JSON] StagedPlain :> PostNoContent
+  , stagePlain :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "plain" :> Lease :> ReqBody '[JSON] StagedPlain :> PostNoContent
   -- ^ Stage a page's texts, decrypted, while its space's encryption is
   -- turned off.
-  , stageBytes :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "attachments" :> Capture "attachment" AttachmentId :> MultipartForm form (AttachmentUpload form) :> PostNoContent
+  , stageBytes :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "attachments" :> Capture "attachment" AttachmentId :> Lease :> MultipartForm form (AttachmentUpload form) :> PostNoContent
   -- ^ Stage an attachment's bytes: encrypted while its space is
   -- encrypted, decrypted while its encryption is turned off. Its name and
   -- media type are staged first, by the request above.
-  , staged :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> Get '[JSON] StagedPage
+  , staged :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> Lease :> Get '[JSON] StagedPage
   -- ^ What is staged of a page, as its commit would put it in place.
-  , commit :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "commit" :> ReqBody '[JSON] ConversionCommit :> Post '[JSON] ConversionProgress
+  , stagedBytes :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "attachments" :> Capture "attachment" AttachmentId :> Lease :> RawM
+  -- ^ The bytes staged for an attachment of a page, which the browser
+  -- reads back and opens before it commits the page: what the server
+  -- holds, not only its hash.
+  , commit :: mode :- "conversion" :> "pages" :> Capture "page" PageId :> "commit" :> Lease :> ReqBody '[JSON] ConversionCommit :> Post '[JSON] ConversionProgress
   -- ^ Put what is staged of a page in place, in one transaction, if it is
   -- still what the caller read back ('StagedPage''s digest) and holds
   -- everything of the page. The last page's commit ends the conversion.
@@ -969,6 +980,10 @@ type Versioned a = Headers '[Header "ETag" PageVersion] a
 
 -- | 'IfMatch': the version a save was made against, which a save must send.
 type IfMatch = Header' '[Required, Strict] "If-Match" PageVersion
+
+-- | The token of the lease a request of a conversion is made under
+-- ('Wiki.Api.Encrypted.ConversionLease').
+type Lease = Header' '[Required, Strict] "Wiki-Conversion-Lease" LeaseToken
 
 -- | A page, with its version.
 versioned :: Page -> Versioned Page

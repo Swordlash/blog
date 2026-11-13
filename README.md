@@ -788,7 +788,15 @@ space's permissions by an administrator of the space who holds its key
 back"): the pages converted so far are converted back, the others stay as
 they are, and the space ends as it began. A page that stops a conversion
 is named, with why, so that it can be mended (shortened, an attachment
-deleted) before it continues. A page encrypted gets a new address
+deleted) before it continues. One browser converts at a time: the one
+that holds the conversion's lease, which each page staged or committed
+renews for two minutes. Another administrator's browser can continue
+only once it has stopped that long; the same user can take it over from
+another of their browsers at once ("Take over here"), and the browser it
+was taken from writes nothing more, not even a request it had already
+sent. Before a page is committed, its attachments' bytes as the server
+staged them are compared, by hash and size, with what the browser sent,
+read back, and opened with the page's key as stored. A page encrypted gets a new address
 made of random letters, since its old one spelled its title; its link by
 id (`/l/<id>`) keeps working, and it keeps that address if the
 encryption is turned back. What cannot be converted is said before

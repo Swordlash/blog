@@ -76,8 +76,9 @@ import Wiki.Server.Import (intoEncrypted)
 import Wiki.Server.Opaque (defaultStretch)
 import Wiki.Server.Reset (ResetMail (..), requestReset, resetPassword, setEmail, verifyEmail)
 import Wiki.Server.Storage
+import Wiki.Server.Storage.Blobs (blobOf)
 import Wiki.Server.Storage.Rows (SitemapNode (..), StoredRecord (..))
-import Wiki.Server.Storage.Schema (Comments (..), KeyGrants (..), PageKeys (..), PageLinks (..), Pages (..), PublicKeys (..), SealedVersions (..), Spaces (..), Threads (..), Vaults (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (Attachments (..), Comments (..), KeyGrants (..), PageKeys (..), PageLinks (..), Pages (..), PublicKeys (..), SealedVersions (..), Spaces (..), Threads (..), Vaults (..), WikiDb (..), wikiDb)
 import Wiki.Server.Vault (keyIdOf, storeVault)
 import Wiki.Server.WebAuthn (toBase64Url)
 
@@ -1131,6 +1132,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
       void (ok =<< as p.ada (setSpaceEntry secret.id Space.ConfirmEach))
       as p.bob (startDecrypting secret.id) >>= (`shouldSatisfy` conflict)
       started <- ok =<< as p.ada (startDecrypting secret.id)
+      lease <- leaseOn st p.ada secret.id
       as p.ada (setSpaceEntry secret.id Space.EnterAtOnce) >>= (`shouldSatisfy` ruleRefused "are being decrypted")
       (started.running, sort (map (\x -> x.space) started.left)) `shouldBe` (Just Space.Decrypting, sort [secret.id, secret.id, inner.id])
       as p.ada (saveSealedPage pid made.updatedAt SealedEdit {content = savedOn (contentOf 'b') 'c'}) >>= (`shouldSatisfy` ruleRefused "are being decrypted")
@@ -1139,13 +1141,13 @@ spec backing = describe "encrypted spaces in the storage" $ do
         versions <- ok =<< as p.ada (sealedVersions x.page (VersionsQuery Nothing 50))
         threads <- threadsOf (ok =<< as p.ada (sealedThreads x.page))
         let attachments = [a.id | x.page == pid]
-        ok =<< as p.ada (stagePlain x.page StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title = "Title " <> show v.number, body = "Text " <> show v.number} | v <- versions], threads = [PlainAnchor {id = th.id, anchor = if th.anchored then Just (Anchor "quoted" "" "") else Nothing} | th <- threads], comments = [PlainComment {id = c.id, body = "Decrypted comment"} | th <- threads, c <- th.comments], attachments = [PlainMeta {id = i, name = "file.txt", mediaType = "text/plain"} | i <- attachments]})
+        ok =<< as p.ada (stagePlain x.page lease StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title = "Title " <> show v.number, body = "Text " <> show v.number} | v <- versions], threads = [PlainAnchor {id = th.id, anchor = if th.anchored then Just (Anchor "quoted" "" "") else Nothing} | th <- threads], comments = [PlainComment {id = c.id, body = "Decrypted comment"} | th <- threads, c <- th.comments], attachments = [PlainMeta {id = i, name = "file.txt", mediaType = "text/plain"} | i <- attachments]})
         BS.writeFile (dir </> "plain") "plain bytes"
-        for_ attachments $ \i -> ok =<< as p.ada (stageBytesFile x.page i (dir </> "plain"))
-        staged <- ok =<< as p.ada (stagedPage x.page)
+        for_ attachments $ \i -> ok =<< as p.ada (stageBytesFile x.page i lease (dir </> "plain"))
+        staged <- ok =<< as p.ada (stagedPage x.page lease)
         -- What was staged changed since it was read back: refused.
-        as p.ada (commitConverted x.page ConversionCommit {digest = "an older digest"}) >>= (`shouldSatisfy` conflict)
-        void (ok =<< as p.ada (commitConverted x.page ConversionCommit {digest = staged.digest}))
+        as p.ada (commitConverted x.page lease ConversionCommit {digest = "an older digest"}) >>= (`shouldSatisfy` conflict)
+        void (ok =<< as p.ada (commitConverted x.page lease ConversionCommit {digest = staged.digest}))
       spaces <- as p.ada listSpaces
       [(x.encryption, x.conversion, x.entry) | x <- spaces, x.id `elem` [secret.id, inner.id]] `shouldBe` [(Nothing, Nothing, Space.EnterAtOnce), (Nothing, Nothing, Space.EnterAtOnce)]
       readBack <- ok =<< as p.ada (getPage secret.id [made.slug])
@@ -1230,12 +1232,13 @@ spec backing = describe "encrypted spaces in the storage" $ do
       void $ ok =<< as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = attachmentId, meta = metaUnder pageKeyOf.keyId 'm', replaces = Nothing} (dir </> "sealed"))
       inner <- ok =<< as p.ada (createEncryptedSubspace secret.id (subspaceAs p.ada p.adaKey (subspaceId 7) "Inner"))
       void (ok =<< as p.ada (startDecrypting secret.id))
+      lease <- leaseOn st p.ada secret.id
       -- Not deleted with a space below it being converted.
       as p.ada (deleteSpace inner.id) >>= (`shouldSatisfy` ruleRefused "being decrypted")
       versions <- ok =<< as p.ada (sealedVersions pid (VersionsQuery Nothing 50))
-      ok =<< as p.ada (stagePlain pid StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title = "Title", body = "Text"} | v <- versions], threads = [], comments = [], attachments = [PlainMeta {id = attachmentId, name = "notes.txt", mediaType = "text/plain"}]})
+      ok =<< as p.ada (stagePlain pid lease StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title = "Title", body = "Text"} | v <- versions], threads = [], comments = [], attachments = [PlainMeta {id = attachmentId, name = "notes.txt", mediaType = "text/plain"}]})
       BS.writeFile (dir </> "plain") plainBytes
-      ok =<< as p.ada (stageBytesFile pid attachmentId (dir </> "plain"))
+      ok =<< as p.ada (stageBytesFile pid attachmentId lease (dir </> "plain"))
       let blobFiles = do
             blobs <- blobFilesIn (at.dataDir </> "attachments")
             filterM (\f -> (plainBytes `BS.isInfixOf`) <$> BS.readFile f) blobs
@@ -1257,10 +1260,11 @@ spec backing = describe "encrypted spaces in the storage" $ do
       BS.writeFile (dir </> "sealed") "sealed bytes"
       for_ [attachmentId, other] $ \i -> ok =<< as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = i, meta = metaUnder pageKeyOf.keyId 'm', replaces = Nothing} (dir </> "sealed"))
       started <- ok =<< as p.ada (startDecrypting secret.id)
+      lease <- leaseOn st p.ada secret.id
       BS.writeFile (dir </> "plain") "plain bytes"
       for_ started.left $ \x -> do
         versions <- ok =<< as p.ada (sealedVersions x.page (VersionsQuery Nothing 50))
-        let stage metas = as p.ada (stagePlain x.page StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title = "Title", body = "Text"} | v <- versions], threads = [], comments = [], attachments = metas})
+        let stage metas = as p.ada (stagePlain x.page lease StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title = "Title", body = "Text"} | v <- versions], threads = [], comments = [], attachments = metas})
             meta i n = PlainMeta {id = i, name = n, mediaType = "text/plain"}
         if x.page == pid
           then do
@@ -1268,15 +1272,157 @@ spec backing = describe "encrypted spaces in the storage" $ do
             ok =<< stage [meta attachmentId "notes.txt"]
             stage [meta other "notes.txt"] >>= (`shouldSatisfy` ruleRefused "would both be named notes.txt")
             ok =<< stage [meta other "notes (2).txt"]
-            for_ [attachmentId, other] $ \i -> ok =<< as p.ada (stageBytesFile x.page i (dir </> "plain"))
+            for_ [attachmentId, other] $ \i -> ok =<< as p.ada (stageBytesFile x.page i lease (dir </> "plain"))
           else ok =<< stage []
-        staged <- ok =<< as p.ada (stagedPage x.page)
-        void (ok =<< as p.ada (commitConverted x.page ConversionCommit {digest = staged.digest}))
+        staged <- ok =<< as p.ada (stagedPage x.page lease)
+        void (ok =<< as p.ada (commitConverted x.page lease ConversionCommit {digest = staged.digest}))
       spaces <- as p.ada listSpaces
       [x.encryption | x <- spaces, x.id == secret.id] `shouldBe` [Nothing]
       home <- ok =<< as p.ada (listPages secret.id)
       read' <- ok =<< as p.ada (getPage secret.id [s' | x <- home, x.id == pid, s' <- [x.slug]])
       sort (map (\x -> x.name.text) read'.attachments) `shouldBe` ["notes (2).txt", "notes.txt"]
+
+    -- A plain page takes one name once (UNIQUE (page_id, name)), and the
+    -- commit renames every attachment of a page: names that end distinct
+    -- but are each other's names now (the ids an encrypted page's
+    -- attachments are named by) are committed, in either direction.
+    it "commits attachments whose names swap or turn in a cycle, decrypting" $ withSystemTempDirectory "conversion" $ \dir -> withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+          cycled = PageId "7a2d0b3f-9c5e-4d4a-8f8b-2e3c4d5e6f70"
+          idOf :: Int -> AttachmentId
+          idOf n = AttachmentId ("1a2b3c4d-" <> T.replicate 4 (show n) <> "-4c3f-9e7a-1d2b3c4d5e6f")
+          (a1, a2) = (idOf 5, idOf 6)
+          (b1, b2, b3) = (idOf 7, idOf 8, idOf 9)
+          upload page i = ok =<< as p.ada (uploadSealedAttachmentFile page SealedUpload {id = i, meta = metaUnder pageKeyOf.keyId 'm', replaces = Nothing} (dir </> "sealed"))
+      void (ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a')))
+      void (ok =<< as p.ada (createSealedPage secret.id (newPage cycled Nothing 'b')))
+      BS.writeFile (dir </> "sealed") "sealed bytes"
+      traverse_ (upload pid) [a1, a2]
+      traverse_ (upload cycled) [b1, b2, b3]
+      started <- ok =<< as p.ada (startDecrypting secret.id)
+      lease <- leaseOn st p.ada secret.id
+      BS.writeFile (dir </> "plain") "plain bytes"
+      -- Decrypted: the first page's two named each other's ids, the
+      -- cycled's three in a cycle.
+      let plainNames x
+            | x == pid = [(a1, a2.text), (a2, a1.text)]
+            | x == cycled = [(b1, b2.text), (b2, b3.text), (b3, b1.text)]
+            | otherwise = []
+          named x = do
+            listed <- ok =<< as p.ada (listPages secret.id)
+            read' <- ok =<< as p.ada (getPage secret.id [s' | y <- listed, y.id == x, s' <- [y.slug]])
+            pure (sort [(y.id, y.name.text) | y <- read'.attachments])
+      for_ started.left $ \x -> do
+        versions <- ok =<< as p.ada (sealedVersions x.page (VersionsQuery Nothing 50))
+        ok =<< as p.ada (stagePlain x.page lease StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title = "Title", body = "Text"} | v <- versions], threads = [], comments = [], attachments = [PlainMeta {id = i, name = n, mediaType = "text/plain"} | (i, n) <- plainNames x.page]})
+        for_ (plainNames x.page) $ \(i, _) -> ok =<< as p.ada (stageBytesFile x.page i lease (dir </> "plain"))
+        staged <- ok =<< as p.ada (stagedPage x.page lease)
+        void (ok =<< as p.ada (commitConverted x.page lease ConversionCommit {digest = staged.digest}))
+      named pid `shouldReturn` plainNames pid
+      named cycled `shouldReturn` plainNames cycled
+
+    -- Two browsers converting one space: the first staged a page under its
+    -- key and is slow to send an attachment's bytes; the same user took the
+    -- conversion over in a second browser, which staged the page again
+    -- under a key of its own and sent its bytes. The first's bytes,
+    -- arriving last, are refused, and so is anything else it sends; what
+    -- the second reads back is its own. Another administrator cannot take
+    -- the lease while it runs.
+    it "refuses a late upload of a converter another took over from" $ withSystemTempDirectory "conversion" $ \dir -> withPeople backing $ \st p -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+      s <- privateSpace st p.ada "Raced"
+      void (ok =<< as p.ada (setSpaceGrant s.id (SubjectUser p.bob) AdministerSpace True))
+      page <- ok =<< as p.ada (createPage s.id Nothing "Raced" "Text.")
+      att <- ok =<< as p.ada (uploadAttachment page.id "notes.txt" "text/plain" "The notes.")
+      void (ok =<< as p.ada (startEncrypting s.id StartEncrypting {keys = [startKey p s.id]}))
+      ok =<< as p.ada (grantSpaceKey s.id NewGrants {keyId = subKey s.id, grants = [newGrant p.bob p.bobKey]})
+      times <- map (\v -> v.updatedAt) . reverse <$> (ok =<< as p.ada (listVersions page.id (VersionsQuery Nothing 50)))
+      let stageUnder lease c = do
+            let key = pageKeyUnder (subKey s.id) c
+                staged = chainOf key c times
+            ok =<< as p.ada (stageSealed page.id lease StagedSealed {pageKey = Just key, versions = take 1 (reverse staged), threads = [], comments = [], attachments = []})
+            ok =<< as p.ada (stageSealed page.id lease StagedSealed {pageKey = Nothing, versions = staged, threads = [], comments = [], attachments = [StagedMeta {id = att.id, meta = metaUnder key.keyId c}]})
+          bytesUnder lease c = do
+            BS.writeFile (dir </> [c]) ("bytes under " <> encodeUtf8 (T.singleton c))
+            as p.ada (stageBytesFile page.id att.id lease (dir </> [c]))
+      -- The first browser.
+      first' <- (\l -> l.token) <$> (ok =<< as p.ada (takeConversionLease s.id LeaseRequest {takeOver = False}))
+      stageUnder first' 'a'
+      -- Held: not given again but on purpose, and never to another.
+      as p.ada (takeConversionLease s.id LeaseRequest {takeOver = False}) >>= (`shouldSatisfy` ruleRefused "another browser of yours")
+      as p.bob (takeConversionLease s.id LeaseRequest {takeOver = True}) >>= (`shouldSatisfy` ruleRefused "another administrator's browser")
+      info <- ok =<< as p.bob (conversionInfo s.id)
+      (\c -> c.yours) <$> info.converter `shouldBe` Just False
+      -- The second browser, which took it over, staged the page again and
+      -- sent its bytes.
+      second' <- (\l -> l.token) <$> (ok =<< as p.ada (takeConversionLease s.id LeaseRequest {takeOver = True}))
+      stageUnder second' 'b'
+      ok =<< bytesUnder second' 'b'
+      -- The first browser's bytes, late: refused, as is all else it sends.
+      bytesUnder first' 'a' >>= (`shouldSatisfy` ruleRefused leaseRefusal)
+      staged <- ok =<< as p.ada (stagedPage page.id second')
+      [(b.blob, b.size) | b <- staged.blobs, b.id == att.id] `shouldBe` [(blobOf "bytes under b", 13)]
+      as p.ada (stagedPage page.id first') >>= (`shouldSatisfy` ruleRefused leaseRefusal)
+      as p.ada (commitConverted page.id first' ConversionCommit {digest = staged.digest}) >>= (`shouldSatisfy` ruleRefused leaseRefusal)
+      void (ok =<< as p.ada (commitConverted page.id second' ConversionCommit {digest = staged.digest}))
+
+    -- The commit puts in place what the browser read back, and nothing
+    -- else: bytes staged again after the read back (by the browser
+    -- itself, or anything that can write them) refuse the commit, which
+    -- names them by their hash and size, and the page stays as it was.
+    it "refuses a commit whose staged bytes changed since they were read back, and keeps the page plain" $ withSystemTempDirectory "conversion" $ \dir -> withPeople backing $ \st p -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+      s <- privateSpace st p.ada "Swapped bytes"
+      page <- ok =<< as p.ada (createPage s.id Nothing "Kept" "Kept text.")
+      att <- ok =<< as p.ada (uploadAttachment page.id "notes.txt" "text/plain" "The notes.")
+      void (ok =<< as p.ada (startEncrypting s.id StartEncrypting {keys = [startKey p s.id]}))
+      lease <- leaseOn st p.ada s.id
+      times <- map (\v -> v.updatedAt) . reverse <$> (ok =<< as p.ada (listVersions page.id (VersionsQuery Nothing 50)))
+      let key = pageKeyUnder (subKey s.id) 'k'
+          staged = chainOf key 'k' times
+          stageAs what = do
+            BS.writeFile (dir </> "bytes") what
+            ok =<< as p.ada (stageBytesFile page.id att.id lease (dir </> "bytes"))
+      ok =<< as p.ada (stageSealed page.id lease StagedSealed {pageKey = Just key, versions = take 1 (reverse staged), threads = [], comments = [], attachments = []})
+      ok =<< as p.ada (stageSealed page.id lease StagedSealed {pageKey = Nothing, versions = staged, threads = [], comments = [], attachments = [StagedMeta {id = att.id, meta = metaUnder key.keyId 'k'}]})
+      stageAs "sealed bytes read back"
+      readBack <- ok =<< as p.ada (stagedPage page.id lease)
+      stageAs "other sealed bytes"
+      as p.ada (commitConverted page.id lease ConversionCommit {digest = readBack.digest}) >>= (`shouldSatisfy` ruleRefused "has changed since it was read back")
+      -- Plain as it was, its attachment's bytes with it.
+      read' <- ok =<< as p.ada (getPage s.id [page.slug])
+      (read'.body, map (\a -> a.name.text) read'.attachments) `shouldBe` ("Kept text.", ["notes.txt"])
+      (_, file) <- ok =<< as p.ada (attachmentFile att.id)
+      traverse BS.readFile file `shouldReturn` Just "The notes."
+
+    -- The other way: encrypting names each attachment by its id, which
+    -- may be another attachment's plain name now.
+    it "commits attachments whose names swap or turn in a cycle, encrypting" $ withSystemTempDirectory "conversion" $ \dir -> withPeople backing $ \st p -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+      s <- privateSpace st p.ada "Swapped"
+      first' <- ok =<< as p.ada (createPage s.id Nothing "One" "Two attachments.")
+      two <- ok =<< as p.ada (createPage s.id Nothing "Two" "Three attachments.")
+      [x1, x2] <- for ["a.txt", "b.txt"] $ \n -> ok =<< as p.ada (uploadAttachment first'.id n "text/plain" "bytes")
+      [y1, y2, y3] <- for ["c.txt", "d.txt", "e.txt"] $ \n -> ok =<< as p.ada (uploadAttachment two.id n "text/plain" "bytes")
+      -- Each named by another's id: a swap, and a cycle of three.
+      let names :: [(Text, Text)]
+          names = [(a.text, b.text) | (a, b) <- [(x1.id, x2.id), (x2.id, x1.id), (y1.id, y2.id), (y2.id, y3.id), (y3.id, y1.id)]]
+      writing st $ do
+        for_ names $ \(a, _) -> runUpdate (update wikiDb.attachments (\r -> r.name <-. val_ ("/moving/" <> a)) (\r -> r.id ==. val_ a))
+        for_ names $ \(a, b) -> runUpdate (update wikiDb.attachments (\r -> r.name <-. val_ b) (\r -> r.id ==. val_ a))
+      started <- ok =<< as p.ada (startEncrypting s.id StartEncrypting {keys = [startKey p s.id]})
+      for_ started.left $ \x -> encryptPage st p.ada dir s.id x.page (if x.page == first'.id then [x1.id, x2.id] else if x.page == two.id then [y1.id, y2.id, y3.id] else [])
+      ((\i -> i.running) <$> (ok =<< as p.ada (conversionInfo s.id))) `shouldReturn` Nothing
+      listedSealed <- ok =<< as p.ada (sealedPages s.id)
+      for_ [(first'.id, [x1.id, x2.id]), (two.id, [y1.id, y2.id, y3.id])] $ \(x, mine) -> do
+        summary <- maybe (panic "not listed encrypted") pure (find (\y -> y.id == x) listedSealed)
+        read' <- ok =<< as p.ada (sealedPageAt s.id [summary.slug])
+        sort (map (\a -> a.id) read'.attachments) `shouldBe` sort mine
 
     -- A conversion that cannot go on can always be turned round: stopped
     -- halfway and turned back, every page ends as it was, but for the
@@ -1295,19 +1441,21 @@ spec backing = describe "encrypted spaces in the storage" $ do
       void (ok =<< as p.ada (startEncrypting s.id StartEncrypting {keys = [startKey p s.id]}))
       -- The page with everything encrypted; the other staged in part.
       encryptPage st p.ada dir s.id first'.id [att.id]
+      lease <- leaseOn st p.ada s.id
       versions <- reverse <$> (ok =<< as p.ada (listVersions other.id (VersionsQuery Nothing 50)))
-      ok =<< as p.ada (stageSealed other.id StagedSealed {pageKey = Just (pageKeyUnder (subKey s.id) 'o'), versions = take 1 (reverse (chainOf (pageKeyUnder (subKey s.id) 'o') 'o' (map (\v -> v.updatedAt) versions))), threads = [], comments = [], attachments = []})
+      ok =<< as p.ada (stageSealed other.id lease StagedSealed {pageKey = Just (pageKeyUnder (subKey s.id) 'o'), versions = take 1 (reverse (chainOf (pageKeyUnder (subKey s.id) 'o') 'o' (map (\v -> v.updatedAt) versions))), threads = [], comments = [], attachments = []})
       -- Turned back: only the page encrypted is left, to be decrypted.
       back <- ok =<< as p.ada (reverseConversion s.id)
+      leaseBack <- leaseOn st p.ada s.id
       (back.running, map (\x -> x.page) back.left) `shouldBe` (Just Space.Decrypting, [first'.id])
       sealedVersionsOf <- ok =<< as p.ada (sealedVersions first'.id (VersionsQuery Nothing 50))
       threads <- threadsOf (ok =<< as p.ada (sealedThreads first'.id))
       let texts = Map.fromList [(first'.updatedAt, ("Plans", "Once upon a time.")), (now'.updatedAt, ("Plans", "Now and then."))]
-      ok =<< as p.ada (stagePlain first'.id StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title = fst x, body = snd x} | v <- reverse sealedVersionsOf, Just x <- [Map.lookup v.updatedAt texts]], threads = [PlainAnchor {id = th.id, anchor = Just (Anchor "then" "Now and " ".")} | th <- threads], comments = [PlainComment {id = c.id, body = "A comment."} | th <- threads, c <- th.comments], attachments = [PlainMeta {id = att.id, name = "notes.txt", mediaType = "text/plain"}]})
+      ok =<< as p.ada (stagePlain first'.id leaseBack StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title = fst x, body = snd x} | v <- reverse sealedVersionsOf, Just x <- [Map.lookup v.updatedAt texts]], threads = [PlainAnchor {id = th.id, anchor = Just (Anchor "then" "Now and " ".")} | th <- threads], comments = [PlainComment {id = c.id, body = "A comment."} | th <- threads, c <- th.comments], attachments = [PlainMeta {id = att.id, name = "notes.txt", mediaType = "text/plain"}]})
       BS.writeFile (dir </> "plain") "The notes' bytes."
-      ok =<< as p.ada (stageBytesFile first'.id att.id (dir </> "plain"))
-      staged <- ok =<< as p.ada (stagedPage first'.id)
-      void (ok =<< as p.ada (commitConverted first'.id ConversionCommit {digest = staged.digest}))
+      ok =<< as p.ada (stageBytesFile first'.id att.id leaseBack (dir </> "plain"))
+      staged <- ok =<< as p.ada (stagedPage first'.id leaseBack)
+      void (ok =<< as p.ada (commitConverted first'.id leaseBack ConversionCommit {digest = staged.digest}))
       -- As it began: plain, every page as it was, but the page encrypted
       -- meanwhile, which kept its new address.
       spaces <- as p.ada listSpaces
@@ -1358,13 +1506,14 @@ spec backing = describe "encrypted spaces in the storage" $ do
       void (ok =<< as p.ada (savePage page.id page.updatedAt "A page" "Second"))
       void (ok =<< as p.ada (setSpaceGrant s.id (SubjectUser p.bob) View True))
       void (ok =<< as p.ada (startEncrypting s.id StartEncrypting {keys = [startKey p s.id]}))
+      lease <- leaseOn st p.ada s.id
       -- Bob given the key, as the converting browser shares it.
       ok =<< as p.ada (grantSpaceKey s.id NewGrants {keyId = subKey s.id, grants = [newGrant p.bob p.bobKey]})
       -- The page's key staged with its latest version alone.
       versions <- reverse <$> (ok =<< as p.ada (listVersions page.id (VersionsQuery Nothing 50)))
       let key = pageKeyUnder (subKey s.id) 'k'
           staged = chainOf key 'k' (map (\v -> v.updatedAt) versions)
-      ok =<< as p.ada (stageSealed page.id StagedSealed {pageKey = Just key, versions = take 1 (reverse staged), threads = [], comments = [], attachments = []})
+      ok =<< as p.ada (stageSealed page.id lease StagedSealed {pageKey = Just key, versions = take 1 (reverse staged), threads = [], comments = [], attachments = []})
       -- Staged and not committed: no encrypted route reads it.
       (ok =<< as p.ada (sealedPages s.id)) `shouldReturn` []
       (ok =<< as p.ada (sealedContents s.id)) `shouldReturn` []
@@ -1374,15 +1523,15 @@ spec backing = describe "encrypted spaces in the storage" $ do
       -- Bob can no longer read it: the key must be renewed, and nothing
       -- more is staged until it is.
       void (ok =<< runStoredWiki st Administrator (setDisabled p.bob True))
-      as p.ada (stageSealed page.id StagedSealed {pageKey = Nothing, versions = staged, threads = [], comments = [], attachments = []}) >>= (`shouldSatisfy` renewalRefused)
+      as p.ada (stageSealed page.id lease StagedSealed {pageKey = Nothing, versions = staged, threads = [], comments = [], attachments = []}) >>= (`shouldSatisfy` renewalRefused)
       info <- ok =<< as p.ada (rotationInfo s.id)
       map (\x -> x.page) info.pages `shouldBe` [page.id]
       ok =<< as p.ada (rotateSpaceKey s.id (rotationOf 3 info))
       -- Then the page goes on, its versions under the key they name.
-      ok =<< as p.ada (stageSealed page.id StagedSealed {pageKey = Nothing, versions = staged, threads = [], comments = [], attachments = []})
-      done <- ok =<< as p.ada (stagedPage page.id)
-      void (ok =<< as p.ada (commitConverted page.id ConversionCommit {digest = done.digest}))
-      encryptPageAs st p.ada dir (KeyId (numbered 3)) home.id []
+      ok =<< as p.ada (stageSealed page.id lease StagedSealed {pageKey = Nothing, versions = staged, threads = [], comments = [], attachments = []})
+      done <- ok =<< as p.ada (stagedPage page.id lease)
+      void (ok =<< as p.ada (commitConverted page.id lease ConversionCommit {digest = done.digest}))
+      encryptPageAs st p.ada dir s.id (KeyId (numbered 3)) home.id []
       ((\i -> i.running) <$> (ok =<< as p.ada (conversionInfo s.id))) `shouldReturn` Nothing
 
 -- | 'it' of the conversion's: a space private from one who administers the
@@ -1430,27 +1579,29 @@ chainOf key c times =
 
 -- | 'encryptPageAs' under a space's key as these tests make it.
 encryptPage :: Storage -> UserId -> FilePath -> SpaceId -> PageId -> [AttachmentId] -> IO ()
-encryptPage st u dir sid = encryptPageAs st u dir (subKey sid)
+encryptPage st u dir sid = encryptPageAs st u dir sid (subKey sid)
 
 -- | Encrypt a page of a space being encrypted as a browser does, with
 -- made-up ciphertexts under the space's key given: its plain versions,
 -- threads, comments and the attachments given read, the key and latest
 -- version staged first, the rest after, each attachment's bytes, the
 -- staged read back, and the page committed with its digest.
-encryptPageAs :: Storage -> UserId -> FilePath -> KeyId -> PageId -> [AttachmentId] -> IO ()
-encryptPageAs st u dir spaceKey' pid attachments = do
+encryptPageAs :: Storage -> UserId -> FilePath -> SpaceId -> KeyId -> PageId -> [AttachmentId] -> IO ()
+encryptPageAs st u dir sid spaceKey' pid attachments = do
   let as :: StoredWiki IO a -> IO a
       as = runStoredWiki st (AsUser u)
       c = T.head (T.drop 3 pid.text)
       key = pageKeyUnder spaceKey' c
+  lease <- leaseOn st u sid
   versions <- reverse <$> (ok =<< as (listVersions pid (VersionsQuery Nothing 50)))
   threads <- ok =<< as (listThreads pid)
   let staged = chainOf key c (map (\v -> v.updatedAt) versions)
-  ok =<< as (stageSealed pid StagedSealed {pageKey = Just key, versions = take 1 (reverse staged), threads = [], comments = [], attachments = []})
+  ok =<< as (stageSealed pid lease StagedSealed {pageKey = Just key, versions = take 1 (reverse staged), threads = [], comments = [], attachments = []})
   ok
     =<< as
       ( stageSealed
           pid
+          lease
           StagedSealed
             { pageKey = Nothing
             , versions = staged
@@ -1461,10 +1612,15 @@ encryptPageAs st u dir spaceKey' pid attachments = do
       )
   for_ attachments $ \i -> do
     BS.writeFile (dir </> "staged") ("sealed bytes of " <> encodeUtf8 i.text)
-    ok =<< as (stageBytesFile pid i (dir </> "staged"))
-  read' <- ok =<< as (stagedPage pid)
+    ok =<< as (stageBytesFile pid i lease (dir </> "staged"))
+  read' <- ok =<< as (stagedPage pid lease)
   length read'.sealed.versions `shouldBe` length versions
-  void (ok =<< as (commitConverted pid ConversionCommit {digest = read'.digest}))
+  void (ok =<< as (commitConverted pid lease ConversionCommit {digest = read'.digest}))
+
+-- | The lease on the conversion a space is in, taken for a user's browser,
+-- over any lease of theirs: each call gives a new token.
+leaseOn :: Storage -> UserId -> SpaceId -> IO LeaseToken
+leaseOn st u sid = (\l -> l.token) <$> (ok =<< runStoredWiki st (AsUser u) (takeConversionLease sid LeaseRequest {takeOver = True}))
 
 -- | A page encrypted by a conversion, read only by the encrypted routes,
 -- with as many versions, threads and attachments as it had.

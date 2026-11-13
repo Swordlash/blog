@@ -70,6 +70,7 @@ module Wiki.Server.Storage.Schema
   , SealedComments (..)
   , SealedAttachments (..)
   , StagedPlain (..)
+  , ConversionLeases (..)
 
     -- * Settings and the log
   , Settings (..)
@@ -849,6 +850,10 @@ deriving stock instance Eq (StagedPlain Identity)
 
 deriving stock instance Show (StagedPlain Identity)
 
+deriving stock instance Eq (ConversionLeases Identity)
+
+deriving stock instance Show (ConversionLeases Identity)
+
 deriving stock instance Eq (EmailVerifications Identity)
 
 deriving stock instance Show (EmailVerifications Identity)
@@ -1083,6 +1088,26 @@ instance Table StagedPlain where
     deriving anyclass (Beamable)
   primaryKey r = StagedPlainKey r.page_id r.kind r.item
 
+-- | The lease on a running conversion (@conversion_leases@, step 23), on
+-- the space it started from: the user whose browser converts it now, the
+-- token that browser's requests carry, and when the lease runs out unless
+-- a page staged or committed renews it
+-- ("Wiki.Api.Encrypted"'s 'ConversionLease').
+data ConversionLeases f = ConversionLeaseRow
+  { space_id :: Columnar f Text
+  , holder :: Columnar f Text
+  , token :: Columnar f Text
+  , expires_at :: Columnar f UTCTime
+  }
+  deriving stock (Generic)
+  deriving anyclass (Beamable)
+
+instance Table ConversionLeases where
+  newtype PrimaryKey ConversionLeases f = ConversionLeaseKey (Columnar f Text)
+    deriving stock (Generic)
+    deriving anyclass (Beamable)
+  primaryKey r = ConversionLeaseKey r.space_id
+
 --------------------------------------------------------------------------------
 -- The database
 
@@ -1126,6 +1151,7 @@ data WikiDb f = WikiDb
   , sealed_comments :: f (TableEntity SealedComments)
   , sealed_attachments :: f (TableEntity SealedAttachments)
   , staged_plain :: f (TableEntity StagedPlain)
+  , conversion_leases :: f (TableEntity ConversionLeases)
   }
   deriving stock (Generic)
   deriving anyclass (Database be)

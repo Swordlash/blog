@@ -135,6 +135,14 @@ $( browserJS
      , ("js_made", "wiki_test_encrypted_made", Safe, [t|IO JSText|])
      , ("js_blobs", "wiki_test_encrypted_blobs", Safe, [t|IO JSText|])
      , ("js_record_decryptions", "wiki_test_encrypted_record_decryptions", Safe, [t|IO ()|])
+     , ("js_swap_staged", "wiki_test_encrypted_swap_staged", Safe, [t|JSText -> IO ()|])
+     , ("js_hold_decryptions", "wiki_test_encrypted_hold_decryptions", Safe, [t|JSText -> IO ()|])
+     , ("js_decryptions_held", "wiki_test_encrypted_decryptions_held", Safe, [t|IO Int|])
+     , ("js_release_decryptions", "wiki_test_encrypted_release_decryptions", Safe, [t|IO Int|])
+     , ("js_decryptions_done", "wiki_test_encrypted_decryptions_done", Safe, [t|IO Int|])
+     , ("js_committed", "wiki_test_encrypted_committed", Safe, [t|IO JSText|])
+     , ("js_go_to", "wiki_test_encrypted_go_to", Safe, [t|JSText -> IO ()|])
+     , ("js_history_back", "wiki_test_encrypted_history_back", Safe, [t|IO ()|])
      , ("js_member", "wiki_test_encrypted_member", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
      , ("js_tell_dropped", "wiki_test_encrypted_tell_dropped", Safe, [t|JSText -> IO ()|])
      , ("js_live", "wiki_test_encrypted_live", Safe, [t|JSText -> IO ()|])
@@ -1253,6 +1261,89 @@ spec m = do
     unsafeIOToPageM (fromJSText <$> js_document_title) >>= (`shouldSatisfy` (not . T.isInfixOf "Under the bell"))
     unmount ui
 
+  -- #213, the review's P2: titles decrypted while the reader leaves the
+  -- space's gate, WebCrypto still at work, are given back by nothing once
+  -- WebCrypto is done: not by the backend, which holds nothing of the
+  -- space after, nor by the bell and the stars on the page, which name the
+  -- page as the server does.
+  it "gives back no title decrypted while the reader left the space's gate, and holds nothing of the space after" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Under the bell" "Changed.")
+    let notice =
+          Notification
+            { id = NotificationId "n1"
+            , kind = Changed
+            , page = made.id
+            , thread = Nothing
+            , actor = Author {id = UserId "user-admin", name = "Ada Admin", avatar = Nothing}
+            , title = encryptedPageTitle
+            , excerpt = ""
+            , createdAt = demoNow
+            , read = False
+            , location = Just PageLocation {space = [secretSlug], page = [made.slug]}
+            }
+        held = unsafeIOToPageM js_decryptions_held
+        -- Every decryption held let go, and done, and what it gave handed
+        -- on to whatever waited for it.
+        releaseAll = do
+          released <- unsafeIOToPageM js_release_decryptions
+          eventually (unsafeIOToPageM js_decryptions_done >>= (`shouldSatisfy` (>= released)))
+          unsafeIOToPageM (threadDelay 300_000)
+    answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 1, items = [notice]}
+    gated <- as "user-admin"
+    void (ok =<< run gated (setEntry secret.id ConfirmEach))
+    run gated endPreload
+    spaces <- run gated listSpaces
+    run gated (confirmedEntry secret.id)
+    -- The backend: the bell's and the stars' titles asked for, their
+    -- decryption held; the gate left; then the decryption done.
+    unsafeIOToPageM (js_hold_decryptions (toJSText secret.id.text))
+    bell <- unsafeIOToPageM newEmptyMVar
+    starList <- unsafeIOToPageM newEmptyMVar
+    void (unsafeIOToPageM (forkIO (runHttpWiki gated notifications >>= putMVar bell)))
+    void (unsafeIOToPageM (forkIO (runHttpWiki gated starred >>= putMVar starList)))
+    eventually (held >>= (`shouldSatisfy` (>= 2)))
+    void (run gated (readerAt spaces Nothing))
+    releaseAll
+    titles <- map (\n -> n.title) . (\ns -> ns.items) <$> (ok =<< unsafeIOToPageM (takeMVar bell))
+    titles `shouldBe` [encryptedPageTitle]
+    stars <- ok =<< unsafeIOToPageM (takeMVar starList)
+    [s.title | s <- stars, s.page == made.id] `shouldBe` [encryptedPageTitle]
+    after <- unsafeIOToPageM (heldNow gated)
+    (Set.member secret.id after.keys, Set.member secret.id after.found, after.attachments, after.urls) `shouldBe` (False, False, 0, 0)
+    -- The page: the bell open inside the space, its titles' decryption
+    -- held, the reader gone to the front page by the browser's history
+    -- (no press on the page, which would close the bell), and the
+    -- decryption done: the open list names the page as the server does.
+    -- Then the same of the stars, back in the space.
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 1, items = [notice]}
+    run gated (confirmedEntry secret.id)
+    ui <- startServerOver m gated (R.Page [secretSlug] [made.slug])
+    eventually (find ui ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Changed."))
+    let leave = do
+          unsafeIOToPageM (js_go_to (toJSText ("/" :: Text)))
+          eventually ((\h -> h.confirmed) <$> unsafeIOToPageM (heldNow gated) `shouldReturn` mempty)
+    unsafeIOToPageM (js_hold_decryptions (toJSText secret.id.text))
+    find ui ".notifications-toggle" >>= click
+    eventually (held >>= (`shouldSatisfy` (>= 1)))
+    leave
+    releaseAll
+    find ui ".notification-list .notification-page" >>= (`shouldHaveText` encryptedPageTitle)
+    find ui ".notifications-toggle" >>= click
+    unsafeIOToPageM js_history_back
+    run gated (confirmedEntry secret.id)
+    unsafeIOToPageM (js_hold_decryptions (toJSText secret.id.text))
+    find ui ".starred-toggle" >>= click
+    eventually (held >>= (`shouldSatisfy` (>= 1)))
+    leave
+    releaseAll
+    find ui ".starred-list" >>= textContent >>= (`shouldSatisfy` \t -> encryptedPageTitle `T.isInfixOf` t && not ("Under the bell" `T.isInfixOf` t))
+    unsafeIOToPageM (fromJSText <$> js_document_title) >>= (`shouldSatisfy` (not . T.isInfixOf "Under the bell"))
+    unmount ui
+
   -- #213: the controls the server would refuse are not drawn, by the rule
   -- the server's checks call ("Wiki.Core.Offered"): in an encrypted space,
   -- the plain-only ones, which can never apply there; during a conversion,
@@ -1344,6 +1435,31 @@ spec m = do
       other -> panic ("not refused: " <> show other)
     sent <- asked
     [r.url | r <- sent, "conversion/pages" `T.isInfixOf` r.url] `shouldBe` []
+
+  -- #213: two browsers converting one space. Bytes staged for an
+  -- attachment that are not those this browser sent (another browser's
+  -- late upload, under another key) are caught when the page is read
+  -- back: by the hash and size the server names them by, and by the bytes
+  -- read back themselves. The page is not committed.
+  it "commits no page whose staged attachment is not what this browser sent, by its hash or by the bytes read back" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Attached" "Text.")
+    void (ok =<< run env (uploadAttachment made.id "notes.txt" "text/plain" "The notes."))
+    unsafeIOToPageM (js_strip_home (toJSText secret.id.text))
+    unsafeIOToPageM (js_converting (toJSText secret.id.text) (toJSText ("decrypting" :: Text)))
+    tab <- as "user-admin"
+    let committed = unsafeIOToPageM (fromJSText <$> js_committed)
+    for_ ["named", "served" :: Text] $ \how -> do
+      unsafeIOToPageM (js_swap_staged (toJSText how))
+      run tab (convertNext secret.id) >>= \case
+        Left (Invalid why) -> why `shouldSatisfy` T.isInfixOf "attachments is not what this browser staged"
+        other -> panic ("not refused (" <> how <> "): " <> show other)
+      committed `shouldReturn` "[]"
+    -- The bytes as sent: committed.
+    unsafeIOToPageM (js_swap_staged (toJSText ("" :: Text)))
+    void (ok =<< run tab (convertNext secret.id))
+    committed `shouldReturn` decodeUtf8 (toS (encode [made.id]))
 
   -- A conversion just started shows how far it is, and Stop, while its
   -- pages are converted: here held at its first page.

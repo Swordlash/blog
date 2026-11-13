@@ -97,7 +97,7 @@ import Wiki.Api.Activity (ActivityQuery (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), WikiSettings (..), userQueryOf)
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.ContentPolicy (interactiveSvgPolicy)
-import Wiki.Api.Encrypted (HeadingsQuery (..), SpaceEntry (..))
+import Wiki.Api.Encrypted (HeadingsQuery (..), LeaseToken, SpaceEntry (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Export (documentDisposition, formatMediaType)
@@ -850,11 +850,13 @@ handlers env caller =
           , startDecrypting = wiki . startDecrypting
           , reverseConversion = wiki . reverseConversion
           , setEntry = \s body -> wiki (setSpaceEntry s body.entry)
-          , stageSealed = \p body -> wiki (stageSealed p body) $> NoContent
-          , stagePlain = \p body -> wiki (stagePlain p body) $> NoContent
-          , stageBytes = \p a u -> wiki (stageBytesFile p a u.payload) $> NoContent
-          , staged = wiki . stagedPage
-          , commit = \p body -> wiki (commitConverted p body)
+          , lease = \s body -> wiki (takeConversionLease s body)
+          , stageSealed = \p t body -> wiki (stageSealed p t body) $> NoContent
+          , stagePlain = \p t body -> wiki (stagePlain p t body) $> NoContent
+          , stageBytes = \p a t u -> wiki (stageBytesFile p a t u.payload) $> NoContent
+          , staged = \p t -> wiki (stagedPage p t)
+          , stagedBytes = \p a t _ respond -> liftIO (stagedBytesContent env caller.who p a t respond)
+          , commit = \p t body -> wiki (commitConverted p t body)
           }
     , attachments =
         AttachmentsApi
@@ -1582,6 +1584,19 @@ attachmentContent env who aid name request respond
                 then respond (responseLBS status304 headers "")
                 else respond (responseFile status200 headers file Nothing)
         Right _ -> respond (refusal ApiError.NotFound)
+
+-- | The bytes a conversion staged for an attachment of a page, for the
+-- browser converting it to read back ('stagedBytesFile'): as they are, of
+-- no media type a browser would show, and kept by no cache.
+stagedBytesContent :: Env -> Who -> PageId -> AttachmentId -> LeaseToken -> (Response -> IO a) -> IO a
+stagedBytesContent env who pid aid t respond =
+  runStoredWiki env.storage who (stagedBytesFile pid aid t) >>= \case
+    Left e -> respond (maybe (responseLBS status503 [] "The wiki could not be reached.") refusal (toApiError e))
+    Right file ->
+      ifM
+        (doesFileExist file)
+        (respond (responseFile status200 [(hContentType, "application/octet-stream"), ("X-Content-Type-Options", "nosniff"), (hCacheControl, "no-store")] file Nothing))
+        (respond (refusal ApiError.NotFound))
 
 -- | Whether a request is a frame loading its document, as the browser says
 -- in @Sec-Fetch-Dest@: the only request an SVG's interactive form is given

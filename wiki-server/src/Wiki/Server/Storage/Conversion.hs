@@ -12,6 +12,10 @@ module Wiki.Server.Storage.Conversion
     setConversion
   , setEntry
   , clearSpaceKey
+  , Lease (..)
+  , loadLease
+  , putLease
+  , dropLease
   , convertedIn
   , pageConverted
   , setPageConverted
@@ -48,6 +52,7 @@ module Wiki.Server.Storage.Conversion
   , setThreadQuote
   , setCommentBody
   , setAttachmentFile
+  , setAttachmentFiles
   , deletePageDrafts
   , hideNotificationsOf
   , dropSealedOf
@@ -67,7 +72,7 @@ import Wiki.Core.Space (Conversion, Entry (..), conversionName)
 import Wiki.Core.Vault (Ciphertext (..), KeyId (..), Nonce (..), Sealed (..))
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (markSpaceLinks, micro)
-import Wiki.Server.Storage.Schema (Attachments (..), Comments (..), Drafts (..), Notifications (..), PageKeys (..), PageVersions (..), Pages (..), SealedAttachments (..), SealedComments (..), SealedThreads (..), SealedVersions (..), Spaces (..), StagedPlain (..), Threads (..), WikiDb (..), wikiDb)
+import Wiki.Server.Storage.Schema (Attachments (..), Comments (..), ConversionLeases (..), Drafts (..), Notifications (..), PageKeys (..), PageVersions (..), Pages (..), SealedAttachments (..), SealedComments (..), SealedThreads (..), SealedVersions (..), Spaces (..), StagedPlain (..), Threads (..), WikiDb (..), wikiDb)
 import Wiki.Server.Storage.Sealed (contentOf, insertSealedThread, insertSealedVersion, loadSealedAnchors, loadSealedComments, loadSealedMetas)
 
 --------------------------------------------------------------------------------
@@ -94,6 +99,35 @@ clearSpaceKey sid = do
   -- Paths into the space read otherwise once it is plain, as when it was
   -- made encrypted ('Wiki.Server.Storage.Sealed.setSpaceKey').
   markSpaceLinks sid
+
+-- | 'Lease': the lease on a running conversion, as the database keeps it
+-- on the space the conversion started from: who holds it, the token their
+-- browser's requests carry, and when it runs out unless renewed.
+data Lease = Lease
+  { holder :: UserId
+  , token :: Text
+  , expiresAt :: UTCTime
+  }
+  deriving stock (Eq, Show)
+
+-- | The lease on the conversion that started from a space, if a browser
+-- holds one.
+loadLease :: (Backend be) => SpaceId -> Db be (Maybe Lease)
+loadLease sid =
+  fmap (\r -> Lease {holder = UserId r.holder, token = r.token, expiresAt = r.expires_at})
+    <$> runSelectReturningOne (select (filter_ (\r -> r.space_id ==. val_ sid.text) (all_ wikiDb.conversion_leases)))
+
+-- | Give the lease on the conversion that started from a space, in place
+-- of any held before.
+putLease :: (Backend be) => SpaceId -> Lease -> Db be ()
+putLease sid l = do
+  dropLease sid
+  runInsert . insert wikiDb.conversion_leases $ insertValues [ConversionLeaseRow {space_id = sid.text, holder = l.holder.text, token = l.token, expires_at = micro l.expiresAt}]
+
+-- | No lease on the conversion that started from a space: it ended, or
+-- was turned back.
+dropLease :: (Backend be) => SpaceId -> Db be ()
+dropLease sid = runDelete (delete wikiDb.conversion_leases (\r -> r.space_id ==. val_ sid.text))
 
 -- | The pages of a space the running conversion has converted.
 convertedIn :: (Backend be) => SpaceId -> Db be (Set PageId)
@@ -324,6 +358,20 @@ setCommentBody cid body = runUpdate (update wikiDb.comments (\c -> c.body <-. va
 setAttachmentFile :: (Backend be) => AttachmentId -> Text -> Text -> Int64 -> BlobId -> Db be ()
 setAttachmentFile aid name mediaType size b =
   runUpdate (update wikiDb.attachments (\a -> mconcat [a.name <-. val_ name, a.media_type <-. val_ mediaType, a.size <-. val_ size, a.blob <-. val_ (Just b.text)]) (\a -> a.id ==. val_ aid.text))
+
+-- | 'setAttachmentFile' for every attachment of a page at once, in two
+-- passes. A page takes one name once (UNIQUE (page_id, name)), and the
+-- names given may be names the attachments hold now in another order (a
+-- swap, a cycle): an attachment encrypted is named by its id, and a name
+-- decrypted may be an id. So each attachment is first given a name no
+-- attachment can hold, its id after a slash ('parseFileName' refuses
+-- slashes), and then its own. No state between the two violates the
+-- constraint, on SQLite, which checks each row as it is written, nor on
+-- PostgreSQL.
+setAttachmentFiles :: (Backend be) => [(AttachmentId, Text, Text, Int64, BlobId)] -> Db be ()
+setAttachmentFiles files = do
+  for_ files $ \(aid, _, _, _, _) -> runUpdate (update wikiDb.attachments (\a -> a.name <-. val_ ("/converting/" <> aid.text)) (\a -> a.id ==. val_ aid.text))
+  for_ files $ \(aid, name, mediaType, size, b) -> setAttachmentFile aid name mediaType size b
 
 -- | Every draft of a page, whoever wrote it.
 deletePageDrafts :: (Backend be) => PageId -> Db be ()

@@ -49,6 +49,7 @@ module Wiki.App.Encrypted
   , openAttachmentBytes
   , openedBytes
   , openBytes
+  , sha256Hex
   , objectUrls
   , revokeUrl
 
@@ -98,6 +99,7 @@ $( browserJS
      , ("js_open_bytesPromise", "wiki_enc_open_bytes", Safe, [t|Int -> JSText -> JSVal -> JSText -> IO (Promise JSVal)|])
      , ("js_revoke", "wiki_enc_revoke", Safe, [t|JSText -> IO ()|])
      , ("js_keep_seen", "wiki_enc_keep_seen", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
+     , ("js_sha256Promise", "wiki_enc_sha256", Safe, [t|JSVal -> IO (Promise JSText)|])
      ]
  )
 
@@ -139,6 +141,9 @@ js_open a1 a2 a3 a4 = if inBrowser then wait =<< js_openPromise a1 a2 a3 a4 else
 
 js_open_many :: Int -> JSText -> IO JSText
 js_open_many a1 a2 = if inBrowser then wait =<< js_open_manyPromise a1 a2 else pure inert
+
+js_sha256 :: JSVal -> IO JSText
+js_sha256 a1 = if inBrowser then wait =<< js_sha256Promise a1 else pure inert
 
 --------------------------------------------------------------------------------
 -- Where encryption works
@@ -441,6 +446,14 @@ openBytes (PageKeyRef k) nonce bytes data' = whenHere $ do
   opened <- evaluate =<< js_open_bytes k (toJSText nonce.text) sealed (toJSText data')
   why <- fromJSText <$> js_opened_error opened
   if why == "" then Right <$> openedBytes (Opened opened) else pure (Left why)
+
+-- | The SHA-256 of bytes, in lowercase hexadecimal, by WebCrypto: how the
+-- server names the blob it stores them as ("Wiki.Core.Id"'s 'BlobId'). A
+-- conversion compares it with the blob the server says it staged.
+sha256Hex :: ByteString -> IO (Either Text Text)
+sha256Hex bytes = whenHere $ do
+  hex <- evaluate . fromJSText =<< js_sha256 =<< toJSBytes bytes
+  pure (if hex == "" then Left "This browser could not hash the bytes." else Right hex)
 
 -- | Two object URLs of an attachment's decrypted bytes, which 'revokeUrl'
 -- lets go: one of the media type given, which the page shows, and one of

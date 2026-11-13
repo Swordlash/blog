@@ -48,6 +48,16 @@ title: Encrypted spaces: a decrypted export, encrypting pages, asking each time
   or stop and turn back.
   ```
 
+  One browser converts a space at a time. If you started in another
+  browser or tab, **Take over here** goes on in this one, and the other
+  stops:
+
+  ```text
+  Another tab or browser of yours is converting this space, until 14:32
+  UTC unless it goes on. Take it over to go on here: the other is
+  stopped. [Take over here]
+  ```
+
 - An encrypted space can now ask for a passkey or your password each time
   it is opened. Its administrators turn on **Ask for a passkey or your
   password each time this space is opened** in its **Permissions**. It

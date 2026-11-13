@@ -29,6 +29,7 @@ wikiTables =
   [ "attachments"
   , "audit_log"
   , "comments"
+  , "conversion_leases"
   , "drafts"
   , "email_verifications"
   , "global_grants"

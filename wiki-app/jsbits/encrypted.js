@@ -423,7 +423,10 @@ function wiki_enc_sealed_error(sealed) {
 // nothing behind but bytes the garbage collector takes.
 async function wiki_enc_open_attachment(handle, address, nonce, data) {
   try {
-    const answer = await fetch(address, { credentials: "same-origin" });
+    // Asked of the server each time (no-cache): a page encrypted again
+    // keeps its attachments' ids, and so their addresses, with other bytes
+    // under another key, which a copy the browser kept would not open.
+    const answer = await fetch(address, { credentials: "same-origin", cache: "no-cache" });
     if (!answer.ok) throw new Error(`The attachment could not be read: ${answer.status}.`);
     const opened = await crypto.subtle.decrypt({ name: "AES-GCM", iv: wikiEncFromBase64(nonce), additionalData: wikiEncText(data) }, wikiEncKey(handle), await answer.arrayBuffer());
     return { opened };
@@ -447,6 +450,17 @@ async function wiki_enc_open_bytes(handle, nonce, bytes, data) {
     return { opened };
   } catch (error) {
     return { error: error?.name === "OperationError" ? "These bytes do not open with the page's key." : String(error?.message ?? error) };
+  }
+}
+
+// The SHA-256 of bytes, in lowercase hexadecimal, as the server names the
+// blob it stores them as; "" when it cannot be had.
+async function wiki_enc_sha256(bytes) {
+  try {
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return "";
   }
 }
 

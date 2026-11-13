@@ -247,6 +247,11 @@ function wikiTestEncServer(request) {
       s.space.conversion = "decrypting";
       return wikiTestEncJson(200, wikiTestEncConversion(s));
     }
+    // The lease on its conversion: a new token each time it is asked for.
+    if (rest === "/conversion/lease" && request.method === "POST") {
+      s.lease = `lease-${++wikiTestEncrypted.next}`;
+      return wikiTestEncJson(200, { token: s.lease, expiresAt: "2026-11-13T12:02:00Z" });
+    }
     // Its readers, as the users a mention names: those the test gives.
     if (rest === "/readers" && request.method === "GET") return wikiTestEncJson(200, wikiTestEncrypted.readerUsers ?? []);
     // Whether its readers confirm each time they open it, set by an
@@ -374,6 +379,8 @@ function wikiTestEncServer(request) {
     }
     return null;
   }
+  m = path.match(/^encrypted\/conversion\/pages\/([^/]+)(\/.*)?$/);
+  if (m) return wikiTestEncStaging(request, header, decodeURIComponent(m[1]), m[2] ?? "");
   m = path.match(/^encrypted\/pages\/([^/]+)(\/.*)?$/);
   if (m) {
     const p = wikiTestEncrypted.pages.get(decodeURIComponent(m[1]));
@@ -464,7 +471,7 @@ function wikiTestEncServer(request) {
 // as JSON) and its readers (user ids).
 function wiki_test_encrypted_start(space, readers) {
   const s = JSON.parse(space);
-  Object.assign(wikiTestEncrypted, { as: null, spaces: new Map([[s.id, { space: s, readers: JSON.parse(readers), admins: ["user-admin"], leaked: [], grants: [] }]]), directory: new Map(), pages: new Map(), next: 0, created: [], historyWithoutLatest: false, rotations: [], tamperLatest: false, subspaces: [], homes: [], headingsAsked: [] });
+  Object.assign(wikiTestEncrypted, { as: null, spaces: new Map([[s.id, { space: s, readers: JSON.parse(readers), admins: ["user-admin"], leaked: [], grants: [] }]]), directory: new Map(), pages: new Map(), next: 0, created: [], historyWithoutLatest: false, rotations: [], tamperLatest: false, subspaces: [], homes: [], headingsAsked: [], committed: [], swapStaged: null });
   globalThis.wikiTestHandlers = [wikiTestEncServer, ...(globalThis.wikiTestHandlers ?? []).filter((h) => h !== wikiTestEncServer)];
 }
 
@@ -507,10 +514,72 @@ function wiki_test_encrypted_live(message) {
 }
 
 // A space's conversion as the server answers it (Wiki.Api.Encrypted's
-// ConversionInfo): every page left while one runs.
+// ConversionInfo): every page left while one runs, but those committed.
 function wikiTestEncConversion(s) {
-  const left = s.space.conversion ? [...wikiTestEncrypted.pages.values()].filter((p) => p.space === s.space.id).map((p) => ({ page: p.id, space: p.space })) : [];
-  return { running: s.space.conversion ?? null, root: s.space.id, spaces: [s.space.id], left, cannotEncrypt: [], cannotDecrypt: [], nothingWritten: false, clearing: false };
+  const left = s.space.conversion ? [...wikiTestEncrypted.pages.values()].filter((p) => p.space === s.space.id && !wikiTestEncrypted.committed.includes(p.id)).map((p) => ({ page: p.id, space: p.space })) : [];
+  return { running: s.space.conversion ?? null, root: s.space.id, spaces: [s.space.id], left, cannotEncrypt: [], cannotDecrypt: [], nothingWritten: false, clearing: false, converter: null };
+}
+
+// The SHA-256 of bytes in hexadecimal: how the server names a blob.
+async function wikiTestEncHex(bytes) {
+  return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// What a browser turning a space's encryption off stages of a page, read
+// back as the server reads it (Wiki.Api.Encrypted's StagedPage), and its
+// commit, under the lease's token. While the test says so, the bytes
+// staged for each attachment are not those the browser sent, as a late
+// upload of another browser would leave them: the staged blob names other
+// bytes ("named"), or names the browser's but the bytes read back are
+// others ("served").
+async function wikiTestEncStaging(request, header, id, rest) {
+  const p = wikiTestEncrypted.pages.get(id);
+  const s = p && wikiTestEncrypted.spaces.get(p.space);
+  if (!p || !s.space.conversion) return wikiTestEncJson(409, { error: "Conflict", text: "This page's space is not being converted now." });
+  if (header("wiki-conversion-lease") !== s.lease) return wikiTestEncJson(409, { error: "Conflict", text: "Another browser is converting this space, or took this browser's lease over: nothing was written." });
+  p.staged ??= { plain: { versions: [], threads: [], comments: [], attachments: [] }, bytes: new Map() };
+  const swap = wikiTestEncrypted.swapStaged;
+  const other = new TextEncoder().encode("bytes another browser staged");
+  if (rest === "/plain" && request.method === "POST") {
+    const sent = JSON.parse(request.body);
+    for (const k of ["versions", "threads", "comments", "attachments"]) p.staged.plain[k].push(...sent[k]);
+    return { status: 204, body: "" };
+  }
+  const bytesAt = rest.match(/^\/attachments\/([^/]+)$/);
+  if (bytesAt && request.method === "POST") {
+    p.staged.bytes.set(decodeURIComponent(bytesAt[1]), Uint8Array.from(wikiTestEncParts(request).file, (c) => c.charCodeAt(0)));
+    return { status: 204, body: "" };
+  }
+  if (bytesAt && request.method === "GET") {
+    const bytes = p.staged.bytes.get(decodeURIComponent(bytesAt[1]));
+    if (!bytes) return wikiTestEncJson(404, { error: "NotFound" });
+    return { status: 200, body: swap ? other : bytes, headers: { "Content-Type": "application/octet-stream" } };
+  }
+  if (rest === "" && request.method === "GET") {
+    const blobs = [];
+    for (const [aid, bytes] of p.staged.bytes) {
+      const named = swap === "named" ? other : bytes;
+      blobs.push({ id: aid, blob: await wikiTestEncHex(named), size: named.length });
+    }
+    return wikiTestEncJson(200, { digest: "staged", pageKeys: [p.pageKey, ...(p.olderKeys ?? [])], sealed: { pageKey: null, versions: [], threads: [], comments: [], attachments: [] }, plain: p.staged.plain, blobs });
+  }
+  if (rest === "/commit" && request.method === "POST") {
+    wikiTestEncrypted.committed.push(p.id);
+    return wikiTestEncJson(200, { left: 0 });
+  }
+  return null;
+}
+
+// What the bytes a conversion staged are, from now on (see
+// wikiTestEncStaging): "named", "served", or "" for those sent.
+function wiki_test_encrypted_swap_staged(how) {
+  wikiTestEncrypted.swapStaged = how || null;
+  for (const p of wikiTestEncrypted.pages.values()) delete p.staged;
+}
+
+// The pages committed by a conversion, as JSON.
+function wiki_test_encrypted_committed() {
+  return JSON.stringify(wikiTestEncrypted.committed);
 }
 
 // The users the server answers as the space's readers, as JSON.
@@ -680,6 +749,57 @@ function wiki_test_encrypted_record_decryptions() {
 
 function wiki_test_encrypted_decrypted() {
   return JSON.stringify(wikiTestEncDecrypted);
+}
+
+// Hold every decryption the page makes by WebCrypto from now on whose
+// additional data names the text given, as a slow device would, until
+// the test releases them; how many are held, and how many of those
+// released are done.
+const wikiTestEncHold = { text: null, waiting: [], done: 0 };
+function wiki_test_encrypted_hold_decryptions(text) {
+  Object.assign(wikiTestEncHold, { text, done: 0 });
+  if (crypto.subtle.wikiTestHeld) return;
+  const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+  crypto.subtle.decrypt = async (algorithm, key, data) => {
+    const aad = algorithm?.additionalData ? new TextDecoder().decode(algorithm.additionalData) : "";
+    if (!(wikiTestEncHold.text && aad.includes(wikiTestEncHold.text))) return decrypt(algorithm, key, data);
+    await new Promise((resolve) => wikiTestEncHold.waiting.push(resolve));
+    try {
+      return await decrypt(algorithm, key, data);
+    } finally {
+      wikiTestEncHold.done++;
+    }
+  };
+  crypto.subtle.wikiTestHeld = true;
+}
+
+function wiki_test_encrypted_decryptions_held() {
+  return wikiTestEncHold.waiting.length;
+}
+
+function wiki_test_encrypted_decryptions_done() {
+  return wikiTestEncHold.done;
+}
+
+// Go to an address as the browser's Back or Forward does, with no press on
+// the page (which would close an open popup): the router hears popstate
+// and reads the address.
+function wiki_test_encrypted_go_to(path) {
+  history.pushState(null, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
+// The browser's Back, as its button does.
+function wiki_test_encrypted_history_back() {
+  history.back();
+}
+
+// Let every decryption held go on, and hold none from now on; how many.
+function wiki_test_encrypted_release_decryptions() {
+  wikiTestEncHold.text = null;
+  const waiting = wikiTestEncHold.waiting.splice(0);
+  for (const resolve of waiting) resolve();
+  return waiting.length;
 }
 
 // The bytes the server stored for each attachment, in base64, as JSON.

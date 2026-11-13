@@ -60,6 +60,12 @@ module Wiki.Api.Encrypted
   , maxHeadings
   , ConversionProgress (..)
   , notConvertedYet
+  , StagedBlob (..)
+  , LeaseToken (..)
+  , LeaseRequest (..)
+  , ConversionLease (..)
+  , Converter (..)
+  , leaseRefusal
 
     -- * Pages
   , SealedSummary (..)
@@ -75,6 +81,7 @@ where
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (UTCTime)
 import Protolude
+import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 import Wiki.Api.Version (PageVersion (..))
 import Wiki.Core.Anchor (Anchor)
 import Wiki.Core.Encrypted (Encapsulated, KeyGrant, PageKey, SealedAnchor, SealedComment, SealedContent, SealedHeading, SealedMeta)
@@ -327,15 +334,19 @@ data ConversionInfo = ConversionInfo
   , cannotEncrypt :: [Text]
   , cannotDecrypt :: [Text]
   , nothingWritten :: Bool
+  -- ^ Whether the space has nothing written in it, its home page as it
+  -- was made: such a space is encrypted at once
+  -- ('Wiki.Api.EncryptedApi''s @encrypt@), any other by a conversion.
   , clearing :: Bool
   -- ^ Whether the plain text a conversion deleted is still in SQLite's
   -- files: the truncating checkpoint after its last commit was held back
   -- by a reader of the database, and runs again after the next write
   -- (and at the server's start). Always false on PostgreSQL, whose old
   -- rows stay in its files until it is vacuumed, whatever this says.
-  -- ^ Whether the space has nothing written in it, its home page as it
-  -- was made: such a space is encrypted at once
-  -- ('Wiki.Api.EncryptedApi''s @encrypt@), any other by a conversion.
+  , converter :: Maybe Converter
+  -- ^ The browser converting the space now, while its lease runs
+  -- ('ConversionLease'): none when no browser holds one, or when it has
+  -- run out.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -471,7 +482,19 @@ data StagedPage = StagedPage
   , pageKeys :: [PageKey]
   , sealed :: StagedSealed
   , plain :: StagedPlain
-  , blobs :: [(AttachmentId, BlobId)]
+  , blobs :: [StagedBlob]
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'StagedBlob': the bytes staged for an attachment of a page: their
+-- blob, which is their SHA-256, and their size. The browser compares both
+-- with the bytes it sent, and reads the bytes back
+-- ('Wiki.Api.EncryptedApi''s @stagedBytes@) before it commits the page.
+data StagedBlob = StagedBlob
+  { id :: AttachmentId
+  , blob :: BlobId
+  , size :: Integer
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -526,6 +549,58 @@ newtype ConversionProgress = ConversionProgress
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
+-- | 'LeaseToken': the token of a lease on a conversion
+-- ('ConversionLease'), which each request that stages, reads back or
+-- commits a page carries in the @Wiki-Conversion-Lease@ header.
+newtype LeaseToken = LeaseToken {text :: Text}
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving newtype (FromJSON, ToJSON)
+
+instance ToHttpApiData LeaseToken where
+  toUrlPiece t = t.text
+
+instance FromHttpApiData LeaseToken where
+  parseUrlPiece = Right . LeaseToken
+
+-- | 'LeaseRequest': a browser asks for the lease on a conversion, to
+-- convert its pages. 'takeOver' asks for it even while another browser of
+-- the same user holds it: that browser's requests are refused from then
+-- on.
+newtype LeaseRequest = LeaseRequest
+  { takeOver :: Bool
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'ConversionLease': the right of one browser to convert a space's
+-- pages. A conversion has one converter at a time: the server refuses to
+-- stage, read back or commit a page with any token but the lease's
+-- ('leaseRefusal'). The lease runs until 'expiresAt', and each page
+-- staged or committed renews it; once it has run out, another browser may
+-- take it, and the old token is refused from then on.
+data ConversionLease = ConversionLease
+  { token :: LeaseToken
+  , expiresAt :: UTCTime
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'Converter': who converts a space now, as 'ConversionInfo' says it:
+-- whether it is the caller (in another browser, or this one), and until
+-- when the lease runs unless it is renewed.
+data Converter = Converter
+  { yours :: Bool
+  , heldUntil :: UTCTime
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The start of the reason the server gives to a request of a conversion
+-- that does not carry the lease's token: another browser converts the
+-- space, or took the lease over since.
+leaseRefusal :: Text
+leaseRefusal = "Another browser is converting this space"
 
 -- | The start of the reason the server gives when a page is read by the
 -- encrypted routes while a conversion has not encrypted it yet, or has

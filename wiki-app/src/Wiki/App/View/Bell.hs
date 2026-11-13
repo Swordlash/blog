@@ -243,20 +243,29 @@ component =
       traverse_ H.unsubscribe st.listWatch
       when st.open $ modify (\s -> s {open = False, listWatch = Nothing})
 
+    -- A list read under another revision of the wiki than the one now (the
+    -- reader left a space that asks each time it is opened while titles
+    -- were decrypted for it) is dropped: the reload the new revision
+    -- started gives the list.
     reload :: H.HalogenM State Action Empty output m ()
     reload = do
+      asked <- gets (\st -> st.input.context.revision)
       notices <- lift notifications
-      modify $ \st -> case notices of
-        Right ns ->
-          let missing = [n | n <- st.heard, all (\x -> x.id /= n.id) ns.items]
-           in st {notices = Just (Right ns {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}), heard = missing}
-        Left _ -> st {notices = Just notices}
+      modify $ \st ->
+        if st.input.context.revision /= asked
+          then st
+          else case notices of
+            Right ns ->
+              let missing = [n | n <- st.heard, all (\x -> x.id /= n.id) ns.items]
+               in st {notices = Just (Right ns {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}), heard = missing}
+            Left _ -> st {notices = Just notices}
 
     marking :: ReadMark -> H.HalogenM State Action Empty output m ()
     marking m = do
       modify (\st -> st {busy = True})
+      asked <- gets (\st -> st.input.context.revision)
       result <- lift (markRead m)
-      modify (\st -> st {busy = False, notices = either (const st.notices) (Just . Right) result})
+      modify (\st -> st {busy = False, notices = if st.input.context.revision /= asked then st.notices else either (const st.notices) (Just . Right) result})
 
 -- | A notification's kind, as a class the stylesheet and the tests use.
 kindClass :: Notification -> Text

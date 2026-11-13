@@ -189,10 +189,12 @@ module Wiki.Server.Storage
   , conversionInfo
   , startEncrypting
   , startDecrypting
+  , takeConversionLease
   , stageSealed
   , stagePlain
   , stageBytesFile
   , stagedPage
+  , stagedBytesFile
   , commitConverted
   , reverseConversion
   , setSpaceEntry
@@ -231,7 +233,7 @@ import Data.Map.Strict qualified as Map
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, setNumStripes, withResource)
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Type.Equality (type (~))
 import Data.UUID.Types qualified as UUID
@@ -1954,23 +1956,35 @@ startDecrypting sid = do
   for_ result (\info -> when (isNothing info.running) (afterConversionWrite True))
   pure result
 
--- | Stage ciphertexts of a page while its space is encrypted.
-stageSealed :: (MonadIO m) => PageId -> E.StagedSealed -> StoredWiki m (Either WikiError ())
-stageSealed pid = run Writes . stageSealedTx pid
+-- | The lease on the conversion a space is in ('E.ConversionLease').
+takeConversionLease :: (MonadIO m) => SpaceId -> E.LeaseRequest -> StoredWiki m (Either WikiError E.ConversionLease)
+takeConversionLease sid = run Writes . takeLeaseTx sid
 
--- | Stage a page's texts, decrypted, while its encryption is turned off.
-stagePlain :: (MonadIO m) => PageId -> E.StagedPlain -> StoredWiki m (Either WikiError ())
-stagePlain pid = run Writes . stagePlainTx pid
+-- | Stage ciphertexts of a page while its space is encrypted, under the
+-- conversion's lease.
+stageSealed :: (MonadIO m) => PageId -> E.LeaseToken -> E.StagedSealed -> StoredWiki m (Either WikiError ())
+stageSealed pid t = run Writes . stageSealedTx pid t
 
--- | Stage an attachment's bytes, from a file of an upload.
-stageBytesFile :: (MonadIO m) => PageId -> AttachmentId -> FilePath -> StoredWiki m (Either WikiError ())
-stageBytesFile pid aid file = do
+-- | Stage a page's texts, decrypted, while its encryption is turned off,
+-- under the conversion's lease.
+stagePlain :: (MonadIO m) => PageId -> E.LeaseToken -> E.StagedPlain -> StoredWiki m (Either WikiError ())
+stagePlain pid t = run Writes . stagePlainTx pid t
+
+-- | Stage an attachment's bytes, from a file of an upload, under the
+-- conversion's lease.
+stageBytesFile :: (MonadIO m) => PageId -> AttachmentId -> E.LeaseToken -> FilePath -> StoredWiki m (Either WikiError ())
+stageBytesFile pid aid t file = do
   size <- liftIO (getFileSize file)
-  run Writes (stageBytesTx pid aid size (\dir -> fst <$> storeBlobFile dir file))
+  run Writes (stageBytesTx pid aid t size (\dir -> fst <$> storeBlobFile dir file))
 
 -- | What is staged of a page.
-stagedPage :: (MonadIO m) => PageId -> StoredWiki m (Either WikiError E.StagedPage)
-stagedPage = run Reads . stagedPageTx
+stagedPage :: (MonadIO m) => PageId -> E.LeaseToken -> StoredWiki m (Either WikiError E.StagedPage)
+stagedPage pid = run Reads . stagedPageTx pid
+
+-- | The file of the bytes staged for an attachment of a page, for the
+-- browser to read back.
+stagedBytesFile :: (MonadIO m) => PageId -> AttachmentId -> E.LeaseToken -> StoredWiki m (Either WikiError FilePath)
+stagedBytesFile pid aid = run Reads . stagedBytesTx pid aid
 
 -- | Commit a page of a conversion. Then, on SQLite, the write-ahead log is
 -- moved into the database file and emptied, so that the plain text the
@@ -1978,9 +1992,9 @@ stagedPage = run Reads . stagedPageTx
 -- once the conversion has ended, the files of the blob store nothing
 -- refers to any more are deleted ('collectGarbage'): the plain bytes of
 -- the attachments encrypted, unless a backup kept names them.
-commitConverted :: (MonadIO m) => PageId -> E.ConversionCommit -> StoredWiki m (Either WikiError E.ConversionProgress)
-commitConverted pid commit = do
-  result <- run Writes (commitConvertedTx pid commit)
+commitConverted :: (MonadIO m) => PageId -> E.LeaseToken -> E.ConversionCommit -> StoredWiki m (Either WikiError E.ConversionProgress)
+commitConverted pid t commit = do
+  result <- run Writes (commitConvertedTx pid t commit)
   for_ result (afterConversionWrite . snd)
   pure (fst <$> result)
 
@@ -4646,6 +4660,13 @@ setResolvedTx pid tid resolved = do
 -- removal elsewhere may make due, and the sharing of its key with its
 -- readers: the browser converting the space renews the key when it is due
 -- and goes on, since staging an encrypted page is refused until then.
+--
+-- One browser converts at a time: the one that holds the conversion's
+-- lease ('takeLeaseTx'). Every request that stages, reads back or commits
+-- a page carries the lease's token, and is refused with any other
+-- ('requireLease'), so that a browser that lost the lease (it stopped
+-- for long, or the same user took the conversion over in another browser)
+-- writes nothing more, even a request it sent before.
 
 -- | Why a write in a space being converted is refused.
 
@@ -4807,7 +4828,9 @@ conversionInfoTx sid = do
       root <- conversionRootOf s
       covered <- filter (\x -> isJust x.conversion) <$> subtreeOf root.id
       left <- db (unconvertedIn (map (\x -> x.id) (filter viewable covered)))
-      pure E.ConversionInfo {running = Just running, root = (\x -> x.id) <$> mfilter viewable (Just root), spaces = map (\x -> x.id) (filter viewable covered), left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False}
+      time <- now
+      lease <- mfilter (\l -> l.expiresAt > time) <$> db (loadLease root.id)
+      pure E.ConversionInfo {running = Just running, root = (\x -> x.id) <$> mfilter viewable (Just root), spaces = map (\x -> x.id) (filter viewable covered), left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False, converter = (\l -> E.Converter {yours = Just l.holder == ctx.author, heldUntil = l.expiresAt}) <$> lease}
     Nothing -> do
       tree <- subtreeOf sid
       enc <- if isJust s.encryption then pure [] else encryptRefusals s c tree
@@ -4823,6 +4846,7 @@ conversionInfoTx sid = do
           , cannotDecrypt = dec
           , nothingWritten = untouched
           , clearing = False
+          , converter = Nothing
           }
 
 -- | Start encrypting a space that has pages, and the plain spaces below
@@ -4871,7 +4895,7 @@ startEncryptingTx sid req = do
   record "space.encryption-started" (spaceSubject s) [("spaces", show (length plainTree)), ("pages", show (length left))]
   -- Nothing to convert: it ends at once, as at its last commit.
   _ <- endIfDone Encrypting s plainTree
-  pure E.ConversionInfo {running = if null left then Nothing else Just Encrypting, root = Just sid, spaces = map (\x -> x.id) plainTree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False}
+  pure E.ConversionInfo {running = if null left then Nothing else Just Encrypting, root = Just sid, spaces = map (\x -> x.id) plainTree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False, converter = Nothing}
 
 -- | Start turning the encryption of a space, and of the spaces below it,
 -- off.
@@ -4887,22 +4911,82 @@ startDecryptingTx sid = do
   record "space.decryption-started" (spaceSubject s) [("spaces", show (length tree)), ("pages", show (length left))]
   -- Nothing to convert: it ends at once, as at its last commit.
   _ <- endIfDone Decrypting s tree
-  pure E.ConversionInfo {running = if null left then Nothing else Just Decrypting, root = Just sid, spaces = map (\x -> x.id) tree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False}
+  pure E.ConversionInfo {running = if null left then Nothing else Just Decrypting, root = Just sid, spaces = map (\x -> x.id) tree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False, converter = Nothing}
 
 -- | A page a conversion stages or commits, checked: its space is being
--- converted this way, the page is not converted yet, and the caller may
--- convert it ('requireConverter'). The page, its space and its chain, the
--- caller and the space's key.
-convertingPage :: PageId -> Conversion -> Tx (PageNode, Space, [Space], UserId, KeyId)
-convertingPage pid way = do
+-- converted this way, the page is not converted yet, the caller may
+-- convert it ('requireConverter'), and the request carries the token of
+-- the conversion's lease ('requireLease'), which a write renews. The page,
+-- its space and its chain, the caller and the space's key.
+convertingPage :: PageId -> Conversion -> E.LeaseToken -> Renewing -> Tx (PageNode, Space, [Space], UserId, KeyId)
+convertingPage pid way t renewing = do
   p <- findNode pid
   (s, c) <- findSpace p.space
   requireView c
   unless (s.conversion == Just way) $
     failWith (Conflict ("This page's space is not being " <> (case way of Encrypting -> "encrypted"; Decrypting -> "decrypted") <> " now."))
   (me, k) <- requireConverter s
+  requireLease s t renewing
   whenM (db (pageConverted pid)) $ failWith (Conflict "This page is converted already.")
   pure (p, s, c, me, k)
+
+-- | Whether a request of a conversion renews its lease: a write does, a
+-- read back does not.
+data Renewing = Renews | Keeps
+  deriving stock (Eq)
+
+-- | How long the lease on a conversion runs after it was given or last
+-- renewed: a page staged or committed renews it, and a browser that has
+-- not written for this long may lose it to another.
+leaseFor :: NominalDiffTime
+leaseFor = 120
+
+-- | The lease on the conversion a space is in, for the caller's browser
+-- ('E.ConversionLease'), asked of a converter of every space it covers,
+-- as turning it back is. Given when no browser holds it, when it has run
+-- out, or when the caller holds it and asks to take it over (from another
+-- browser of theirs); a new token each time, so that the browser that
+-- held it before is refused from then on.
+takeLeaseTx :: SpaceId -> E.LeaseRequest -> Tx E.ConversionLease
+takeLeaseTx sid req = do
+  (s, c) <- findSpace sid
+  requireView c
+  when (isNothing s.conversion) $ failWith (Conflict "No conversion of this space runs.")
+  root <- conversionRootOf s
+  covered <- filter (\x -> isJust x.conversion) <$> subtreeOf root.id
+  for_ covered requireConverter
+  me <- asks (\x -> x.author) >>= maybe (failWith Forbidden) pure
+  time <- now
+  held <- db (loadLease root.id)
+  for_ held $ \l ->
+    when (l.expiresAt > time && not (l.holder == me && req.takeOver)) $
+      failWith (Conflict (leaseHeld me l))
+  token <- (<>) <$> newId <*> newId
+  let lease = Lease {holder = me, token, expiresAt = addUTCTime leaseFor time}
+  db (putLease root.id lease)
+  pure E.ConversionLease {token = E.LeaseToken token, expiresAt = lease.expiresAt}
+
+-- | Why the lease on a conversion is not given: the browser that holds it,
+-- and until when.
+leaseHeld :: UserId -> Lease -> Text
+leaseHeld me l
+  | l.holder == me = E.leaseRefusal <> ": another browser of yours holds it, until " <> clock <> " UTC unless it goes on. Take it over here to stop it there."
+  | otherwise = E.leaseRefusal <> ": another administrator's browser holds it, until " <> clock <> " UTC unless it goes on. It can be continued here once it has stopped for two minutes."
+  where
+    clock = toS (formatTime defaultTimeLocale "%H:%M" l.expiresAt)
+
+-- | 'Conflict' unless a request of a conversion carries the token of the
+-- conversion's lease, on the space it started from; renewed for a write.
+-- A token is refused once another was given, whether the lease ran out or
+-- not: the browser that holds the old one writes nothing more.
+requireLease :: Space -> E.LeaseToken -> Renewing -> Tx ()
+requireLease s t renewing = do
+  root <- conversionRootOf s
+  db (loadLease root.id) >>= \case
+    Just l | l.token == t.text -> when (renewing == Renews) $ do
+      time <- now
+      db (putLease root.id Lease {holder = l.holder, token = l.token, expiresAt = addUTCTime leaseFor time})
+    _ -> failWith (Conflict (E.leaseRefusal <> ", or took this browser's lease over: nothing was written. Open the space's settings again to see who converts it."))
 
 -- | 'checkSealedText' for a ciphertext staged by a conversion, which names
 -- any key of the page's: one of before a renewal of the space's key made
@@ -4916,9 +5000,9 @@ checkStagedText keys k s most = do
 
 -- | Stage ciphertexts of a page while its space is encrypted
 -- ('E.StagedSealed').
-stageSealedTx :: PageId -> E.StagedSealed -> Tx ()
-stageSealedTx pid req = do
-  (_, s, c, _, k) <- convertingPage pid Encrypting
+stageSealedTx :: PageId -> E.LeaseToken -> E.StagedSealed -> Tx ()
+stageSealedTx pid lease req = do
+  (_, s, c, _, k) <- convertingPage pid Encrypting lease Renews
   requireNoRenewal s.id c k
   times <- db (pageVersionTimes pid)
   for_ req.pageKey $ \pk -> do
@@ -4961,9 +5045,9 @@ stageSealedTx pid req = do
 
 -- | Stage a page's texts, decrypted, while its space's encryption is
 -- turned off ('E.StagedPlain').
-stagePlainTx :: PageId -> E.StagedPlain -> Tx ()
-stagePlainTx pid req = do
-  _ <- convertingPage pid Decrypting
+stagePlainTx :: PageId -> E.LeaseToken -> E.StagedPlain -> Tx ()
+stagePlainTx pid lease req = do
+  _ <- convertingPage pid Decrypting lease Renews
   known <- Set.fromList <$> db (pageVersionTimes pid)
   for_ req.versions $ \v -> do
     unless (Set.member (micro v.updatedAt) known) $ invalid "This is not a version of the page."
@@ -5021,13 +5105,15 @@ versionItem at = toS (iso8601Show (micro at))
 -- stores in the blob directory given to it: encrypted while its space is
 -- encrypted, decrypted while its encryption is turned off. Its name and
 -- media type are staged first.
-stageBytesTx :: PageId -> AttachmentId -> Integer -> (FilePath -> IO BlobId) -> Tx ()
-stageBytesTx pid aid size store = do
+stageBytesTx :: PageId -> AttachmentId -> E.LeaseToken -> Integer -> (FilePath -> IO BlobId) -> Tx ()
+stageBytesTx pid aid lease size store = do
   p <- findNode pid
   (s, c) <- findSpace p.space
   requireView c
   way <- maybe (failWith (Conflict "This page's space is not being converted now.")) pure s.conversion
-  _ <- convertingPage pid way
+  -- The lease is checked before the bytes are stored: a browser that lost
+  -- it stores nothing.
+  _ <- convertingPage pid way lease Renews
   dir <- asks (\x -> x.blobs)
   case way of
     Encrypting -> do
@@ -5048,20 +5134,34 @@ stageBytesTx pid aid size store = do
 
 -- | What is staged of a page, for the browser to read back before it
 -- commits it.
-stagedPageTx :: PageId -> Tx E.StagedPage
-stagedPageTx pid = do
+stagedPageTx :: PageId -> E.LeaseToken -> Tx E.StagedPage
+stagedPageTx pid lease = do
   p <- findNode pid
   (s, c) <- findSpace p.space
   requireView c
   way <- maybe (failWith (Conflict "This page's space is not being converted now.")) pure s.conversion
-  _ <- convertingPage pid way
+  _ <- convertingPage pid way lease Keeps
   stagedPageOf pid way
+
+-- | The file of the bytes staged for an attachment of a page, as
+-- 'stagedPageTx' names them, for the browser to read back and open before
+-- it commits the page.
+stagedBytesTx :: PageId -> AttachmentId -> E.LeaseToken -> Tx FilePath
+stagedBytesTx pid aid lease = do
+  p <- findNode pid
+  (s, c) <- findSpace p.space
+  requireView c
+  way <- maybe (failWith (Conflict "This page's space is not being converted now.")) pure s.conversion
+  _ <- convertingPage pid way lease Keeps
+  staged <- stagedPageOf pid way
+  dir <- asks (\x -> x.blobs)
+  maybe (failWith NotFound) pure (find (\b -> b.id == aid) staged.blobs >>= \b -> blobFile dir b.blob)
 
 -- | What is staged of a page, with the digest that names it.
 stagedPageOf :: PageId -> Conversion -> Tx E.StagedPage
 stagedPageOf pid way = do
   keys <- db (loadPageKeys pid)
-  (sealed, plain, blobs) <- case way of
+  (sealed, plain, staged) <- case way of
     Encrypting -> do
       rows <- db (loadStagedSealed pid)
       pure
@@ -5087,8 +5187,14 @@ stagedPageOf pid way = do
             }
         , [(AttachmentId r.item, BlobId b) | r <- rows, r.kind == "attachment", Just b <- [r.blob]]
         )
-  let unnamed = E.StagedPage {digest = "", pageKeys = keys, sealed, plain, blobs}
-  pure E.StagedPage {digest = decodeUtf8 (convertToBase Base16 (sha256 (BSL.toStrict (encode unnamed))) :: ByteString), pageKeys = keys, sealed, plain, blobs}
+  -- Each blob with the size of its file: the digest names the bytes by
+  -- their hash (the blob's id) and their size.
+  dir <- asks (\x -> x.blobs)
+  sized <- for staged $ \(a, b) -> do
+    size <- maybe (pure 0) (\f -> liftIO (ifM (doesFileExist f) (getFileSize f) (pure 0))) (blobFile dir b)
+    pure E.StagedBlob {id = a, blob = b, size}
+  let unnamed = E.StagedPage {digest = "", pageKeys = keys, sealed, plain, blobs = sized}
+  pure E.StagedPage {digest = decodeUtf8 (convertToBase Base16 (sha256 (BSL.toStrict (encode unnamed))) :: ByteString), pageKeys = keys, sealed, plain, blobs = sized}
   where
     noSealed = E.StagedSealed {pageKey = Nothing, versions = [], threads = [], comments = [], attachments = []}
     noPlain = E.StagedPlain {versions = [], threads = [], comments = [], attachments = []}
@@ -5107,13 +5213,13 @@ stagedPageOf pid way = do
 -- off, the page's plain columns are written from what is staged, with its
 -- search text and links, and its ciphertexts and keys are deleted; it
 -- keeps its random slug.
-commitConvertedTx :: PageId -> E.ConversionCommit -> Tx (E.ConversionProgress, Bool)
-commitConvertedTx pid commit = do
+commitConvertedTx :: PageId -> E.LeaseToken -> E.ConversionCommit -> Tx (E.ConversionProgress, Bool)
+commitConvertedTx pid lease commit = do
   p <- findNode pid
   (s, c) <- findSpace p.space
   requireView c
   way <- maybe (failWith (Conflict "This page's space is not being converted now.")) pure s.conversion
-  (_, _, _, _, k) <- convertingPage pid way
+  (_, _, _, _, k) <- convertingPage pid way lease Renews
   staged <- stagedPageOf pid way
   unless (staged.digest == commit.digest) $
     failWith (Conflict "What is staged of this page has changed since it was read back: it is read back again before its commit.")
@@ -5122,9 +5228,9 @@ commitConvertedTx pid commit = do
   threads <- db (pageThreads pid)
   comments <- map fst <$> db (pageComments pid)
   attachments <- db (pageAttachmentIds pid)
-  dir <- asks (\x -> x.blobs)
-  let blobOf a = List.lookup a staged.blobs
-      sizeOf b = maybe (pure 0) (\f -> fromIntegral <$> liftIO (getFileSize f)) (blobFile dir b)
+  let stagedOf a = find (\b -> b.id == a) staged.blobs
+      blobOf a = (\b -> b.blob) <$> stagedOf a
+      sizeOf a = maybe 0 (\b -> fromIntegral b.size) (stagedOf a)
       incomplete what = failWith (Conflict ("Not everything of this page is staged (" <> what <> "): it is staged again before its commit."))
   case way of
     Encrypting -> do
@@ -5144,9 +5250,10 @@ commitConvertedTx pid commit = do
       random <- T.take 12 . T.filter (/= '-') <$> newId
       siblings <- db (childPages p.space p.parent)
       subtree <- db (subtreeIds pid)
-      for_ attachments $ \a -> for_ (blobOf a) $ \b -> do
-        size <- sizeOf b
-        db (setAttachmentFile a a.text "application/octet-stream" size b >> clearSealedStagedBlob a)
+      -- Each attachment named by its id, which may be another's plain
+      -- name now: renamed in two passes ('setAttachmentFiles').
+      let files = [(a, a.text, "application/octet-stream", sizeOf a, b) | a <- attachments, Just b <- [blobOf a]]
+      db (setAttachmentFiles files >> traverse_ (\(a, _, _, _, _) -> clearSealedStagedBlob a) files)
       db $ do
         for_ times $ \at -> setVersionText pid at "" ""
         updatePageText pid "" "" page.updatedAt
@@ -5163,9 +5270,9 @@ commitConvertedTx pid commit = do
       unless (sort [x.id | x <- plain.comments] == sort comments) $ incomplete "its comments"
       unless (all (isJust . blobOf) attachments && length plain.attachments == length attachments) $ incomplete "its attachments"
       latest <- maybe (incomplete "its latest version") pure (lastMay plain.versions)
-      for_ attachments $ \a -> for_ ((,) <$> blobOf a <*> find (\m -> m.id == a) plain.attachments) $ \(b, m) -> do
-        size <- sizeOf b
-        db (setAttachmentFile a m.name m.mediaType size b)
+      -- Names decrypted, which may be the ids the attachments are named by
+      -- now, in another order: renamed in two passes ('setAttachmentFiles').
+      db (setAttachmentFiles [(a, m.name, m.mediaType, sizeOf a, b) | a <- attachments, Just b <- [blobOf a], Just m <- [find (\x -> x.id == a) plain.attachments]])
       db $ do
         for_ plain.versions $ \v -> setVersionText pid v.updatedAt v.title v.body
         updatePageText pid latest.title latest.body page.updatedAt
@@ -5194,6 +5301,7 @@ endIfDone :: Conversion -> Space -> [Space] -> Tx Int
 endIfDone way root covered = do
   left <- db (unconvertedIn (map (\x -> x.id) covered))
   when (null left) $ do
+    db (dropLease root.id)
     for_ covered $ \x -> db $ do
       setConversion x.id Nothing
       clearConverted x.id
@@ -5242,10 +5350,13 @@ reverseConversionTx sid = do
     for_ [p | p <- pages, Set.notMember p.id done] $ \p ->
       db (case way of Encrypting -> dropStagedSealed p.id; Decrypting -> dropStagedPlain p.id)
     db (flipConverted x.id >> setConversion x.id (Just back))
+  -- The browser converting it, if another, stops: its token is refused
+  -- from now on, and the browser that turns it back asks for the lease.
+  db (dropLease root.id)
   record "space.conversion-reversed" (spaceSubject root) [("was", Space.conversionName way), ("spaces", show (length covered))]
   left <- db (unconvertedIn (map (\x -> x.id) covered))
   _ <- endIfDone back root covered
-  pure E.ConversionInfo {running = if null left then Nothing else Just back, root = Just root.id, spaces = map (\x -> x.id) covered, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False}
+  pure E.ConversionInfo {running = if null left then Nothing else Just back, root = Just root.id, spaces = map (\x -> x.id) covered, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False, converter = Nothing}
 
 --------------------------------------------------------------------------------
 -- Comments and attachments in an encrypted space

@@ -43,6 +43,7 @@ where
 
 import Data.Map.Strict qualified as Map
 import Data.Row (Empty)
+import Data.Time (defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -50,7 +51,7 @@ import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Wiki.Api.Encrypted (ConversionInfo (..))
+import Wiki.Api.Encrypted (ConversionInfo (..), Converter (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
 import Wiki.App.Backend.Encrypted (MonadEncryption (..))
 import Wiki.App.Route (Route (..))
@@ -109,6 +110,7 @@ data Action
   | AskDecrypt Bool
   | Decrypt
   | Continue
+  | TakeOver
   | Stop
   | TurnBack
   | ChooseWho Int
@@ -186,6 +188,12 @@ component =
                 <p class="permissions-intro conversion-back-explained">Turning it back converts the pages done so far back, and leaves the others as they are: the space ends as it began. Pages encrypted so far keep the new addresses they got; their links by id keep working.</p>
                 <button type="button" class="primary conversion-continue" disabled={{ st.busy }} onClick={{ const Continue }}>Continue</button>
                 <button type="button" class="conversion-reverse" disabled={{ st.busy }} onClick={{ const TurnBack }}>Stop and turn back</button>
+                {% for c in toList (st.conversionInfo >>= \i -> i.converter) %}
+                  <p class="permissions-intro conversion-converter" role="status">{{ converterText c }}</p>
+                  {% if c.yours %}
+                    <button type="button" class="conversion-take-over" disabled={{ st.busy }} onClick={{ const TakeOver }}>Take over here</button>
+                  {% end %}
+                {% end %}
               {% end %}
             </div>
           {% end %}
@@ -427,6 +435,14 @@ component =
       Continue -> do
         modify (\st -> st {busy = True, problem = Nothing})
         convertAll =<< gets (\st -> maybe 0 (\i -> length i.left) st.conversionInfo)
+      -- The conversion goes on here, and the other browser of the user's
+      -- that held it is refused from now on.
+      TakeOver -> do
+        sid <- gets (\st -> st.input.space.id)
+        modify (\st -> st {busy = True, problem = Nothing})
+        takeOverConversion sid >>= \case
+          Left e -> modify (\st -> st {busy = False, problem = Just e})
+          Right () -> convertAll =<< gets (\st -> maybe 0 (\i -> length i.left) st.conversionInfo)
       Stop -> modify (\st -> st {stopping = True})
       -- The conversion goes the other way over the pages done so far.
       TurnBack -> do
@@ -479,6 +495,16 @@ component =
       result <- spaceAccess sid
       info <- rightToMaybe <$> conversionOf sid
       modify (\st -> st {loaded = either Failed Ready result, busy = isJust st.converting, conversionInfo = info})
+
+-- | Who converts the space now, while their lease on it runs: one browser
+-- at a time does, and the others are refused until it stops for long
+-- enough, or the same user takes it over.
+converterText :: Converter -> Text
+converterText c
+  | c.yours = "Another tab or browser of yours is converting this space, until " <> clock <> " UTC unless it goes on. Take it over to go on here: the other is stopped."
+  | otherwise = "Another administrator's browser is converting this space, until " <> clock <> " UTC unless it goes on. It can be continued here once it has stopped for two minutes."
+  where
+    clock = toS (formatTime defaultTimeLocale "%H:%M" c.heldUntil)
 
 -- | Who a permission may be granted to: every user, then every group.
 candidates :: SpaceAccess -> [Subject]
