@@ -14,11 +14,12 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Http (serveDemo, serverStarts, serverStops, startServer, tellServer)
+import Test.Browser.Http (Asked (..), answerWith, asked, hangUp, holdAt, release, serveDemo, serverStarts, serverStops, startServer, tellServer)
 import Test.Browser.Mount (clickButton, slugs, start, startChanged)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api.Events (ServerMessage (..))
+import Wiki.Api.Notifications (Notifications (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Islands (MonadIslands)
@@ -149,7 +150,59 @@ demo m = describe "over the demo" $ do
     unmount ui
 
 live :: forall m -> (Specs m) => Spec
-live m = describe "over the backend over HTTP" $
+live m = describe "over the backend over HTTP" $ do
+  -- #213, the review's P2: the server's list is the truth for every
+  -- notification told before it was asked for. One whose page the reader
+  -- may no longer read, which the server leaves out, goes; one told while
+  -- the list was fetched, which the answer cannot hold yet, stays.
+  it "keeps of what the live channel told only what came while the list was fetched" $
+    runPage $ do
+      serverStarts
+      serveDemo
+      answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 0, items = []}
+      ui <- startServer m Home
+      find ui ".notifications-toggle" >>= (`shouldHaveText` "🔔")
+      length <$> findAll ui ".notifications-count" `shouldReturn` 0
+      let told i title =
+            Notification
+              { id = NotificationId i
+              , kind = Replied
+              , page = PageId "page-hello"
+              , thread = Nothing
+              , actor = Author {id = UserId "user-reader", name = "Rita Reader", avatar = Nothing}
+              , title
+              , excerpt = "Thanks."
+              , createdAt = UTCTime (fromGregorian 2026 10 26) 0
+              , read = False
+              , location = Just PageLocation {space = slugs ["blog"], page = slugs ["hello-world"]}
+              }
+          fetches = length . filter (\r -> r.method == "GET" && "api/v1/notifications" `T.isSuffixOf` r.url) <$> asked
+      eventually $ do
+        tellServer (Notified (told "n1" "Lost since"))
+        find ui ".notifications-count" >>= (`shouldHaveText` "1")
+      -- The channel opens again; the list is fetched again, without it.
+      before <- fetches
+      hangUp
+      eventuallyWithin 5000 (fetches >>= (`shouldSatisfy` (> before)))
+      eventually (length <$> findAll ui ".notifications-count" `shouldReturn` 0)
+      -- Told while the list is fetched: kept.
+      holdAt "GET" "api/v1/notifications"
+      again <- fetches
+      hangUp
+      eventuallyWithin 5000 (fetches >>= (`shouldSatisfy` (> again)))
+      eventually $ do
+        tellServer (Notified (told "n2" "Told meanwhile"))
+        find ui ".notifications-count" >>= (`shouldHaveText` "1")
+      release
+      unsafeIOToPageM (threadDelay 300_000)
+      (traverse textContent =<< findAll ui ".notifications-count") `shouldReturn` ["1"]
+      -- The server has it now: opened, the list holds it once.
+      answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 1, items = [told "n2" "Told meanwhile"]}
+      find ui ".notifications-toggle" >>= click
+      eventually ((traverse textContent =<< findAll ui ".notification-page") `shouldReturn` ["Told meanwhile"])
+      unmount ui
+      serverStops
+
   it "counts a notification the live channel tells of, with no page shown" $
     runPage $ do
       serverStarts

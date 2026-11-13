@@ -1416,6 +1416,41 @@ spec m = do
     [r.url | r <- sent, ("pages/" <> made.id.text <> "/threads") `T.isSuffixOf` r.url, not ("encrypted" `T.isInfixOf` r.url)] `shouldSatisfy` (not . null)
     [r.url | r <- sent, ("encrypted/pages/" <> made.id.text <> "/threads") `T.isSuffixOf` r.url] `shouldBe` []
 
+  -- #213, the review's P2: a space that asks each time it is opened, in
+  -- the middle of turning its encryption off, shows nothing of a page made
+  -- plain already before the reader confirms, by any route: the page's
+  -- own, its permanent link, the list, its history and comments, the
+  -- search. Confirmed, the reader reads it, plain.
+  it "shows nothing of a page a decryption made plain while the space's gate is not confirmed, by any route" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Sealed title" "Sealed text.")
+    void (ok =<< run env (setEntry secret.id ConfirmEach))
+    unsafeIOToPageM (js_converting (toJSText secret.id.text) (toJSText ("decrypting" :: Text)))
+    unsafeIOToPageM (js_made_plain (toJSText made.id.text) (toJSText ("Plain title" :: Text)) (toJSText ("Plain text." :: Text)))
+    tab <- as "user-admin"
+    run tab endPreload
+    void (run tab listSpaces)
+    let shown :: (Show a) => Either WikiError a -> Bool
+        shown = \case
+          Right x -> "Plain" `T.isInfixOf` show x
+          Left _ -> False
+    -- The page's route, and its permanent link: where it is, then there.
+    (shown <$> run tab (getPage secret.id [made.slug])) `shouldReturn` False
+    at <- ok =<< run tab (pageLocation made.id)
+    (shown <$> run tab (getPage secret.id at.page)) `shouldReturn` False
+    -- The list, its history and its comments.
+    (shown <$> run tab (listPages secret.id)) `shouldReturn` False
+    (shown <$> run tab (listVersions made.id (VersionsQuery Nothing 50))) `shouldReturn` False
+    run tab (listThreads made.id) >>= (`shouldSatisfy` isLeft)
+    -- The search.
+    hits <- run tab (searchPages (searchQuery "Plain"))
+    [h | h <- hits, h.page == made.id] `shouldBe` []
+    -- Confirmed: the page made plain reads plain.
+    run tab (confirmedEntry secret.id)
+    read' <- ok =<< run tab (getPage secret.id [made.slug])
+    (read'.title, read'.body) `shouldBe` ("Plain title", "Plain text.")
+
   -- Turning encryption off checks a page's history as an export does,
   -- before anything of it is staged: a history the server rolled back
   -- after this browser read the page is refused, and nothing of the page
@@ -1432,6 +1467,32 @@ spec m = do
     unsafeIOToPageM (js_converting (toJSText secret.id.text) (toJSText ("decrypting" :: Text)))
     run tab (convertNext secret.id) >>= \case
       Left (Invalid why) -> why `shouldSatisfy` T.isInfixOf "older version"
+      other -> panic ("not refused: " <> show other)
+    sent <- asked
+    [r.url | r <- sent, "conversion/pages" `T.isInfixOf` r.url] `shouldBe` []
+
+  -- #213, the review's P2: a whole history whose oldest versions the
+  -- server left out joins version by version, and its latest is the one
+  -- read: its beginning is what gives it away. Not made plain, nothing of
+  -- it staged; and the history view says so.
+  it "refuses to turn plain a page whose history the server cut short at its beginning, and the history says so" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Cut" "First.")
+    second' <- ok =<< run env (savePage made.id made.updatedAt "Cut" "Second.")
+    void (ok =<< run env (savePage made.id second'.updatedAt "Cut" "Third."))
+    unsafeIOToPageM (js_strip_home (toJSText secret.id.text))
+    tab <- as "user-admin"
+    void (ok =<< run tab (getPage secret.id [made.slug]))
+    -- The first version left out.
+    unsafeIOToPageM (js_drop_version (toJSText made.id.text) 0)
+    history <- as "user-admin"
+    void (ok =<< run history (getPage secret.id [made.slug]))
+    length <$> (ok =<< run history (listVersions made.id (VersionsQuery Nothing 50))) `shouldReturn` 2
+    run history (chainProblem made.id) `shouldReturn` Just (Truncated 2)
+    unsafeIOToPageM (js_converting (toJSText secret.id.text) (toJSText ("decrypting" :: Text)))
+    run tab (convertNext secret.id) >>= \case
+      Left (Invalid why) -> why `shouldSatisfy` T.isInfixOf "begins at version 2"
       other -> panic ("not refused: " <> show other)
     sent <- asked
     [r.url | r <- sent, "conversion/pages" `T.isInfixOf` r.url] `shouldBe` []

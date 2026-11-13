@@ -135,5 +135,30 @@ spec = describe "Wiki.Core.Encrypted" $ do
       gapIn [v 2, v 1, ("other", Nothing)] `shouldBe` Just (Gap 0)
       -- A version of format 1 after a numbered one: the history was cut.
       gapIn [("late", Nothing), v 1, t0] `shouldBe` Just (Gap 1)
+
+    -- The ends of a whole history, which no neighbour vouches for: its
+    -- oldest version must be a chain's first. The boundary of chains begun
+    -- on a page written before versions were chained: version 1 names the
+    -- version of format 1 below it, which must be there; versions of
+    -- format 1 below that cannot be checked.
+    it "finds a whole history that does not begin where its chain begins" $ do
+      let v n = (VersionTag ("t" <> show n), Just (Chain n (Just (VersionTag ("t" <> show (n - 1 :: Int)))) Nothing))
+          o n = (VersionTag ("o" <> show n), Just (Chain n (if n == 1 then Nothing else Just (VersionTag ("o" <> show (n - 1 :: Int)))) (Just "origin")))
+          t0 = ("t0", Nothing)
+      -- A chain of its own origin, from its first: whole; its first left out.
+      historyStart [o 3, o 2, o 1] `shouldBe` Nothing
+      historyStart [o 3, o 2] `shouldBe` Just (Truncated 2)
+      gapIn [o 3, o 2] `shouldBe` Nothing
+      -- A chain begun on a page of format 1: whole with the version it
+      -- names, and with any versions of format 1 below that; cut without it.
+      historyStart [v 2, v 1, t0] `shouldBe` Nothing
+      historyStart [v 2, v 1, t0, ("older", Nothing)] `shouldBe` Nothing
+      historyStart [v 2, v 1] `shouldBe` Just (Truncated 1)
+      historyStart [v 3, v 2] `shouldBe` Just (Truncated 2)
+      -- The first version of a page chained before origins (number 1,
+      -- after nothing), and a page of format 1 alone.
+      historyStart [("u2", Just (Chain 2 (Just "u1") Nothing)), ("u1", Just (Chain 1 Nothing Nothing))] `shouldBe` Nothing
+      historyStart [t0] `shouldBe` Nothing
+      historyStart [] `shouldBe` Nothing
   where
     sealed = Sealed (Nonce "n") (Ciphertext "c")

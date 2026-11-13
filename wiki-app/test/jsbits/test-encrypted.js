@@ -187,7 +187,21 @@ function wikiTestEncServer(request) {
   if (plain) {
     const id = decodeURIComponent(plain[1]);
     const s = wikiTestEncrypted.spaces.get(id) ?? wikiTestEncrypted.spaces.get(wikiTestEncrypted.pages.get(id)?.space);
-    if (s && s.space.encryption && s.readers.includes(me)) return wikiTestEncJson(409, { error: "Conflict", text: "This page is in an encrypted space." });
+    if (s && s.space.encryption && s.readers.includes(me)) {
+      // While its encryption is turned off, the pages made plain already
+      // answer by the plain routes: listed, with their history and
+      // comments.
+      const p = wikiTestEncrypted.pages.get(id);
+      if (s.space.conversion && request.method === "GET") {
+        if (path === `spaces/${plain[1]}/pages`) {
+          const made = [...wikiTestEncrypted.pages.values()].filter((x) => x.space === s.space.id && x.plain);
+          return wikiTestEncJson(200, made.map((x) => ({ id: x.id, space: x.space, parent: x.parent, title: x.plain.title, slug: x.slug, createdAt: x.versions[0].updatedAt, updatedAt: x.versions.at(-1).updatedAt, position: x.position, template: false, kind: "document" })));
+        }
+        if (p?.plain && path === `pages/${plain[1]}/versions`) return wikiTestEncJson(200, [{ page: p.id, updatedAt: p.versions.at(-1).updatedAt, title: p.plain.title, author: null, number: 1 }]);
+        if (p?.plain && path === `pages/${plain[1]}/threads`) return wikiTestEncJson(200, []);
+      }
+      return wikiTestEncJson(409, { error: "Conflict", text: "This page is in an encrypted space." });
+    }
   }
   // An attachment deleted, by the plain route, which carries no text.
   m = path.match(/^attachments\/([^/]+)$/);

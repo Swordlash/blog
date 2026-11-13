@@ -68,6 +68,7 @@ module Wiki.Core.Encrypted
   , judgeHead
   , linkedFrom
   , gapIn
+  , historyStart
   , Kept (..)
   , keepIn
 
@@ -229,6 +230,11 @@ data ChainProblem
     -- before the one it read last: the page as it was before it was
     -- encrypted again.
     Superseded
+  | -- | A page's whole history, as the server sent it, does not begin
+    -- where its chain begins: its oldest version is numbered so, and is
+    -- not a chain's first ('historyStart'). The server left the oldest
+    -- versions out.
+    Truncated {oldest :: Int}
   deriving stock (Eq, Show)
 
 -- | What a reader is told of a problem, in a banner over the page.
@@ -254,6 +260,10 @@ chainProblemText = \case
       <> " this browser has read before: its history may have been changed. The page cannot be edited here until it is reloaded."
   Superseded ->
     "The server sent this page as it was before it was encrypted again, which this browser has read since: what is shown is not the latest, so the page cannot be edited here until it is reloaded."
+  Truncated oldest ->
+    "This page's history as the server sent it begins at version "
+      <> show oldest
+      <> ", not at the page's first: the server may have left the oldest versions out. The page cannot be edited here until it is reloaded."
 
 -- | 'Judged': how the latest version the server sent stands against the
 -- latest this browser saw, when nothing is wrong with it: the same one, or
@@ -359,6 +369,23 @@ keepIn remembered new = case break (\s -> s.origin == new.origin) remembered of
     | r.number > new.number -> (KeptLater, remembered)
     | r.number == new.number -> if r.tag == new.tag then (KeptNow, remembered) else (KeptFork, remembered)
     | otherwise -> (KeptNow, before <> [new])
+
+-- | Whether a page's whole history, the latest first, begins where its
+-- chain begins. 'gapIn' checks each version against the next; this checks
+-- the end, which no neighbour vouches for. The oldest version must be a
+-- chain's first: numbered 1 and after nothing ('firstChain', and the
+-- first version of a page written before chains had origins). A version
+-- numbered 1 that names a version before it (the first of a chain begun
+-- on a page written before versions were chained, 'chainAfter') needs that
+-- version below it, which 'follows' checks: as the oldest it is a
+-- problem. A version of format 1 (before chains) as the oldest is taken
+-- as it is: nothing tells whether versions of format 1 before it are
+-- missing. With the links checked, a history that begins at 1 holds as
+-- many chained versions as its latest one's number says.
+historyStart :: [(VersionTag, Maybe Chain)] -> Maybe ChainProblem
+historyStart versions = case lastMay versions of
+  Just (_, Just c) | c.number /= 1 || isJust c.previous -> Just (Truncated c.number)
+  _ -> Nothing
 
 -- | The first break in a run of a page's versions, the latest first: a
 -- version that does not follow on the next one.

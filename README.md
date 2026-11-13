@@ -892,7 +892,12 @@ How it works:
   confirmation in that tab; a reload asks again too. Outside it, its
   starred pages and its pages under the bell are named "an encrypted
   page", a search finds nothing of it, and its pages' tabs and history
-  entries are titled by the space alone. It is a gate in the wiki's own
+  entries are titled by the space alone. While its encryption is being
+  turned off, the pages made plain already are behind the gate too, by
+  every route (the page, its link by id, the list of pages, its history
+  and comments): once you open the space, you read the pages not
+  converted yet decrypted and the others plain; the setting goes with the
+  encryption at the end. It is a gate in the wiki's own
   page, not in its encryption: someone who opens the browser's developer
   tools on a device where your keys are unlocked gets past it. Someone
   who signs in only with a provider, and has no passkey on the device,
@@ -921,12 +926,21 @@ How it works:
   one under the same number, a later one that its history does not join,
   version by version, to the one your browser read, or a history with a
   version missing or out of order (within a page of the history or
-  between two pages of it), the page is shown under a banner that says
-  so, and cannot be edited in that tab until it is reloaded. What this
+  between two pages of it), or a whole history that does not begin with
+  the chain's first version (its oldest versions left out), the page is
+  shown under a banner that says so, and cannot be edited in that tab
+  until it is reloaded. Turning a space's encryption off checks each
+  page's whole history so before it makes it plain. What this
   does not catch: an older version sent to a browser that never read the
-  page; a page the server hides or deletes altogether; and comments or
-  attachments the server leaves out or sends as they were before (each
-  one opens only as itself, on its own page, but has no version number). What your browser remembers is
+  page; versions from before versions were numbered left out below the
+  first numbered one; a page the server hides or deletes altogether, or
+  leaves out of a list of pages (a space's pages, the pages a conversion
+  has left, which the server alone counts, so a page left out of a
+  decryption is not made plain, and its key goes with the space's at the
+  end; the pages and spaces of an export decrypted here); and comments or
+  attachments the server leaves out, reorders or sends as they were
+  before (each one opens only as itself, on its own page, but has no
+  version number). What your browser remembers is
   in its storage for this site, and nothing in it is secret: clearing the
   browser's data for the wiki forgets it, and with it the protection
   against an older version on that device. Versions written before this

@@ -115,3 +115,7 @@ title: Encrypted spaces: a decrypted export, encrypting pages, asking each time
 
 - The wiki's export now says which encrypted spaces it leaves out, and
   how to export each.
+- The bell no longer brings back a notification the wiki has since left
+  out of your list, such as one about a page you may no longer read:
+  after the list is fetched again, only notifications that arrived while
+  it was being fetched are kept beside it.

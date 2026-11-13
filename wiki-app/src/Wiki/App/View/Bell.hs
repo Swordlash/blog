@@ -75,8 +75,10 @@ data State = State
   -- ^ The watch for a press outside or Escape, while the list is open.
   , heard :: [Notification]
   -- ^ The notifications the live channel told of since the list was last
-  -- fetched: kept when it is fetched again before the server's answer has
-  -- them.
+  -- fetched. Of these, a fetch keeps those told of while it was under way
+  -- and not in the server's answer yet; the server's answer is the truth
+  -- for those told of before it was asked, which it may leave out (a page
+  -- the reader may no longer read).
   }
 
 data Action
@@ -250,13 +252,14 @@ component =
     reload :: H.HalogenM State Action Empty output m ()
     reload = do
       asked <- gets (\st -> st.input.context.revision)
+      before <- gets (\st -> map (\n -> n.id) st.heard)
       notices <- lift notifications
       modify $ \st ->
         if st.input.context.revision /= asked
           then st
           else case notices of
             Right ns ->
-              let missing = [n | n <- st.heard, all (\x -> x.id /= n.id) ns.items]
+              let missing = [n | n <- st.heard, n.id `notElem` before, all (\x -> x.id /= n.id) ns.items]
                in st {notices = Just (Right ns {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}), heard = missing}
             Left _ -> st {notices = Just notices}
 

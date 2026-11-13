@@ -161,7 +161,7 @@ import Wiki.App.Vault (identitySlot)
 import Wiki.Core.Anchor (Anchor)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), distinctAttachments, mimeEssence, parseFileName, shownInBrowser, uploadedMimeType)
 import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody)
-import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), Kept (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), Seen (..), VersionTag (..), anchorData, attachmentBytesData, attachmentMetaData, chainAfter, chainProblemText, commentData, encryptedPageTitle, firstChain, gapIn, headingOf, judgeHead, linkedFrom)
+import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), Kept (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), Seen (..), VersionTag (..), anchorData, attachmentBytesData, attachmentMetaData, chainAfter, chainProblemText, commentData, encryptedPageTitle, firstChain, gapIn, headingOf, historyStart, judgeHead, linkedFrom)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..))
 import Wiki.Core.Notification (Notification (..), PageLocation (..), WatchTarget (..), withTitle)
 import Wiki.Core.Offered qualified as Offered
@@ -215,6 +215,10 @@ data HttpEnv = HttpEnv
   -- ^ What the page holds of encrypted spaces (see "Encrypted spaces"):
   -- their keys, and their pages decrypted for the search. Shared by every
   -- copy of the environment, and emptied whenever who is signed in changes.
+  , told :: IORef [Notification]
+  -- ^ The last notifications the live channel told of, the latest first:
+  -- those told while the list is fetched are added to the server's answer,
+  -- which cannot hold them yet ('fetchedNotices').
   }
 
 -- | 'Awaiting' is what a password sign-in that waits for its second factor
@@ -253,11 +257,13 @@ newHttpEnvWith transport start = liftIO $ do
         case event of
           PageChanged _ -> atomicModifyIORef' held (\h -> (h {heldFound = mempty}, ()))
           _ -> pass
-  feed <- newFeed heard (\page threads -> change (withThreads page (Right threads))) (change . forgetThreads) (change . withNotice) (change forgetNotices)
+  told <- newIORef []
+  let notice n = change (withNotice n) >> atomicModifyIORef' told (\ns -> (take 50 (n : ns), ()))
+  feed <- newFeed heard (\page threads -> change (withThreads page (Right threads))) (change . forgetThreads) notice (change forgetNotices)
   preloading <- newIORef True
   awaiting <- newIORef noneAwaiting
   passwordKey <- newIORef Nothing
-  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, rechecks = True, changes, feed, preloading, awaiting, passwordKey, held}
+  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, rechecks = True, changes, feed, preloading, awaiting, passwordKey, held, told}
 
 -- | A backend over a transport that answers at once: the server's
 -- application in the same process. 'atOnce' sends requests to it instead
@@ -765,7 +771,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   listVersions pid q =
     sealedPage pid >>= \case
       Just (sid, k) -> sealedVersions sid pid k q
-      Nothing -> plainVersions
+      Nothing -> plainPageRead pid plainVersions
     where
       plainVersions =
         pageContent
@@ -775,7 +781,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   getVersion pid at =
     sealedPage pid >>= \case
       Just (sid, k) -> sealedVersion sid pid k at
-      Nothing -> cached (\c -> Map.lookup (pid, at) c.versions) (endpoints.pages.version pid (VersionTime at)) (withVersion pid at)
+      Nothing -> plainPageRead pid (cached (\c -> Map.lookup (pid, at) c.versions) (endpoints.pages.version pid (VersionTime at)) (withVersion pid at))
 
   -- The server cannot restore a version of an encrypted page, whose text
   -- it cannot read: the browser decrypts the version and saves it again.
@@ -879,7 +885,7 @@ instance (MonadIO m) => MonadComments (HttpWiki m) where
   listThreads pid =
     sealedPage pid >>= \case
       Just (sid, _) -> sealedListThreads sid pid
-      Nothing -> cached (\c -> Map.lookup pid c.threads) (endpoints.comments pid).list (withThreads pid)
+      Nothing -> plainPageRead pid (cached (\c -> Map.lookup pid c.threads) (endpoints.comments pid).list (withThreads pid))
   openThread pid anchor body =
     sealedPage pid >>= \case
       Just (sid, _) -> renewingThen sid (sealedOpenThread sid pid anchor body)
@@ -956,13 +962,15 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
           Left NotFound -> Right []
           other -> other
   spaceReaders sid =
-    Map.lookup sid . (\h -> h.heldReaders) <$> readHeld >>= \case
-      Just users -> pure (Right users)
-      Nothing ->
+    -- Kept with the key it was read under: a reader removed since gave
+    -- the space a new key, and the list is read again.
+    readHeld >>= \h -> case (Map.lookup sid h.heldReaders, fst <$> Map.lookup sid h.heldKeys) of
+      (Just (k, users), Just held) | k == held -> pure (Right users)
+      _ ->
         send (endpoints.encrypted.readers sid) >>= \case
-          Right users -> modifyHeld (\h -> if Map.member sid h.heldKeys then h {heldReaders = Map.insert sid users h.heldReaders} else h) $> Right users
+          Right users -> modifyHeld (\h' -> maybe h' (\(k, _) -> h' {heldReaders = Map.insert sid (k, users) h'.heldReaders}) (Map.lookup sid h'.heldKeys)) $> Right users
           Left e -> pure (Left e)
-  notifications = cached (\c -> c.notices) endpoints.notifications.list withNotices >>= either (pure . Left) (fmap Right . withSealedNotices)
+  notifications = fetchedNotices >>= either (pure . Left) (fmap Right . withSealedNotices)
   markRead m = do
     result <- send (endpoints.notifications.markRead m)
     when (kept result) (modifyCache (withNotices result))
@@ -1033,6 +1041,27 @@ withSealedTitles stars = do
                 else s
             | s <- stars
             ]
+
+-- | The user's notifications, cached as the server answered them and kept
+-- up to date by the live channel ('withNotice'). Those the channel told of
+-- while the list was fetched are added to the answer, which cannot hold
+-- them yet; those told before the request are the server's to give or
+-- leave out (a page the reader may no longer read).
+fetchedNotices :: (MonadIO m) => HttpWiki m (Either WikiError Notifications)
+fetchedNotices =
+  (\c -> c.notices) <$> readCache >>= \case
+    Just known -> pure known
+    Nothing -> do
+      toldRef <- HttpWiki (asks (\env -> env.told))
+      before <- liftIO (map (\n -> n.id) <$> readIORef toldRef)
+      result <- send endpoints.notifications.list
+      during <- liftIO (filter (\n -> n.id `notElem` before) <$> readIORef toldRef)
+      let merged =
+            result <&> \ns ->
+              let missing = [n | n <- during, all (\x -> x.id /= n.id) ns.items]
+               in Notifications {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}
+      when (kept merged) (modifyCache (withNotices merged))
+      pure merged
 
 -- | The notifications with the titles of pages of encrypted spaces
 -- decrypted ('sealedTitles'), where this tab can: the server names such a
@@ -1531,9 +1560,10 @@ data Held = Held
   -- ^ The oldest version, checked by its decryption, of the last page of a
   -- page's history listed here: the next page, asked for before it, must
   -- join it ('sealedVersions').
-  , heldReaders :: Map SpaceId [User]
-  -- ^ The readers of encrypted spaces ('spaceReaders'), kept as long as
-  -- the space's key ('dropSpaces').
+  , heldReaders :: Map SpaceId (KeyId, [User])
+  -- ^ The readers of encrypted spaces ('spaceReaders'), each with the id
+  -- of the space's key it was read under: kept as long as that key, which
+  -- a reader's removal renews ('dropSpaces').
   , heldConfirmed :: Set SpaceId
   -- ^ The gates the reader confirmed in this tab ('confirmedEntry'): the
   -- spaces that ask for a passkey or the password each time they are
@@ -2313,8 +2343,10 @@ checkHead key sid pid k tag chain = withUser $ \u -> do
 -- its latest version against what this browser read before
 -- ('checkHead'), the whole history given (the latest first, each
 -- version's tag and chain as its decryption gave them) one chain from its
--- latest version without a break ('gapIn'), and no problem found before.
--- The problem, or 'Nothing'.
+-- latest version without a break ('gapIn') down to the chain's first
+-- ('historyStart'), and no problem found before. The problem, or
+-- 'Nothing'. The export gives no history, only the latest version, which
+-- is all it writes: a history cut short changes nothing it holds.
 pageTrusted :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> SealedContent -> [(VersionTag, Maybe Chain)] -> HttpWiki m (Maybe ChainProblem)
 pageTrusted key sid pid keys latest history = do
   checkHead key sid pid keys latest.tag latest.chain
@@ -2322,7 +2354,7 @@ pageTrusted key sid pid keys latest history = do
     [] -> pass
     newest : _
       | newest /= (latest.tag, latest.chain) -> foundProblem pid (Unlinked {seen = maybe 0 (\c -> c.number) latest.chain, served = maybe 0 (\c -> c.number) (snd newest)})
-      | otherwise -> for_ (gapIn history) (foundProblem pid)
+      | otherwise -> for_ (gapIn history <|> historyStart history) (foundProblem pid)
   Map.lookup pid . (\h -> h.heldProblems) <$> readHeld
 
 -- | A page's history, the latest first, read a page at a time from a
@@ -2401,15 +2433,55 @@ sealedListPages sid current =
 -- (this browser holds no key of the space) while the space is converted,
 -- by the plain ones, which give the pages that read plain: a reader
 -- without the key reads those as before. The refusal stands when the
--- plain read fails too.
+-- plain read fails too, and when the space is behind a gate the reader
+-- has not confirmed in this tab ('closedGate'): a space that asks each
+-- time it is opened shows nothing, by either route, until it is
+-- confirmed, though its decryption has made some pages plain already.
 plainWhileConverting :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError a) -> HttpWiki m (Either WikiError a) -> HttpWiki m (Either WikiError a)
 plainWhileConverting sid plain sealed = do
   immediate <- HttpWiki (asks (\env -> env.immediate))
   sealed >>= \case
     Left e | not immediate -> do
       converting <- either (const False) (any (\s -> s.id == sid && isJust s.conversion)) <$> spacesNow
-      if converting then plain <&> either (const (Left e)) Right else pure (Left e)
+      gated <- gateClosed sid
+      if converting && not gated then plain <&> either (const (Left e)) Right else pure (Left e)
     other -> pure other
+
+-- | Whether a space is behind a gate the reader has not confirmed in this
+-- tab ('closedGate'); taken as closed when the list of spaces cannot be
+-- read.
+gateClosed :: (MonadIO m) => SpaceId -> HttpWiki m Bool
+gateClosed sid = either (const True) isJust <$> closedGate sid
+
+-- | A read of a page by the plain routes (its history, a version, its
+-- comments), refused while the page's space is behind a gate the reader
+-- has not confirmed in this tab: during a decryption the pages made plain
+-- already answer by these routes, which would not ask what the space
+-- asks. The page's space is the one it was read in here, or else the
+-- server's location of it. Nothing more is asked of the server when no
+-- gate is closed.
+plainPageRead :: (MonadIO m) => PageId -> HttpWiki m (Either WikiError a) -> HttpWiki m (Either WikiError a)
+plainPageRead pid plain =
+  spacesNow >>= \case
+    Left _ -> plain
+    Right spaces -> do
+      h <- readHeld
+      let closed sid = maybe False (`Set.notMember` h.heldConfirmed) (Space.gateOf spaces sid)
+      if not (any (\s -> closed s.id) spaces)
+        then plain
+        else do
+          sid <- case Map.lookup pid h.heldSpaces of
+            Just known -> pure (Just known)
+            Nothing -> send (endpoints.pages.location pid) <&> either (const Nothing) (\l -> spaceAtPath spaces l.space)
+          if maybe False closed sid then pure (Left (Invalid (keyStateText ConfirmFirst))) else plain
+
+-- | The space at a path of slugs from the top, in a list of spaces.
+spaceAtPath :: [Space] -> [Slug] -> Maybe SpaceId
+spaceAtPath spaces = go Nothing
+  where
+    go at = \case
+      [] -> at
+      slug : rest -> find (\s -> s.parent == at && s.slug == slug) spaces >>= \s -> go (Just s.id) rest
 
 sealedListPagesWith :: (MonadIO m) => SpaceId -> KeyId -> HttpWiki m (Either WikiError [PageSummary])
 sealedListPagesWith sid current =
@@ -2557,7 +2629,10 @@ listedVersions pid q listed opened = do
   lowest <- Map.lookup pid . (\h -> h.heldLowest) <$> readHeld
   let checked = [(v.updatedAt, (v.heading.tag, v.heading.chain)) | (v, Just _) <- zip listed opened]
       joined = [above | Just (at, above) <- [lowest], q.before == Just at]
-  for_ (gapIn (joined <> map snd checked)) (foundProblem pid)
+      -- The last page of the history (fewer than asked for), every title
+      -- opened: its oldest version is the page's first ('historyStart').
+      ends = length listed < q.limit && length checked == length listed
+  for_ (gapIn (joined <> map snd checked) <|> (if ends then historyStart (joined <> map snd checked) else Nothing)) (foundProblem pid)
   modifyHeld (\h -> h {heldLowest = maybe (Map.delete pid h.heldLowest) (\x -> Map.insert pid x h.heldLowest) (lastMay checked)})
   pure (Right [VersionInfo {page = pid, updatedAt = v.updatedAt, title = fromMaybe unreadable title, author = v.author, number = v.number} | (v, title) <- zip listed opened])
 
