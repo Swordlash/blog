@@ -1706,6 +1706,36 @@ confirms it against reality and the plan is amended if it does not hold.
     again. Steps 20 to 23. Ten Codex rounds were started and nine
     finished (5, 3, 4, 3, 3, 1, 1, 2, 1 findings, all fixed); the owner
     merged before the tenth.
+81. **The smoke tests are Haskell suites that wait on the program
+    (WP5.98; #260, #262, #267, #270, #271; the owner, 2026-11-12:
+    "mamy bardzo dużo timing issues w testach dymnych").** They are
+    native test-suites of the package `wiki-smoke` on haskell-halogen's
+    Playwright driver, not node scripts: `demo`, `passkeys`, `server`
+    (on SQLite and on PostgreSQL), `waits`, `screenshots`, `adoption`;
+    `toolchain/smoke-suite.sh` runs one, `npm run smoke-test` the
+    demo, the passkeys and the server. **No fixed pause.** A suite
+    waits on the program: `visit` after a navigation; every action
+    settled by the driver; `waitQuiet` (no fiber of the program waits
+    in a `liftIO`) after an action that asks the server; a condition
+    named in a comment for what is not the program's; `afterEvent` for
+    an event the browser fires late (a dialog's `close`, `popstate`).
+    The application's side of the rule (in `Wiki.App.View.Common`): a
+    pause that only takes a notice off the screen or ticks is
+    `H.delay`, which `waitQuiet` does not count; a pause followed by
+    work a test waits for (a debounce, the autosave, the backups'
+    re-look) stays `threadDelay`; nothing a view does before telling
+    the shell may be a wait; the assistant's turn counts as the
+    program's work. A failure goes through `expectationFailure`, never
+    `fail`. The job `smoke-throttled` runs the suites with the pages'
+    processor four times slower (`HALOGEN_PLAYWRIGHT_THROTTLE=4`),
+    weekly and by hand, so that races are found on purpose; the call
+    timeout is the plain one times the throttle. What stays in node
+    tests JavaScript modules without a browser (`test-assistant.mjs`,
+    `test-tikz-letters.mjs`) or is a tool (the README's "The smoke
+    tests" lists them). A test elsewhere that fails by chance is held
+    the same way: by a condition or a count, not a clock (#271: bytes
+    allocated for a cost, client backends for a database's sessions,
+    each example's own keys).
 
 ## Repository layout
 
@@ -1897,101 +1927,6 @@ which the wiki pins since #227.
   state to stop in `Finalize`. Read them all, make each in the step
   that keeps it (`H.liftEffect`), and say the rule in AGENTS.md's
   conventions.
-- **WP5.98 The smoke tests wait on the program, and run slowed down
-  (the owner, 2026-11-12: "mamy bardzo dużo timing issues w testach
-  dymnych"; after #251 and #253).** Two days of red runs fell into two
-  kinds. Real faults of the application that a slow machine only showed
-  (task boxes disabled and enabled again at adoption, #243; a slide's
-  controls replaced under a click, #253; the history entry's number lost
-  in a race, #240): there the tests did their work. And tests racing the
-  page or the system: a comparison after a fixed 300 ms, a click on
-  `.sign-in-toggle` right after `goto`, a check for dead processes half a
-  second after the kill. The second kind has one mechanism: a test waits
-  on time, or on nothing, where the program has a signal. So: one place
-  where both smoke tests wait after every navigation, until the program
-  says it has started and settled, before anything is clicked or
-  compared; every fixed pause in them replaced by a condition; and a run
-  of the smoke tests with the processor throttled (Playwright's CDP
-  session can slow it four times), as a job of its own or weekly, so that
-  races are found on purpose and not by chance on someone's pull
-  request. The throttled run is the part that also finds the first kind.
-  **On haskell-halogen's `playwright` package (the owner, 2026-11-12:
-  it has landed, with `H.delay` and the adoption check; pull requests
-  108 to 110 there).** Its driver waits on the program: `visit` after a
-  navigation, every action settled, `waitQuiet` until no fiber of the
-  program waits in a `liftIO`. So the smoke tests are ported to it as
-  native test-suites, and the scripts go; helpers of the wiki's own
-  for waiting are not written (libraries over hand-rolled code). The
-  application's part: a pause that only takes a notice off the screen
-  or ticks becomes `H.delay`, which `waitQuiet` does not count; a pause
-  followed by work a test waits for (a debounce, the autosave, the
-  backups' re-look) stays `threadDelay`. Four pull requests: (a) the
-  pin's bump as its own commit with `playwright` among its
-  subdirectories, the pauses, `screenshots.mjs` ported as the first
-  suite, proofs that `waitQuiet` returns after a save, with the
-  assistant's ticker running and after typing; (b) `smoke-test.mjs`
-  ported, with the adoption check through the library's `adoptWith`,
-  and the throttled run (`HALOGEN_PLAYWRIGHT_THROTTLE=4`) as a job of
-  its own or weekly; (c) `test-passkeys.mjs` and `smoke-test-server.mjs`
-  with the encrypted walk and the canary, after #255; (d) what is left
-  of the scripts' helpers and the README. `test-assistant.mjs` and
-  `test-tikz-letters.mjs` test JavaScript modules without a browser and
-  stay in node. The driver's author's notes on the port are kept with
-  pull request (a). **(a) is done (#260, merged with #259):** the pin
-  is at ed83131, the pauses follow the rule (stated in
-  `Wiki.App.View.Common`), and `wiki-smoke`, a native-only package,
-  has two suites run in CI's wasm job: the README's screenshots, and
-  proofs of the waits, both also with `HALOGEN_PLAYWRIGHT_THROTTLE=4`.
-  One thing in the notes did not hold: the assistant's turn reaches
-  its view through an emitter, so `waitQuiet` returns right after
-  Send; (b) begins by giving the turn a counted wait in
-  `Assistant.hs`. For (b) and (c), three tests that raced in CI on the
-  night of 2026-11-12: `DeckViewer` "when the server refuses the
-  page" (the request an `IntersectionObserver` starts after
-  `bringNear`, waited for two seconds), the Vault suite's check for an
-  exportable key (one example's leak fails every later one), and
-  `page.goBack` in the server smoke test's interactive SVG walk
-  (it timed out four times that day). Two more that day, neither a
-  browser's wait: wiki-core's `Markdown.Html, its cost grows no faster
-  than the HTML` measures times on a shared runner and failed once on a
-  pull request that did not touch it (it needs a count, not a clock);
-  and the editor's scroll listener posted to the live preview's channel
-  after the editor had closed it, an old race in the application that
-  #263's tests made show and fixed. **(b) is done (#262):**
-  `toolchain/smoke-test.mjs` is gone; `wiki-smoke-demo` does what it
-  did in 82 examples with no fixed pause (of the script's 20
-  `eventually` calls 5 stay, each on something that is not the
-  program's), the adoption check through the library's two halves and
-  `Wiki.Smoke.Adoption`, which (c) uses too. The assistant's turn
-  counts as the program's work, so `waitQuiet` after Send means the
-  answer has ended. The call timeout is the plain one times the
-  throttle. The throttled run is the job `smoke-throttled`, weekly and
-  by hand. `npm run smoke-test` runs the Haskell suite for the demo and
-  then the node runner for the server's script, where three reads of
-  the address straight after a view now wait for the router. The
-  driver lacks response sizes on a request (the suite reads the files'
-  sizes) and a count of what `leaveOutContents` left out. **(c) is
-  done (#267):** `test-passkeys.mjs`, `smoke-test-server.mjs` and the
-  scripts of the encrypted walk, the canary, the adoption and
-  PostgreSQL are gone; `wiki-smoke-passkeys` (6 examples) and
-  `wiki-smoke-server` (49) do what they did, section for section, on a
-  harness for a real server (`Wiki.Smoke.Server`, `Api`, `Browser`,
-  `Walk`), with no fixed pause. `page.goBack` in the SVG walk is
-  explained: the SVG navigates its own frame, which adds an entry to
-  the page's history, and Back then moved the frame and the page never
-  loaded; the suite goes back two entries and waits for `popstate`.
-  `npm run smoke-test` runs the demo, the passkeys and the server (on
-  PostgreSQL too when a database is given), then the node runner for
-  the two tests of JavaScript modules. A path given to the smoke
-  scripts is read from the caller's directory
-  (`toolchain/caller-paths.sh`). **(d), its first three parts, is
-  done (#270):** the late events in the server's suites (218 actions
-  read, one raced: Escape on the administration's user dialog),
-  `afterEvent` in `Wiki.Smoke.Browser` for every suite, the README's
-  one section on the smoke tests with the node scripts that stay and
-  why (none drives a browser as a test), and AGENTS.md's three
-  sentences. Left of the package: the three tests that raced on a
-  clock or on each other (branch `raced-tests`).
 - **WP5.95 No view takes an older answer over a newer one (found by
   Codex on #243, rounds 12 and 13; left there on purpose).** The page view
   drops a fetched page older than the one it shows (`takesPage`, by
