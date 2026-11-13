@@ -31,6 +31,18 @@ function wiki_test_slide_row_focused(index) {
   return wikiTestSlideRow(index)?.hasFocus() ?? false;
 }
 
+// Where the focus is in the rows' list: "text N" in the text of the row at
+// index N, "header N" on its header's button, "elsewhere" outside the list,
+// and "nowhere" when nothing has it.
+function wiki_test_slide_focus() {
+  const active = document.activeElement;
+  if (active === null || active === document.body) return "nowhere";
+  const items = [...document.querySelectorAll(".editor-slides > li")];
+  const index = items.findIndex((item) => item.contains(active));
+  if (index < 0) return "elsewhere";
+  return `${active.closest(".slide-row-body") ? "text" : "header"} ${index}`;
+}
+
 // Give the open editor's master a layout cut for another text than the one
 // it holds, as a cut of an older text that arrives late: whether the master
 // took it, and whether its layout has the key the cut gave.
@@ -41,9 +53,11 @@ function wiki_test_stale_rows(text) {
   return JSON.stringify([taken, keys.includes(999)]);
 }
 
-// The page's islands without the editor ("absent"), with an editor that
-// waits until released ("hold"), or as they were ("as-is"): what a page
-// without its editor's script, or one still loading it, gives the editor.
+// The page's islands without the editor ("absent"), with an editor whose
+// module fails to load ("fail"), with an editor that waits until released
+// ("hold"), or as they were ("as-is"): what a page without its editor's
+// script, one whose editor's module cannot be fetched, or one still
+// loading it, gives the editor.
 function wiki_test_editor_script(how) {
   const islands = globalThis.wikiTestIslands ?? globalThis.wikiIslands;
   globalThis.wikiTestIslands = islands;
@@ -53,6 +67,9 @@ function wiki_test_editor_script(how) {
     globalThis.wikiTestHeld = [];
   } else if (how === "absent") {
     globalThis.wikiIslands = { ...islands, attachEditor: undefined };
+  } else if (how === "fail") {
+    const failing = () => Promise.reject(new Error("The test keeps the editor's module from loading."));
+    globalThis.wikiIslands = { ...islands, attachEditor: (textarea, host, original) => islands.attachEditor(textarea, host, original, failing) };
   } else {
     globalThis.wikiTestHeld = [];
     globalThis.wikiIslands = { ...islands, attachEditor: (...args) => globalThis.wikiTestHeld.push(args) };

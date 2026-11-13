@@ -95,7 +95,7 @@ import {
 } from "@codemirror/autocomplete";
 import { Annotation, ChangeSet, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
-import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, redo, standardKeymap, undo } from "@codemirror/commands";
+import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, redo, redoSelection, standardKeymap, undo, undoSelection } from "@codemirror/commands";
 import {
   Language,
   LanguageSupport,
@@ -623,6 +623,53 @@ const keptSelection = ViewPlugin.fromClass(
   },
   { decorations: (plugin) => plugin.decorations },
 );
+
+// The same in a row of the slide mode (attachRow): the selection marked is
+// the master's, the one the assistant has, where it lies in the row, and
+// not the row's own. A row keeps its own selection when the focus goes to
+// another row, but the master's moves to that other row then, and the
+// first row shows nothing. The master tells each row to look again
+// (keptRefresh) when its selection or text changes (rowsSync).
+const keptRefresh = StateEffect.define();
+
+const keptInRow = (masterView, key) => {
+  const marks = (view) => {
+    const range = rangeOf(masterView.state, key);
+    if (view.hasFocus || range === null) return Decoration.none;
+    const length = view.state.doc.length;
+    const found = [];
+    for (const r of masterView.state.selection.ranges) {
+      const from = Math.max(r.from, range.from) - range.from;
+      const to = Math.min(r.to, range.to) - range.from;
+      if (from < to && to <= length) found.push(keptMark.range(from, to));
+    }
+    return Decoration.set(found, true);
+  };
+  return ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.decorations = marks(view);
+      }
+      update(update) {
+        const told = update.transactions.some((tr) => tr.effects.some((e) => e.is(keptRefresh)));
+        if (told || update.focusChanged || update.selectionSet || update.docChanged) this.decorations = marks(update.view);
+      }
+    },
+    { decorations: (plugin) => plugin.decorations },
+  );
+};
+
+// What the master and the rows of the slide mode share as typing fields:
+// the attributes that let the browser check and correct the words, and the
+// guard that leaves files dropped or pasted to the component, which
+// attaches them (the drop's and the paste's listeners on the panes);
+// CodeMirror would put a dropped file's text in, or a pasted file's name.
+const wordAttributes = { spellcheck: "true", autocapitalize: "sentences", autocorrect: "on" };
+
+const filesLeftToPanes = EditorView.domEventHandlers({
+  drop: (event) => Boolean(event.dataTransfer?.files?.length),
+  paste: (event) => Boolean(event.clipboardData?.files?.length),
+});
 
 // Inline math left open on its line (issue #120): a $ or a \( that nothing
 // closes on the same line is underlined in red from there to the line's
@@ -1210,8 +1257,8 @@ const forwarded = (key, offset, tr) => {
       : undefined,
     annotations,
     // The master's own filters (the title line's guard) are for typing in
-    // the master: a row's edit is taken as it was made, the first row's
-    // with the guard of its own.
+    // the master: a row's edit is taken as it was made, that of the row
+    // that starts the text with the guard of its own.
     filter: false,
   };
 };
@@ -1362,6 +1409,9 @@ const rowsSync = (host) =>
       if (problems) problemsToRow(key, view, update.state);
       if (folds) foldsToRow(key, view, update.state);
       if (tracked || folds) changesToRow(key, view, update.state, field);
+      // The master's selection, which a row without the focus marks
+      // (keptInRow), may have come into the row or left it.
+      if ((update.selectionSet || update.docChanged) && !view.hasFocus) view.dispatch({ effects: keptRefresh.of(null), annotations: mirrored.of(true) });
     }
     // A step, or its undo or redo: the component reads the rows again at
     // once ("wiki-relayout"), and decides which open and which has the
@@ -1413,11 +1463,9 @@ export function attachRow(masterHost, rowHost, key, focus) {
   const masterView = master.view;
   const range = rangeOf(masterView.state, key);
   if (range === null) return;
-  const keys = [
-    { key: "Mod-z", run: () => undo(masterView), preventDefault: true },
-    { key: "Mod-y", mac: "Mod-Shift-z", run: () => redo(masterView), preventDefault: true },
-    { linux: "Mod-Shift-z", run: () => redo(masterView), preventDefault: true },
-  ];
+  // The history's keys, each run on the master's history: the undo and
+  // redo of changes and of selections.
+  const keys = historyKeymap.map((binding) => ({ ...binding, run: () => binding.run(masterView) }));
   const { anchor, head } = masterView.state.selection.main;
   const inside = (at) => at >= range.from && at <= range.to;
   const titled = masterHost.dataset.titleLine !== "false";
@@ -1430,13 +1478,16 @@ export function attachRow(masterHost, rowHost, key, focus) {
         // break, so that the row's offsets are the master's.
         EditorState.lineSeparator.of("\n"),
         EditorView.clipboardInputFilter.of((pasted) => pasted.replace(/\r\n?/g, "\n")),
-        // The page's title line is the first row's first line.
-        titled && range.from === 0 ? titleLine : [],
+        // The page's title line is the first line of the row that starts
+        // the text, whichever row that is now.
+        titled ? titleLineWhile(() => rangeOf(masterView.state, key)?.from === 0) : [],
         master.rowExtensions,
         rowChanges(masterHost),
+        keptInRow(masterView, key),
         keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...keys, ...textKeys, ...foldKeys]),
         EditorView.lineWrapping,
-        EditorView.contentAttributes.of({ spellcheck: "true", autocapitalize: "sentences", autocorrect: "on" }),
+        // The row's text is named by its title on the header.
+        EditorView.contentAttributes.of({ "aria-labelledby": `slide-row-title-${key}`, ...wordAttributes }),
         EditorView.domEventHandlers({
           focus: (_event, focused) => {
             masterHost.wikiFocusedRow = key;
@@ -1548,10 +1599,15 @@ function textStartOf(doc) {
 // a change that takes it away, or adds a "#" to it, is followed by one that
 // makes the start of the first line "# " again, and a selection that would
 // start inside the "# " starts after it.
+//
+// `applies` says, at each transaction, whether the guard is on: always in
+// the master, and in a row of the slide mode only while that row starts
+// the text, which a re-cut or an undo can change after the row's editor
+// was made.
 const titleMark = "# ";
-const titleLine = [
+const titleLineWhile = (applies) => [
   EditorState.transactionFilter.of((tr) => {
-    if (!tr.docChanged) return tr;
+    if (!tr.docChanged || !applies()) return tr;
     const first = tr.newDoc.line(1).text;
     if (first.startsWith(titleMark)) return tr;
     const marks = /^#*[ \t]*/.exec(first)[0];
@@ -1568,7 +1624,7 @@ const titleLine = [
   }),
   EditorState.transactionFilter.of((tr) => {
     const doc = tr.newDoc;
-    if (!doc.sliceString(0, titleMark.length).startsWith(titleMark)) return tr;
+    if (!applies() || !doc.sliceString(0, titleMark.length).startsWith(titleMark)) return tr;
     const sel = tr.newSelection;
     if (!sel.ranges.some((r) => r.from < titleMark.length)) return tr;
     const after = (at) => Math.max(at, titleMark.length);
@@ -1579,6 +1635,7 @@ const titleLine = [
     return [tr, { selection: moved, sequential: true }];
   }),
 ];
+const titleLine = titleLineWhile(() => true);
 
 // What the editor of a page tells the preview beside it and the preview in a
 // window of its own (WP5.36 of docs/PLAN.md): the line being written (the
@@ -1779,19 +1836,8 @@ export function attach(textarea, host, original, codeTokens) {
       rowsLayout,
       steps,
       rowsSync(host),
-      EditorView.contentAttributes.of({
-        "aria-label": textarea.getAttribute("aria-label") ?? "",
-        spellcheck: "true",
-        autocapitalize: "sentences",
-        autocorrect: "on",
-      }),
-      // Files dropped or pasted are the component's to attach (the drop's
-      // and the paste's listeners on the panes); CodeMirror would put a
-      // dropped file's text in, or a pasted file's name.
-      EditorView.domEventHandlers({
-        drop: (event) => Boolean(event.dataTransfer?.files?.length),
-        paste: (event) => Boolean(event.clipboardData?.files?.length),
-      }),
+      EditorView.contentAttributes.of({ "aria-label": textarea.getAttribute("aria-label") ?? "", ...wordAttributes }),
+      filesLeftToPanes,
       EditorView.updateListener.of((update) => {
         if (update.docChanged || update.selectionSet) {
           follow.moved(update.state.doc.lineAt(update.state.selection.main.head).number, update.docChanged);
@@ -1856,11 +1902,20 @@ export function attach(textarea, host, original, codeTokens) {
     textarea,
     host,
     // The master's view, and what a row of the slide mode shares with it
-    // (attachRow): the completion, which asks the master's host, and the
-    // Markdown as it is drawn.
+    // (attachRow): the completion, which asks the master's host, the
+    // Markdown as it is drawn, the words' attributes and the files' guard.
     view,
     changesField: changes.field,
-    rowExtensions: [completion.extension, new LanguageSupport(wikiMarkdown), syntaxHighlighting(highlighter), decorations(codeTokens), unclosedMath, lintGutter(), folding],
+    rowExtensions: [
+      completion.extension,
+      new LanguageSupport(wikiMarkdown),
+      syntaxHighlighting(highlighter),
+      decorations(codeTokens),
+      unclosedMath,
+      lintGutter(),
+      folding,
+      filesLeftToPanes,
+    ],
     // Whether the presentation is edited slide by slide, its rows typing
     // into the master: the master's completion is then off, and its focus
     // goes to a row (focus below).

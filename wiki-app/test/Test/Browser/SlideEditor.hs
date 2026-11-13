@@ -20,9 +20,10 @@ import Data.Aeson.Types (Parser, parseMaybe)
 import Data.IORef (IORef)
 import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
+import Protolude hiding (find, wait)
 import Test.Browser.Mount (slugs, startOn, startWith)
 import Test.Browser.Text (completing, editorText, inputsSeen, insertText, markdown, problemsMarked, proposeText, selectText, setMarkdown, watchEditor)
 import Test.Hspec.Halogen
@@ -40,8 +41,11 @@ import Wiki.Core.Slides (moveSlide)
 import Wiki.Core.Space (Space (id))
 
 $( browserJS
-     ["jsbits/test-slides.js"]
+     ["jsbits/test-slides.js", "jsbits/test-files.js"]
      [ ("js_slide_fits", "wiki_test_slide_fits", Safe, [t|IO JSText|])
+     , ("js_slide_focus", "wiki_test_slide_focus", Safe, [t|IO JSText|])
+     , ("js_drop_filePromise", "wiki_test_drop_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
+     , ("js_pastePromise", "wiki_test_paste", Safe, [t|JSText -> JSText -> JSText -> JSText -> JSText -> IO (Promise Bool)|])
      , ("js_row_text", "wiki_test_slide_row_text", Safe, [t|Int -> IO JSText|])
      , ("js_row_select", "wiki_test_slide_row_select", Safe, [t|Int -> Int -> Int -> IO ()|])
      , ("js_row_selection", "wiki_test_slide_row_selection", Safe, [t|Int -> IO JSText|])
@@ -55,6 +59,12 @@ $( browserJS
      , ("js_viewport_rules", "wiki_test_viewport_rules", Safe, [t|IO JSText|])
      ]
  )
+
+js_drop_file :: JSText -> JSText -> JSText -> JSText -> IO ()
+js_drop_file a1 a2 a3 a4 = if inBrowser then wait =<< js_drop_filePromise a1 a2 a3 a4 else pure inert
+
+js_paste :: JSText -> JSText -> JSText -> JSText -> JSText -> IO Bool
+js_paste a1 a2 a3 a4 a5 = if inBrowser then wait =<< js_pastePromise a1 a2 a3 a4 a5 else pure inert
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
@@ -521,6 +531,160 @@ spec m = do
     eventually $ markdown ui >>= (`shouldSatisfy` T.isPrefixOf "# ")
     rowText 0 >>= (`shouldSatisfy` T.isPrefixOf "# ")
 
+  it "keeps the title line's mark in the row that starts the text, whichever row that is after a split or a join, and nowhere else" $ runPage $ do
+    (ui, _) <- openDeck deck
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    -- A heading typed under the title: after the pause the editor it was
+    -- typed in holds the new slide, which no longer starts the text.
+    rowSelect 0 14 14
+    rowContent ui "Deck" >>= (`typeText` "\n## New")
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "New", "One", "Two", "Three"]
+    eventually $ rowFocused 1 `shouldReturn` True
+    openRowContent ui >>= (`typeText` "s")
+    eventually $ markdown ui `shouldReturn` T.replace "By me." "By me.\n## News" deck
+    unmount ui
+    -- "One" joined to the title slide, its heading taken away in its own
+    -- editor, which then starts the text and keeps the mark.
+    (joined, _) <- openDeck deck
+    rowHeader joined "Deck" >>= click
+    rowHeader joined "One" >>= click
+    eventually $ openTitles joined `shouldReturn` ["One"]
+    editor <- find joined ".editor-slides > li:nth-child(2) .cm-editor"
+    rowSelect 1 0 7
+    press "Backspace"
+    eventually $ rowTitles joined `shouldReturn` ["Deck", "Two", "Three"]
+    find joined ".editor-slides > li:nth-child(1) .cm-editor" >>= (`shouldBeSameElement` editor)
+    rowSelect 0 0 0
+    press "Backspace"
+    press "Delete"
+    press "Delete"
+    eventually $ markdown joined >>= (`shouldSatisfy` T.isPrefixOf "# ")
+    rowText 0 >>= (`shouldSatisfy` T.isPrefixOf "# ")
+
+  it "leaves a file dropped or pasted in a row to the editor, which attaches it at the cursor, and puts in neither the file's text nor its name; names the row's text by its slide's title" $ runPage $ do
+    (ui, _) <- openDeck deck
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    rowSelect 0 14 14
+    -- CodeMirror would read the dropped file, put its text where it was
+    -- dropped and select it, and the editor's link would take its place
+    -- there, not at the cursor.
+    unsafeIOToPageM (dropFile ".editor-slides .slide-row.open .cm-content" "notes.txt" "text/plain" "aGVsbG8K")
+    let dropped = T.replace "By me." "By me.[notes.txt](attachment:notes.txt)" deck
+    eventually $ markdown ui `shouldReturn` dropped
+    settle
+    markdown ui `shouldReturn` dropped
+    prevented <- unsafeIOToPageM (pasteFile ".editor-slides .slide-row.open .cm-content" "pasted.txt" "pasted.txt" "text/plain" "aGVsbG8K")
+    prevented `shouldBe` True
+    let pasted = T.replace "By me." "By me.[notes.txt](attachment:notes.txt)[pasted.txt](attachment:pasted.txt)" deck
+    eventually $ markdown ui `shouldReturn` pasted
+    settle
+    markdown ui `shouldReturn` pasted
+    named <- find ui ".editor-slides .slide-row.open .cm-content" >>= (`getAttribute` "aria-labelledby")
+    find ui ("#" <> fromMaybe "none" named) >>= (`shouldHaveText` "Deck")
+
+  it "marks in a row without the focus the editor's selection, the one the assistant is given, and not a selection the row kept from before" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    let kept = T.concat <$> (findAll ui ".editor-slides .cm-wiki-kept-selection" >>= traverse textContent)
+    rowSelect 0 2 6
+    find ui ".editor-new-slide" >>= focus
+    eventually $ kept `shouldReturn` "Deck"
+    -- Selected in "One" since: "Deck" keeps its own selection, which is
+    -- no longer the editor's.
+    rowSelect 1 8 14
+    find ui ".editor-new-slide" >>= focus
+    eventually $ kept `shouldReturn` "First."
+    -- In the text again, the browser shows the selection itself.
+    rowSelect 1 8 14
+    eventually $ kept `shouldReturn` ""
+
+  it "takes back a selection with Ctrl+U in a row, from the one history" $ runPage $ do
+    (ui, _) <- openDeck deck
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    rowSelect 0 8 8
+    rowSelect 0 10 12
+    press "Control+u"
+    eventually $ rowSelection 0 `shouldReturn` (8, 8)
+
+  it "gives the focus to the row an undo or a redo takes the cursor to when it takes away the row the focus was in, its text when open and its header when closed" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
+    rowSelect 1 3 3
+    find ui ".editor-new-slide" >>= click
+    let added = ["Deck", "One", "New slide", "Two", "Three"]
+    eventually $ rowTitles ui `shouldReturn` added
+    eventually $ slideFocus `shouldReturn` "text 2"
+    -- From the keyboard alone: each key reaches the history.
+    press "Control+z"
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    eventually $ slideFocus `shouldReturn` "text 1"
+    press "Control+y"
+    eventually $ rowTitles ui `shouldReturn` added
+    slideFocus >>= (`shouldSatisfy` T.isPrefixOf "text ")
+    press "Control+z"
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    eventually $ markdown ui `shouldReturn` deck
+    slideFocus >>= (`shouldSatisfy` T.isPrefixOf "text ")
+    -- The redo of a delete, with the focus in the deleted row's text: the
+    -- row the cursor goes to is closed, and its header takes the focus.
+    rowHeader ui "One" >>= click
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    rowDelete ui "Two" >>= click
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Three"]
+    press "Control+z"
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    rowContent ui "Two" >>= click
+    press "Control+y"
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Three"]
+    eventually $ slideFocus >>= (`shouldSatisfy` T.isPrefixOf "header ")
+    press "Control+z"
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+
+  it "brings a slide deleted open back open through any number of undos and redos, and back closed when it was closed as it went" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    rowDelete ui "Two" >>= click
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Three"]
+    for_ [1 :: Int, 2, 3] $ \_ -> do
+      press "Control+z"
+      eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+      press "Control+y"
+      eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Three"]
+    press "Control+z"
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    -- Closed, then taken away by the redo: it comes back closed.
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    press "Control+y"
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Three"]
+    press "Control+z"
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    openTitles ui `shouldReturn` ["Deck"]
+
+  it "shows the textarea until CodeMirror is in place, the typing there cut into rows, and the Markdown with the note when CodeMirror's module fails to load" $ runPage $ do
+    unsafeIOToPageM (js_editor_script (toJSText "hold"))
+    (ui, wiki) <- openDeckWith False deck
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    area <- find ui ".editor-text"
+    shouldBeVisible area
+    focus area
+    press "Control+End"
+    typeText area "\n\n## Four"
+    unsafeIOToPageM (js_editor_script (toJSText "as-is"))
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three", "Four"]
+    markdown ui `shouldReturn` deck <> "\n\n## Four"
+    unmount ui
+    unsafeIOToPageM (js_editor_script (toJSText "fail"))
+    failed <- startOn m wiki helloEditor
+    eventually $ find failed ".editor-slides-note" >>= (`shouldHaveText` "Slide by slide needs the editor's script, which this page has not loaded: the presentation is shown as its Markdown.")
+    length <$> findAll failed ".editor-slides" `shouldReturn` 0
+    find failed ".editor-text" >>= shouldBeVisible
+    unsafeIOToPageM (js_editor_script (toJSText "as-is"))
+
   it "renders the deck whole for one slide's preview: a macro of an earlier slide, a footnote's number, the same slide in every view" $ runPage $ do
     (ui, wiki) <- openDeck macros
     find ui ".editor-side-by-side" >>= click
@@ -898,6 +1062,19 @@ rowSelection i = do
 
 rowFocused :: Int -> PageM s Bool
 rowFocused i = unsafeIOToPageM (js_row_focused i)
+
+-- | Where the focus is in the rows' list (test-slides.js's
+-- wiki_test_slide_focus).
+slideFocus :: PageM s Text
+slideFocus = unsafeIOToPageM (fromJSText <$> js_slide_focus)
+
+-- | A drop of a file on the element a selector finds; a paste of a file
+-- with a text beside it, and whether its default was prevented.
+dropFile :: Text -> Text -> Text -> Text -> IO ()
+dropFile selector name mediaType base64 = evaluate =<< js_drop_file (toJSText selector) (toJSText name) (toJSText mediaType) (toJSText base64)
+
+pasteFile :: Text -> Text -> Text -> Text -> Text -> IO Bool
+pasteFile selector text name mediaType base64 = evaluate =<< js_paste (toJSText selector) (toJSText text) (toJSText name) (toJSText mediaType) (toJSText base64)
 
 -- | The text of a row of a text's fresh cut.
 rowTextOf :: Text -> Int -> Text

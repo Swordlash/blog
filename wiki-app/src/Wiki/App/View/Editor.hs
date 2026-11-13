@@ -324,6 +324,7 @@ import Wiki.App.Editor.Browser
   , restoreFocus
   , rowKeyOf
   , rowWanted
+  , rowWithFocus
   , rowsLayout
   , selectedSpan
   , setRows
@@ -636,17 +637,23 @@ data State = State
   , focusRow :: Maybe RowKey
   -- ^ The row that takes the focus as it opens: one a jump opened.
   , rowsList :: H.RefLabel
+  -- ^ The rows' list, which gives the focus back to what had it when a
+  -- patch moved that element.
   , dragging :: Maybe RowKey
   -- ^ The row whose handle a drag started from, while the drag lasts.
   , dropAt :: Maybe (RowKey, Bool)
   -- ^ Where the row dragged would go: before or after ('True') this row.
   , deletedOpen :: [RowKey]
-  -- ^ The rows deleted while open: an undo that brings one back opens it.
+  -- ^ The rows a step took away (a delete, its redo, the undo of a new
+  -- slide) while they were open: an undo or redo that brings one back
+  -- opens it. Each removal says again whether its row was open: a key
+  -- leaves the list when its row is taken away closed, and every key
+  -- leaves it with the rows when the editor is loaded again. Keys are
+  -- never given twice, so a key the history no longer reaches is never
+  -- matched by mistake; the list holds at most one key per row taken away.
   , announcement :: Text
   -- ^ What the rows' live region says last: a move, a delete, a new slide,
   -- a jump.
-  -- ^ The rows' list, which gives the focus back to what had it when a
-  -- patch moved that element.
   , cursorAt :: Int
   -- ^ The line the cursor is on, from 1, as CodeMirror last reported:
   -- the preview of a presentation shows the slide it is on.
@@ -748,6 +755,7 @@ data Action
   | OneSlide Bool
   | CursorAt Int
   | EditorReady
+  | EditorFailed
   | FromRow SlideRow.Output
   | RowWantedBy RowWanted
   | MoveFromText RowKey Int
@@ -778,8 +786,8 @@ freshRows st = case st.loaded of
   Ready w
     | w.page.kind == Kind.Presentation ->
         let (rows, nextKey) = SlideRows.cutRows st.nextKey w.loadedBody
-         in st {rows = Just rows, nextKey, openRows = [], keptOpen = [], focusRow = Nothing, rowHeads = headsOf st w.loadedBody rows}
-  _ -> st {rows = Nothing, rowHeads = [], openRows = [], keptOpen = [], focusRow = Nothing}
+         in st {rows = Just rows, nextKey, openRows = [], keptOpen = [], focusRow = Nothing, deletedOpen = [], rowHeads = headsOf st w.loadedBody rows}
+  _ -> st {rows = Nothing, rowHeads = [], openRows = [], keptOpen = [], focusRow = Nothing, deletedOpen = []}
 
 -- | The rows' headers of a text cut into rows, with what the last check
 -- and the last measures say of that text.
@@ -1713,6 +1721,7 @@ component =
                 {{ HE.handler' (EventType "wiki-emoji") (\ev -> uncurry EmojiAsked <$> emojiAsked ev) }}
                 {{ HE.handler' (EventType "wiki-cursor-line") (fmap CursorAt . cursorLineOf) }}
                 {{ HE.handler' (EventType "wiki-ready") (const (Just EditorReady)) }}
+                {{ HE.handler' (EventType "wiki-editor-failed") (const (Just EditorFailed)) }}
                 {{ HE.handler' (EventType "wiki-row-wanted") (fmap RowWantedBy . rowWanted) }}
                 {{ HE.handler' (EventType "wiki-relayout") (const (Just Relaid)) }}
               ></div>
@@ -2227,8 +2236,21 @@ component =
       FromRow SlideRow.DragEnded -> modify (\st -> st {dragging = Nothing, dropAt = Nothing})
       -- A step, or its undo or redo, changed the master's layout: the rows
       -- are read again at once, and a row brought back by the undo of its
-      -- delete opens again if it was open.
-      Relaid -> recutRowsWith True >> refreshHeads
+      -- delete opens again if it was open. When the step took away the row
+      -- the focus was in (the undo of a new slide, the redo of a delete),
+      -- the focus goes to the row the history put the cursor in: to its
+      -- text if it is open, else to its header, so that the next Ctrl+Z or
+      -- Ctrl+Y has somewhere to go.
+      Relaid -> do
+        had <- rowWithFocus
+        recutRowsWith True
+        refreshHeads
+        for_ had $ \key -> unlessM (gets (elem key . rowKeys)) focusCursorRow
+      -- CodeMirror's module did not load: there will be no master, and the
+      -- presentation is its Markdown in the textarea, as on a page without
+      -- the editor's script. Only while the master is awaited: a failure
+      -- told late does not undo a master in place.
+      EditorFailed -> modify (\st -> if st.master == Waiting then st {master = Absent} else st)
       -- CodeMirror has taken the textarea's place: the master is told the
       -- mode and given the rows of the text it holds, which can open now,
       -- the row its cursor starts in first.
@@ -2553,10 +2575,19 @@ component =
                           | (above, k, below) <- neighbours
                           , wasOpen k || (fresh k && if afterStep then k `elem` st.deletedOpen else any (maybe False wasOpen) [above, below])
                           ]
+                        -- After a step, each row the step took away is
+                        -- remembered as open or not as it was then, in place
+                        -- of what was remembered of it before, so that any
+                        -- number of undos and redos brings it back as it
+                        -- was when it went.
+                        gone = [r.key | r <- old.rows, r.key `notElem` keys]
+                        remembered s
+                          | afterStep = [k | k <- gone, wasOpen k] <> filter (`notElem` gone) s.deletedOpen
+                          | otherwise = s.deletedOpen
                     unless (new == old) $ do
                       taken <- H.liftEffect (setRows host layout.text new)
                       when taken . keepingRowsFocus $
-                        modify (\s -> s {rows = Just new, nextKey, openRows = opened, deletedOpen = filter (`notElem` keys) s.deletedOpen})
+                        modify (\s -> s {rows = Just new, nextKey, openRows = opened, deletedOpen = remembered s})
               )
         _ -> pass
 
@@ -2624,7 +2655,7 @@ component =
         -- the step at once ("wiki-relayout"), and the rows read again then
         -- may come before what follows here.
         wasOpen <- gets (\s -> key `elem` s.openRows)
-        when wasOpen $ modify (\s -> s {deletedOpen = key : s.deletedOpen})
+        modify (\s -> s {deletedOpen = [key | wasOpen] <> filter (/= key) s.deletedOpen})
         taken <- stepWith host layout rows "delete.slide" deleted Nothing
         when taken $ do
           modify (\s -> s {openRows = filter (/= key) s.openRows})
@@ -2646,6 +2677,22 @@ component =
       when taken $ do
         modify (\s -> s {nextKey = succ s.nextKey, openRows = s.openRows <> [key], focusRow = Just key})
         gets (slideNamed key) >>= say . (<> " added.") . capital
+
+    -- Give the focus to the row the master's cursor is in: its text if it
+    -- is open, else its header.
+    focusCursorRow :: H.HalogenM State Action Slots ViewOutput m ()
+    focusCursorRow = do
+      st <- get
+      shown <- H.getRef st.rowsList
+      for_ ((,,) <$> st.hostElement <*> st.rows <*> shown) $ \(host, rows, items) ->
+        H.liftEffect (rowsLayout host)
+          >>= traverse_
+            ( \layout ->
+                for_ (atMay rows.rows (SlideRows.rowAt rows layout.cursor)) $ \row ->
+                  if row.key `elem` st.openRows
+                    then H.liftEffect (focusText host)
+                    else H.liftEffect (focusHeader items row.key)
+            )
 
     -- The index of the row with a key.
     indexOf :: RowKey -> Rows -> Maybe Int

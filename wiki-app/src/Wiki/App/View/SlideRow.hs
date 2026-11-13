@@ -213,7 +213,7 @@ component =
                       , HE.preventingDefault (HE.handler' (EventType "keydown") (\ev -> (Pressed <$> historyKey ev) <|> (if st.input.movable then MoveBy <$> moveKey ev else Nothing)))
                       ]
                       ( [ HH.span [HP.class_ (HH.ClassName "slide-row-number")] [HH.text (maybe "" (\n -> show n <> ".") h.number)]
-                        , HH.span [HP.class_ (HH.ClassName "slide-row-title")] [HH.text (titleOf h)]
+                        , HH.span [HP.class_ (HH.ClassName "slide-row-title"), HP.id ("slide-row-title-" <> show k)] [HH.text (titleOf h)]
                         ]
                           <> [HH.span [HP.class_ (HH.ClassName "slide-row-part")] [HH.text ("part of slide " <> show n)] | Just n <- [h.partOf]]
                           <> [HH.span [HP.class_ (HH.ClassName "slide-row-problems")] [HH.text (problemsPhrase h.problems)] | h.problems > 0]

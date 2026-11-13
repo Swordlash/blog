@@ -104,6 +104,7 @@ module Wiki.App.Editor.Browser
   , rowKeyOf
   , stepIn
   , focusHeader
+  , rowWithFocus
   , dragCarries
   , markDragged
   , pointerAfter
@@ -151,6 +152,7 @@ import Web.HTML.HTMLElement qualified as HTMLElement
 import Web.HTML.HTMLInputElement qualified as HTMLInputElement
 import Web.HTML.HTMLTextAreaElement (HTMLTextAreaElement)
 import Web.HTML.HTMLTextAreaElement qualified as HTMLTextAreaElement
+import Web.HTML.Window qualified as HTMLWindow
 import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
 import Wiki.App.Browser (forgetPreviewEntry, historyBack, onPreviewEntry, pushPreviewEntry)
 import Wiki.App.Editor.Problems (ProblemRange)
@@ -938,6 +940,18 @@ stepIn host text event edits after select =
 -- render that puts it there is done.
 focusHeader :: (MonadIO m) => Element -> RowKey -> m ()
 focusHeader rowsList (RowKey k) = liftIO (js_focus_header rowsList k)
+
+-- | The key of the row of the rows' list that holds the element with the
+-- focus (a row's text, or a control of its header), if one does. Read
+-- before a change of the rows, to know whether the change takes away the
+-- row the focus is in.
+rowWithFocus :: (MonadIO m) => m (Maybe RowKey)
+rowWithFocus = liftIO $ do
+  w <- HTMLWindow.window
+  active <- w.document.activeElement
+  row <- maybe (pure Nothing) (`Element.closest` ".editor-slides [data-row-key]") active
+  key <- maybe (pure Nothing) (`Element.getAttribute` "data-row-key") row
+  pure (RowKey <$> (readMaybe . T.unpack =<< key))
 
 -- | Whether a drag carries data of this type: @Files@ for files, or
 -- 'slideType' for a slide's row. Pure, read in the drag's listener.

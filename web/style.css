@@ -3608,14 +3608,16 @@ body:has(.slides-view) {
 }
 
 /* A presentation edited slide by slide (WP5.103): the master, the
-   CodeMirror over the whole text, and the textarea before it are hidden,
-   and the slides are a list of rows. A row is one card: one border, the
-   same edges for every row, its header the first line and, while it is
-   open, a CodeMirror over the slide's Markdown the rest, as tall as its
-   text, under the header's bottom border and in no frame of its own. The
-   card shows the focus inside it, as the application's fields do. */
-.editor-form.slides .editor-source > .editor-cm,
-.editor-form.slides .editor-source > .editor-text {
+   CodeMirror over the whole text, is hidden, and the slides are a list of
+   rows. The textarea stays until the master has taken its place (the rule
+   on .editor-cm:not(:empty) + .editor-text hides it then): while
+   CodeMirror loads, and if it never does, the textarea is what can be
+   typed in. A row is one card: one border, the same edges for every row,
+   its header the first line and, while it is open, a CodeMirror over the
+   slide's Markdown the rest, as tall as its text, under the header's
+   bottom border and in no frame of its own. The card shows the focus
+   inside it, as the application's fields do. */
+.editor-form.slides .editor-source > .editor-cm {
   display: none;
 }
 
