@@ -1518,6 +1518,9 @@ const matchesIn = (state, query, from, to) => {
   return found;
 };
 
+// The scroll a step of the search asks for slide by slide: none.
+const noScroll = StateEffect.define();
+
 const matchMark = Decoration.mark({ class: "cm-wiki-match" });
 const currentMatchMark = Decoration.mark({ class: "cm-wiki-match cm-wiki-match-current" });
 
@@ -2228,6 +2231,10 @@ export function attach(textarea, host, original, codeTokens) {
   // match at all, whether the count stopped at countLimit, the matches,
   // and the rows' layout of the same text, in characters. The count waits
   // for a pause in the typing (countSoon).
+  // A step's scroll to its match: in the middle of the master's text in
+  // the raw Markdown, and none slide by slide, where the master is hidden
+  // and the match's row scrolls instead (rowsSync).
+  const matchInView = (range) => (bySlide ? noScroll.of(null) : EditorView.scrollIntoView(range, { y: "center" }));
   let countTimer = null;
   const countMatches = () => {
     clearTimeout(countTimer);
@@ -2296,7 +2303,7 @@ export function attach(textarea, host, original, codeTokens) {
       // The search's: the library's query, which its commands read (a
       // step shows its match in the middle of the text), the panel's
       // query, and the marks of its matches.
-      search({ literal: true, scrollToMatch: (range) => EditorView.scrollIntoView(range, { y: "center" }) }),
+      search({ literal: true, scrollToMatch: (range) => matchInView(range) }),
       searching,
       masterMatches(() => !bySlide),
       rowsSync(host),
@@ -2651,7 +2658,7 @@ export function attach(textarea, host, original, codeTokens) {
           : (all.findLast((m) => m.from < before.from || (m.from === before.from && m.to < before.to)) ?? all[all.length - 1]);
         view.dispatch({
           selection: EditorSelection.single(after.from, after.to),
-          effects: EditorView.scrollIntoView(EditorSelection.range(after.from, after.to), { y: "center" }),
+          effects: matchInView(EditorSelection.range(after.from, after.to)),
           userEvent: "select.search",
         });
       }
