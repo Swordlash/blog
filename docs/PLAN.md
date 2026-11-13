@@ -1531,10 +1531,13 @@ confirms it against reality and the plan is amended if it does not hold.
     home page, made by the browser. **Each sealed route asks for exactly
     what its plain counterpart asks**, by the same named function. A
     database whose recorded schema steps have a hole is refused, naming
-    the step. The canary (`toolchain/smoke-canary.mjs`) writes a marker
-    into each protected place through the browser against a real server
-    and looks for it in every file of the data directory, a dump of
-    PostgreSQL, and every request, answer and WebSocket frame.
+    the step. The canary (wiki-smoke's `Server.Canary` since #267)
+    writes a marker into each protected place through the browser
+    against a real server and looks for it in every file of the data
+    directory, a dump of PostgreSQL, and every request, answer and
+    WebSocket frame (the answers by asking each GET again with the
+    browser's session, since the driver gives no response bodies; the
+    answers to the browsers' own writes are not read).
 77. **A page has a kind: a document or a presentation (WP5.97, #191,
     #253; the owner's answers of 2026-11-11, the rest decided while he
     slept).** The kind is a column of the page (step 19, no `CHECK`:
@@ -1943,9 +1946,24 @@ which the wiki pins since #227.
   then the node runner for the server's script, where three reads of
   the address straight after a view now wait for the router. The
   driver lacks response sizes on a request (the suite reads the files'
-  sizes) and a count of what `leaveOutContents` left out. Left: (c)
-  `test-passkeys.mjs` and `smoke-test-server.mjs` with the encrypted
-  walk and the canary, then (d).
+  sizes) and a count of what `leaveOutContents` left out. **(c) is
+  done (#267):** `test-passkeys.mjs`, `smoke-test-server.mjs` and the
+  scripts of the encrypted walk, the canary, the adoption and
+  PostgreSQL are gone; `wiki-smoke-passkeys` (6 examples) and
+  `wiki-smoke-server` (49) do what they did, section for section, on a
+  harness for a real server (`Wiki.Smoke.Server`, `Api`, `Browser`,
+  `Walk`), with no fixed pause. `page.goBack` in the SVG walk is
+  explained: the SVG navigates its own frame, which adds an entry to
+  the page's history, and Back then moved the frame and the page never
+  loaded; the suite goes back two entries and waits for `popstate`.
+  `npm run smoke-test` runs the demo, the passkeys and the server (on
+  PostgreSQL too when a database is given), then the node runner for
+  the two tests of JavaScript modules. A path given to the smoke
+  scripts is read from the caller's directory
+  (`toolchain/caller-paths.sh`). **(d)**: the late events in the
+  server's suites, the node scripts that stay and the README's section
+  are #270; the three tests that raced on a clock or on each other are
+  a pull request of their own.
 - **WP5.95 No view takes an older answer over a newer one (found by
   Codex on #243, rounds 12 and 13; left there on purpose).** The page view
   drops a fetched page older than the one it shows (`takesPage`, by
@@ -3013,6 +3031,22 @@ needs. Each was true when its package merged; check before relying on one.
   policy refuses `waitForFunction`). The demo's suite was read for it
   (38 pairs, 3 fixed); `wiki-smoke/server/` and `wiki-smoke/src/` were
   not, and go with WP5.98 (d).
+- **The server's smoke suite after #267 (WP5.98c).** Found by the port
+  and left: "Back to editing" in the editor's preview, with an SVG
+  there that navigates its own frame, undoes the frame's navigation;
+  the SVG navigates again, and Back is stuck in the preview (inferred
+  from the history's entries, not reproduced by hand). After its own
+  comment on an encrypted page the page reads the threads twice (after
+  the POST and, probably, when the live channel reports the comment).
+  A failure in a smoke suite goes through `Wiki.Smoke.Api.failure` or
+  `expectationFailure`, never `fail`: `fail` in `IO` carries a call
+  stack only from GHC 9.14's base, so on 9.10 and 9.12 a `HasCallStack`
+  above it is a redundant constraint, an error under `-Werror`, and the
+  failure names no line. What the Playwright driver lacks, with what
+  the wiki does instead, is written for haskell-halogen's owner
+  (response bodies, CDP events, request bodies in the log,
+  `waitForFunction` under the server's policy, a history step that
+  moves a frame, `exposeFunction`, popups, a hold by resource type).
 - **The editor's search after #263.** Codex ran eight rounds (3, 2, 2,
   2, 3, 2, 1, 0); most findings came from leaning on
   `@codemirror/search` for more than its cursors (its `test` and
