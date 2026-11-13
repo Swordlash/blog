@@ -357,16 +357,20 @@ function wikiTestEncServer(request) {
       return { status: 204, body: "" };
     }
     const pages = [...wikiTestEncrypted.pages.values()].filter((p) => p.space === s.space.id);
+    // While the space is converted, the pages that read plain are not
+    // listed encrypted (Wiki.Server.Storage's sealedAmong); read by the
+    // encrypted routes, one is refused (notConvertedYet).
+    const sealedNow = pages.filter((p) => !(s.space.conversion && p.plain));
     if (rest === "/pages" && request.method === "GET") {
       return wikiTestEncJson(
         200,
-        pages.map((p) => {
+        sealedNow.map((p) => {
           const sealed = wikiTestEncSealed(p);
           return { ...sealed, heading: wikiTestEncHeading(sealed.content), content: undefined };
         }),
       );
     }
-    if (rest === "/contents" && request.method === "GET") return wikiTestEncJson(200, pages.map(wikiTestEncSealed));
+    if (rest === "/contents" && request.method === "GET") return wikiTestEncJson(200, sealedNow.map(wikiTestEncSealed));
     const at = rest.match(/^\/pages\/at\/?(.*)$/);
     if (at && request.method === "GET") {
       // The space's address is its home page's; a page's path ends in its

@@ -788,7 +788,14 @@ space's permissions by an administrator of the space who holds its key
 back"): the pages converted so far are converted back, the others stay as
 they are, and the space ends as it began. A page that stops a conversion
 is named, with why, so that it can be mended (shortened, an attachment
-deleted) before it continues. One browser converts at a time: the one
+deleted) before it continues. While a conversion is paused halfway, the
+space's tree holds pages of both kinds: a browser holding the key shows
+every title, decrypted or plain; one without it shows the plain pages and,
+in their places, the encrypted ones as "an encrypted page" (the server
+lists them to any reader, with their places but no title), so that a plain
+page under an encrypted one keeps its address. A search finds the encrypted
+pages, decrypted in the browser, and not the plain ones until the
+conversion ends: the server's search leaves out a space with a key. One browser converts at a time: the one
 that holds the conversion's lease, which each page staged or committed
 renews for two minutes. Another administrator's browser can continue
 only once it has stopped that long; the same user can take it over from

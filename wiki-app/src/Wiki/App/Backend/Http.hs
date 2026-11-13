@@ -2427,7 +2427,22 @@ pageOrderOf sid = either (const ByName) (maybe ByName (\s -> s.pageOrder) . find
 
 sealedListPages :: (MonadIO m) => SpaceId -> KeyId -> HttpWiki m (Either WikiError [PageSummary])
 sealedListPages sid current =
-  plainWhileConverting sid (send (endpoints.spaces.listPages sid)) (sealedListPagesWith sid current)
+  plainWhileConverting sid (mixedWithoutKey sid) (sealedListPagesWith sid current)
+
+-- | The pages of a space being converted, for a browser that cannot open
+-- its key: those that read plain, by the plain route, and those that read
+-- encrypted, as the server lists them to any reader of the space, each
+-- named as the server names an encrypted page ('encryptedPageTitle'). The
+-- tree keeps its shape: a plain page under an encrypted one keeps its
+-- place and its address, and the encrypted one opens as any encrypted
+-- page does without the key.
+mixedWithoutKey :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError [PageSummary])
+mixedWithoutKey sid = runExceptT $ do
+  plain <- ExceptT (send (endpoints.spaces.listPages sid))
+  sealed <- either (const []) identity <$> lift (send (endpoints.encrypted.pages sid))
+  order <- lift (pageOrderOf sid)
+  let others = [summaryFrom p encryptedPageTitle | p <- sealed, p.id `notElem` map (\x -> x.id) plain]
+  pure (pageTreeOrder order (plain <> others))
 
 -- | A read of a space's pages by the encrypted routes, or, when it fails
 -- (this browser holds no key of the space) while the space is converted,
@@ -2903,9 +2918,14 @@ sealedSearch q =
             Just w
               | q.includeSubspaces -> any (\x -> x.id == w) (chain s.id)
               | otherwise -> s.id == w
-      candidates <- for [(s.id, k) | s <- spaces, Just k <- [s.encryption], wanted s] $ \(sid, k) ->
-        foundIn sid k <&> \pages ->
-          let summaries = Map.fromList [(p.id, p) | (p, _) <- pages]
+      candidates <- for [(s, k) | s <- spaces, Just k <- [s.encryption], wanted s] $ \(sp, k) -> do
+        let sid = sp.id
+        pages <- foundIn sid k
+        -- While the space is converted, a page that reads encrypted may
+        -- hang under one that reads plain: its path goes through it.
+        around <- if isJust sp.conversion && not (null pages) then either (const []) identity <$> send (endpoints.spaces.listPages sid) else pure []
+        pure $
+          let summaries = Map.fromList ([(p.id, p) | p <- around] <> [(p.id, p) | (p, _) <- pages])
            in [ Candidate {page = p.id, space = sid, spacePath = map (\s -> s.slug) (chain sid), pagePath, text = Search.searchable p.title body}
               | (p, body) <- pages
               , Just pagePath <- [pathOf (`Map.lookup` summaries) p.id]

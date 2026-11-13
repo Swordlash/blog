@@ -104,6 +104,7 @@ import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Entry (..), Space (..))
+import Wiki.Core.Space qualified as Space
 import Wiki.Core.User (Login (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (..))
 
@@ -1415,6 +1416,55 @@ spec m = do
     sent <- asked
     [r.url | r <- sent, ("pages/" <> made.id.text <> "/threads") `T.isSuffixOf` r.url, not ("encrypted" `T.isInfixOf` r.url)] `shouldSatisfy` (not . null)
     [r.url | r <- sent, ("encrypted/pages/" <> made.id.text <> "/threads") `T.isSuffixOf` r.url] `shouldBe` []
+
+  -- #213, the review's P2: a conversion paused halfway leaves pages of
+  -- both kinds in one space, a page of one kind under a page of the other.
+  -- Each way round, with the key and without it, both are in the tree, the
+  -- page below's address goes through the page above, and it reads: plain
+  -- for anyone, encrypted for the reader who holds the key. Without the
+  -- key an encrypted page is named "an encrypted page", never by a title.
+  for_ [("an encryption", "encrypting" :: Text, True), ("a decryption", "decrypting", False)] $ \(what, way, parentSealed) ->
+    it ("keeps the tree of " <> what <> " paused halfway whole and its links working, with the space's key and without it") $ runPage $ do
+      env <- encryptedSpace "user-admin"
+      void (ok =<< run env (encryptSpace secret.id))
+      unsafeIOToPageM (js_strip_home (toJSText secret.id.text))
+      parent <- ok =<< run env (createPage secret.id Nothing "Parent title" "Parent text.")
+      child <- ok =<< run env (createPage secret.id (Just parent.id) "Child title" "Child text.")
+      -- An encryption goes the oldest first: the parent is encrypted, the
+      -- child still plain. A decryption too: the parent is plain again,
+      -- the child still encrypted.
+      let (plainOne, sealedOne) = if parentSealed then (child, parent) else (parent, child)
+      unsafeIOToPageM (js_converting (toJSText secret.id.text) (toJSText way))
+      unsafeIOToPageM (js_made_plain (toJSText plainOne.id.text) (toJSText ("Plain " <> plainOne.title)) (toJSText ("Plain " <> plainOne.body)))
+      for_ [("user-admin" :: Text, True), ("user-reader", False)] $ \(who, holds) -> do
+        tab <- as who
+        run tab endPreload
+        spaces <- run tab listSpaces
+        s <- maybe (panic "the space is not listed") pure (head [x | x <- spaces, x.id == secret.id])
+        listed <- ok =<< run tab (listPages secret.id)
+        let byId = Map.fromList [(p.id, p) | p <- listed]
+            titleOf i = (\p -> p.title) <$> Map.lookup i byId
+        titleOf plainOne.id `shouldBe` Just ("Plain " <> plainOne.title)
+        titleOf sealedOne.id `shouldBe` Just (if holds then sealedOne.title else encryptedPageTitle)
+        [p.title | p <- listed, not holds, p.title == sealedOne.title] `shouldBe` []
+        (\p -> p.parent) <$> Map.lookup child.id byId `shouldBe` Just (Just parent.id)
+        path <- maybe (panic "the child has no path") pure (Space.pagePath s (`Map.lookup` byId) child.id)
+        path `shouldBe` [p.slug | i <- [parent.id, child.id], Just p <- [Map.lookup i byId]]
+        read' <- run tab (getPage secret.id path)
+        case (parentSealed, holds, read') of
+          -- The child plain: read plain by anyone.
+          (True, _, Right page) -> (page.title, page.body) `shouldBe` ("Plain Child title", "Plain Child text.")
+          -- The child encrypted: read by the key's holder; refused without.
+          (False, True, Right page) -> (page.title, page.body) `shouldBe` ("Child title", "Child text.")
+          (False, False, Left _) -> pass
+          other -> panic ("not as expected: " <> show other)
+        -- The page above, as its kind reads.
+        above <- run tab (getPage secret.id (take 1 path))
+        case (parentSealed, holds, above) of
+          (False, _, Right page) -> page.title `shouldBe` "Plain Parent title"
+          (True, True, Right page) -> page.title `shouldBe` "Parent title"
+          (True, False, Left _) -> pass
+          other -> panic ("not as expected above: " <> show other)
 
   -- #213, the review's P2: a space that asks each time it is opened, in
   -- the middle of turning its encryption off, shows nothing of a page made
