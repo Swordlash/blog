@@ -100,7 +100,7 @@ import {
   insertCompletionText,
   pickedCompletion,
 } from "@codemirror/autocomplete";
-import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { Annotation, ChangeSet, CharCategory, Compartment, EditorSelection, EditorState, Prec, StateEffect, StateField, Transaction, findClusterBreak } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
 import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, redo, redoSelection, standardKeymap, undo, undoSelection } from "@codemirror/commands";
 import {
@@ -1504,22 +1504,24 @@ const escapedText = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // The library's query for what the panel asks for, {search, replace,
 // caseSensitive, regexp, wholeWord}, on a text whose title line's "# " is
-// guarded (`titled`) or not (a template's): guardedQueries holds the
-// first.
-const guardedQueries = new WeakSet();
+// guarded (`titled`) or not (a template's). The library is given the
+// expression and the case only: whole word, the guarded "# " and the
+// replacement are the wiki's (eachMatch, replacementOf), kept for the
+// query in searchOptions, {guarded, wholeWord, expanded}: whether the
+// replacement's "$" are expanded (a regular expression's) or written as
+// they are (a plain query's).
+const searchOptions = new WeakMap();
 
 const searchQuery = (spec, titled) => {
   const text = typeof spec?.search === "string" ? spec.search : "";
-  const replace = typeof spec?.replace === "string" ? spec.replace : "";
   const query = new SearchQuery({
     search: spec?.regexp ? text : escapedText(text),
-    replace: spec?.regexp ? replace : replace.replace(/\$/g, "$$$$"),
+    replace: typeof spec?.replace === "string" ? spec.replace : "",
     caseSensitive: Boolean(spec?.caseSensitive),
-    wholeWord: Boolean(spec?.wholeWord),
     regexp: true,
     literal: true,
   });
-  if (titled) guardedQueries.add(query);
+  searchOptions.set(query, { guarded: Boolean(titled), wholeWord: Boolean(spec?.wholeWord), expanded: Boolean(spec?.regexp) });
   return query;
 };
 
@@ -1562,13 +1564,15 @@ const markLimit = 2000;
 // whole text's finds. eachMatch starts each there (acrossLines: the
 // library's own choice of cursor).
 //
-// A match in the guarded "# " is skipped here, not by the query's `test`
-// option. In the library's three cursors a failing test is not the same
-// thing: the string cursor (SearchCursor) drops that candidate and goes on,
+// A match in the guarded "# ", and with whole word one that is not a whole
+// word, is skipped here, and the iteration goes on: the library's query
+// has neither a `test` nor `wholeWord` (which installs one). In the
+// library's three cursors a failing test is not the same thing: the string cursor (SearchCursor) drops that candidate and goes on,
 // RegExpCursor goes on to the next match, but MultilineRegExpCursor tries
 // the same match again over more text and, at the text's end, stops: a
 // failing test there ends the search ("\s+" on "# T\n\nword word" found
-// nothing after rejecting the space of "# ").
+// nothing after rejecting the space of "# ", and with whole word "cat\s*"
+// on "scat cat" nothing after rejecting the "cat" of "scat").
 //
 // What it costs, a full pass over 60 slides of 100 lines (528,000
 // characters, in Node): 0.1 to 2 ms for a query of a few thousand matches
@@ -1583,23 +1587,76 @@ const acrossLines = (query) => /\\[sWDnr]|\n|\r|\[\^/.test(query.search);
 // starts after it, so such a match could be counted but never selected
 // whole or replaced. A match in the title's own text, after the "# ", is
 // one.
-const inGuard = (query, state, from) => guardedQueries.has(query) && from < titleMark.length && state.sliceDoc(0, titleMark.length) === titleMark;
+const inGuard = (query, state, from) => searchOptions.get(query)?.guarded && from < titleMark.length && state.sliceDoc(0, titleMark.length) === titleMark;
+
+// The characters just before and just after a position of a state's text,
+// each a whole grapheme cluster (findClusterBreak), as the library takes
+// them.
+const charsAround = (state, at) => {
+  const start = Math.max(0, at - 16);
+  const near = state.sliceDoc(start, Math.min(state.doc.length, at + 16));
+  const i = at - start;
+  return [near.slice(findClusterBreak(near, i, false), i), near.slice(i, findClusterBreak(near, i))];
+};
+
+// Whether a match is a whole word: the library's own rule (its
+// regexpWordTest, @codemirror/search 6.7.2), on the document's text rather
+// than the cursor's line: a match of no length is; any other is when it
+// does not start between two word characters, nor end between two. Word
+// characters are those of the state's language at the match
+// (charCategorizer; the library asks at the selection's head, the same
+// language in a page's Markdown).
+const wholeWordAt = (state, from, to) => {
+  if (from === to) return true;
+  const word = state.charCategorizer(from);
+  const [beforeStart, atStart] = charsAround(state, from);
+  const [atEnd, afterEnd] = charsAround(state, to);
+  const isWord = (c) => c !== "" && word(c) === CharCategory.Word;
+  return !(isWord(beforeStart) && isWord(atStart)) && !(isWord(atEnd) && isWord(afterEnd));
+};
 
 // The search's matches from the place a position's line (or, across lines,
 // the text) starts, each given to `visit` as the cursor gives it ({from,
-// to, match}) until `visit` says true: enough.
+// to, match}) until `visit` says true: enough. A candidate skipped (in the
+// guarded "# ", or not a whole word when whole words are asked for) is
+// passed over and the cursor goes on from its end, as the library's
+// line-by-line cursor goes on after a rejected one: "cat" as a whole word
+// in "scatcat cat" is the last "cat" alone, the cursor having found and
+// passed over the "cat" of "scat" and then the one after it.
 const eachMatch = (query, state, at, visit) => {
+  const wholeWord = searchOptions.get(query)?.wholeWord;
   const cursor = query.getCursor(state, acrossLines(query) ? 0 : state.doc.lineAt(at).from);
   while (!cursor.next().done) {
     const match = cursor.value;
-    if (!inGuard(query, state, match.from) && visit(match)) return;
+    if (inGuard(query, state, match.from) || (wholeWord && !wholeWordAt(state, match.from, match.to))) continue;
+    if (visit(match)) return;
   }
 };
 
-// What a match is replaced with: the library's own replacement, with
-// "$&", "$$" and the groups ("$1"), reached through its query's type
-// (create(), the library's own way to it).
-const replacementOf = (query, match) => query.create().getReplacement(match);
+// What a match is replaced with. A plain query's replacement is written as
+// it is. A regular expression's is expanded, as JavaScript's String
+// replace expands one: "$&" is the match, "$1" to "$99" its groups (a
+// group that did not take part, an optional or another alternative's, is
+// nothing), "$$" a dollar, and anything else (a "$" before no digit, a
+// group number the expression does not have) is written as it is. Of two
+// digits, the two make the group's number when the expression has that
+// group, and the first alone otherwise, the second written after it.
+const replacementOf = (query, match) => {
+  const template = query.replace;
+  if (!searchOptions.get(query)?.expanded) return template;
+  const groups = match.match ?? [];
+  return template.replace(/\$(\$|&|\d\d?)/g, (whole, what) => {
+    if (what === "$") return "$";
+    if (what === "&") return groups[0] ?? "";
+    if (what.length === 2) {
+      const n = Number(what);
+      if (n >= 1 && n < groups.length) return groups[n] ?? "";
+    }
+    const n = Number(what[0]);
+    if (n >= 1 && n < groups.length) return (groups[n] ?? "") + what.slice(1);
+    return whole;
+  });
+};
 
 // The matches of a query that overlap a range of a state, {from, to},
 // none of no length (a mark of no length shows nothing), at most
@@ -2424,6 +2481,14 @@ export function attach(textarea, host, original, codeTokens) {
       effects: matchInView(EditorSelection.range(match.from, match.to)),
       userEvent: "select.search",
     });
+  // The match a Replace selected to replace next ({from, to, match}, and
+  // the text it was found for): a match of the text before that Replace,
+  // which the replacement may have made no longer one (a whole word that a
+  // replacement's letter now touches). The next Replace replaces it all
+  // the same, so that Replace pressed once for each match replaces what
+  // Replace all replaces. Forgotten as soon as the text is another (any
+  // other change) or a step selects something else.
+  let replacingNext = null;
   let countTimer = null;
   const countMatches = () => {
     clearTimeout(countTimer);
@@ -2823,7 +2888,7 @@ export function attach(textarea, host, original, codeTokens) {
       }
       const query = searchQuery(spec, titled);
       const before = view.state.field(searching);
-      const same = before !== null && before.search === query.search && before.caseSensitive === query.caseSensitive && before.wholeWord === query.wholeWord;
+      const same = before !== null && before.search === query.search && before.caseSensitive === query.caseSensitive && searchOptions.get(before)?.wholeWord === searchOptions.get(query)?.wholeWord;
       view.dispatch({ effects: setSearching.of(query) });
       if (!same) countMatches();
     },
@@ -2836,6 +2901,7 @@ export function attach(textarea, host, original, codeTokens) {
       const query = view.state.field(searching);
       if (!query?.valid) return 0;
       const step = stepFrom(query, view.state, view.state.selection.main, forward);
+      replacingNext = null;
       if (step === null) return 0;
       selectMatch(step.match);
       return step.wrapped ? 2 : 1;
@@ -2849,8 +2915,11 @@ export function attach(textarea, host, original, codeTokens) {
       if (!query?.valid) return 0;
       const { state } = view;
       const before = state.selection.main;
-      const here = matchFrom(query, state, before.from, () => true);
-      if (here === null || here.from !== before.from || here.to !== before.to) {
+      const selected = (m) => m !== null && m.from === before.from && m.to === before.to;
+      const member = matchFrom(query, state, before.from, () => true);
+      const here = selected(member) ? member : replacingNext?.doc === state.doc && selected(replacingNext) ? replacingNext : null;
+      replacingNext = null;
+      if (here === null) {
         // No match selected: the next one is.
         const step = stepFrom(query, state, before, true);
         if (step === null) return 0;
@@ -2861,23 +2930,29 @@ export function attach(textarea, host, original, codeTokens) {
       if (bySlide && key !== undefined && !host.wikiRows?.has(key)) {
         host.dispatchEvent(new CustomEvent("wiki-row-wanted", { detail: { key, left: -1, close: false, focus: false, reason: "search" } }));
       }
-      // The match selected replaced, and the next selected, by the rule the
-      // cursor goes through a text with, which Replace all replaces by: a
-      // match replaced at p..q with text of length n, the next is the first
-      // that starts after p + n, or at p + n only if it has a length;
-      // looked for in the text after the replacement. Past the end, the
-      // first match there is.
+      // The match selected replaced, and the next selected: the match after
+      // it in the text before the replacement, as Replace all, which
+      // decides every match in the text before it, goes on to it (a match
+      // of no length where the replaced one ended is none of the
+      // sequence). Moved past the text put in. Past the end, the first
+      // match of the text after the replacement.
       const insert = replacementOf(query, here);
       const changes = state.changes({ from: here.from, to: here.to, insert });
-      const replaced = state.update({ changes }).state;
-      const end = here.from + insert.length;
-      const next = matchFrom(query, replaced, end, (m) => m.from > end || m.to > m.from) ?? matchFrom(query, replaced, 0, () => true);
+      const after = matchFrom(query, state, here.to, (m) => m.from !== here.from || m.to !== here.to);
+      let next = null;
+      if (after !== null) {
+        const from = changes.mapPos(after.from, 1);
+        next = { from, to: Math.max(from, changes.mapPos(after.to, -1)), match: after.match };
+      } else {
+        next = matchFrom(query, state.update({ changes }).state, 0, () => true);
+      }
       view.dispatch({
         changes,
         selection: next === null ? undefined : EditorSelection.single(next.from, next.to),
         effects: next === null ? [] : matchInView(EditorSelection.range(next.from, next.to)),
         userEvent: "input.replace",
       });
+      if (next !== null) replacingNext = { ...next, doc: view.state.doc };
       return 1;
     },
     // Replace every match, as one step of the history (input.replace.all):

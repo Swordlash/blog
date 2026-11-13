@@ -158,20 +158,35 @@ spec m = do
   -- no length at a line's start, its end, a word's edge, before a
   -- character and on an empty line; one that may be empty; white space
   -- across lines, whose first match is in the title line's guarded "# ";
-  -- a look behind across a line; one across lines or not; and one whose
-  -- first match is in the guarded "# " and the others not.
+  -- a look behind across a line; one across lines or not; one whose
+  -- first match is in the guarded "# " and the others not; and words that
+  -- end a longer word. Each without and with whole word, which leaves
+  -- none of "#|x": then nothing is stepped to or replaced.
   for_ [False, True] $ \bySlide ->
     it ("visits each match counted once in order and replaces as Replace all does, for every query of a table" <> (if bySlide then ", slide by slide" else ", in the raw Markdown")) $ runPage $ do
       ui <- if bySlide then openDeck m "# Title\n\nax" else fst <$> startWith m (Just "user-editor") helloEditor
-      let case' text pattern' = do
+      let case' text (whole, pattern') = do
             setMarkdown ui text
             selectText ui 2 2
+            toggle <- find ui ".editor-search-word"
+            pressed <- getAttribute toggle "aria-pressed"
+            when (pressed /= Just (if whole then "true" else "false")) (click toggle)
             field <- find ui ".editor-search-find"
             clear field
             typeText field pattern'
+            let asked = pattern' <> (if whole then " (whole word)" else "")
             n <- eventually $ do
               shown <- said ui
-              maybe (expectationFailure (toS ("no count for " <> pattern' <> ": " <> shown)) >> pure 0) pure (lastMay (mapMaybe (readMaybe . T.unpack) (T.words shown)))
+              if shown == "No matches"
+                then pure 0
+                else maybe (expectationFailure (toS ("no count for " <> asked <> ": " <> shown)) >> pure 0) pure (lastMay (mapMaybe (readMaybe . T.unpack) (T.words shown)))
+            -- None only where none is a whole word: "x" after "a".
+            (asked, n == 0) `shouldBe` (asked, (pattern', whole) == ("#|x", True))
+            when (n == 0) $ do
+              find ui ".editor-search-replace-all" >>= click
+              ((asked,) <$> markdown ui) `shouldReturn` (asked, text)
+            unless (n == 0) $ caseFound text asked n
+          caseFound text pattern' n = do
             next <- find ui ".editor-search-next"
             visited <- replicateM (n + 1) (click next >> editorSelection ui)
             let distinct = ordNub (take n visited)
@@ -203,8 +218,50 @@ spec m = do
         [ ("# Title\n\nax\nax\nax", ["^", "$", "\\b", "(?=x)", "a|", "^$", "#|x"])
         , ("# T\n\nword word\nword", ["\\s+", "word"])
         , ("# T\n\na\nb\n\nab b", ["(?<=a\\n)b", "a\\nb|b"])
+        , ("# T\n\nscat cat\ncat", ["cat\\s*", "cat"])
         ]
-        $ \(text, patterns) -> for_ patterns (case' text)
+        $ \(text, patterns) -> for_ [(whole, p') | p' <- patterns, whole <- [False, True]] (case' text)
+
+  -- A regular expression's replacement, by Replace and by Replace all: "$&"
+  -- the match, "$1" a group (nothing for one that did not take part), "$$"
+  -- a dollar, a group the expression does not have written as it is (and
+  -- of two digits, the first alone when there is no group of both); a
+  -- plain query's replacement written as it is.
+  it "expands a regular expression's replacement as JavaScript does, a group that did not take part as nothing, and writes a plain query's as it is" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    selectText ui 2 2
+    press "Control+f"
+    for_
+      [ (True, "(a)?b", "<$1>", "b ab", "<> <a>")
+      , (True, "(x)|(b)", "[$1|$2]", "b x", "[|b] [x|]")
+      , (True, "b", "[$&$$]", "b", "[b$]")
+      , (True, "(b)", "$5$1", "b", "$5b")
+      , (True, "(b)", "$12", "b", "b2")
+      , (False, "b", "$1$&$$", "b", "$1$&$$")
+      ]
+      $ \(regexp, pattern', replacement, body, expected) -> do
+        let text = "# T\n\n" <> body
+            asked = (pattern', replacement)
+        setMarkdown ui text
+        selectText ui 2 2
+        toggle <- find ui ".editor-search-regexp"
+        pressed <- getAttribute toggle "aria-pressed"
+        when (pressed /= Just (if regexp then "true" else "false")) (click toggle)
+        find ui ".editor-search-find" >>= clear
+        find ui ".editor-search-find" >>= (`typeText` pattern')
+        find ui ".editor-search-replacement" >>= clear
+        find ui ".editor-search-replacement" >>= (`typeText` replacement)
+        n <- eventually $ do
+          shown <- said ui
+          maybe (expectationFailure (toS ("no count: " <> shown)) >> pure 0) pure (lastMay (mapMaybe (readMaybe . T.unpack) (T.words shown)))
+        find ui ".editor-search-next" >>= click
+        replaceButton <- find ui ".editor-search-replace"
+        replicateM_ n (click replaceButton)
+        ((asked,) <$> markdown ui) `shouldReturn` (asked, "# T\n\n" <> expected)
+        setMarkdown ui text
+        selectText ui 2 2
+        find ui ".editor-search-replace-all" >>= click
+        ((asked,) <$> markdown ui) `shouldReturn` (asked, "# T\n\n" <> expected)
 
   it "counts no match in the title line's guarded \"# \", steps to none and replaces none, and finds the title's own text, in the raw Markdown" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
