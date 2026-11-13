@@ -1027,7 +1027,8 @@ try {
   await page.locator("#app .new-page-view button.primary").click();
   const editor = page.locator(editorText);
   await editor.waitFor({ timeout });
-  assert.equal(here(page), "/s/smoke-space/p/first-page/edit/");
+  // As for the space: the address follows the view.
+  await eventually(() => assert.equal(here(page), "/s/smoke-space/p/first-page/edit/"), "the new page's address");
   // Typed and saved with Ctrl+S, which stays.
   await editor.pressSequentially("Hello from the server's smoke test.");
   await editor.press("Control+s");
@@ -1113,7 +1114,7 @@ try {
   await page.locator("#app .page-view h1", { hasText: "First page" }).waitFor({ timeout });
   await page.locator("#app .page-view .actions a", { hasText: "History" }).click();
   await page.locator("#app .history-view h1", { hasText: "First page" }).waitFor({ timeout });
-  assert.equal(here(page), "/s/smoke-space/p/first-page/history/");
+  await eventually(() => assert.equal(here(page), "/s/smoke-space/p/first-page/history/"), "the history's address");
   const versionNames = () => page.locator("#app .version-list li > a").allTextContents();
   const versions = await versionNames();
   assert.ok(versions.length >= 4, `the history lists ${versions.length} versions`);
@@ -1390,7 +1391,7 @@ try {
   await olive.locator("#app .sign-in-toggle").click();
   await olive.locator("#app .sign-in-form .provider-link", { hasText: "Sign in with Fake" }).click();
   await olive.locator("#app .account .account-toggle", { hasText: "Olive Oidc" }).waitFor({ timeout });
-  assert.equal(here(olive), "/s/smoke-public/", "signing in with a provider came back elsewhere");
+  await eventually(() => assert.equal(here(olive), "/s/smoke-public/", "signing in with a provider came back elsewhere"), "the page signed in to");
   // The server rendered that page for her session: the cookie came with it.
   const landed = await olive.evaluate(async () => (await fetch("api/v1/session")).json());
   assert.equal(landed.user?.login, "olive", "signed in as someone else");
