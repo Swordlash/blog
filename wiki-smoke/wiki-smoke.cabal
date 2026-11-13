@@ -81,7 +81,7 @@ test-suite wiki-smoke-screenshots
 
 -- That the driver's waits hold on the wiki: waitQuiet after typing returns
 -- once the debounced preview is drawn, after a save with "Saved" still
--- shown, and while the writing assistant's seconds counter ticks.
+-- shown, and after the writing assistant's Send once the answer has ended.
 test-suite wiki-smoke-waits
   import:           shared
   type:             exitcode-stdio-1.0
