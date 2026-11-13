@@ -883,6 +883,15 @@ countsPerRow found
       | otherwise = repeat True
     lastStart = fromMaybe 0 (lastMay starts)
 
+-- | What a row's header says of the search's matches: how many start in
+-- the row, or, for a row the count did not reach whole (it stopped at its
+-- limit, 1000, before the row's end), that they were not counted.
+rowMatchesOf :: State -> RowKey -> Maybe SlideRow.RowMatches
+rowMatchesOf st key = case (Map.lookup key st.rowMatches, st.matches) of
+  (Just n, _) -> Just (SlideRow.Counted n)
+  (Nothing, Just found) | found.valid && found.capped -> Just SlideRow.NotCounted
+  _ -> Nothing
+
 -- | A text as a regular expression of JavaScript's that matches it as it
 -- is written.
 escapedPattern :: Text -> Text
@@ -1921,7 +1930,7 @@ component =
                     , dropMark = case st.dropAt of
                         Just (at, after) | at == h.key -> Just after
                         _ -> Nothing
-                    , matches = if st.searchOpen then Map.lookup h.key st.rowMatches else Nothing
+                    , matches = if st.searchOpen then rowMatchesOf st h.key else Nothing
                     }
                   FromRow
               ]

@@ -15,6 +15,7 @@ module Wiki.App.View.SlideRow
   , heads
   , titleOf
   , Input (..)
+  , RowMatches (..)
   , Output (..)
   , component
   )
@@ -115,11 +116,17 @@ data Input = Input
   , dropMark :: Maybe Bool
   -- ^ Where a row dragged over this one would go: before it ('False') or
   -- after it ('True'), drawn as a line.
-  , matches :: Maybe Int
-  -- ^ How many matches of the editor's search start in the row, while the
-  -- search is open and its count holds them all (WP5.103b). A closed row
-  -- says it on its header; an open row marks them in its text.
+  , matches :: Maybe RowMatches
+  -- ^ The editor's search's matches that start in the row, while the
+  -- search is open (WP5.103b). A closed row says them on its header; an
+  -- open row marks them in its text.
   }
+
+-- | 'RowMatches' is what a row's header says of the search's matches in
+-- it: how many, or that they were not counted, the count having stopped
+-- at its limit before the row's end.
+data RowMatches = Counted Int | NotCounted
+  deriving stock (Eq, Show)
 
 -- | What a row tells the editor: its header was clicked (to open or close
 -- it); Ctrl+Z ('True') or Ctrl+Y ('False') was pressed on its header,
@@ -236,7 +243,7 @@ component =
                           <> [ -- The search's matches in the slide, while the row
                                -- is closed: in the button's text, so that it is
                                -- read with the slide's title.
-                               HH.span [HP.class_ (HH.ClassName "slide-row-matches")] [HH.text (matchesPhrase n) | not st.input.open, Just n <- [st.input.matches], n > 0]
+                               HH.span [HP.class_ (HH.ClassName "slide-row-matches")] [HH.text phrase | not st.input.open, Just phrase <- [st.input.matches >>= matchesPhrase]]
                              , HH.span [HP.class_ (HH.ClassName ("slide-row-fit slide-fit-" <> fitName h.fit)), HP.attr (HH.AttrName "aria-hidden") "true"] []
                              , HH.span [HP.class_ (HH.ClassName "visually-hidden")] [HH.text (", " <> fitPhrase h)]
                              ]
@@ -349,6 +356,9 @@ problemsPhrase :: Int -> Text
 problemsPhrase 1 = "1 problem"
 problemsPhrase n = show n <> " problems"
 
-matchesPhrase :: Int -> Text
-matchesPhrase 1 = "1 match"
-matchesPhrase n = show n <> " matches"
+matchesPhrase :: RowMatches -> Maybe Text
+matchesPhrase = \case
+  Counted 0 -> Nothing
+  Counted 1 -> Just "1 match"
+  Counted n -> Just (show n <> " matches")
+  NotCounted -> Just "matches not counted"
