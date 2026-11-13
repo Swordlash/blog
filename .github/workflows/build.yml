@@ -664,6 +664,13 @@ jobs:
       if: matrix.group == 'deploy'
       run: sh toolchain/test-ci-prune-caches.sh
 
+    # The browser suite's kept bundle (wiki-app/test/web/bundle.sh), against
+    # a fake islands bundle: reused while its inputs are unchanged, built
+    # again when one changes, and never reused half built. A few seconds.
+    - name: Test the browser tests' kept bundle
+      if: matrix.group == 'deploy'
+      run: sh toolchain/test-test-bundle.sh
+
     # The rehearsal script's ports, against a fake old and new wiki-server:
     # port 0 for the old server's listeners, the admin listener's address
     # read from its log, and two runs side by side. Six seconds.
