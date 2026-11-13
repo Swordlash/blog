@@ -1110,7 +1110,7 @@ jobs:
         HSPEC_HALOGEN_JOBS: '2'
         WIKI_SUITE_TIMES: '1'
       run: |
-        echo '### The wasm test suites: wall time, budget, slowest examples' >> "$GITHUB_STEP_SUMMARY"
+        echo "### The wasm test suites on $(nproc) cores: wall time, budget, slowest examples" >> "$GITHUB_STEP_SUMMARY"
         npm run test-wasm
 
     # The demo's smoke test with every page's processor four times slower,
@@ -1169,15 +1169,18 @@ jobs:
     # it ends, a failing one outside a group, and each is timed against its
     # budget (toolchain/ci-suite-time.sh). The suites require the build
     # (toolchain/smoke-suite.sh), so a missing demo fails rather than passes
-    # as pending.
+    # as pending. Side by side on four cores each suite took up to twice
+    # as long as alone (2026-11-14), so each call of the driver may take
+    # twice the plain 30 seconds.
     - name: Smoke-test the page in a browser
       if: github.job == 'smoke'
       env:
         WIKI_SMOKE_EXTRA: waits screenshots
         WIKI_SCREENSHOTS_DIR: ${{ runner.temp }}/screenshots
         WIKI_SUITE_TIMES: '1'
+        HALOGEN_PLAYWRIGHT_TIMEOUT: '60000'
       run: |
-        echo '### The smoke suites, side by side: wall time, budget, slowest examples' >> "$GITHUB_STEP_SUMMARY"
+        echo "### The smoke suites, side by side on $(nproc) cores: wall time, budget, slowest examples" >> "$GITHUB_STEP_SUMMARY"
         npm run smoke-test
 
     - name: Stop PostgreSQL
@@ -1188,7 +1191,7 @@ jobs:
     # dist-newstyle/native-fast here too, after the tests, so that the copy
     # of the build directories this job saves carries them: the smoke job
     # of the next run restores that copy and compiles only what changed. A
-    # second or so when nothing did.
+    # second when nothing did (measured on 2026-11-14).
     - name: Build the smoke suites, for the next run's smoke job
       if: github.job == 'wasm' || github.job == 'wasm-warm'
       run: |
