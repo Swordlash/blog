@@ -45,9 +45,17 @@
 # HALOGEN_PLAYWRIGHT_ARTIFACTS=<dir> keeps a failing example's screenshot,
 # HALOGEN_PLAYWRIGHT_CONSOLE=1 prints what the pages log as it arrives, and
 # HALOGEN_PLAYWRIGHT_HEADED=1 shows the browser.
+#
+# A path given in one of these variables may be relative to the directory
+# this is run from: it is made absolute from there before the suite runs
+# from wiki-smoke/ (toolchain/caller-paths.sh), and a program's bare name
+# (WIKI_SERVER=wiki-server) is left for PATH.
 set -eu
+called_from=$(pwd)
+. "$(dirname "$0")/caller-paths.sh"
 cd "$(dirname "$0")/.."
-toolchain_home=${WIKI_TOOLCHAIN_HOME:-$HOME}
+toolchain_home=$(path_from_caller "${WIKI_TOOLCHAIN_HOME:-}")
+toolchain_home=${toolchain_home:-$HOME}
 if [ -r "$toolchain_home/.wiki-toolchain/env" ]; then
   # shellcheck source=/dev/null
   . "$toolchain_home/.wiki-toolchain/env"
@@ -71,27 +79,36 @@ case "$suite" in
     ;;
 esac
 
-# The suite runs in its package's directory, so the directories are given
-# to it absolute.
-absolute() {
-  case "$1" in
-    /*) printf '%s' "$1" ;;
-    *) printf '%s/%s' "$(pwd)" "$1" ;;
-  esac
-}
+# The suite runs in its package's directory, so every path is given to it
+# absolute: the caller's from the caller's directory, the defaults from the
+# repository's root, where this now is.
 WIKI_SMOKE_REQUIRED=1
-WIKI_DEMO_DIR=$(absolute "${WIKI_DEMO_DIR:-dist-newstyle/wasm/public/app}")
+WIKI_DEMO_DIR=$(path_from_caller "${WIKI_DEMO_DIR:-}")
+WIKI_DEMO_DIR=${WIKI_DEMO_DIR:-$(pwd)/dist-newstyle/wasm/public/app}
 # The repository, whose web/src/tikz-letters.mjs the demo's suite reads.
 WIKI_SOURCE_DIR=$(pwd)
 export WIKI_SMOKE_REQUIRED WIKI_DEMO_DIR WIKI_SOURCE_DIR
 if [ "$suite" = screenshots ]; then
-  WIKI_SCREENSHOTS_DIR=$(absolute "${WIKI_SCREENSHOTS_DIR:-docs/screenshots}")
+  WIKI_SCREENSHOTS_DIR=$(path_from_caller "${WIKI_SCREENSHOTS_DIR:-}")
+  WIKI_SCREENSHOTS_DIR=${WIKI_SCREENSHOTS_DIR:-$(pwd)/docs/screenshots}
   export WIKI_SCREENSHOTS_DIR
 fi
+
+# The driver's, and the PostgreSQL programs the server's suite runs.
+for variable in HALOGEN_PLAYWRIGHT_ARTIFACTS; do
+  eval "value=\${$variable:-}"
+  [ -z "$value" ] || export "$variable=$(path_from_caller "$value")"
+done
+for variable in HALOGEN_PLAYWRIGHT_NODE WIKI_TEST_PSQL WIKI_TEST_PG_DUMP WIKI_TEST_PG_RESTORE; do
+  eval "value=\${$variable:-}"
+  [ -z "$value" ] || export "$variable=$(program_from_caller "$value")"
+done
 
 native_project=${NATIVE_PROJECT:-cabal-native-fast.project}
 native_build_dir=${NATIVE_BUILDDIR:-dist-newstyle/native-fast}
 if [ "$suite" = passkeys ] || [ "$suite" = server ]; then
+  WIKI_SERVER=$(program_from_caller "${WIKI_SERVER:-}")
+  WIKI_PRERENDER=$(program_from_caller "${WIKI_PRERENDER:-}")
   # SQLite runs keep their temporary data directories, even when a caller
   # has exported the address of a live deployment's database: the suites
   # give the server its database themselves.

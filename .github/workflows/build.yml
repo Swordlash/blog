@@ -547,6 +547,13 @@ jobs:
       if: matrix.group == 'unit'
       run: sh toolchain/test-check-tex.sh
 
+    # That the smoke scripts read a relative path their caller gives
+    # (WIKI_SERVER=dist-newstyle/...) from the caller's directory, and
+    # leave a bare command name for PATH: a second.
+    - name: Test caller-paths.sh
+      if: matrix.group == 'unit'
+      run: sh toolchain/test-caller-paths.sh
+
     # The changelog job's check, on pull requests made in a repository of
     # its own: a few seconds.
     - name: Test check-changelog.sh

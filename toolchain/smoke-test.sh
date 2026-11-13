@@ -36,9 +36,15 @@
 # this builds first at -O0 in dist-newstyle/native-fast, and run one after
 # the other: they are built with cabal in the same build directory. Every
 # part runs whatever the others' outcome, and the command fails if any did.
+#
+# Paths given here relative to the directory this is run from (the [dir],
+# WIKI_SERVER, WIKI_PRERENDER) are read from there (toolchain/caller-paths.sh).
 set -eu
+called_from=$(pwd)
+. "$(dirname "$0")/caller-paths.sh"
 cd "$(dirname "$0")/.."
-toolchain_home=${WIKI_TOOLCHAIN_HOME:-$HOME}
+toolchain_home=$(path_from_caller "${WIKI_TOOLCHAIN_HOME:-}")
+toolchain_home=${toolchain_home:-$HOME}
 if [ -r "$toolchain_home/.wiki-toolchain/env" ]; then
   # shellcheck source=/dev/null
   . "$toolchain_home/.wiki-toolchain/env"
@@ -47,11 +53,13 @@ native_project=${NATIVE_PROJECT:-cabal-native-fast.project}
 native_build_dir=${NATIVE_BUILDDIR:-dist-newstyle/native-fast}
 sh toolchain/changelog-stamp.sh
 cabal build -v0 --project-file="$native_project" --builddir="$native_build_dir" wiki-server:exe:wiki-server wiki-app:exe:wiki-app-prerender
+WIKI_SERVER=$(program_from_caller "${WIKI_SERVER:-}")
+WIKI_PRERENDER=$(program_from_caller "${WIKI_PRERENDER:-}")
 WIKI_SERVER=${WIKI_SERVER:-$(cabal list-bin -v0 --project-file="$native_project" --builddir="$native_build_dir" wiki-server:exe:wiki-server)}
 WIKI_PRERENDER=${WIKI_PRERENDER:-$(cabal list-bin -v0 --project-file="$native_project" --builddir="$native_build_dir" wiki-app:exe:wiki-app-prerender)}
 export WIKI_SERVER WIKI_PRERENDER
 if [ "$#" -gt 0 ]; then
-  WIKI_DEMO_DIR=$1
+  WIKI_DEMO_DIR=$(path_from_caller "$1")
   export WIKI_DEMO_DIR
 fi
 suites="demo passkeys server"

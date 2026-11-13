@@ -2637,6 +2637,7 @@ sh toolchain/test-deploy-local.sh
 WIKI_TEST_WIZARD=1 sh toolchain/test-deploy-local.sh   # the wizard's test first
 sh toolchain/test-configure.sh     # the wizard's test alone
 sh toolchain/test-check-tex.sh     # the TeX check, against fake engines
+sh toolchain/test-caller-paths.sh  # the smoke scripts read a relative path from their caller's directory
 ```
 
 The wizard's test (`toolchain/test-configure.sh`) builds the wizard, checks the
