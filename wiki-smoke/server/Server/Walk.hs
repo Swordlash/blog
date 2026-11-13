@@ -605,7 +605,11 @@ visitor smoke loadsRef = do
         click (locator dialog ".password-form button.primary")
         waitQuiet administration
         hasText (locator dialog ".account-state") "With a password"
-        press administration "Escape"
+        -- Escape closes the modal dialog, whose close event the browser
+        -- fires with the next animation frame: the program hears of it
+        -- then, after the press has settled.
+        afterEvent administration "document.querySelector('#app .user-dialog')" "close" (press administration "Escape")
+        waitQuiet administration
         hasText (locator administration "#app .admin-view .user-row[data-login=olive] .user-sign-in") "With a password"
       -- She signs in with it in her browser, from the header's form.
       reload olive

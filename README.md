@@ -3514,12 +3514,82 @@ still creates the `.br` files it serves.
 
 Browser specs mark the whole tree `parallel`, and CI sets
 `HSPEC_HALOGEN_JOBS=2` to use isolated Chromium contexts. The Content Security
-Policy check runs after each context's examples. Smoke programs use Node's
-test runner with two isolated processes (`SMOKE_JOBS` changes that limit).
-Demo, SQLite, PostgreSQL and passkeys have separate browser contexts, servers
-and data; dependent editing/history steps remain sequential within a program.
-The PostgreSQL run creates and drops its own databases, and reports a skip when
-`WIKI_TEST_DATABASE_URL` is absent.
+Policy check runs after each context's examples.
+
+### The smoke tests
+
+The smoke tests drive the page `npm run build-wasm` built, in headless
+Chromium, from native Haskell programs: the suites of `wiki-smoke`, on
+haskell-halogen-playwright, whose driver waits after every action until the
+page's Halogen program says it is idle. Each suite runs with
+`sh toolchain/smoke-suite.sh <suite> [cabal test arguments]`:
+
+| Suite | What it drives |
+| --- | --- |
+| `demo` | the serverless demo as a static host serves it: every prerendered page adopted, a long walk with back, forward and reload, a dark scheme and a phone, slides, the clipboard, offline, the writing assistant |
+| `passkeys` | the assistant's keys synced with real passkeys from Chromium's virtual authenticator, against a real wiki-server |
+| `server` | the server's build of the page against a real wiki-server on SQLite: the administrator's walk, a visitor, a provider's sign-in, every route adopted, the demo imported, interactive SVGs, encrypted spaces and their canary, health and metrics, offline |
+| `server-postgres` | the same on PostgreSQL |
+| `waits` | that the driver's waits hold on the wiki's pages |
+| `screenshots` | the README's screenshots (`npm run screenshots`) |
+
+`npm run smoke-test` runs `demo`, `passkeys` and `server`, then
+`server-postgres` when `WIKI_TEST_DATABASE_URL` names a PostgreSQL server
+(with `WIKI_TEST_PSQL`, `WIKI_TEST_PG_DUMP` and `WIKI_TEST_PG_RESTORE`, as
+`toolchain/ci-postgres.sh` prints them), and says it did not run it
+otherwise. Through `smoke-suite.sh` a suite needs its builds and fails
+without them; under a plain `cabal test` it is one pending example instead
+(`WIKI_SMOKE_REQUIRED=1` makes it fail). The demo is
+`dist-newstyle/wasm/public/app` or `WIKI_DEMO_DIR`; the server's suites take
+`wiki-server` and `wiki-app-prerender` from `WIKI_SERVER` and
+`WIKI_PRERENDER`, or build them in `dist-newstyle/native-fast`. A relative
+path given in these variables is read from the directory the script is run
+from, and a program's bare name is looked up on `PATH`
+(`toolchain/caller-paths.sh`). The driver reads
+`HALOGEN_PLAYWRIGHT_TIMEOUT` (each call's limit, 30 seconds here when it is
+not set, times the throttle), `HALOGEN_PLAYWRIGHT_THROTTLE` (every page's
+processor slowed down by that factor), `HALOGEN_PLAYWRIGHT_ARTIFACTS` (where
+a failing example's screenshot goes), `HALOGEN_PLAYWRIGHT_CONSOLE=1` (the
+pages' console as it comes) and `HALOGEN_PLAYWRIGHT_HEADED=1`. CI runs
+`npm run smoke-test` in its wasm job, and its weekly job `smoke-throttled`
+runs `demo`, `passkeys` and `server` with `HALOGEN_PLAYWRIGHT_THROTTLE=4`, to
+find on purpose a test that passes only because the page is quick enough.
+
+A suite waits on the program, never on the clock. There is no fixed pause.
+After a navigation, `visit` (or a reload and `waitStarted`) waits until the
+program has started. An action settles by itself, so what the program
+renders at once is read straight after it. After an action that makes the
+program ask the server or IndexedDB, `waitQuiet` waits until no fiber of the
+program waits in a `liftIO`, and the page is read once. What is not the
+program's is a condition, named in a comment, and the page is settled after
+it: what an island's library draws, a frame's own script or document, the
+service worker, a push over the WebSocket in another tab, something the
+server does by itself, an image decoded. An event the browser fires later
+than the action's settle (a modal dialog's `close` after Escape, a `popstate`
+after the page's own `history.back()`) is waited for with `afterEvent`
+(`Wiki.Smoke.Browser`), which listens for it before the action. The
+server's pages refuse the driver's `waitForFunction` (their Content Security
+Policy allows no `unsafe-eval`): a condition in the page is asked with
+`holdsInPage`. A failure is raised through `expectationFailure` (or
+`Wiki.Smoke.Api.failure`), never `fail`, so that it names the suite's line on
+every compiler: base's `fail` carries a call stack only from GHC 9.14. In
+the application, a pause that only takes a notice off the screen or ticks
+is `H.delay`, which `waitQuiet` does not wait for; one followed by work a
+test waits for is `liftIO (threadDelay n)` (`Wiki.App.View.Common`).
+
+What stays in node is what tests or serves JavaScript without a browser,
+and one tool: `toolchain/test-assistant.mjs` (the writing assistant's
+providers over the real SDKs) and `toolchain/test-tikz-letters.mjs`, which
+`npm run smoke-test` runs through `toolchain/run-smoke-tests.mjs` after the
+suites; `toolchain/deploy-server.mjs`, the deploy's static server, which
+`toolchain/test-deploy-server.mjs` tests over HTTP alone (from
+`toolchain/test-deploy-local.sh`); `toolchain/compress.mjs`, the deploy's
+brotli files; `toolchain/test-native-groups.mjs`, CI's check of its test
+groups; `toolchain/wasm-test-runner.mjs`, which runs a wasm test binary
+under Node for `toolchain/wasm-test-wrapper.sh`; and
+`toolchain/measure-slide-jumps.mjs`, run by hand only, which times the
+presentation editor on a long deck with Playwright from node: a measure for
+finding where the time goes, not a test.
 
 `serve-wasm` opens the page in a browser; set `PORT` for another port, `NO_OPEN=1` to
 not open one. Builds go to `dist-newstyle/native` and `dist-newstyle/wasm`; always
