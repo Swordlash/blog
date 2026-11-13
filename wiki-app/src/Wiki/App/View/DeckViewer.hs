@@ -253,8 +253,13 @@ component =
                   ( \element -> do
                       channel <- liftIO HS.create
                       void (H.subscribe channel.emitter)
-                      callback <- liftIO (mkSyncCallback (const (HS.notify channel.listener (Near st.generation))))
-                      i <- liftIO (js_when_near element callback)
+                      -- The watch starts on the loop, without a wait, in the
+                      -- step that keeps it in the state: through 'liftIO' a
+                      -- viewer closed in between would never keep it, and
+                      -- 'stopNear' would leave it watching a removed element.
+                      (callback, i) <- H.liftEffect . liftIO $ do
+                        callback <- mkSyncCallback (const (HS.notify channel.listener (Near st.generation)))
+                        (callback,) <$> js_when_near element callback
                       modify (\s -> s {near = Just i, callbacks = callback : s.callbacks})
                   )
         _ -> pass
