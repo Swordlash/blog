@@ -93,11 +93,21 @@ closeSqlite = close
 -- the log (@PRAGMA wal_checkpoint(TRUNCATE)@), outside any transaction:
 -- whether it went through. It does not while a reader still reads a state
 -- the log holds; the next one, or SQLite's own, then finishes it.
+--
+-- It does not wait. A truncating checkpoint waits, through the
+-- connection's busy handler, for every reader to leave the log; with the
+-- handler's 10 seconds a reader holding a snapshot (a backup being taken)
+-- would hold the only writer that long at each attempt. So the busy
+-- handler is off for the checkpoint (@busy_timeout = 0@), and put back
+-- after it, however it ends: the checkpoint copies what it can and says
+-- at once whether it could empty the log. Who needs it to run tries again
+-- under a deadline of its own.
 checkpointSqlite :: Connection -> IO Bool
 checkpointSqlite c =
-  (query_ c "PRAGMA wal_checkpoint(TRUNCATE)" :: IO [(Int, Int, Int)]) <&> \case
-    [(busy, _, _)] -> busy == 0
-    _ -> False
+  bracket_ (execute_ c "PRAGMA busy_timeout = 0") (execute_ c "PRAGMA busy_timeout = 10000") $
+    (query_ c "PRAGMA wal_checkpoint(TRUNCATE)" :: IO [(Int, Int, Int)]) <&> \case
+      [(busy, _, _)] -> busy == 0
+      _ -> False
 
 -- | Begin a transaction: one that writes takes the database's write lock
 -- at once (@BEGIN IMMEDIATE@), so that what it reads is still true when it

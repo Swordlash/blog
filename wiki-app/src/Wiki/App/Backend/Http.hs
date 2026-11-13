@@ -627,7 +627,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
       >>= keepingSpaces (map (\p -> (p.id, p.space)))
   postDetails sid = pageContent (\c -> Map.lookup sid c.postDetails) (endpoints.spaces.postDetails sid) (withPostDetails sid)
   getPage sid path =
-    encryptedOr sid (pageContent (cachedPage sid path) (getResponse <$> endpoints.spaces.pageAt sid path) (withPageAt sid path)) (sealedGetPage sid path)
+    encryptedOr sid (readPlain =<< pageContent (cachedPage sid path) (getResponse <$> endpoints.spaces.pageAt sid path) (withPageAt sid path)) (sealedGetPage sid path)
       >>= keepingSpaces (\p -> [(p.id, p.space)])
 
   -- Page content (see "Wiki.App.Backend.Http.Cache"): cached only while
@@ -1722,6 +1722,15 @@ freshSpaces = do
     else do
       result <- send endpoints.spaces.list
       for_ result (modifyCache . withSpaces)
+      -- A space plain now (its encryption turned off, here or elsewhere):
+      -- its key and what was held of its pages are let go, and its pages
+      -- are no longer taken for encrypted ones.
+      for_ result $ \spaces -> do
+        let plain = Set.fromList [s.id | s <- spaces, isNothing s.encryption]
+        gone <- atomicHeld $ \h ->
+          let (h', dropped) = dropSpaces (`Set.member` plain) h
+           in (h' {heldPages = Map.filter (\(sid, _) -> Set.notMember sid plain) h'.heldPages}, dropped)
+        liftIO (letGo gone)
       pure result
 
 -- | A space's current key id, if the list says it is encrypted.
@@ -2159,6 +2168,15 @@ unreadable = "(a page this browser cannot decrypt)"
 --------------------------------------------------------------------------------
 -- The chain of versions
 
+-- | A page read plain: whatever this tab held of it as an encrypted page
+-- (read before another tab's conversion made it plain) is forgotten, so
+-- that its history, comments, attachments and writes go by the plain
+-- routes from now on ('forgetSealedPage').
+readPlain :: (MonadIO m) => Either WikiError Page -> HttpWiki m (Either WikiError Page)
+readPlain result = do
+  for_ result $ \p -> whenM (Map.member p.id . (\h -> h.heldPages) <$> readHeld) (forgetSealedPage p.id)
+  pure result
+
 -- | Remember the latest versions of pages read here ('heldHeads').
 rememberHeads :: (MonadIO m) => [(PageId, (UTCTime, VersionTag, Maybe Chain))] -> HttpWiki m ()
 rememberHeads heads = modifyHeld (\h -> h {heldHeads = Map.union (Map.fromList heads) h.heldHeads})
@@ -2209,6 +2227,24 @@ checkHead key sid pid k tag chain = withUser $ \u -> do
   case verdict of
     Left problem -> foundProblem pid problem
     Right () -> for_ chain $ \c -> rememberSeen pid Seen {number = c.number, tag, origin = c.origin}
+
+-- | Whether this browser trusts a page's history as the server sent it,
+-- before it is written out or made plain (the export, the decryption; a
+-- save and a restore refuse a page with a problem held, 'heldProblems'):
+-- its latest version against what this browser read before
+-- ('checkHead'), the whole history given (the latest first, each
+-- version's tag and chain as its decryption gave them) one chain from its
+-- latest version without a break ('gapIn'), and no problem found before.
+-- The problem, or 'Nothing'.
+pageTrusted :: (MonadIO m) => SpaceKey -> SpaceId -> PageId -> [PageKey] -> SealedContent -> [(VersionTag, Maybe Chain)] -> HttpWiki m (Maybe ChainProblem)
+pageTrusted key sid pid keys latest history = do
+  checkHead key sid pid keys latest.tag latest.chain
+  case history of
+    [] -> pass
+    newest : _
+      | newest /= (latest.tag, latest.chain) -> foundProblem pid (Unlinked {seen = maybe 0 (\c -> c.number) latest.chain, served = maybe 0 (\c -> c.number) (snd newest)})
+      | otherwise -> for_ (gapIn history) (foundProblem pid)
+  Map.lookup pid . (\h -> h.heldProblems) <$> readHeld
 
 -- | A page's history, the latest first, read a page at a time from a
 -- version on (all of it for 'Nothing'), each page's titles decrypted,
@@ -2324,12 +2360,12 @@ sealedListPagesWith sid current =
         pure (Right (pageTreeOrder order (sealed <> others)), Map.size titles == length listed)
 
 sealedGetPage :: (MonadIO m) => SpaceId -> [Slug] -> KeyId -> HttpWiki m (Either WikiError Page)
-sealedGetPage sid path current = plainWhileConverting sid (send (getResponse <$> endpoints.spaces.pageAt sid path)) $
+sealedGetPage sid path current = plainWhileConverting sid (readPlain =<< send (getResponse <$> endpoints.spaces.pageAt sid path)) $
   readingSealed NoRefresh sid current $ \key ->
     send (getResponse <$> endpoints.encrypted.pageAt sid path) >>= \case
       -- A page a conversion of its space has not encrypted yet, or has
       -- decrypted already: read by the plain route.
-      Left (Conflict why) | notConvertedYet `T.isPrefixOf` why -> (,True) <$> send (getResponse <$> endpoints.spaces.pageAt sid path)
+      Left (Conflict why) | notConvertedYet `T.isPrefixOf` why -> (,True) <$> (readPlain =<< send (getResponse <$> endpoints.spaces.pageAt sid path))
       Left e -> pure (Left e, True)
       Right p -> do
         rememberPages sid [(p.id, p.pageKey)]
@@ -2835,8 +2871,7 @@ exportedSpace s current =
         -- The version opened, so its tag and chain are its own: checked
         -- against what this browser read before, as a page read is, so that
         -- a version older than one read here never goes into the file.
-        lift (checkHead key s.id p.id p.pageKeys p.content.tag p.content.chain)
-        lift (Map.lookup p.id . (\h -> h.heldProblems) <$> readHeld) >>= traverse_ (\problem -> throwError (Invalid (pageNamed path <> " " <> chainProblemText problem <> " Nothing was exported."), True))
+        lift (pageTrusted key s.id p.id p.pageKeys p.content []) >>= traverse_ (\problem -> throwError (Invalid (pageNamed path <> " " <> chainProblemText problem <> " Nothing was exported."), True))
         attached <- for p.attachments $ \a -> lift (exportedAttachment key s.id p.id p.pageKeys a) >>= either (const (unopened path "an attachment of it")) pure
         listedThreads <- sent (send (endpoints.encrypted.threads p.id))
         threads <- for listedThreads.threads $ \t -> lift (openThreadWith key s.id p.id listedThreads.pageKeys t) >>= maybe (unopened path "a comment on it") pure
@@ -2989,11 +3024,16 @@ decryptOnePage sid k pid =
     loc <- ExceptT (send (endpoints.pages.location pid))
     p <- ExceptT (send (getResponse <$> endpoints.encrypted.pageAt sid loc.page))
     infos <- ExceptT (allVersions (endpoints.encrypted.versions pid) (\v -> v.updatedAt))
-    versions <- for (reverse infos) $ \info -> do
+    opened <- for (reverse infos) $ \info -> do
       v <- ExceptT (send (endpoints.encrypted.version pid (VersionTime info.updatedAt)))
       vk <- maybe (throwError (Invalid "A version of this page names no key of the page's.")) pure (keyNamed v.content.keyId p.pageKeys)
       (title, body) <- ExceptT (withPageKey key sid pid vk (\pk -> liftIO (first Invalid <$> openContent pk sid pid v.content)))
-      pure PlainVersion {updatedAt = v.updatedAt, title, body}
+      pure (PlainVersion {updatedAt = v.updatedAt, title, body}, (v.content.tag, v.content.chain))
+    -- The history as this browser trusts it, before anything of the page
+    -- is staged ('pageTrusted'): one the server rolled back or forked is
+    -- not made plain, and its ciphertexts stay as the evidence.
+    lift (pageTrusted key sid pid p.pageKeys p.content (reverse (map snd opened))) >>= traverse_ (throwError . Invalid . chainProblemText)
+    let versions = map fst opened
     listed <- ExceptT (send (endpoints.encrypted.threads pid))
     threads <- for listed.threads $ \t -> lift (openThreadWith key sid pid listed.pageKeys t) >>= maybe (throwError (Invalid "A comment on this page does not decrypt here.")) pure
     -- Names made distinct as the export makes them ('distinctNamesBy'): a
@@ -3049,10 +3089,12 @@ finally' step after = ExceptT (runExceptT step <* after)
 convertNextPage :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError Int)
 convertNextPage sid = runExceptT $ do
   info <- ExceptT (send (endpoints.encrypted.conversion sid))
-  way <- maybe (throwError (Invalid "No conversion runs in this space.")) pure info.running
-  case info.left of
-    [] -> pure 0
-    next : _ -> do
+  -- None runs (it ended, here or in another tab) or nothing is left:
+  -- nothing more to do.
+  case (info.running, info.left) of
+    (Nothing, _) -> pure 0
+    (_, []) -> pure 0
+    (Just way, next : _) -> do
       current <- ExceptT (send (endpoints.encrypted.space next.space))
       when (way == Encrypting) (void (lift (openKey Refresh next.space current.keyId)))
       e <- ExceptT (send (endpoints.encrypted.space next.space))

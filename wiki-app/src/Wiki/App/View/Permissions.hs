@@ -413,6 +413,8 @@ component =
           else
             startConversion space.id Encrypting >>= \case
               Left e -> modify (\st -> st {busy = False, problem = Just e})
+              -- Nothing to convert: ended at its start.
+              Right info | isNothing info.running -> modify (\st -> st {confirming = False}) >> H.raise (Changed Nothing)
               Right info -> modify (\st -> st {confirming = False, conversionInfo = Just info}) >> convertAll (length info.left)
       AskDecrypt asking -> modify (\st -> st {confirmingOff = asking})
       Decrypt -> do
@@ -420,6 +422,7 @@ component =
         modify (\st -> st {busy = True, problem = Nothing})
         startConversion space.id Decrypting >>= \case
           Left e -> modify (\st -> st {busy = False, problem = Just e})
+          Right info | isNothing info.running -> modify (\st -> st {confirmingOff = False}) >> H.raise (Changed Nothing)
           Right info -> modify (\st -> st {confirmingOff = False, conversionInfo = Just info}) >> convertAll (length info.left)
       Continue -> do
         modify (\st -> st {busy = True, problem = Nothing})

@@ -168,8 +168,21 @@ function wikiTestEncServer(request) {
     const k = wikiTestEncrypted.directory.get(decodeURIComponent(m[1]));
     return k ? wikiTestEncJson(200, { user: decodeURIComponent(m[1]), keyId: k.keyId, publicKey: k.publicKey, createdAt: "2026-11-07T09:00:00Z" }) : wikiTestEncJson(404, { error: "NotFound" });
   }
+  // Where a page is, by its id.
+  const located = path.match(/^pages\/([^/]+)\/location$/);
+  if (located && request.method === "GET") {
+    const p = wikiTestEncrypted.pages.get(decodeURIComponent(located[1]));
+    if (p) return wikiTestEncJson(200, { space: [wikiTestEncrypted.spaces.get(p.space).space.slug], page: [p.slug] });
+  }
   // The plain routes of an encrypted space's pages refuse, as the server's
   // do, so that the backend reads them through the encrypted routes.
+  // A page another tab made plain during a conversion: read plain.
+  const plainAt = path.match(/^spaces\/([^/]+)\/pages\/at\/(.+)$/);
+  if (plainAt && request.method === "GET") {
+    const slug = decodeURIComponent(plainAt[2].split("/").filter((x) => x).at(-1) ?? "");
+    const p = [...wikiTestEncrypted.pages.values()].find((x) => x.space === decodeURIComponent(plainAt[1]) && x.slug === slug && x.plain);
+    if (p) return wikiTestEncJson(200, { id: p.id, space: p.space, parent: p.parent, title: p.plain.title, slug: p.slug, body: p.plain.body, attachments: [], createdAt: p.versions[0].updatedAt, updatedAt: p.versions[p.versions.length - 1].updatedAt, position: p.position, template: false, kind: "document", createdBy: null, updatedBy: null });
+  }
   const plain = path.match(/^spaces\/([^/]+)\/pages/) ?? path.match(/^pages\/([^/]+)/);
   if (plain) {
     const id = decodeURIComponent(plain[1]);
@@ -342,6 +355,8 @@ function wikiTestEncServer(request) {
       const slug = decodeURIComponent(at[1].split("/").filter((x) => x).at(-1) ?? "");
       const p = slug === "" ? pages.find((x) => x.id === s.space.homePage) : pages.find((x) => x.slug === slug);
       if (!p) return wikiTestEncJson(404, { error: "NotFound" });
+      // The server's refusal, as text (Wiki.Api.Encrypted's notConvertedYet).
+      if (p.plain) return { status: 409, body: "This page is read as plain text while its space is converted: read it by the plain routes.", headers: {} };
       const sealed = wikiTestEncSealed(p);
       return wikiTestEncJson(200, sealed, { ETag: wikiTestEncTag(sealed.updatedAt) });
     }
@@ -501,6 +516,11 @@ function wikiTestEncConversion(s) {
 // The users the server answers as the space's readers, as JSON.
 function wiki_test_encrypted_reader_users(users) {
   wikiTestEncrypted.readerUsers = JSON.parse(users);
+}
+
+// A page made plain by another tab's conversion, with its title and text.
+function wiki_test_encrypted_made_plain(page, title, body) {
+  wikiTestEncrypted.pages.get(page).plain = { title, body };
 }
 
 // The space in the middle of a conversion, as the server lists it.

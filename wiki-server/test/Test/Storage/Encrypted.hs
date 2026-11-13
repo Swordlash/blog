@@ -31,7 +31,7 @@ import Data.ByteString qualified as BS
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Database.Beam (all_, delete, filter_, runDelete, runSelectReturningList, runUpdate, select, update, val_, (<-.), (==.))
 import Database.SQLite.Simple qualified as SQLite
 import Protolude
@@ -1179,9 +1179,16 @@ spec backing = describe "encrypted spaces in the storage" $ do
         snapshot <- SQLite.open file
         SQLite.execute_ snapshot "BEGIN"
         void (SQLite.query_ snapshot "SELECT count(*) FROM pages" :: IO [SQLite.Only Int])
-        encryptPage st p.ada dir s'.id made.id []
+        -- The last commit returns within its own short bound, not after
+        -- SQLite's busy wait of each attempt at the checkpoint.
+        lastCommit <- timed (encryptPage st p.ada dir s'.id made.id [])
+        lastCommit `shouldSatisfy` (< 5)
         -- Ended, but not done: the plain text is still being cleared.
         ((\i -> (i.running, i.clearing)) <$> (ok =<< as p.ada (conversionInfo s'.id))) `shouldReturn` (Nothing, True)
+        -- A write meanwhile, the reader still there: the owed checkpoint it
+        -- tries after it costs next to nothing.
+        meanwhile <- timed (void (ok =<< as p.ada (createSpace Nothing "Meanwhile")))
+        meanwhile `shouldSatisfy` (< 1)
         SQLite.execute_ snapshot "ROLLBACK"
         SQLite.close snapshot
         -- The next write runs the cleanup left pending.
@@ -1191,6 +1198,21 @@ spec backing = describe "encrypted spaces in the storage" $ do
         contents <- traverse (\f -> (f,) <$> BS.readFile f) =<< filterM doesFileExist files
         [f | (f, b) <- contents, m <- [marker "title", marker "text"], encodeUtf8 m `BS.isInfixOf` b] `shouldBe` []
       _ -> pass
+
+    -- A conversion with nothing to convert ends at its start, as any
+    -- other: an encrypted space without pages (one made before home pages)
+    -- is plain at once, and writes are taken again.
+    it "ends a conversion with no page to convert at its start" $ withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+      writing st $ do
+        runUpdate (update wikiDb.spaces (\x -> x.home_page <-. val_ Nothing) (\x -> x.id ==. val_ secret.id.text))
+        runDelete (delete wikiDb.pages (\x -> x.space_id ==. val_ secret.id.text))
+      started <- ok =<< as p.ada (startDecrypting secret.id)
+      (started.running, started.left) `shouldBe` (Nothing, [])
+      spaces <- as p.ada listSpaces
+      [(x.encryption, x.conversion) | x <- spaces, x.id == secret.id] `shouldBe` [(Nothing, Nothing)]
+      void (ok =<< as p.ada (renameSpace secret.id "Plain again"))
 
     -- Every way a conversion ends cleans up as its last commit does: a
     -- decryption turned back before it committed anything leaves no file
@@ -1638,6 +1660,14 @@ giveKey st u c = do
 -- | So many bytes of one letter, in base64url.
 bytes :: Int -> Text
 bytes n = toBase64Url (BS.replicate n 120)
+
+-- | How long an action took, in seconds.
+timed :: IO () -> IO Double
+timed act = do
+  start <- getCurrentTime
+  act
+  end <- getCurrentTime
+  pure (realToFrac (diffUTCTime end start))
 
 -- | The origin of the chains the tests start.
 testOrigin :: VersionTag

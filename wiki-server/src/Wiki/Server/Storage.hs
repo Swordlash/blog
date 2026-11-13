@@ -235,6 +235,7 @@ import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Type.Equality (type (~))
 import Data.UUID.Types qualified as UUID
+import GHC.Clock (getMonotonicTime)
 import Protolude
 import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize, removePathForcibly)
 import Wiki.Api.Account (Account (..), InvitationToken (..), NewAccount (..), providerOnly)
@@ -1941,11 +1942,17 @@ conversionInfo sid = do
 
 -- | Start encrypting a space that has pages.
 startEncrypting :: (MonadIO m) => SpaceId -> E.StartEncrypting -> StoredWiki m (Either WikiError E.ConversionInfo)
-startEncrypting sid = run Writes . startEncryptingTx sid
+startEncrypting sid req = do
+  result <- run Writes (startEncryptingTx sid req)
+  for_ result (\info -> when (isNothing info.running) (afterConversionWrite True))
+  pure result
 
 -- | Start turning a space's encryption off.
 startDecrypting :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError E.ConversionInfo)
-startDecrypting = run Writes . startDecryptingTx
+startDecrypting sid = do
+  result <- run Writes (startDecryptingTx sid)
+  for_ result (\info -> when (isNothing info.running) (afterConversionWrite True))
+  pure result
 
 -- | Stage ciphertexts of a page while its space is encrypted.
 stageSealed :: (MonadIO m) => PageId -> E.StagedSealed -> StoredWiki m (Either WikiError ())
@@ -2004,13 +2011,17 @@ afterConversionWrite ended = do
   st <- StoredWiki (asks (\env -> env.storage))
   liftIO $ case st.engine of
     Engine p -> withResource p.writer $ \c -> do
-      let tries :: Int -> IO Bool
-          tries n =
+      -- Tried for a second and a half at most, every tenth of a second:
+      -- each try returns at once ('checkpoint' does not wait), so the
+      -- writer is held no longer than that.
+      deadline <- (+ 1.5) <$> getMonotonicTime
+      let tries =
             checkpoint c >>= \case
               True -> pure True
-              False | n > 1 -> threadDelay 100000 >> tries (n - 1)
-              False -> pure False
-      done <- tries 20
+              False -> do
+                at <- getMonotonicTime
+                if at + 0.1 < deadline then threadDelay 100000 >> tries else pure False
+      done <- tries
       writeIORef st.pendingCleanup (not done)
       when (ended && isJust st.lock) (collectGarbage c st.place.dataDir)
 
@@ -4858,7 +4869,9 @@ startEncryptingTx sid req = do
   requireEncryptionRule sid
   left <- db (unconvertedIn (map (\x -> x.id) plainTree))
   record "space.encryption-started" (spaceSubject s) [("spaces", show (length plainTree)), ("pages", show (length left))]
-  pure E.ConversionInfo {running = Just Encrypting, root = Just sid, spaces = map (\x -> x.id) plainTree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False}
+  -- Nothing to convert: it ends at once, as at its last commit.
+  _ <- endIfDone Encrypting s plainTree
+  pure E.ConversionInfo {running = if null left then Nothing else Just Encrypting, root = Just sid, spaces = map (\x -> x.id) plainTree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False}
 
 -- | Start turning the encryption of a space, and of the spaces below it,
 -- off.
@@ -4872,7 +4885,9 @@ startDecryptingTx sid = do
   for_ tree $ \x -> db (clearConverted x.id >> setConversion x.id (Just Decrypting))
   left <- db (unconvertedIn (map (\x -> x.id) tree))
   record "space.decryption-started" (spaceSubject s) [("spaces", show (length tree)), ("pages", show (length left))]
-  pure E.ConversionInfo {running = Just Decrypting, root = Just sid, spaces = map (\x -> x.id) tree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False}
+  -- Nothing to convert: it ends at once, as at its last commit.
+  _ <- endIfDone Decrypting s tree
+  pure E.ConversionInfo {running = if null left then Nothing else Just Decrypting, root = Just sid, spaces = map (\x -> x.id) tree, left = [E.ConversionPage {page, space} | (page, space) <- left], cannotEncrypt = [], cannotDecrypt = [], nothingWritten = False, clearing = False}
 
 -- | A page a conversion stages or commits, checked: its space is being
 -- converted this way, the page is not converted yet, and the caller may

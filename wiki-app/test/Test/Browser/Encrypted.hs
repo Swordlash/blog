@@ -140,6 +140,7 @@ $( browserJS
      , ("js_live", "wiki_test_encrypted_live", Safe, [t|JSText -> IO ()|])
      , ("js_document_title", "wiki_test_encrypted_document_title", Safe, [t|IO JSText|])
      , ("js_converting", "wiki_test_encrypted_converting", Safe, [t|JSText -> JSText -> IO ()|])
+     , ("js_made_plain", "wiki_test_encrypted_made_plain", Safe, [t|JSText -> JSText -> JSText -> IO ()|])
      , ("js_reader_users", "wiki_test_encrypted_reader_users", Safe, [t|JSText -> IO ()|])
      , ("js_headings_asked", "wiki_test_encrypted_headings_asked", Safe, [t|IO JSText|])
      , ("js_decrypted", "wiki_test_encrypted_decrypted", Safe, [t|IO JSText|])
@@ -1303,6 +1304,46 @@ spec m = do
     sent <- asked
     [r.url | r <- sent, "notifications/people" `T.isInfixOf` r.url || "nobody-here" `T.isInfixOf` (r.url <> r.body)] `shouldBe` []
     unmount ui
+
+  -- A page this tab read encrypted, made plain since by another tab's
+  -- conversion: read plain now, it is no longer taken for an encrypted
+  -- page, whose writes this tab would refuse or send to the encrypted
+  -- routes.
+  it "takes a page read encrypted and made plain elsewhere as plain, from its plain read on" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Soon plain" "Encrypted.")
+    tab <- as "user-admin"
+    void (ok =<< run tab (getPage secret.id [made.slug]))
+    unsafeIOToPageM (js_converting (toJSText secret.id.text) (toJSText ("decrypting" :: Text)))
+    unsafeIOToPageM (js_made_plain (toJSText made.id.text) (toJSText ("Soon plain" :: Text)) (toJSText ("Plain now." :: Text)))
+    read' <- ok =<< run tab (getPage secret.id [made.slug])
+    read'.body `shouldBe` "Plain now."
+    -- Its comments are asked for by the plain route, as the page's.
+    void (run tab (listThreads made.id))
+    sent <- asked
+    [r.url | r <- sent, ("pages/" <> made.id.text <> "/threads") `T.isSuffixOf` r.url, not ("encrypted" `T.isInfixOf` r.url)] `shouldSatisfy` (not . null)
+    [r.url | r <- sent, ("encrypted/pages/" <> made.id.text <> "/threads") `T.isSuffixOf` r.url] `shouldBe` []
+
+  -- Turning encryption off checks a page's history as an export does,
+  -- before anything of it is staged: a history the server rolled back
+  -- after this browser read the page is refused, and nothing of the page
+  -- is sent to be made plain.
+  it "refuses to turn plain a page whose history the server rolled back, staging nothing of it" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Rolled" "First.")
+    void (ok =<< run env (savePage made.id made.updatedAt "Rolled" "Second."))
+    unsafeIOToPageM (js_strip_home (toJSText secret.id.text))
+    tab <- as "user-admin"
+    void (ok =<< run tab (getPage secret.id [made.slug]))
+    unsafeIOToPageM (js_roll_back (toJSText made.id.text))
+    unsafeIOToPageM (js_converting (toJSText secret.id.text) (toJSText ("decrypting" :: Text)))
+    run tab (convertNext secret.id) >>= \case
+      Left (Invalid why) -> why `shouldSatisfy` T.isInfixOf "older version"
+      other -> panic ("not refused: " <> show other)
+    sent <- asked
+    [r.url | r <- sent, "conversion/pages" `T.isInfixOf` r.url] `shouldBe` []
 
   -- A conversion just started shows how far it is, and Stop, while its
   -- pages are converted: here held at its first page.
