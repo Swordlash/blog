@@ -1844,18 +1844,6 @@ which the wiki pins since #227.
   Shell, Tasks, Spaces, Slides, Search and Notifications move (about
   70 examples), and AGENTS.md's gate names the native suite. Until
   then nothing moves.
-- **WP5.105 A jump to a far slide holds the page for seconds (found
-  by #263's measures, from #259; the owner, 2026-11-13: after WP5.98's
-  (c), one after the other).** On a deck of 60 slides of 100
-  lines, moving the cursor to a far slide (a jump that opens its row,
-  a search step, "next problem") held the page 4.6, 11.5 and 23.6
-  seconds in three measures; a near one costs 18 to 55 ms, and a
-  keystroke in a row on that deck 30 to 150 ms. The cause is not
-  established: the preview following the slide (`SlideAt`) and the
-  row's opening are the suspects. First measure where the time goes
-  (the page's main thread, by a profile in the browser on that deck),
-  then fix the cause; a test holds the cost (the longest hold of the
-  page for a jump across the deck under a bound).
 - **WP5.108 The pause after typing in a long presentation (found by
   WP5.105's measures, #269).** On the deck of 60 slides of 100 lines,
   the pause after a keystroke holds the page 7 to 11 seconds at its
@@ -1869,7 +1857,7 @@ which the wiki pins since #227.
   `fitsNow` and `measuresFor` call it for every slide, so they cost
   slides times text. Publish once for a pause, split the text once,
   then measure again and take what is next; a test holds the pause's
-  longest hold on that deck. Stacked on #269.
+  longest hold on that deck.
 - **WP5.109 A resource made on a worker and kept a step later (found
   by #268).** #268 fixed the owners of addresses and the embedded
   deck's watch: a view's program made a resource through `lift` or
@@ -1881,7 +1869,7 @@ which the wiki pins since #227.
   (`mkSyncCallback`), observer, listener and timer a view keeps in its
   state to stop in `Finalize`. Read them all, make each in the step
   that keeps it (`H.liftEffect`), and say the rule in AGENTS.md's
-  conventions. After #268 and #269, which it shares files with.
+  conventions. After #268, which it shares files with.
 - **WP5.98 The smoke tests wait on the program, and run slowed down
   (the owner, 2026-11-12: "mamy bardzo dużo timing issues w testach
   dymnych"; after #251 and #253).** Two days of red runs fell into two
@@ -2979,6 +2967,24 @@ needs. Each was true when its package merged; check before relying on one.
   nothing and builds the bundle once per job as before. `mv -T` and
   `xargs -r` are GNU's: on another system the script would build every
   time rather than keep.
+- **A move to another slide after #269 (WP5.105).** The cost was not
+  the distance: any move of the cursor to another slide made the
+  preview parse the whole unchanged deck twice (its render, and the
+  look-up of the people mentioned), about 1.1 s each in wasm on 60
+  slides of 100 lines. `Preview` now keeps `Parsed` (the text, its
+  deck, the logins mentioned) and parses once for a text; a move costs
+  about 0.1 s where it cost 2.2 to 2.8, and a browser example holds it
+  under a second. `toolchain/measure-slide-jumps.mjs` times each move
+  on a generated deck against the built demo. Left: of that 0.1 s, 60
+  to 75 ms is the preview rendering every card and Halogen comparing
+  them, which grows with the deck; the cards cannot be memoized at the
+  pin, because a thunk that compares equal is skipped with its child
+  slots unvisited (`Halogen.VDom.Thunk.patchThunk`) and the render
+  pass finalizes every child not visited, so a memoized card's islands
+  would be torn down (read in the code, not run; haskell-halogen
+  should carry a skipped thunk's slots over). A keystroke's own
+  handler on that deck is 47 to 90 ms. The pause after typing is
+  WP5.108.
 - **The editor's search after #263.** Codex ran eight rounds (3, 2, 2,
   2, 3, 2, 1, 0); most findings came from leaning on
   `@codemirror/search` for more than its cursors (its `test` and
