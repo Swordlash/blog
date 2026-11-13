@@ -3054,7 +3054,17 @@ needs. Each was true when its package merged; check before relying on one.
   one an example drops at once; it now waits for the run's template
   database. One failure in 38 runs is not explained: sessions on the
   killed run's databases thirty seconds after the kill; the message now
-  prints them.
+  prints them. It failed the same way once more on #265's `native
+  (postgres)` job (2026-11-13) and passed on the re-run: thirty seconds
+  is a clock where the script needs a condition; it goes with the raced
+  tests listed under WP5.98.
+- **The compilers below the default (#265).** GHC 9.12.4 is built by a
+  weekly job only (and by hand), so an error that only it reports is
+  seen up to a week after its pull request: #265's was a local function
+  in a test whose type 9.12 does not infer. GHC 9.12.4 is installed on
+  the owner's machine: `cabal build -w ghc-9.12.4
+  --builddir=dist-newstyle/native-912 <targets>` shows such an error
+  before a push, and most of what the floor's GHC 9.10.3 reports too.
 - **Presentations (WP5.97, decision 77, #253).** Left out: the detached
   preview window shows a presentation as a document; no theme from the
   space's settings and no look per slide; on a slide, and in the editor's
