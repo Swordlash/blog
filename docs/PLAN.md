@@ -1880,7 +1880,13 @@ which the wiki pins since #227.
   `bringNear`, waited for two seconds), the Vault suite's check for an
   exportable key (one example's leak fails every later one), and
   `page.goBack` in the server smoke test's interactive SVG walk
-  (it timed out four times that day). **(b) is done (#262):**
+  (it timed out four times that day). Two more that day, neither a
+  browser's wait: wiki-core's `Markdown.Html, its cost grows no faster
+  than the HTML` measures times on a shared runner and failed once on a
+  pull request that did not touch it (it needs a count, not a clock);
+  and the editor's scroll listener posted to the live preview's channel
+  after the editor had closed it, an old race in the application that
+  #263's tests made show and fixed. **(b) is done (#262):**
   `toolchain/smoke-test.mjs` is gone; `wiki-smoke-demo` does what it
   did in 82 examples with no fixed pause (of the script's 20
   `eventually` calls 5 stay, each on something that is not the
@@ -2946,8 +2952,20 @@ needs. Each was true when its package merged; check before relying on one.
   itself, attachments of encrypted pages fetched with `no-cache`.
   Moving a space to a destination the encryption rule refuses, and
   turning "private from parent" off under a plain parent, are offered
-  and then refused. Codex's tenth round on the merged head is owed and
-  its findings, if any, are a follow-up.
+  and then refused. Codex's tenth round ran on the merged head and found
+  one thing, fixed in #264 with what its own three rounds found: with
+  the cached list of spaces emptied by a write, the plain route was
+  chosen without the gate. The rule since: what a tab knows about gates
+  does not depend on a cache a write can empty (the last list read is
+  kept beside it); one function, `closedIn`, decides every gate; a list
+  read from the server is the truth, and for a space it leaves out or
+  shows plain everything held is let go; a search reads the list once
+  and decides both its halves from it. Left by #264: a tab that has
+  read no list takes the plain route unchecked (the shell always reads
+  one first); a list gone stale through a change made elsewhere behaves
+  as before; `postDetails`, `pageBacklinks`, `getDraft` and
+  `fetchExport` have no gate of their own and are reached only after a
+  gated read.
 - **Encrypted spaces after #251 (decision 76).** The server still sees:
   the words a reader searches for (the search page's address carries
   them, and the server searches the plain spaces with them), sizes of
