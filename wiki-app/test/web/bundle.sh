@@ -122,16 +122,17 @@ elif [ ! -e node_modules/.package-lock.json ]; then
 elif [ -d "$kept" ]; then
   # Reused: copied, not linked, since the output directory is written to
   # after this script (dev-test.sh copies into it), and a link would write
-  # into the kept bundle. The kept bundle's time is renewed, so that the
-  # pruning below keeps the bundles in use.
+  # into the kept bundle. The kept bundle's time is renewed, and its list
+  # of inputs', so that the pruning below keeps the bundles in use and the
+  # next build says what changed since this one.
   cp -R "$kept/." "$out"
-  touch "$kept"
+  touch "$kept" "$keep/$key.inputs"
   say "reused ${key%"${key#????????????}"} (the inputs are unchanged)"
   exit 0
 else
   last=$(ls -t "$keep"/*.inputs 2>/dev/null | head -n 1)
   if [ -n "$last" ]; then
-    why="changed since the last bundle kept: $(changed "$last" "$list")"
+    why="changed since the bundle used last: $(changed "$last" "$list")"
   else
     why='no bundle kept yet'
   fi
@@ -154,8 +155,7 @@ cp -R "$build/." "$out"
 # digest), and only when node_modules can be told apart.
 inputs >"$list.after"
 if ! cmp -s "$list" "$list.after"; then
-  rm -f "$list.after"
-  say "not kept: the inputs changed while it was built ($(changed "$list" "$list.after" 2>/dev/null || true))"
+  say "not kept: the inputs changed while it was built ($(changed "$list" "$list.after"))"
   exit 0
 fi
 rm -f "$list.after"
