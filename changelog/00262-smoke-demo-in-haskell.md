@@ -1,5 +1,5 @@
 ---
-pr: 0
+pr: 262
 title: The demo's smoke test is written in Haskell and waits on the page
 technical: true
 ---
