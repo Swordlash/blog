@@ -6,10 +6,12 @@
 #
 #   sh toolchain/smoke-suite.sh screenshots [cabal test args...]   # npm run screenshots
 #   sh toolchain/smoke-suite.sh waits [cabal test args...]         # npm run smoke-waits
+#   sh toolchain/smoke-suite.sh demo [cabal test args...]          # part of npm run smoke-test
 #
 # screenshots takes the README's screenshots into docs/screenshots (or the
 # directory WIKI_SCREENSHOTS_DIR names); waits checks that the driver's
-# waits hold on the wiki. Both drive the demo npm run build-wasm wrote in
+# waits hold on the wiki; demo is the demo's smoke test (wiki-smoke's
+# demo/Main.hs says what it checks). All drive the demo npm run build-wasm wrote in
 # dist-newstyle/wasm/public/app, or the directory WIKI_DEMO_DIR names. Here
 # the build is required (WIKI_SMOKE_REQUIRED=1): without it the suite fails
 # rather than reporting its examples pending, as it does under a plain
@@ -35,12 +37,12 @@ fi
 # which CI's wasm job exports for every later command.
 unset CC CXX LD AR NM RANLIB STRIP OBJCOPY OBJDUMP SIZE STRINGS
 
-suite=${1:?usage: smoke-suite.sh <screenshots|waits> [cabal test args...]}
+suite=${1:?usage: smoke-suite.sh <screenshots|waits|demo> [cabal test args...]}
 shift
 case "$suite" in
-  screenshots | waits) ;;
+  screenshots | waits | demo) ;;
   *)
-    printf 'No smoke suite %s: screenshots or waits\n' "$suite" >&2
+    printf 'No smoke suite %s: screenshots, waits or demo\n' "$suite" >&2
     exit 2
     ;;
 esac
@@ -55,7 +57,9 @@ absolute() {
 }
 WIKI_SMOKE_REQUIRED=1
 WIKI_DEMO_DIR=$(absolute "${WIKI_DEMO_DIR:-dist-newstyle/wasm/public/app}")
-export WIKI_SMOKE_REQUIRED WIKI_DEMO_DIR
+# The repository, whose web/src/tikz-letters.mjs the demo's suite reads.
+WIKI_SOURCE_DIR=$(pwd)
+export WIKI_SMOKE_REQUIRED WIKI_DEMO_DIR WIKI_SOURCE_DIR
 if [ "$suite" = screenshots ]; then
   WIKI_SCREENSHOTS_DIR=$(absolute "${WIKI_SCREENSHOTS_DIR:-docs/screenshots}")
   export WIKI_SCREENSHOTS_DIR

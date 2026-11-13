@@ -44,13 +44,16 @@ library
   import:           shared
   hs-source-dirs:   src
   exposed-modules:
+      Wiki.Smoke.Adoption
       Wiki.Smoke.Demo
   if arch(wasm32) || arch(javascript)
     buildable: False
   else
     build-depends:
         base >= 4.20 && < 5,
+        aeson,
         base64-bytestring,
+        http-types,
         bytestring,
         directory,
         filepath,
@@ -93,6 +96,36 @@ test-suite wiki-smoke-waits
   else
     build-depends:
         base,
+        text,
+        haskell-halogen-playwright,
+        wiki-smoke
+
+-- The demo's smoke test, as toolchain/smoke-test.mjs had it: every page the
+-- build wrote adopted by the program, one long walk through the demo, a
+-- dark scheme and a phone, slides, the clipboard and comments, the
+-- service worker offline, and the writing assistant (Main's haddock says
+-- what each part checks). npm run smoke-test runs it.
+test-suite wiki-smoke-demo
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   demo
+  main-is:          Main.hs
+  other-modules:
+      Demo.Prerendered
+      Demo.Site
+  ghc-options:      -threaded
+  if arch(wasm32) || arch(javascript)
+    buildable: False
+  else
+    build-depends:
+        base,
+        aeson,
+        bytestring,
+        directory,
+        filepath,
+        http-client,
+        http-types,
+        process,
         text,
         haskell-halogen-playwright,
         wiki-smoke
