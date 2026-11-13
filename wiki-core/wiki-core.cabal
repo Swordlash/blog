@@ -204,6 +204,7 @@ test-suite wiki-core-test
   build-depends:
       QuickCheck,
       aeson,
+      base,
       bytestring,
       containers,
       haskell-halogen-core,

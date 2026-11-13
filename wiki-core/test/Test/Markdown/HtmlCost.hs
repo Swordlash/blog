@@ -7,50 +7,62 @@
 -- page (its render, its search text, its links), so one page must not
 -- stall it.
 --
--- Each input is read and written out again at four sizes, 50, 100, 200 and
--- 400 KB, each the best of three runs. Linear cost makes the largest about
--- eight times the smallest, quadratic cost sixty-four times; the test
--- fails above twenty-four, which a loaded machine does not reach. A run of
--- the largest under 50 ms passes whatever the ratio: there is too little
--- to time.
+-- The cost is counted, not timed: the bytes the work allocates, which GHC
+-- counts for the thread that does it ('getAllocationCounter'), and which
+-- are the same however loaded the machine is. The regressions the test was
+-- written against (commit cd882171) show in it. A text appended to at
+-- every step is copied, so a scan that keeps what it has passed, a builder
+-- that joins each text to the one before and a writer that nests its
+-- appends allocate the square of the length. The walk down the open
+-- elements at every tag shows too: with the depth's bound taken away,
+-- "elements nested deep" allocates 54 times as much at 40 KB as at 5 KB,
+-- where linear is eight (10 with the bound, at those small sizes). Timed,
+-- the test failed now and then on a loaded machine, on a pull request that
+-- changed none of this.
+--
+-- Each input is read and written out again at four sizes, 50, 100, 200
+-- and 400 KB. Linear cost makes the largest allocate about eight times the
+-- smallest, quadratic cost sixty-four times; the test fails above sixteen.
 module Test.Markdown.HtmlCost (spec) where
 
 import Data.Text qualified as T
-import Data.Time (diffUTCTime, getCurrentTime)
 import Protolude
+import System.Mem (getAllocationCounter, setAllocationCounter)
 import Test.Hspec
 import Wiki.Core.Markdown.Html
 
 spec :: Spec
-spec = describe "Markdown.Html, its cost" $ sequential $ do
+spec = describe "Markdown.Html, its cost" $ do
   for_ shapes $ \(name, make, work) ->
     it ("grows no faster than the HTML: " <> toS name) $ do
-      times <- for [50, 100, 200, 400] $ \kb ->
-        -- Each run its own input, a space longer than the one before, made
-        -- before the clock starts: the same input would be read once and
-        -- the result kept.
-        fmap minimum . for [0 .. 2] $ \i -> do
-          let input = make (kb * 1024) <> T.replicate i " "
-          _ <- evaluate (T.length input)
-          timed (work input)
-      let smallest = fromMaybe 0 (head times)
-          largest = fromMaybe 0 (lastMay times)
-      putStrLn (name <> ": " <> T.intercalate ", " [show (round (t * 1000) :: Int) <> " ms" | t <- times])
-      (name, times, largest < 0.05 || largest / max smallest 0.001 < 24) `shouldSatisfy` (\(_, _, ok) -> ok)
+      counts <- for [50, 100, 200, 400] $ \kb -> do
+        -- The input is made before the count starts: only the work is
+        -- counted.
+        let input = make (kb * 1024)
+        _ <- evaluate (T.length input)
+        allocated (work input)
+      let smallest = fromMaybe 0 (head counts)
+          largest = fromMaybe 0 (lastMay counts)
+          ratio = fromIntegral largest / fromIntegral (max smallest 1) :: Double
+      putStrLn (name <> ": " <> T.intercalate ", " [show (c `div` 1024) <> " KiB" | c <- counts] <> " allocated, " <> show (round ratio :: Int) <> " times from the smallest to the largest")
+      (name, counts, ratio) `shouldSatisfy` (\(_, _, r) -> r < 16)
 
-  it "reads the reviewer's style of 100,000 end tags, 400 KB, in a few seconds even unoptimised" $ do
+  it "reads the reviewer's style of 100,000 end tags, 400 KB, allocating in proportion to it" $ do
     let input = "<style>/* " <> T.replicate 100000 "</x>" <> " */</style><p>after</p>"
     _ <- evaluate (T.length input)
-    seconds <- timed (frame input)
-    putStrLn ("the reviewer's input: " <> show (round (seconds * 1000) :: Int) <> " ms" :: Text)
-    seconds `shouldSatisfy` (< 5)
+    bytes <- allocated (frame input)
+    putStrLn ("the reviewer's input: " <> show (bytes `div` 1024) <> " KiB allocated" :: Text)
+    -- Quadratic copying of 400 KB is tens of gigabytes; linear work is a
+    -- few hundred bytes for each byte of input.
+    bytes `shouldSatisfy` (< 1000 * T.length input)
   where
-    timed :: Int -> IO Double
-    timed n = do
-      start <- getCurrentTime
+    -- The bytes the thread allocates while the work's result is forced.
+    allocated :: Int -> IO Int
+    allocated n = do
+      setAllocationCounter 0
       _ <- evaluate n
-      end <- getCurrentTime
-      pure (realToFrac (diffUTCTime end start))
+      left <- getAllocationCounter
+      pure (fromIntegral (negate left))
 
 -- | Each input by its name, made at about a length, and the work it is
 -- given: read and written out again, its length forced.
