@@ -907,14 +907,22 @@ spec m = do
     typed <- unsafeIOToPageM js_stall
     typed `shouldSatisfy` (< 5000)
 
-  it "moves the cursor to a far slide of sixty slides of a hundred lines without holding the page, and no slower the second time" $ runPage $ do
+  -- One example for both, since each opens the same long deck, which costs
+  -- CI about half a minute of a browser page and loads the page beside it.
+  it "moves the cursor to a far slide of sixty slides of a hundred lines, and checks them again after a keystroke, without holding the page" $ runPage $ do
+    -- A line of slide 30 that becomes a marker of an unknown block when
+    -- its first character goes: a problem the check finds in the new text.
+    let typing = T.intercalate "\n" [if n == longSlideLine 30 + 2 then "x[[!nothing]]" else l | (n, l) <- zip [1 :: Int ..] (T.splitOn "\n" longDeck)]
     -- CodeMirror takes the deck's 300,000 characters in seconds on a
     -- loaded machine: more than 'openDeck' waits.
-    (ui, _) <- openDeckWith False longDeck
+    (ui, _) <- openDeckWith False typing
     _ <- eventuallyWithin 60_000 (editorText ui)
-    -- Settled: the rows cut and every slide measured.
+    let problemsOf30 = findAll ui ".editor-slides .slide-row" >>= \rows -> maybe (pure "") (\r -> findAllIn r ".slide-row-problems" >>= fmap T.concat . traverse textContent) (atMay rows 30)
+    -- Settled: the rows cut, every slide measured, and every slide cut
+    -- when presented (one problem on each row).
     eventuallyWithin 120_000 $ length <$> rowTitles ui `shouldReturn` 61
     eventuallyWithin 120_000 $ (fromJSText <$> unsafeIOToPageM js_slide_fits) >>= (`shouldSatisfy` (not . T.isInfixOf "unmeasured"))
+    eventuallyWithin 120_000 $ problemsOf30 `shouldReturn` "1 problem"
     settle
     -- The master's selection set in a slide, as a search's step or the
     -- next problem sets it: the slide's row opens and the preview shows
@@ -922,7 +930,7 @@ spec m = do
     -- until the card is shown and the program has settled.
     let jumpTo n = do
           unsafeIOToPageM js_stall_start
-          let at = lineStart longDeck (longSlideLine n + 2)
+          let at = lineStart typing (longSlideLine n + 2)
           selectText ui at at
           eventuallyWithin 60_000 $ cardTitles ui `shouldReturn` ["Slide " <> show n]
           eventuallyWithin 60_000 $ openTitles ui >>= (`shouldSatisfy` elem ("Slide " <> show n))
@@ -940,20 +948,9 @@ spec m = do
     -- shared machine.
     toTwentieth <- jumpTo 20
     (toLast, toTwentieth) `shouldSatisfy` (\(a, b) -> a < 1000 && b < 1000 && b <= 2 * a + 300)
-
-  it "checks sixty slides of a hundred lines again after a keystroke without holding the page" $ runPage $ do
-    -- A line of slide 30 that becomes a marker of an unknown block when
-    -- its first character goes: a problem the check finds in the new text.
-    let typing = T.intercalate "\n" [if n == longSlideLine 30 + 2 then "x[[!nothing]]" else l | (n, l) <- zip [1 :: Int ..] (T.splitOn "\n" longDeck)]
-    (ui, _) <- openDeck typing
-    let problemsOf30 = findAll ui ".editor-slides .slide-row" >>= \rows -> maybe (pure "") (\r -> findAllIn r ".slide-row-problems" >>= fmap T.concat . traverse textContent) (atMay rows 30)
-    eventuallyWithin 120_000 $ length <$> rowTitles ui `shouldReturn` 61
-    eventuallyWithin 120_000 $ (fromJSText <$> unsafeIOToPageM js_slide_fits) >>= (`shouldSatisfy` (not . T.isInfixOf "unmeasured"))
-    -- Every slide is cut when presented: one problem on each row.
-    eventuallyWithin 120_000 $ problemsOf30 `shouldReturn` "1 problem"
+    -- Slide 30 open, the caret after the "x" in the row's own text ("##
+    -- Slide 30", a blank line, then the line).
     rowHeader ui "Slide 30" >>= click
-    -- The caret after the "x", in the row's own text ("## Slide 30", a
-    -- blank line, then the line).
     rowSelect 30 14 14
     eventuallyWithin 60_000 $ cardTitles ui `shouldReturn` ["Slide 30"]
     settle
