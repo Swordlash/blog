@@ -48,6 +48,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Demo.Prerendered qualified as Prerendered
 import Demo.Site
+import Demo.Walk qualified as Walk
 import Halogen.Playwright.Hspec
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
@@ -58,8 +59,10 @@ main = withDemoIO "the demo, as a static host serves it" $ \demo -> do
   site <- newSite demo
   paths <- prerenderedPaths demo.dir
   visitor <- newProgramGate
+  walk <- Walk.newWalk site
   pure $ playwright $ do
     Prerendered.spec site paths visitor
+    Walk.spec walk
 
 -- | Every index.html under the directory, as the route that serves it:
 -- @/@, @/s/docs/@.

@@ -113,6 +113,7 @@ test-suite wiki-smoke-demo
   other-modules:
       Demo.Prerendered
       Demo.Site
+      Demo.Walk
   ghc-options:      -threaded
   if arch(wasm32) || arch(javascript)
     buildable: False
@@ -127,5 +128,7 @@ test-suite wiki-smoke-demo
         http-types,
         process,
         text,
+        time,
+        zip-archive,
         haskell-halogen-playwright,
         wiki-smoke
