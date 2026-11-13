@@ -35,7 +35,7 @@ import Web.DOM.Internal.Types (Element)
 import Web.Event.Event (EventType (..))
 import Wiki.App.Editor.Browser (attachRow, detachRow, dragCarries, historyKey, markDragged, moveKey, pointerAfter)
 import Wiki.App.Editor.Problems (ProblemRange (..))
-import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), rowHeading, rowLines, rowStarts, swallowed)
+import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), rowLines, rowStarts)
 import Wiki.Core.Slides (Fit (..), SlideSpan (..), fitName)
 
 -- | 'Head' is what a row's header shows: its key, its number among the
@@ -55,20 +55,23 @@ data Head = Head
   }
   deriving stock (Eq, Show)
 
--- | The rows' headers, from the text the rows were cut from, its slides
--- and their fits as the presentation reads them ('Wiki.Core.Slides.slideSpans'
--- and 'Wiki.Core.Slides.fitsNow', in the same order), and its problems'
--- ranges in characters. A row has the fit of the slide that starts on its
--- first line; a row the presentation does not start a slide at
--- ('Wiki.Core.SlideRows.swallowed') has none, and is part of the slide of
--- the row above that takes it in.
-heads :: Text -> Rows -> [SlideSpan] -> [Fit] -> [ProblemRange] -> [Head]
-heads text rows spans fits problems = [headOf i row opener line count | (i, row, opener, line, count) <- zip5 [0 :: Int ..] rows.rows openers startLines counts]
+-- | The rows' headers, from the text the rows were cut from, the rows the
+-- presentation does not start a slide at ('Wiki.Core.SlideRows.swallowed'),
+-- each row's heading ('Wiki.Core.SlideRows.rowHeading', in the rows'
+-- order), the text's slides and their fits as the presentation reads them
+-- ('Wiki.Core.Slides.slideSpans' and 'Wiki.Core.Slides.fitsNow', in the
+-- same order), and its problems' ranges in characters. A row has the fit
+-- of the slide that starts on its first line; a row the presentation does
+-- not start a slide at has none, and is part of the slide of the row
+-- above that takes it in. The rows taken in and the headings are given,
+-- not read here: each costs a parse of the whole text, which the editor
+-- has from its check, or keeps from the rows' texts before.
+heads :: Text -> Rows -> [(Int, Int)] -> [Maybe (Int, Text)] -> [SlideSpan] -> [Fit] -> [ProblemRange] -> [Head]
+heads text rows swallowedRows openers spans fits problems = [headOf i row opener line count | (i, row, opener, line, count) <- zip5 [0 :: Int ..] rows.rows openers startLines counts]
   where
-    -- Each row read once, and the whole text walked once: this runs after
-    -- every pause in the typing, on the page's one thread, so its time
-    -- must grow with the text's length and no faster.
-    openers = map rowHeading rows.rows
+    -- The whole text walked once: this runs after every pause in the
+    -- typing, on the page's one thread, so its time must grow with the
+    -- text's length and no faster.
     starts = rowStarts rows
     ends = drop 1 starts <> [T.length text]
     startLines = rowLines rows
@@ -80,7 +83,7 @@ heads text rows spans fits problems = [headOf i row opener line count | (i, row,
       (s, e) : rest ->
         let (inside, after) = span (\f -> f < e || (e == T.length text && f == e)) (dropWhile (< s) froms)
          in length inside : countIn rest after
-    taken = Map.fromList (swallowed rows)
+    taken = Map.fromList swallowedRows
     fitAt = Map.fromList [(sp.from, f) | (sp, f) <- zip spans fits]
     preambleIsSlide = any (isNothing . (\sp -> sp.level)) spans
     numbered = Map.fromList (numbers 0 (zip3 [0 :: Int ..] rows.rows openers))

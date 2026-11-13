@@ -965,10 +965,13 @@ spec m = do
     press "Backspace"
     eventuallyWithin 120_000 $ problemsOf30 `shouldReturn` "2 problems"
     settle
-    -- Before WP5.108 the pause parsed the whole deck a dozen times and held
-    -- the page 7 seconds at once.
+    -- The pause parsed the whole deck a dozen times and held the page 7
+    -- seconds at once here (7006 ms). The text is parsed once by the check
+    -- and once by the preview now: 477 to 705 ms, 1178 once with the
+    -- machine loaded. The bound leaves room for a slow machine and still
+    -- fails the old code.
     held <- unsafeIOToPageM js_stall
-    held `shouldSatisfy` (< 1000)
+    held `shouldSatisfy` (< 3000)
 
   it "takes the emoji or the mention chosen with the arrows in a row, though the hidden editor changes before Enter, with another row open" $ runPage $ do
     (ui, _) <- openDeck deck

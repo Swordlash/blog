@@ -651,6 +651,10 @@ data State = State
   -- master holds the same layout, mapped through each change since.
   , rowHeads :: [SlideRow.Head]
   -- ^ What the rows' headers show, from the rows and the last check.
+  , rowHeadings :: Map Text (Maybe (Int, Text))
+  -- ^ The heading of each row's text ('SlideRows.rowHeading'), by the
+  -- text: a row is parsed again for its heading only when its text
+  -- changed.
   , nextKey :: RowKey
   -- ^ The key the next new row gets: no key is given twice.
   , openRows :: [RowKey]
@@ -685,6 +689,11 @@ data State = State
   , measures :: Maybe Slides.Measures
   -- ^ Whether each slide of a presentation fits, as the preview last
   -- measured it, for the text it showed.
+  , measuredLater :: Maybe (Text, [Slides.Fit])
+  -- ^ Measures the preview took for a text while that text's check was
+  -- still to come: they are kept for the check, which reads the text's
+  -- slides from the parse it makes anyway, and are made 'measures' then
+  -- (WP5.108 of docs/PLAN.md).
   , oneSlide :: Bool
   -- ^ Whether the preview of a presentation's raw Markdown shows the
   -- cursor's slide alone, rather than the whole deck.
@@ -915,36 +924,59 @@ freshRows st = case st.loaded of
   Ready w
     | w.page.kind == Kind.Presentation ->
         let (rows, nextKey) = SlideRows.cutRows st.nextKey w.loadedBody
-         in st {rows = Just rows, nextKey, openRows = [], keptOpen = [], focusRow = Nothing, deletedOpen = [], rowHeads = headsOf st (problemsOf st) w.loadedBody rows}
+            problems = problemsOf st ((\old -> swallowedOf st (SlideRows.assemble old) old) <$> st.rows)
+            headings = map SlideRows.rowHeading rows.rows
+         in st
+              { rows = Just rows
+              , nextKey
+              , openRows = []
+              , keptOpen = []
+              , focusRow = Nothing
+              , deletedOpen = []
+              , rowHeads = headsOf st problems w.loadedBody rows (swallowedOf st w.loadedBody rows) headings
+              , rowHeadings = Map.fromList (zip (map (.text) rows.rows) headings)
+              }
   _ -> st {rows = Nothing, rowHeads = [], openRows = [], keptOpen = [], focusRow = Nothing, deletedOpen = []}
 
 -- | The rows' headers of a text cut into rows, with what the last check
 -- and the last measures say of that text: the problems given, which are
 -- 'problemsOf' the state, counted on the rows they are in when the text
--- is the one checked.
-headsOf :: State -> [Problems.Problem] -> Text -> Rows -> [SlideRow.Head]
-headsOf st problems text rows =
+-- is the one checked; the rows a block left open takes in
+-- ('swallowedOf'); and each row's heading, in the rows' order.
+headsOf :: State -> [Problems.Problem] -> Text -> Rows -> [(Int, Int)] -> [Maybe (Int, Text)] -> [SlideRow.Head]
+headsOf st problems text rows taken headings =
   let checkedNow = st.checkedText == text && isDeck st
       spans = if checkedNow then st.checked.slides else Slides.slideSpans text
-   in SlideRow.heads text rows spans (Slides.fitsNow st.measures text spans) (if checkedNow then problemRanges text problems else [])
+   in SlideRow.heads text rows taken headings spans (Slides.fitsNow st.measures text spans) (if checkedNow then problemRanges text problems else [])
+
+-- | The rows that the presentation read from the whole text does not
+-- start a slide at ('SlideRows.swallowed'), for rows that hold this text:
+-- from the openers the last check found when the text is the one
+-- checked, so that the whole text is not parsed again, and from a parse
+-- of the text otherwise.
+swallowedOf :: State -> Text -> Rows -> [(Int, Int)]
+swallowedOf st text rows = case st.checked.openers of
+  Just starts | text == st.checkedText -> SlideRows.swallowedFrom starts rows
+  _ -> SlideRows.swallowed rows
 
 -- | The problems the editor marks: the last check's, the failed islands'
 -- in its text, the slides that do not fit, and the rows a block left open
--- takes into the slide above.
-problemsOf :: State -> [Problems.Problem]
-problemsOf st = sort (Problems.allProblems st.checked st.failedIslands <> fitProblems st <> swallowProblems st)
+-- takes into the slide above (given by 'swallowedOf' of the rows, which
+-- are read only when the rows hold the text checked).
+problemsOf :: State -> Maybe [(Int, Int)] -> [Problems.Problem]
+problemsOf st taken = sort (Problems.allProblems st.checked st.failedIslands <> fitProblems st <> swallowProblems st taken)
 
 -- | A problem on the line that opens a block left open (a code fence, a
 -- box, an HTML comment) in a row, which takes the rows below it into its
 -- slide in the presentation read from the whole text, while the rows keep
 -- their own; on the row's heading line when that line cannot be found.
 -- Only for the text checked.
-swallowProblems :: State -> [Problems.Problem]
-swallowProblems st = case st.rows of
-  Just rows
+swallowProblems :: State -> Maybe [(Int, Int)] -> [Problems.Problem]
+swallowProblems st taken = case (st.rows, taken) of
+  (Just rows, Just swallowed)
     | isDeck st && SlideRows.assemble rows == st.checkedText ->
         [ Problems.Problem {from = line, to = line, kind = Problems.SlideSwallows, severity = Problems.Error, message = "A code block, a box or an HTML block on this slide is not closed: in the presentation it takes in the slides after it, up to the end."}
-        | holder <- ordNub (map snd (SlideRows.swallowed rows))
+        | holder <- ordNub (map snd swallowed)
         , Just startLine <- [atMay (SlideRows.rowLines rows) holder]
         , Just row <- [atMay rows.rows holder]
         , let line = startLine + T.count "\n" (T.take (fromMaybe 0 (SlideRows.leftOpenAt row)) row.text)
@@ -973,6 +1005,15 @@ fitProblems st =
       Slides.Tight -> Just (Problems.Warning, "This slide may be cut slightly when presented: less than half a line is left at its foot, or up to a line goes beyond it.")
       Slides.Overflowing -> Just (Problems.Error, "This slide is cut when presented: more than a line goes beyond its foot. Move some of it to a slide of its own.")
       _ -> Nothing
+
+-- | The measures kept for a text whose check was still to come
+-- ('measuredLater'), made 'measures' once that text is checked: from the
+-- slides the check found, without another parse.
+measuredNow :: State -> State
+measuredNow st = case (st.measuredLater, st.checked.openers) of
+  (Just (text, fits), Just _)
+    | text == st.checkedText -> st {measures = Just (Slides.measuresWith text st.checked.slides fits), measuredLater = Nothing}
+  _ -> st
 
 -- | The toolbar's controls of a presentation, or none for a document.
 deckBar :: State -> Maybe DeckBar
@@ -1123,6 +1164,7 @@ component =
               , master = Waiting
               , rows = Nothing
               , rowHeads = []
+              , rowHeadings = mempty
               , nextKey = RowKey 0
               , openRows = []
               , keptOpen = []
@@ -1141,6 +1183,7 @@ component =
               , searchNote = Nothing
               , searchStepped = False
               , measures = Nothing
+              , measuredLater = Nothing
               , selection = Nothing
               , pendingChanges = 0
               , decisions = mempty
@@ -2362,9 +2405,23 @@ component =
       -- those in the checked text are marked.
       -- Whether each slide fits, measured for the text the preview
       -- shows: marked beside the slides' handles and among the problems.
+      -- For the text checked the measures are made from the check's
+      -- slides; for a text whose check is still to come (the preview
+      -- catches up with the typing first) they wait for it ('measuredNow'),
+      -- which publishes; for another text the text is parsed for its
+      -- slides.
       FromPreview (Preview.SlidesMeasured text fits) -> do
-        modify (\st -> st {measures = Just (Slides.measuresFor text fits)})
-        publishProblems
+        st <- get
+        case st.checked.openers of
+          Just _
+            | text == st.checkedText -> do
+                modify (\s -> s {measures = Just (Slides.measuresWith text st.checked.slides fits), measuredLater = Nothing})
+                publishProblems
+          _
+            | isJust st.checkWait -> modify (\s -> s {measuredLater = Just (text, fits)})
+            | otherwise -> do
+                modify (\s -> s {measures = Just (Slides.measuresFor text fits)})
+                publishProblems
       FromPreview (Preview.IslandDrawn key out) -> do
         before <- gets (\st -> st.failedIslands)
         let after = case out of
@@ -2436,7 +2493,7 @@ component =
       -- master's rule (web/src/editor.js's rowsSync): an undo or a redo
       -- takes it to the row the history put the cursor in, which the
       -- "wiki-row-wanted" after this event opens.
-      Relaid -> recutRowsWith True
+      Relaid -> recutRowsWith True True
       -- The search's panel: what it asks for is searched at once; a step
       -- or a replacement goes from the editor's selection, and slide by
       -- slide opens the match's row ("web/src/editor.js"'s rowsSync).
@@ -2792,14 +2849,17 @@ component =
     -- takes them only if its text is still the one they were cut from: a
     -- cut of an older text is dropped, and the next check cuts again. A
     -- row that splits off an open row is open too. Run after the typing
-    -- has paused, with the check.
+    -- has paused, with the check, and for a replacement or a step. New rows
+    -- are published ('publishProblems').
     recutRows :: H.HalogenM State Action Slots ViewOutput m ()
-    recutRows = recutRowsWith False
+    recutRows = recutRowsWith False True
 
-    -- The same, after a structural step or its undo or redo ('True'): a row
-    -- that comes back opens only if it was open when it was deleted.
-    recutRowsWith :: Bool -> H.HalogenM State Action Slots ViewOutput m ()
-    recutRowsWith afterStep = do
+    -- The same, after a structural step or its undo or redo ('True' first):
+    -- a row that comes back opens only if it was open when it was deleted.
+    -- With 'False' second, the rows are not published: the check, which
+    -- publishes right after its re-cut, publishes once for both.
+    recutRowsWith :: Bool -> Bool -> H.HalogenM State Action Slots ViewOutput m ()
+    recutRowsWith afterStep publishing = do
       st <- get
       case (st.master, st.hostElement, st.rows) of
         (Attached, Just host, Just old) ->
@@ -2835,7 +2895,7 @@ component =
                           modify (\s -> s {rows = Just new, nextKey, openRows = opened, deletedOpen = remembered s})
                         -- New rows, new headers, and maybe other rows a
                         -- block left open swallows.
-                        publishProblems
+                        when publishing publishProblems
               )
         _ -> pass
 
@@ -3022,10 +3082,11 @@ component =
         gets (\st -> st.loaded) >>= \case
           Ready w -> do
             found <- liftIO (evaluate (force (Problems.checkText w.page.kind w.body)))
-            modify $ \st -> keepDrawnFailures st {checkWait = Nothing, checked = found, checkedText = w.body}
+            modify $ \st -> measuredNow (keepDrawnFailures st {checkWait = Nothing, checked = found, checkedText = w.body})
             gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (offerFolds host w.body found.folds))
             -- Cut first: the rows a block left open swallows are problems.
-            recutRows
+            -- One publication for the pause, after the re-cut.
+            recutRowsWith False False
             publishProblems
           _ -> modify (\st -> st {checkWait = Nothing})
       modify (\st -> st {checkWait = Just waiting})
@@ -3056,25 +3117,43 @@ component =
     -- with the rows' fits. The headers are made only here, so that no
     -- source of problems can change the button and leave the headers
     -- behind. Run by everything that changes one of those: a check that
-    -- has finished, an island drawn or failed late, the slides measured,
-    -- the editor in place, a step, and a re-cut of the rows taken (after a
-    -- pause in the typing, or for a step's undo or redo). While the editor holds another text than the one checked
+    -- has finished (once, after the re-cut it makes), an island drawn or
+    -- failed late, the slides measured for the text checked, the editor in
+    -- place, a step, and a re-cut of the rows taken outside a check (for a
+    -- step, its undo or redo, a replacement). While the editor holds another text than the one checked
     -- (a step, typing since the check), CodeMirror keeps its marks mapped
     -- through the changes, and the next check marks them again.
+    --
+    -- On a long presentation this is seconds of work, and other handlers
+    -- run while it computes: the rows, the text checked or the measures
+    -- it read may change meanwhile. Each of those changes publishes again,
+    -- so what was computed from the ones before is not written over the
+    -- newer: the headers are written only while the rows, the text checked
+    -- and the measures are still those read.
     publishProblems :: H.HalogenM State Action Slots ViewOutput m ()
     publishProblems = do
       st <- get
-      let problems = problemsOf st
+      let text = SlideRows.assemble <$> st.rows
+          taken = swallowedOf st <$> text <*> st.rows
+          problems = problemsOf st taken
           holdsChecked = case st.loaded of
             Ready w -> w.body == st.checkedText
             _ -> False
+          current s = s.rows == st.rows && s.checkedText == st.checkedText && s.measures == st.measures
       when holdsChecked $ do
-        traverse_ (\host -> H.liftEffect (showProblems host (problemRanges st.checkedText problems))) st.hostElement
-        when (length problems /= st.problemCount) $ modify (\s -> s {problemCount = length problems})
-      for_ st.rows $ \rows -> do
-        let found = headsOf st problems (SlideRows.assemble rows) rows
+        let ranges = problemRanges st.checkedText problems
+        _ <- liftIO (evaluate (length ranges))
+        whenM (gets current) $ do
+          traverse_ (\host -> H.liftEffect (showProblems host ranges)) st.hostElement
+          when (length problems /= st.problemCount) $ modify (\s -> s {problemCount = length problems})
+      for_ ((,,) <$> st.rows <*> text <*> taken) $ \(rows, whole, swallowed) -> do
+        let headings = [fromMaybe (SlideRows.rowHeading r) (Map.lookup r.text st.rowHeadings) | r <- rows.rows]
+            found = headsOf st problems whole rows swallowed headings
         _ <- liftIO (evaluate (sum [T.length h.title | h <- found]))
-        modify (\s -> s {rowHeads = found})
+        modify $ \s ->
+          if current s
+            then s {rowHeads = found, rowHeadings = Map.fromList (zip (map (.text) rows.rows) headings)}
+            else s
 
     cancelPreview :: H.HalogenM State Action Slots ViewOutput m ()
     cancelPreview = do
