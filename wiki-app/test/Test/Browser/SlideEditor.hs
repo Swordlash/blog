@@ -886,6 +886,31 @@ spec m = do
     typed <- unsafeIOToPageM js_stall
     typed `shouldSatisfy` (< 5000)
 
+  it "moves the cursor to a far slide of sixty slides of a hundred lines without holding the page, and no slower the second time" $ runPage $ do
+    (ui, _) <- openDeck longDeck
+    -- Settled: the rows cut and every slide measured.
+    eventuallyWithin 120_000 $ length <$> rowTitles ui `shouldReturn` 61
+    eventuallyWithin 120_000 $ (fromJSText <$> unsafeIOToPageM js_slide_fits) >>= (`shouldSatisfy` (not . T.isInfixOf "unmeasured"))
+    settle
+    -- The master's selection set in a slide, as a search's step or the
+    -- next problem sets it: the slide's row opens and the preview shows
+    -- its card. The longest hold of the page's thread from the selection
+    -- until the card is shown and the program has settled.
+    let jumpTo n = do
+          unsafeIOToPageM js_stall_start
+          let at = lineStart longDeck (longSlideLine n + 2)
+          selectText ui at at
+          eventuallyWithin 60_000 $ cardTitles ui `shouldReturn` ["Slide " <> show n]
+          eventuallyWithin 60_000 $ openTitles ui >>= (`shouldSatisfy` elem ("Slide " <> show n))
+          settle
+          unsafeIOToPageM js_stall
+    -- Each change of the slide shown parsed the whole deck twice in the
+    -- preview: about 2.3 seconds in one hold of the page on a fast machine.
+    toLast <- jumpTo 60
+    -- Another far slide, the first one's row left open: no slower.
+    toTwentieth <- jumpTo 20
+    (toLast, toTwentieth) `shouldSatisfy` (\(a, b) -> a < 500 && b < 500 && b <= max 150 (2 * a))
+
   it "takes the emoji or the mention chosen with the arrows in a row, though the hidden editor changes before Enter, with another row open" $ runPage $ do
     (ui, _) <- openDeck deck
     rowHeader ui "Two" >>= click
@@ -1765,6 +1790,31 @@ spec m = do
 -- with no line break at the end.
 deck :: Text
 deck = T.intercalate "\n" ["# Deck", "", "By me.", "", "## One", "", "First.", "", "## Two", "", "Second.", "", "## Three", "", "Third."]
+
+-- | A presentation as long as a long talk: a title line and sixty slides
+-- of a hundred lines each, about 300,000 characters, each slide with
+-- paragraphs, a list, a code block and a formula.
+longDeck :: Text
+longDeck = T.intercalate "\n" (["# Long", ""] <> concatMap slide [1 .. 60 :: Int])
+  where
+    slide n =
+      (<> [""]) . take 99 $
+        ["## Slide " <> show n, ""]
+          <> para n 0 12
+          <> para n 12 12
+          <> map ("- " <>) (sentences n 24 10)
+          <> ["", "```haskell"]
+          <> ["step" <> show i <> " x = x * " <> show n <> " + " <> show i | i <- [0 .. 9 :: Int]]
+          <> ["```", ""]
+          <> ["$$\\int_0^{" <> show n <> "} x^2 \\, dx = \\frac{" <> show n <> "^3}{3}$$", ""]
+          <> concat [para n k 12 | k <- [34, 46 .. 94]]
+    -- A paragraph of lines, a blank line after it.
+    para n start count = sentences n start count <> [""]
+    sentences n start count = ["Line " <> show k <> " of slide " <> show n <> ": the quick brown fox jumps over the lazy dog." | k <- [start .. start + count - 1 :: Int]]
+
+-- | The line a slide of 'longDeck' starts on, its heading.
+longSlideLine :: Int -> Int
+longSlideLine n = 3 + 100 * (n - 1)
 
 -- | The deck the random walk starts from: a title slide, three slides, and
 -- a formula KaTeX cannot read in the second, for "next problem".
