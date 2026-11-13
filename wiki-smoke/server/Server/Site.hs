@@ -113,7 +113,7 @@ address smoke path = smoke.origin <> path
 
 -- | The administrator's session, which the walk's first example takes.
 adminSession :: (HasCallStack) => Smoke -> IO Session
-adminSession smoke = readIORef smoke.admin >>= maybe (fail "the administrator has not signed in: the walk's first example did not pass") pure
+adminSession smoke = readIORef smoke.admin >>= maybe (failure "the administrator has not signed in: the walk's first example did not pass") pure
 
 setAdminSession :: Smoke -> Session -> IO ()
 setAdminSession smoke = writeIORef smoke.admin . Just
@@ -322,4 +322,4 @@ includes whole part what = expect (part `Text.isInfixOf` whole) (what <> ": \"" 
 
 -- | The value, or a failure that says what was missing.
 orFail :: (HasCallStack) => String -> Maybe a -> IO a
-orFail what = maybe (fail what) pure
+orFail what = maybe (failure what) pure

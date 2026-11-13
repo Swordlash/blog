@@ -35,6 +35,7 @@ module Wiki.Smoke.Api
   , isNull
   , textOr
   , escape
+  , failure
   )
 where
 
@@ -53,6 +54,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Data.Text.Encoding.Error qualified as Text
 import GHC.Stack (HasCallStack)
+import Halogen.Playwright.Hspec (expectationFailure)
 import Network.HTTP.Client (Manager, RequestBody (..), httpLbs, newManager, parseRequest, redirectCount, requestBody, requestHeaders, responseBody, responseHeaders, responseStatus)
 import Network.HTTP.Client qualified as Http
 import Network.HTTP.Client.MultipartFormData (PartM (..), formDataBody, partBS, partFileRequestBody)
@@ -91,7 +93,7 @@ expectStatus :: (HasCallStack) => Int -> String -> Reply -> IO Reply
 expectStatus wanted what a = do
   if a.status == wanted
     then pure a
-    else fail (what <> ": " <> show a.status <> " where " <> show wanted <> " was expected: " <> Text.unpack (Text.take 500 (bodyText a)))
+    else failure (what <> ": " <> show a.status <> " where " <> show wanted <> " was expected: " <> Text.unpack (Text.take 500 (bodyText a)))
 
 -- | The body as text.
 bodyText :: Reply -> Text
@@ -143,7 +145,7 @@ api wiki who method path body extra =
 apiJson :: (HasCallStack) => Reply -> IO Value
 apiJson a = case Aeson.eitherDecodeStrict a.body of
   Right v -> pure v
-  Left e -> fail ("not JSON (" <> e <> ", status " <> show a.status <> "): " <> Text.unpack (Text.take 500 (bodyText a)))
+  Left e -> failure ("not JSON (" <> e <> ", status " <> show a.status <> "): " <> Text.unpack (Text.take 500 (bodyText a)))
 
 -- | Upload a file to the API as a form (a path under @\/api\/v1\/@): the
 -- file's field, name, media type and bytes, and other fields of text.
@@ -189,7 +191,7 @@ infixl 9 .!
 text :: (HasCallStack) => Value -> IO Text
 text = \case
   String t -> pure t
-  other -> fail ("not a string: " <> show other)
+  other -> failure ("not a string: " <> show other)
 
 -- | A string, or the default for anything else.
 textOr :: Text -> Value -> Text
@@ -205,22 +207,33 @@ texts v = list v >>= traverse text
 list :: (HasCallStack) => Value -> IO [Value]
 list = \case
   Array a -> pure (toList a)
-  other -> fail ("not an array: " <> show other)
+  other -> failure ("not an array: " <> show other)
 
 -- | A whole number, or a failure.
 int :: (HasCallStack) => Value -> IO Int
 int = \case
   Number n | Just i <- toBoundedInteger n -> pure i
-  other -> fail ("not a whole number: " <> show other)
+  other -> failure ("not a whole number: " <> show other)
 
 -- | A boolean, or a failure.
 bool :: (HasCallStack) => Value -> IO Bool
 bool = \case
   Bool b -> pure b
-  other -> fail ("not a boolean: " <> show other)
+  other -> failure ("not a boolean: " <> show other)
 
 isNull :: Value -> Bool
 isNull = (== Null)
+
+-- | Fail with the message as an expectation does, naming the line of the
+-- suite that called (hspec's @expectationFailure@, through every function
+-- that carries 'HasCallStack' on the way). @fail@ names the line only
+-- where base's @MonadFail@ carries a call stack, which it does from GHC
+-- 9.14; on the floor's GHC 9.10 it does not.
+failure :: (HasCallStack) => String -> IO a
+failure message = do
+  expectationFailure message
+  -- Not reached: the expectation has thrown.
+  ioError (userError message)
 
 -- | A part of a path, escaped as JavaScript's @encodeURIComponent@ does.
 escape :: Text -> Text
