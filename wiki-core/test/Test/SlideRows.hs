@@ -266,6 +266,17 @@ spec = describe "SlideRows" $ do
       let r = cut "# T\n## A\n"
       map (rowAt r) [0, 3, 4, 8, 9] `shouldBe` [0, 0, 1, 1, 1]
 
+    it "counts the characters in each row of a layout, a row's start its own" $
+      countPerRow [(RowKey 3, 0), (RowKey 1, 10), (RowKey 7, 20)] [25, 0, 9, 10, 10, 30]
+        `shouldBe` [(RowKey 3, 2), (RowKey 1, 2), (RowKey 7, 2)]
+
+    prop "counts each character once, in the row 'rowAt' finds" $
+      forAll aDeck $ \source ->
+        let (r, _) = cutRows (RowKey 0) source
+            at = [0, 3 .. T.length source]
+         in countPerRow (zip [row.key | row <- r.rows] (rowStarts r)) at
+              === [(row.key, length [c | c <- at, rowAt r c == i]) | (i, row) <- zip [0 ..] r.rows]
+
     it "fixes the preamble and a title slide that comes first" $ do
       map (fixedRows . cut) ["Intro.\n# T\n## A\n", "Intro.\n## A\n# T\n", "# T\n## A\n", "## A\n# T\n", "Text.\n"] `shouldBe` [2, 1, 1, 0, 1]
 

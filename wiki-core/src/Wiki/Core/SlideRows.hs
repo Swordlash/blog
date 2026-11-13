@@ -62,6 +62,7 @@ module Wiki.Core.SlideRows
 
     -- * Reading rows
   , rowAt
+  , countPerRow
   , fixedRows
   , rowHeading
   , rowTitle
@@ -71,7 +72,7 @@ module Wiki.Core.SlideRows
   )
 where
 
-import Data.List (zip4)
+import Data.List (span, zip4)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -426,6 +427,21 @@ reorderAt i j xs = take j rest <> take 1 (drop i xs) <> drop j rest
 -- the separator starts, is in that row.
 rowAt :: Rows -> Int -> Int
 rowAt r offset = max 0 (length (takeWhile (<= offset) (rowStarts r)) - 1)
+
+-- | How many of some characters of a text (the starts of the editor's
+-- search's matches) are in each row of a layout, the rows given by their
+-- keys and starts in the order of the text, as the editor holds them: a
+-- character is in the last row that starts at or before it. One walk over
+-- the rows and the characters, sorted first.
+countPerRow :: [(RowKey, Int)] -> [Int] -> [(RowKey, Int)]
+countPerRow layout = go layout . sort
+  where
+    go rows' at = case rows' of
+      [] -> []
+      [(key, start)] -> [(key, length (dropWhile (< start) at))]
+      (key, start) : more@((_, next) : _) ->
+        let (inside, after) = span (< next) (dropWhile (< start) at)
+         in (key, length inside) : go more after
 
 -- | How many of the first rows stay where they are: the preamble, and the
 -- title slide, a first opener of level one. These rows are neither moved
