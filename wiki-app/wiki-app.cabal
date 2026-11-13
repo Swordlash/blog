@@ -408,6 +408,7 @@ test-suite wiki-app-browser-test
       Test.Browser.CopyCode
       Test.Browser.DeckViewer
       Test.Browser.Editor
+      Test.Browser.EditorSearch
       Test.Browser.Emoji
       Test.Browser.Entries
       Test.Browser.Export

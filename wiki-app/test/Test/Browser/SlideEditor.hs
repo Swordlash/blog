@@ -10,8 +10,11 @@
 -- taken away; a row's problems, fits and spoilers' folds; the headers
 -- before CodeMirror is there, and the Markdown without it; the switch to
 -- the raw Markdown and back, which the browser keeps and which changes no
--- byte, of a text with carriage returns too; and the preview, which shows
--- the cursor's slide, or the whole deck.
+-- byte, of a text with carriage returns too; the preview, which shows
+-- the cursor's slide, or the whole deck, and a text with carriage returns'
+-- fits; and the editor's search over the whole text slide by slide (WP5.103b):
+-- the closed rows' counts, a step that opens a closed row and closes none,
+-- the marks in an open row, Replace and Replace all.
 module Test.Browser.SlideEditor (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -42,7 +45,7 @@ import Wiki.Core.Slides (moveSlide)
 import Wiki.Core.Space (Space (id))
 
 $( browserJS
-     ["jsbits/test-slides.js", "jsbits/test-files.js"]
+     ["jsbits/test-slides.js", "jsbits/test-files.js", "jsbits/test-search.js"]
      [ ("js_slide_fits", "wiki_test_slide_fits", Safe, [t|IO JSText|])
      , ("js_slide_focus", "wiki_test_slide_focus", Safe, [t|IO JSText|])
      , ("js_mermaid", "wiki_test_mermaid", Safe, [t|JSText -> IO ()|])
@@ -68,6 +71,9 @@ $( browserJS
      , ("js_slide_cut", "wiki_test_slide_cut", Safe, [t|Int -> IO JSText|])
      , ("js_fit_hold", "wiki_test_fit_hold", Safe, [t|Bool -> IO ()|])
      , ("js_viewport_rules", "wiki_test_viewport_rules", Safe, [t|IO JSText|])
+     , ("js_search_focus", "wiki_test_search_focus", Safe, [t|IO JSText|])
+     , ("js_search_marks", "wiki_test_search_marks", Safe, [t|IO JSText|])
+     , ("js_search_panel_seen", "wiki_test_search_panel_seen", Safe, [t|IO Bool|])
      ]
  )
 
@@ -973,12 +979,150 @@ spec m = do
     press "g"
     eventually $ markdown ui `shouldReturn` typed <> "g"
 
+  -- The editor's search over the whole text (WP5.103b), slide by slide.
+  it "searches the whole presentation from a row with Ctrl+F: the closed rows' headers count their matches, Enter opens the closed row of the next with it selected and in sight, the rows open before stay open, and Escape gives the focus to the match, past an emoji" $ runPage $ do
+    (ui, _) <- openDeck searchDeck
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀"]
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀", "One"]
+    rowSelect 1 10 16
+    press "Control+f"
+    find ui ".editor-search-find" >>= (`getProperty` "value") >>= (`shouldBe` "needle")
+    searchFocus `shouldReturn` "find"
+    eventually $ said ui `shouldReturn` "1 of 3"
+    -- A closed row's header counts its matches; an open row marks them.
+    eventually $ headerCounts ui `shouldReturn` [("Three", "2 matches")]
+    eventually $ searchMarks `shouldReturn` [(1, "needle", True)]
+    -- The next match is in "Three", closed: it opens, the match selected
+    -- and in sight. "One" stays open: a step closes no row. The focus stays
+    -- in the field, where Enter goes on stepping.
+    press "Enter"
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀", "One", "Three"]
+    eventually $ rowSelection 3 `shouldReturn` (10, 16)
+    eventually $ rowCursorSeen 3 `shouldReturn` True
+    searchFocus `shouldReturn` "find"
+    eventually $ said ui `shouldReturn` "2 of 3"
+    eventually $ searchMarks `shouldReturn` [(1, "needle", False), (3, "Needle", True), (3, "needle", False)]
+    headerCounts ui `shouldReturn` []
+    press "Enter"
+    eventually $ rowSelection 3 `shouldReturn` (21, 27)
+    -- Past the end, back to "One": still no row closes.
+    press "Enter"
+    eventually $ said ui `shouldReturn` "1 of 3, from the start"
+    eventually $ rowSelection 1 `shouldReturn` (10, 16)
+    openTitles ui `shouldReturn` ["Deck 😀", "One", "Three"]
+    -- Escape: the focus in "One", at the match.
+    press "Escape"
+    eventually $ length <$> findAll ui ".editor-search" `shouldReturn` 0
+    eventually $ searchFocus `shouldReturn` "text 1"
+    rowSelection 1 `shouldReturn` (10, 16)
+    searchMarks `shouldReturn` []
+    markdown ui `shouldReturn` searchDeck
+    unsafeIOToPageM (fromJSText <$> js_slide_invariants) `shouldReturn` ""
+
+  it "keeps the search's field in sight while a step opens a row far down sixty slides" $ runPage $ do
+    let sixty = T.intercalate "\n\n" ("# Sixty" : concat [["## Slide " <> show n, T.intercalate "\n\n" (replicate 6 ("Text " <> show n <> "."))] | n <- [1 .. 59 :: Int]] <> ["The end."])
+    (ui, _) <- openDeck sixty
+    eventually $ openTitles ui `shouldReturn` ["Slide 1"]
+    rowHeader ui "Slide 1" >>= focus
+    press "Control+f"
+    find ui ".editor-search-find" >>= (`typeText` "the end")
+    eventually $ said ui `shouldReturn` "1 match"
+    press "Enter"
+    eventually $ openTitles ui `shouldReturn` ["Slide 1", "Slide 59"]
+    eventually $ rowCursorSeen 59 `shouldReturn` True
+    unsafeIOToPageM js_search_panel_seen `shouldReturn` True
+    searchFocus `shouldReturn` "find"
+
+  it "replaces a match in a closed row, opening it first, and every match as one step of the history that one Ctrl+Z takes back in every row" $ runPage $ do
+    (ui, _) <- openDeck searchDeck
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀"]
+    -- Ctrl+F on a header: nothing is selected, and the text to find is
+    -- typed.
+    rowHeader ui "Two" >>= focus
+    press "Control+f"
+    find ui ".editor-search-find" >>= (`typeText` "needle")
+    find ui ".editor-search-replacement" >>= (`typeText` "pin")
+    eventually $ said ui `shouldReturn` "3 matches"
+    -- Next selects the match in "One", which opens. Closed again by its
+    -- header, Replace opens it before it writes there, and goes on to
+    -- "Three", which opens.
+    find ui ".editor-search-next" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀", "One"]
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀"]
+    find ui ".editor-search-replace" >>= click
+    let once = T.replace "A needle" "A pin" searchDeck
+    markdown ui `shouldReturn` once
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀", "One", "Three"]
+    eventually $ rowText 1 `shouldReturn` "## One\n\nA pin here.\n"
+    eventually $ said ui `shouldReturn` "1 of 2"
+    -- Replace all: in every slide, in one step.
+    find ui ".editor-search-replace-all" >>= click
+    let every = T.replace "Needle and needle" "pin and pin" once
+    markdown ui `shouldReturn` every
+    eventually $ rowText 3 `shouldReturn` "## Three\n\npin and pin."
+    eventually $ said ui `shouldReturn` "No matches, 2 replaced"
+    -- Escape after a step: the focus at the match, in "Three". One Ctrl+Z
+    -- takes Replace all back, in "Three" and in the text; one more takes
+    -- back the replacement in "One".
+    press "Escape"
+    eventually $ searchFocus `shouldReturn` "text 3"
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` once
+    eventually $ rowText 3 `shouldReturn` "## Three\n\nNeedle and needle."
+    press "Control+z"
+    eventually $ markdown ui `shouldReturn` searchDeck
+    eventually $ rowText 1 `shouldReturn` "## One\n\nA needle here.\n"
+    unsafeIOToPageM (fromJSText <$> js_slide_invariants) `shouldReturn` ""
+
+  it "marks the matches in an open row through its typing, and counts them again after a pause" $ runPage $ do
+    (ui, _) <- openDeck searchDeck
+    rowHeader ui "One" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀", "One"]
+    rowSelect 1 10 16
+    press "Control+f"
+    eventually $ said ui `shouldReturn` "1 of 3"
+    -- Typed in the row before its match: the mark stays on its word, and
+    -- the word typed is marked too.
+    rowSelect 1 8 8
+    openRowContent ui >>= (`typeText` "One more needle. ")
+    eventually $ searchMarks `shouldReturn` [(1, "needle", False), (1, "needle", False)]
+    eventually $ said ui `shouldReturn` "4 matches"
+    headerCounts ui `shouldReturn` [("Three", "2 matches")]
+
+  it "selects a regular expression's match across two slides in the row it starts in" $ runPage $ do
+    (ui, _) <- openDeck searchDeck
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀"]
+    rowHeader ui "Two" >>= focus
+    press "Control+f"
+    find ui ".editor-search-regexp" >>= click
+    find ui ".editor-search-find" >>= (`typeText` "here\\.\\s+## Two")
+    eventually $ said ui `shouldReturn` "1 match"
+    press "Enter"
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀", "One"]
+    -- The part in "One": from "here." to the row's end.
+    eventually $ rowSelection 1 `shouldReturn` (17, 23)
+    eventually $ said ui `shouldReturn` "1 of 1"
+
+  it "marks the fits of a presentation with carriage returns, and its preview follows the cursor's slide" $ runPage $ do
+    let returns = T.replace "\n" "\r\n" deck
+    (ui, _) <- openDeck returns
+    eventually $ editorFits `shouldReturn` replicate 4 "fits"
+    find ui ".editor-side-by-side" >>= click
+    eventually $ cardTitles ui `shouldReturn` ["Deck"]
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    rowSelect 2 1 1
+    eventually $ cardTitles ui `shouldReturn` ["Two"]
+    markdown ui `shouldReturn` returns
+
   -- A random walk over the slide mode, seeded: after every step, once the
   -- page is quiet, the editor's selection is the focused row's, every open
   -- row shows its range, the rows tile the text, and the text is the one a
   -- model of the steps computes.
   for_ [11 :: Int, 23, 47] $ \seed ->
-    it ("holds the rows' invariants through a random walk of typing, splits, joins, moves, deletes, new slides, undos, redos and jumps (seed " <> show seed <> ")") $ runPage $ do
+    it ("holds the rows' invariants through a random walk of typing, splits, joins, moves, deletes, new slides, undos, redos, jumps, search steps and replacements (seed " <> show seed <> ")") $ runPage $ do
       (ui, _) <- openDeck walkDeck
       eventually $ openTitles ui `shouldReturn` ["One"]
       randomWalk ui seed 50
@@ -1216,8 +1360,9 @@ spec m = do
     -- The walk: each step chosen by the seed's numbers from what the page
     -- shows (the rows, the open ones), made, and checked once the page is
     -- quiet. The model's text follows the steps whose effect is known
-    -- (typing, a split, Backspace, a move, a delete, a new slide, undo and
-    -- redo through a stack of texts); after a toolbar command the page's
+    -- (typing, a split, Backspace, a move, a delete, a new slide, the
+    -- search's Replace, undo and redo through a stack of texts; a step of
+    -- the search changes nothing); after a toolbar command the page's
     -- text is taken. A failure says the seed and the steps so far.
     randomWalk :: forall s. Mounted s Shell.Query Void m -> Int -> Int -> PageM s ()
     randomWalk ui seed total = go (fromIntegral seed * 2654435761 + 1) (Model walkDeck [] []) [] 1
@@ -1339,15 +1484,39 @@ spec m = do
             let at = maybe (length r.rows) (+ 1) (head [k | (k, (key, _)) <- zip [0 ..] lay.starts, key == RowKey lay.focused])
             find ui ".editor-new-slide" >>= click
             pure ("new slide at " <> show at, Just (pushText (assemble (fst (newRow (RowKey 0) "New slide" at r))) model))
-        | kind < 83 -> do
+        | kind < 80 -> do
             inList
             press "Control+z"
             pure ("undo", Just (undoModel model))
-        | kind < 90 -> do
+        | kind < 86 -> do
             inList
             press "Control+y"
             pure ("redo", Just (redoModel model))
-        | kind < 95
+        -- A step of the search, from its panel: no text changes, and a
+        -- closed row with the match opens, the others staying as they are.
+        | kind < 90 -> do
+            searching
+            find ui ".editor-search-next" >>= click
+            pure ("search step", Just model)
+        -- Replace, twice when the selection is no match: the first selects
+        -- the next match (opening its row), changing nothing, and the
+        -- second replaces it and selects the next.
+        | kind < 93 -> do
+            searching
+            let matchOf now =
+                  let a = min now.anchor now.cursor
+                      b = max now.anchor now.cursor
+                   in if a < b && T.toLower (T.take (b - a) (T.drop a now.text)) == walkQuery then Just (a, b) else Nothing
+            before <- walkLayout
+            when (isNothing (matchOf before)) $ do
+              find ui ".editor-search-replace" >>= click
+              settle
+            now <- walkLayout
+            find ui ".editor-search-replace" >>= click
+            pure $ case matchOf now of
+              Just (a, b) -> ("replace at " <> show a, Just (pushText (T.take a now.text <> walkReplacement <> T.drop b now.text) model))
+              Nothing -> ("replace, no match", Just model)
+        | kind < 97
         , not (null open) -> do
             find ui ".editor-toolbar button.tool[aria-label=\"Bold\"]" >>= click
             pure ("bold", Nothing)
@@ -1372,6 +1541,19 @@ spec m = do
                   jj = (ii + 1 + fromIntegral r3 `mod` (size - 1)) `mod` size
                in (,) <$> atMay xs ii <*> atMay xs jj
         pickFrom xs = if null xs then Nothing else atMay xs (fromIntegral r2 `mod` length xs)
+        -- The search's panel open, asking for the walk's query and its
+        -- replacement, opened from where the focus is in the list.
+        searching = do
+          shown <- findAll ui ".editor-search"
+          when (null shown) $ do
+            inList
+            press "Control+f"
+            field <- find ui ".editor-search-find"
+            clear field
+            typeText field walkQuery
+            replacement <- find ui ".editor-search-replacement"
+            clear replacement
+            typeText replacement walkReplacement
         -- Undo and redo need the focus in the list: on a header if it is
         -- nowhere there.
         inList = do
@@ -1412,6 +1594,39 @@ deck = T.intercalate "\n" ["# Deck", "", "By me.", "", "## One", "", "First.", "
 walkDeck :: Text
 walkDeck = T.intercalate "\n" ["# Walk", "", "## One", "", "First line.", "", "## Two", "", "Half: $\\frac{1}$ here.", "", "## Three", "", "Third line."]
 
+-- | What the walk's search finds, in "First line." and "Third line.", and
+-- what its Replace writes, which the search finds again (it does not
+-- match case).
+walkQuery, walkReplacement :: Text
+walkQuery = "line"
+walkReplacement = "LINE"
+
+-- | The presentation the search's tests search: "needle" once in "One",
+-- not in "Two", twice in "Three" ("Needle" once), and an emoji in the
+-- title before them.
+searchDeck :: Text
+searchDeck = T.intercalate "\n" ["# Deck 😀", "", "By me.", "", "## One", "", "A needle here.", "", "## Two", "", "Nothing.", "", "## Three", "", "Needle and needle."]
+
+-- | What the search's panel says of the matches.
+said :: Mounted s q o m -> PageM s Text
+said ui = find ui ".editor-search-count" >>= textContent
+
+-- | The closed rows' counts of matches, with the rows' titles.
+headerCounts :: Mounted s q o m -> PageM s [(Text, Text)]
+headerCounts ui = do
+  rows <- findAll ui ".editor-slides .slide-row"
+  counted <- for rows $ \r -> (,) <$> (findIn r ".slide-row-title" >>= textContent) <*> (findIn r ".slide-row-matches" >>= textContent)
+  pure [c | c@(_, n) <- counted, not (T.null n)]
+
+-- | Where the focus is (test-search.js's wiki_test_search_focus).
+searchFocus :: PageM s Text
+searchFocus = unsafeIOToPageM (fromJSText <$> js_search_focus)
+
+-- | The marks of the matches drawn: in which row (-1 for the editor's own
+-- text), the text marked, and whether it is the current match.
+searchMarks :: PageM s [(Int, Text, Bool)]
+searchMarks = fromMaybe [] . decodeStrict . encodeUtf8 <$> unsafeIOToPageM (fromJSText <$> js_search_marks)
+
 -- | The walk's model: the text, the texts an undo goes back to (the last
 -- first) and those a redo goes forward to.
 data Model = Model
@@ -1449,10 +1664,13 @@ insertAt at typed whole = T.take at whole <> typed <> T.drop at whole
 nextRandom :: Word64 -> (Word64, Word64)
 nextRandom g = let g' = g * 6364136223846793005 + 1442695040888963407 in (g' `div` 8589934592, g')
 
--- | The master's text, the row whose text had the focus last, and the
--- rows' keys and starts, in characters, as the component reads them.
+-- | The master's text, its selection, the row whose text had the focus
+-- last, and the rows' keys and starts, in characters, as the component
+-- reads them.
 data WalkLayout = WalkLayout
   { text :: Text
+  , anchor :: Int
+  , cursor :: Int
   , focused :: Int
   , starts :: [(RowKey, Int)]
   }
@@ -1460,14 +1678,16 @@ data WalkLayout = WalkLayout
 instance FromJSON WalkLayout where
   parseJSON = withObject "WalkLayout" $ \o -> do
     text <- o .: "text"
+    anchor <- o .: "anchor"
+    cursor <- o .: "head"
     focused <- o .: "focused"
     pairs <- o .: "rows"
-    pure WalkLayout {text, focused, starts = [(RowKey k, s) | (k, s) <- pairs]}
+    pure WalkLayout {text, anchor, cursor, focused, starts = [(RowKey k, s) | (k, s) <- pairs]}
 
 walkLayout :: PageM s WalkLayout
 walkLayout = do
   json <- unsafeIOToPageM (fromJSText <$> js_master_layout)
-  maybe (expectationFailure ("no layout: " <> json) >> pure (WalkLayout "" (-1) [])) pure (decodeStrict (encodeUtf8 json))
+  maybe (expectationFailure ("no layout: " <> json) >> pure (WalkLayout "" 0 0 (-1) [])) pure (decodeStrict (encodeUtf8 json))
 
 -- | The indices of the open rows.
 openRowIndices :: PageM s [Int]

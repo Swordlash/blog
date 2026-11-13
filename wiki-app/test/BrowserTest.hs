@@ -36,6 +36,7 @@ import Test.Browser.Personal qualified as Personal
 import Test.Browser.Policy qualified as Policy
 import Test.Browser.Problems qualified as Problems
 import Test.Browser.DeckViewer qualified as DeckViewer
+import Test.Browser.EditorSearch qualified as EditorSearch
 import Test.Browser.Folds qualified as Folds
 import Test.Browser.SlideEditor qualified as SlideEditor
 import Test.Browser.SlideRows qualified as SlideRows
@@ -95,6 +96,7 @@ spec = do
   describe "Emoji in the editor" (Emoji.spec BrowserDOM)
   describe "Problems marked in the editor" (Problems.spec BrowserDOM)
   describe "Spoilers folded in the editor" (Folds.spec BrowserDOM)
+  describe "The editor's search over the whole text" (EditorSearch.spec BrowserDOM)
   describe "A presentation in the editor" (SlideEditor.spec BrowserDOM)
   describe "A presentation's slides as rows over one editor" (SlideRows.spec BrowserDOM)
   describe "A presentation embedded in a page" (DeckViewer.spec BrowserDOM)
