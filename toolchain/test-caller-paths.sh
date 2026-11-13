@@ -2,8 +2,10 @@
 # toolchain/caller-paths.sh: a relative path given by a script's caller is
 # read from the caller's directory, an absolute one is kept, and a bare
 # command name is left for PATH; and toolchain/smoke-suite.sh forwards a
-# relative WIKI_SERVER so given, absolute, to the suite it runs. A second
-# or so: the suite's run is stood in for by a fake cabal on PATH.
+# relative WIKI_SERVER so given, absolute, to the suite it runs, and runs a
+# suite's program already built (WIKI_SMOKE_PROGRAM) from wiki-smoke/. A
+# second or so: the suite's run is stood in for by a fake cabal on PATH,
+# and by a fake program.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 failures=0
@@ -48,6 +50,33 @@ chmod +x "$work/bin/cabal"
 check "smoke-suite.sh's relative WIKI_SERVER" "$(sed -n 's/^WIKI_SERVER=//p' "$work/out")" "$work/caller/build/wiki-server"
 check "smoke-suite.sh's bare WIKI_PRERENDER" "$(sed -n 's/^WIKI_PRERENDER=//p' "$work/out")" wiki-app-prerender
 check "smoke-suite.sh's relative WIKI_DEMO_DIR" "$(sed -n 's/^WIKI_DEMO_DIR=//p' "$work/out")" "$work/caller/app"
+
+# With WIKI_SMOKE_PROGRAM, the suite's program already built (relative to
+# the caller's directory), smoke-suite.sh runs it from wiki-smoke/, as
+# cabal does, with the arguments, and runs no cabal; with
+# WIKI_SUITE_TIMES=1 through toolchain/ci-suite-time.sh, which asks for the
+# slowest examples.
+cat > "$work/caller/build/suite" <<'EOF'
+#!/bin/sh
+printf 'PWD=%s\nARGS=%s\n' "$(pwd)" "$*" > "$CALLER_PATHS_OUT"
+EOF
+chmod +x "$work/caller/build/suite"
+for timing in 0 1; do
+  rm -f "$work/out"
+  (
+    cd "$work/caller"
+    CALLER_PATHS_OUT="$work/out" PATH="$work/bin:$PATH" WIKI_TOOLCHAIN_HOME="$work/home" \
+      WIKI_SMOKE_PROGRAM=build/suite WIKI_SUITE_TIMES=$timing GITHUB_STEP_SUMMARY= \
+      sh "$root/toolchain/smoke-suite.sh" demo --match x > "$work/suite-out" 2>&1
+  )
+  check "smoke-suite.sh's program, timed $timing, run from wiki-smoke/" "$(sed -n 's/^PWD=//p' "$work/out")" "$root/wiki-smoke"
+  if [ "$timing" = 1 ]; then
+    check "smoke-suite.sh's timed program's arguments" "$(sed -n 's/^ARGS=//p' "$work/out")" "--match x --print-slow-items=5"
+    check "smoke-suite.sh's timed program's report" "$(grep -c '^smoke-demo: [0-9]* s, budget' "$work/suite-out")" 1
+  else
+    check "smoke-suite.sh's program's arguments" "$(sed -n 's/^ARGS=//p' "$work/out")" "--match x"
+  fi
+done
 
 if [ "$failures" -gt 0 ]; then
   printf '%s of the cases failed\n' "$failures" >&2

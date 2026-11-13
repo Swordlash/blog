@@ -108,11 +108,13 @@ line="$suite: $seconds s, budget $budget_text, $verdict"
 printf '\n%s\n' "$line"
 [ -z "$slowest" ] || printf '%s\n' "$slowest" | sed 's/^/  /'
 
+# One write, so that suites run side by side do not mix their lines.
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-  {
+  block=$(
     printf -- '- `%s`: %s s, budget %s, %s\n' "$suite" "$seconds" "$budget_text" "$verdict"
     [ -z "$slowest" ] || printf '%s\n' "$slowest" | sed 's/|/\\|/g; s/^/  - /'
-  } >> "$GITHUB_STEP_SUMMARY"
+  )
+  printf '%s\n' "$block" >> "$GITHUB_STEP_SUMMARY"
 fi
 
 if [ "$status" -ne 0 ]; then
