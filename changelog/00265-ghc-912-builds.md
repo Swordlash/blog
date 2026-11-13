@@ -1,5 +1,5 @@
 ---
-pr: 0
+pr: 265
 title: The wiki builds on GHC 9.12 again
 technical: true
 ---
