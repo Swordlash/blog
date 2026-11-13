@@ -1045,21 +1045,24 @@ const completions = (host) => {
   const names = asker(host, "wiki-emoji");
   // Whether the reader moved in the emoji's list with the keys (an arrow,
   // Page Up or Page Down) since it was shown for the letters typed: what
-  // was typed then ({from, letters}), or null. A move counts whichever
+  // was typed then ({from, letters}), by view. A move counts whichever
   // entry it lands on, the first too (ArrowDown in a list of one, or down
-  // and back up). It is forgotten when the list closes, and does not count
-  // once other letters are typed.
-  let moved = null;
+  // and back up). It is forgotten when the view's list closes, and does
+  // not count once other letters are typed. The extension is shared by
+  // the master and the rows of the slide mode (attachRow), and each has a
+  // list of its own: the hidden master's transactions (the check's
+  // problems after a pause) must not forget a row's move.
+  const moved = new WeakMap();
   const moving = (binding) => ({
     ...binding,
     run: (view) => {
       const done = binding.run(view);
-      if (done && emojiShown(view.state)) moved = emojiTyped(view.state, view.state.selection.main.head);
+      if (done && emojiShown(view.state)) moved.set(view, emojiTyped(view.state, view.state.selection.main.head));
       return done;
     },
   });
   const forgetMoves = EditorView.updateListener.of((update) => {
-    if (moved !== null && completionStatus(update.state) !== "active") moved = null;
+    if (moved.has(update.view) && completionStatus(update.state) !== "active") moved.delete(update.view);
   });
   // Enter chooses a mention at once, and an emoji as said above; when it
   // chooses nothing, it is a new line.
@@ -1067,7 +1070,8 @@ const completions = (host) => {
     if (!emojiShown(view.state)) return acceptCompletion(view);
     const typed = emojiTyped(view.state, view.state.selection.main.head);
     if (typed === null) return false;
-    const chosen = moved !== null && moved.from === typed.from && moved.letters === typed.letters;
+    const move = moved.get(view);
+    const chosen = move !== undefined && move !== null && move.from === typed.from && move.letters === typed.letters;
     if (typed.letters.length < enterAfter && !chosen) return false;
     return acceptCompletion(view);
   };

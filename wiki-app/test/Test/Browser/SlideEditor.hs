@@ -46,6 +46,7 @@ $( browserJS
      , ("js_slide_focus", "wiki_test_slide_focus", Safe, [t|IO JSText|])
      , ("js_mermaid", "wiki_test_mermaid", Safe, [t|JSText -> IO ()|])
      , ("js_stall_start", "wiki_test_stall_start", Safe, [t|IO ()|])
+     , ("js_master_problems", "wiki_test_master_problems", Safe, [t|IO ()|])
      , ("js_stall", "wiki_test_stall", Safe, [t|IO Int|])
      , ("js_row_cursor_seen", "wiki_test_slide_row_cursor_seen", Safe, [t|Int -> IO Bool|])
      , ("js_drop_filePromise", "wiki_test_drop_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
@@ -870,6 +871,33 @@ spec m = do
     unsafeIOToPageM (threadDelay 1_000_000)
     typed <- unsafeIOToPageM js_stall
     typed `shouldSatisfy` (< 5000)
+
+  it "takes the emoji or the mention chosen with the arrows in a row, though the hidden editor changes before Enter, with another row open" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    let chooseIn typed = do
+          rowSelect 0 14 14
+          openRowContent ui >>= (`typeText` ("\n\n" <> typed))
+          eventually $ length <$> findAll ui ".editor-slides .cm-tooltip-autocomplete" `shouldReturn` 1
+          -- The list takes keys only once it has been shown a moment (the
+          -- library's interactionDelay).
+          unsafeIOToPageM (threadDelay 200_000)
+          press "ArrowDown"
+          eventually $ (findAll ui ".editor-slides .cm-tooltip-autocomplete li[aria-selected]" >>= traverse (`getAttribute` "id")) >>= (`shouldSatisfy` ((== 1) . length))
+          settle
+          -- The check's problems, told to the hidden editor after a pause.
+          unsafeIOToPageM js_master_problems
+          settle
+          press "Enter"
+          eventually $ length <$> findAll ui ".editor-slides .cm-tooltip-autocomplete" `shouldReturn` 0
+          T.takeWhile (/= '\n') . snd . T.breakOnEnd "By me.\n\n" <$> markdown ui
+    -- One letter: Enter chooses an emoji only once the arrows moved.
+    emoji <- chooseIn ":s"
+    emoji `shouldSatisfy` (\line -> T.length line > 3 && ":" `T.isPrefixOf` line && ":" `T.isSuffixOf` line)
+    mention <- chooseIn "@ad"
+    mention `shouldSatisfy` (\line -> T.length line > 3 && "@" `T.isPrefixOf` line && " " `T.isSuffixOf` line)
+    openTitles ui `shouldReturn` ["Deck", "Two"]
 
   it "renders the deck whole for one slide's preview: a macro of an earlier slide, a footnote's number, the same slide in every view" $ runPage $ do
     (ui, wiki) <- openDeck macros

@@ -104,6 +104,12 @@ function wiki_test_slide_focus() {
   return `${active.closest(".slide-row-body") ? "text" : "header"} ${index}`;
 }
 
+// The master's problems told again, as the check does after a pause in the
+// typing: a transaction of the hidden master's own, while a row completes.
+function wiki_test_master_problems() {
+  document.querySelector(".editor-cm:not(.slide-row-body)")?.wikiEditor?.problems?.([]);
+}
+
 // Give the open editor's master a layout cut for another text than the one
 // it holds, as a cut of an older text that arrives late: whether the master
 // took it, and whether its layout has the key the cut gave.
