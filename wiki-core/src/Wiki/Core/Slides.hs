@@ -114,11 +114,13 @@ module Wiki.Core.Slides
   , fitName
   , Measures
   , measuresFor
+  , measuresWith
   , fitsNow
   )
 where
 
 import Data.IntSet qualified as IntSet
+import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Halogen.HTML qualified as HH
 import Protolude
@@ -640,9 +642,11 @@ slideSpansParsed source spans
     pieces starts' rest = case starts' of
       a : more@(b : _) -> let (piece, rest') = T.splitAt (b - a) rest in piece : pieces more rest'
       _ -> []
-    sourceLines = T.splitOn "\n" source
-    lineCount = length sourceLines
-    lineAt n = fromMaybe "" (atMay sourceLines (n - 1))
+    -- The lines in a sequence: a slide's last line is looked up by its
+    -- number, for each slide.
+    sourceLines = textLines source
+    lineCount = Seq.length sourceLines
+    lineAt n = fromMaybe "" (Seq.lookup (n - 1) sourceLines)
     blank n = T.all isSpace (lineAt n)
     lastNonBlank start n
       | n > start && blank n = lastNonBlank start (n - 1)
@@ -694,8 +698,10 @@ slideChunks source = case slideSpans source of
         chunk a b = T.take (b - a) (T.drop a source)
      in (before, zipWith chunk offsets (drop 1 offsets))
   where
-    -- The character the line starts at.
-    lineStart n = sum (map ((+ 1) . T.length) (take (n - 1) (T.splitOn "\n" source)))
+    -- The character the line starts at, from the lines' starts found in
+    -- one walk over the text.
+    starts = Seq.fromList (scanl (\at l -> at + T.length l + 1) 0 (T.splitOn "\n" source))
+    lineStart n = fromMaybe 0 (Seq.lookup (min (n - 1) (Seq.length starts - 1)) starts)
 
 -- | Move a presentation's slide, by its index in 'slideSpans', to be the
 -- slide at another index: its whole text, from its first line up to the
@@ -819,12 +825,20 @@ data Measures = Measures
   deriving stock (Eq, Show)
 
 -- | The measures of a text: the fits by the slides' places in the deck.
+-- The text is parsed for its slides; 'measuresWith' takes slides the
+-- caller has.
 measuresFor :: Text -> [Fit] -> Measures
-measuresFor text fits =
-  Measures
-    { look = lookLines text
-    , measured = zip (map (slideLines text) (slideSpans text)) (fits <> repeat Unmeasured)
-    }
+measuresFor text = measuresWith text (slideSpans text)
+
+-- | 'measuresFor' of a text whose slides ('slideSpans') the caller has
+-- already, as the editor's check reads them: the text is not parsed again.
+measuresWith :: Text -> [SlideSpan] -> [Fit] -> Measures
+measuresWith text spans fits =
+  let ls = textLines text
+   in Measures
+        { look = lookLines ls
+        , measured = zip (slidesLines ls spans) (fits <> repeat Unmeasured)
+        }
 
 -- | Whether each slide of a text (its 'slideSpans') fits, as far as the
 -- measures say: a slide's fit holds while its lines and the look are
@@ -832,17 +846,25 @@ measuresFor text fits =
 -- changed since, or not measured, is 'Unmeasured'.
 fitsNow :: Maybe Measures -> Text -> [SlideSpan] -> [Fit]
 fitsNow measures text spans = case measures of
-  Just m | m.look == lookLines text -> [current (atMay m.measured i) sp | (i, sp) <- zip [0 ..] spans]
+  Just m | m.look == lookLines ls -> zipWith current (map Just m.measured <> repeat Nothing) (zip spans (slidesLines ls spans))
   _ -> map (const Unmeasured) spans
   where
-    current found sp = case found of
-      Just (written, fit) | written == slideLines text sp -> fit
+    ls = textLines text
+    current found (_, written) = case found of
+      Just (was, fit) | was == written -> fit
       _ -> Unmeasured
 
--- | The lines of a text that set a deck's look.
-lookLines :: Text -> [Text]
-lookLines = filter ("[[!style]]" `T.isPrefixOf`) . map T.stripStart . T.splitOn "\n"
+-- | A text's lines, split once, for the slides' lines to be taken from
+-- ('slidesLines'). Splitting the whole text for each slide made the
+-- measures cost the slides times the text: 60 splits of 285,000
+-- characters on a deck of 60 slides (WP5.108 of docs/PLAN.md).
+textLines :: Text -> Seq Text
+textLines = Seq.fromList . T.splitOn "\n"
 
--- | A slide's lines in a text.
-slideLines :: Text -> SlideSpan -> [Text]
-slideLines text sp = take (sp.to - sp.from + 1) (drop (sp.from - 1) (T.splitOn "\n" text))
+-- | The lines of a text that set a deck's look.
+lookLines :: Seq Text -> [Text]
+lookLines = filter ("[[!style]]" `T.isPrefixOf`) . map T.stripStart . toList
+
+-- | Each slide's lines, from a text's lines ('textLines').
+slidesLines :: Seq Text -> [SlideSpan] -> [[Text]]
+slidesLines ls = map (\sp -> toList (Seq.take (sp.to - sp.from + 1) (Seq.drop (sp.from - 1) ls)))

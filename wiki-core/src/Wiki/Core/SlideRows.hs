@@ -67,11 +67,14 @@ module Wiki.Core.SlideRows
   , rowHeading
   , rowTitle
   , swallowed
+  , swallowedFrom
   , leftOpenAt
   , openerStarts
+  , openerStartsParsed
   )
 where
 
+import Data.IntSet qualified as IntSet
 import Data.List (span, zip4)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -165,18 +168,23 @@ fromLayout source = \case
   [] -> Nothing
   (key, _) : rest -> Just (rowsFrom source ((key, 0) : valid 0 rest))
   where
-    total = T.length source
     valid previous = \case
       [] -> []
       (key, s) : rest
-        | s > previous && s <= total && followsLineBreak s -> (key, s) : valid s rest
+        | s > previous && IntSet.member s lineStarts -> (key, s) : valid s rest
         | otherwise -> valid previous rest
-    -- A line feed, or a carriage return without a line feed after it: a
-    -- start between the two characters of @\\r\\n@ is not a line's start.
-    followsLineBreak s = case T.index source (s - 1) of
-      '\n' -> True
-      '\r' -> s == total || T.index source s /= '\n'
-      _ -> False
+    -- Every character that follows a line break, found in one walk over
+    -- the text (looking each row's start up by its index walked the text
+    -- once for each row): after a line feed, or after a carriage return
+    -- without a line feed after it. A start between the two characters of
+    -- @\\r\\n@ is not a line's start.
+    lineStarts = IntSet.fromDistinctAscList (breaks 1 (T.unpack source))
+    breaks at = \case
+      '\n' : more -> at : breaks (at + 1) more
+      '\r' : more@('\n' : _) -> breaks (at + 1) more
+      '\r' : more -> at : breaks (at + 1) more
+      _ : more -> breaks (at + 1) more
+      [] -> []
 
 -- | The keys of the rows whose text is not what it was in the rows
 -- before, new rows included: the rows to re-cut ('recut').
@@ -474,9 +482,15 @@ rowTitle = maybe "" snd . rowHeading
 -- HTML comment) runs on through the rows below it. Empty exactly when the
 -- rows are where a fresh cut of the whole text ('cutRows') puts them.
 swallowed :: Rows -> [(Int, Int)]
-swallowed r = go 0 (zip [0 ..] (rowStarts r))
+swallowed r = swallowedFrom (openerStarts (assemble r)) r
+
+-- | 'swallowed', from the starts of the openers of the rows' whole text
+-- ('openerStarts', or 'openerStartsParsed' of a parse the caller has):
+-- the whole text is not parsed again.
+swallowedFrom :: [Int] -> Rows -> [(Int, Int)]
+swallowedFrom starts r = go 0 (zip [0 ..] (rowStarts r))
   where
-    whole = Set.fromList (0 : openerStarts (assemble r))
+    whole = Set.fromList (0 : starts)
     go holder = \case
       [] -> []
       (k, s) : rest
@@ -523,11 +537,21 @@ leftOpenAt row = case parseDeckSpans probe of
 openerStarts :: Text -> [Int]
 openerStarts source = [s | (s, _, _) <- openers source]
 
+-- | 'openerStarts' of a text parsed already: its blocks as
+-- 'parseDeckSpans' gives them, each with the line it starts on, as the
+-- editor's check reads them ("Wiki.Core.Markdown.Problems"), so that one
+-- parse of a text serves the check and the rows.
+openerStartsParsed :: Text -> [(Maybe Int, Block)] -> [Int]
+openerStartsParsed source spans = [s | (s, _, _) <- openersParsed source spans]
+
 -- | The openers of a text: each one's first character, level and title.
 openers :: Text -> [(Int, Int, [Inline])]
-openers source = case parseDeckSpans source of
-  Left _ -> []
-  Right spans -> atLines (parserLineStarts source) 1 [(l, level, xs) | (Just (l, _), Heading level _ xs) <- deckLevel spans, level <= 2]
+openers source = either (const []) (openersParsed source . map (first (fmap fst))) (parseDeckSpans source)
+
+-- | 'openers' of a text parsed already, each block with the line it
+-- starts on.
+openersParsed :: Text -> [(Maybe Int, Block)] -> [(Int, Int, [Inline])]
+openersParsed source spans = atLines (parserLineStarts source) 1 [(l, level, xs) | (Just l, Heading level _ xs) <- deckLevel spans, level <= 2]
   where
     -- The lines are in order: walk the lines' starts once.
     atLines starts n = \case
