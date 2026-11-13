@@ -43,8 +43,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Protolude
 import Wiki.App.Browser (unzipFiles, zipFiles)
 import Wiki.Core.Anchor (Anchor)
-import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
-import Wiki.Core.Attachment qualified as A
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), distinctAttachments)
 import Wiki.Core.Comment (Comment (..), Thread (..), formerAuthorName)
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (BlobId, PageId)
@@ -143,17 +142,9 @@ decryptedArchive at app exported =
 -- (@plans (2).png@), keeping its bytes: an archive takes one name once
 -- on a page.
 distinctNames :: Page -> (Page, [Text])
-distinctNames p = (p {attachments = reverse kept}, reverse said)
+distinctNames p = (p {attachments = kept}, ["another " <> old <> " of " <> show p.title <> " as " <> new | (old, new) <- said])
   where
-    (kept, said, _) = foldl' step ([], [], Set.empty) p.attachments
-    step (xs, notes, taken) x
-      | Set.member x.name.text taken =
-          let new = fromMaybe x.name.text (find (`Set.notMember` taken) [numbered n x.name.text | n <- [2 :: Int ..]])
-           in (x {A.name = FileName new} : xs, ("another " <> x.name.text <> " of " <> show p.title <> " as " <> new) : notes, Set.insert new taken)
-      | otherwise = (x : xs, notes, Set.insert x.name.text taken)
-    numbered n name = case T.breakOnEnd "." name of
-      (stem, ext) | T.length stem > 1 -> T.dropEnd 1 stem <> " (" <> show n <> ")." <> ext
-      _ -> name <> " (" <> show n <> ")"
+    (kept, said) = distinctAttachments p.attachments
 
 -- | What an archive read back from the file lacks of the archive written,
 -- or 'Nothing' when it holds it all: every space with its name, slug and

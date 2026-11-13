@@ -34,7 +34,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Database.Beam (all_, delete, filter_, runDelete, runSelectReturningList, runUpdate, select, update, val_, (<-.), (==.))
 import Protolude
-import System.Directory (doesFileExist, listDirectory)
+import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Database (Backing)
@@ -1108,7 +1108,7 @@ spec backing = describe "encrypted spaces in the storage" $ do
           rows <- tableRows st
           [(t, r) | (t, rs) <- rows, r <- rs, any (`T.isInfixOf` r) markers] `shouldBe` []
           files <- databaseFiles at
-          blobs <- listDirectory (at.dataDir </> "attachments") <&> map ((at.dataDir </> "attachments") </>)
+          blobs <- blobFilesIn (at.dataDir </> "attachments")
           contents <- traverse (\f -> (f,) <$> BS.readFile f) =<< filterM doesFileExist (files <> blobs)
           [f | (f, b) <- contents, m <- markers, encodeUtf8 m `BS.isInfixOf` b] `shouldBe` []
 
@@ -1158,6 +1158,70 @@ spec backing = describe "encrypted spaces in the storage" $ do
       void (ok =<< as p.ada (savePage pid readBack.updatedAt "Title 3" "Text 3"))
 
     conversionPrivacy backing
+
+    -- Every way a conversion ends cleans up as its last commit does: a
+    -- decryption turned back before it committed anything leaves no file
+    -- of the bytes it staged decrypted. A space above one being converted
+    -- is not deleted, which would take the staged rows with it.
+    it "leaves no staged file behind a decryption turned back before any commit, and keeps a space above a conversion" $ withSystemTempDirectory "conversion" $ \dir -> withPlaceIn backing $ \at -> withStorage defaultConfig at $ \st -> do
+      p <- makePeople st
+      secret <- encryptedOf st p
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+          plainBytes = "plaincanary-staged-bytes" :: ByteString
+      void (ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a')))
+      BS.writeFile (dir </> "sealed") "sealed bytes"
+      void $ ok =<< as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = attachmentId, meta = metaUnder pageKeyOf.keyId 'm', replaces = Nothing} (dir </> "sealed"))
+      inner <- ok =<< as p.ada (createEncryptedSubspace secret.id (subspaceAs p.ada p.adaKey (subspaceId 7) "Inner"))
+      void (ok =<< as p.ada (startDecrypting secret.id))
+      -- Not deleted with a space below it being converted.
+      as p.ada (deleteSpace inner.id) >>= (`shouldSatisfy` ruleRefused "being decrypted")
+      versions <- ok =<< as p.ada (sealedVersions pid (VersionsQuery Nothing 50))
+      ok =<< as p.ada (stagePlain pid StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title = "Title", body = "Text"} | v <- versions], threads = [], comments = [], attachments = [PlainMeta {id = attachmentId, name = "notes.txt", mediaType = "text/plain"}]})
+      BS.writeFile (dir </> "plain") plainBytes
+      ok =<< as p.ada (stageBytesFile pid attachmentId (dir </> "plain"))
+      let blobFiles = do
+            blobs <- blobFilesIn (at.dataDir </> "attachments")
+            filterM (\f -> (plainBytes `BS.isInfixOf`) <$> BS.readFile f) blobs
+      blobFiles >>= (`shouldSatisfy` (not . null))
+      back <- ok =<< as p.ada (reverseConversion secret.id)
+      back.running `shouldBe` Nothing
+      blobFiles `shouldReturn` []
+
+    -- An encrypted page can hold two attachments of one name; a plain page
+    -- cannot (UNIQUE (page_id, name)). Staged under one name they are
+    -- refused before the commit, which would fail; under the names the
+    -- browser makes distinct, the page is committed with both.
+    it "refuses to stage two attachments of a page under one name, and commits them under distinct names" $ withSystemTempDirectory "conversion" $ \dir -> withEncrypted backing $ \st p secret -> do
+      let as :: UserId -> StoredWiki IO a -> IO a
+          as u = runStoredWiki st (AsUser u)
+          pid = PageId "6f1c9a2e-8b4d-4c3f-9e7a-1d2b3c4d5e6f"
+          other = AttachmentId "1a2b3c4d-4444-4c3f-9e7a-1d2b3c4d5e6f"
+      void (ok =<< as p.ada (createSealedPage secret.id (newPage pid Nothing 'a')))
+      BS.writeFile (dir </> "sealed") "sealed bytes"
+      for_ [attachmentId, other] $ \i -> ok =<< as p.ada (uploadSealedAttachmentFile pid SealedUpload {id = i, meta = metaUnder pageKeyOf.keyId 'm', replaces = Nothing} (dir </> "sealed"))
+      started <- ok =<< as p.ada (startDecrypting secret.id)
+      BS.writeFile (dir </> "plain") "plain bytes"
+      for_ started.left $ \x -> do
+        versions <- ok =<< as p.ada (sealedVersions x.page (VersionsQuery Nothing 50))
+        let stage metas = as p.ada (stagePlain x.page StagedPlain {versions = [PlainVersion {updatedAt = v.updatedAt, title = "Title", body = "Text"} | v <- versions], threads = [], comments = [], attachments = metas})
+            meta i n = PlainMeta {id = i, name = n, mediaType = "text/plain"}
+        if x.page == pid
+          then do
+            stage [meta attachmentId "notes.txt", meta other "notes.txt"] >>= (`shouldSatisfy` ruleRefused "would both be named notes.txt")
+            ok =<< stage [meta attachmentId "notes.txt"]
+            stage [meta other "notes.txt"] >>= (`shouldSatisfy` ruleRefused "would both be named notes.txt")
+            ok =<< stage [meta other "notes (2).txt"]
+            for_ [attachmentId, other] $ \i -> ok =<< as p.ada (stageBytesFile x.page i (dir </> "plain"))
+          else ok =<< stage []
+        staged <- ok =<< as p.ada (stagedPage x.page)
+        void (ok =<< as p.ada (commitConverted x.page ConversionCommit {digest = staged.digest}))
+      spaces <- as p.ada listSpaces
+      [x.encryption | x <- spaces, x.id == secret.id] `shouldBe` [Nothing]
+      home <- ok =<< as p.ada (listPages secret.id)
+      read' <- ok =<< as p.ada (getPage secret.id [s' | x <- home, x.id == pid, s' <- [x.slug]])
+      sort (map (\x -> x.name.text) read'.attachments) `shouldBe` ["notes (2).txt", "notes.txt"]
 
     -- A conversion that cannot go on can always be turned round: stopped
     -- halfway and turned back, every page ends as it was, but for the
@@ -1473,6 +1537,16 @@ data People = People
   , dan :: UserId
   , danKey :: KeyId
   }
+
+-- | Every file under a directory, its subdirectories' too (the blob
+-- store keeps each blob under the first two letters of its hash).
+blobFilesIn :: FilePath -> IO [FilePath]
+blobFilesIn dir = do
+  entries <- map (dir </>) <$> listDirectory dir
+  fmap concat . for entries $ \e ->
+    doesDirectoryExist e >>= \case
+      True -> blobFilesIn e
+      False -> pure [e | not (".tmp" `isSuffixOf` e)]
 
 withPeople :: Backing -> (Storage -> People -> IO a) -> IO a
 withPeople = withPeopleIn defaultConfig

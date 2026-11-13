@@ -159,7 +159,7 @@ import Wiki.App.Offline (browserOnline, forgetReads, offlineCopy)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.Vault (identitySlot)
 import Wiki.Core.Anchor (Anchor)
-import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), mimeEssence, parseFileName, shownInBrowser, uploadedMimeType)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), distinctAttachments, mimeEssence, parseFileName, shownInBrowser, uploadedMimeType)
 import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody)
 import Wiki.Core.Encrypted (Chain (..), ChainProblem (..), Judged (..), Kept (..), KeyGrant (..), PageKey (..), SealedAnchor (..), SealedComment (..), SealedContent (..), SealedHeading (..), SealedMeta (..), Seen (..), VersionTag (..), anchorData, attachmentBytesData, attachmentMetaData, chainAfter, chainProblemText, commentData, encryptedPageTitle, firstChain, gapIn, headingOf, judgeHead, linkedFrom)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), CommentId (..), CommentThreadId (..), PageId (..), SpaceId (..))
@@ -2990,7 +2990,9 @@ decryptOnePage sid k pid =
       pure PlainVersion {updatedAt = v.updatedAt, title, body}
     listed <- ExceptT (send (endpoints.encrypted.threads pid))
     threads <- for listed.threads $ \t -> lift (openThreadWith key sid pid listed.pageKeys t) >>= maybe (throwError (Invalid "A comment on this page does not decrypt here.")) pure
-    files <- for p.attachments $ \a -> ExceptT (exportedAttachment key sid pid p.pageKeys a)
+    -- Names made distinct as the export makes them ('distinctNamesBy'): a
+    -- plain page takes one name once, and its text names the first.
+    files <- (\xs -> zip (fst (distinctAttachments (map fst xs))) (map snd xs)) <$> for p.attachments (\a -> ExceptT (exportedAttachment key sid pid p.pageKeys a))
     -- Each text as the encrypted space holds it: a conversion turns it
     -- plain as it is, and refuses none of it.
     let anchors = [PlainAnchor {id = t.id, anchor = t.anchor} | t <- threads]

@@ -38,7 +38,7 @@ import Web.Storage.IndexedDB qualified as IDB
 import Wiki.Api.Security (ResetToken (..))
 import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Types (SessionInfo (..))
-import Wiki.App.Assistant (MonadAssistant, assistantDatabase)
+import Wiki.App.Assistant (MonadAssistant (..), assistantDatabase, dropSlotsIfIO, vaultGenerationIO)
 import Wiki.App.Assistant.Keys (Keys (..), readKeys)
 import Wiki.App.Backend (MonadWiki (..), Session (..), session)
 import Wiki.App.Backend.Encrypted (MonadEncryption (..))
@@ -930,6 +930,31 @@ userKeys m = describe "the user's keys" $ do
     stored "identity:user-editor" `shouldReturn` False
     closed again
 
+  -- The drop of every user's keys reads the store's generation, then
+  -- looks the keys up, then deletes them: a key kept in between (a
+  -- sign-in completed meanwhile, here or in another tab) stops it, decided
+  -- in the same transaction as the deletion.
+  it "lets go of no key when one was kept between the drop's look and its deletion" $ runPage $ do
+    ui <- signedOut "editor's password"
+    signIn ui "editor's password"
+    _ <- madeKeys
+    eventually (stored "vault:user-editor" `shouldReturn` True)
+    let doomed = [UserId "vault:user-editor", UserId "identity:user-editor"]
+    -- A page started afresh, which heard of no sign-in: only the store's
+    -- generation decides.
+    unsafeIOToPageM js_reload
+    before <- unsafeIOToPageM vaultGenerationIO
+    unsafeIOToPageM (runTest (newVaultKey False >>= \k -> void (keepDeviceKey (UserId "user-other") k True) >> forgetKey k :: m ()))
+    unsafeIOToPageM (dropSlotsIfIO before doomed) `shouldReturn` False
+    stored "vault:user-editor" `shouldReturn` True
+    stored "identity:user-editor" `shouldReturn` True
+    now <- unsafeIOToPageM vaultGenerationIO
+    now `shouldSatisfy` (> before)
+    unsafeIOToPageM (dropSlotsIfIO now doomed) `shouldReturn` True
+    stored "vault:user-editor" `shouldReturn` False
+    stored "identity:user-editor" `shouldReturn` False
+    closed ui
+
   -- The view of a space that asks each time, pressed as a reader does: a
   -- wrong password leaves it shut, with nothing of it decrypted; the right
   -- one opens it; and, once a passkey unlocks the keys, the passkey.
@@ -965,6 +990,19 @@ userKeys m = describe "the user's keys" $ do
     eventually $ length <$> findAll gated ".keys-unlock-passkey" `shouldReturn` 1
     find gated ".account-toggle" >>= click
     unmount gated
+    -- Both are offered: a passkey that fails here (one not on this
+    -- device, its dialog closed) leaves the password.
+    failing <- startServer m (R.Page [E.secretSlug] [page.slug])
+    _ <- eventually (find failing ".encrypted-confirm-passkey")
+    _ <- find failing ".encrypted-confirm-password"
+    unsafeIOToPageM js_cancel_next
+    find failing ".encrypted-confirm-passkey" >>= click
+    _ <- eventually (find failing ".encrypted-error")
+    length <$> findAll failing ".page-view" `shouldReturn` 0
+    find failing "input[name=encrypted-password]" >>= (`typeText` "editor's password")
+    find failing ".encrypted-confirm-password" >>= click
+    eventually (find failing ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Opened with the password."))
+    unmount failing
     other <- startServer m (R.Page [E.secretSlug] [page.slug])
     eventually (find other ".encrypted-confirm-passkey") >>= click
     eventually (find other ".page-view .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Opened with the password."))

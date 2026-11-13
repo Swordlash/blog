@@ -89,6 +89,62 @@ function wiki_vault_listen() {
   wikiVaultListen();
 }
 
+// The store's generation: how many times a key was kept on this device
+// (wiki_vault_keep_key), 0 for none.
+async function wiki_vault_generation() {
+  try {
+    const g = await wikiVaultStore("readonly", (store) => store.get("generation"));
+    return typeof g === "number" ? g : 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Let go of these slots' keys (JSON, a list of slots) on this device, in
+// this page, IndexedDB and the other tabs, only if no key was kept since
+// the generation given was read and no sign-in was heard of: the
+// generation is compared and the keys deleted in one transaction, so that
+// a sign-in that keeps its keys in another tab comes either before, and
+// stops it, or after, and keeps them. Whether they were let go.
+async function wiki_vault_drop_if(generation, slots) {
+  const list = JSON.parse(slots);
+  if (globalThis.wikiVaultSignedIn) return false;
+  let dropped = false;
+  try {
+    const db = await wikiVaultDatabase();
+    try {
+      dropped = await new Promise((resolve, reject) => {
+        const transaction = db.transaction("keys", "readwrite");
+        const store = transaction.objectStore("keys");
+        let deciding = false;
+        const g = store.get("generation");
+        g.onsuccess = () => {
+          const now = typeof g.result === "number" ? g.result : 0;
+          if (now === generation && !globalThis.wikiVaultSignedIn) {
+            deciding = true;
+            for (const slot of list) store.delete(String(slot));
+          }
+        };
+        transaction.oncomplete = () => resolve(deciding);
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+    } finally {
+      db.close();
+    }
+  } catch {
+    return false;
+  }
+  if (dropped) {
+    wikiVaultPageKeys();
+    for (const slot of list) {
+      wikiVaultLetGo(String(slot));
+      wikiVaultChannel?.postMessage({ dropped: String(slot) });
+    }
+  }
+  return dropped;
+}
+
 // The slots this device keeps a key in, in IndexedDB and in the page, as
 // JSON: what a page that finds nobody signed in looks through.
 async function wiki_vault_slots() {
@@ -288,8 +344,14 @@ async function wiki_vault_keep_key(user, handle, onDisk) {
     }
     wikiVaultPageKeys().set(String(user), key);
     wikiVaultSlotHandles(String(user)).add(handle);
-    if (onDisk) await wikiVaultStore("readwrite", (store) => store.put(key, String(user)));
-    else await wikiVaultStore("readwrite", (store) => store.delete(String(user)));
+    // The store's generation moves on in the same transaction as the key
+    // is kept: a page about to let go of every user's keys, which read the
+    // generation before, lets go of none (wiki_vault_drop_if).
+    await wikiVaultStore("readwrite", (store) => {
+      const g = store.get("generation");
+      g.onsuccess = () => store.put((typeof g.result === "number" ? g.result : 0) + 1, "generation");
+      return onDisk ? store.put(key, String(user)) : store.delete(String(user));
+    });
     return "";
   } catch (error) {
     return String(error?.message ?? error);

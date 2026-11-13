@@ -97,7 +97,7 @@ import Protolude
 import Wiki.Api.Account (PasswordChange (..), SignInMethods)
 import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), NewPublicKey (..), PublicKeyEntry (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..), VaultChange (..))
 import Wiki.App.Account (SignInError (..), passwordErrorText)
-import Wiki.App.Assistant (KeyRef, Made (..), MonadAssistant (..), NewIdentity (..), PasskeyRefusal (..), Used (..), deviceSlotsIO)
+import Wiki.App.Assistant (KeyRef, Made (..), MonadAssistant (..), NewIdentity (..), PasskeyRefusal (..), Used (..), deviceSlotsIO, dropSlotsIfIO, vaultGenerationIO)
 import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..), Rewrap (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Assistant.Vault (DeviceRecord (..), Stored (..), assistantItem, readStored, sealingData, wrappingData, wrappingInfo)
@@ -166,7 +166,13 @@ writeDevice u d = keepDeviceRecord (vaultSlot u) (Just (BSL.toStrict (encode d))
 -- taken for the vault key when the assistant's settings sync, sealed with
 -- the vault key ('shareWithAssistant').
 forgetUserKeys :: (MonadAssistant m) => UserId -> m ()
-forgetUserKeys u = do
+forgetUserKeys u = slotsOfUser u >>= traverse_ dropDeviceKey
+
+-- | The slots of a user's keys on this device that a sign-out lets go of
+-- ('forgetUserKeys'): the vault's and the private key's, and the
+-- assistant's when its key is the vault key.
+slotsOfUser :: (MonadAssistant m) => UserId -> m [UserId]
+slotsOfUser u = do
   vaultKey <- deviceKey (vaultSlot u)
   assistantKey <- deviceKey u
   same <- case (vaultKey, assistantKey) of
@@ -181,9 +187,7 @@ forgetUserKeys u = do
     _ -> pure False
   traverse_ forgetKey vaultKey
   traverse_ forgetKey assistantKey
-  dropDeviceKey (vaultSlot u)
-  dropDeviceKey (identitySlot u)
-  when same (dropDeviceKey u)
+  pure ([vaultSlot u, identitySlot u] <> [u | same])
   where
     probeData = "wiki-vault/1 same-key"
 
@@ -195,9 +199,14 @@ forgetUserKeys u = do
 -- as a sign-out would have done.
 forgetEveryUsersKeys :: (MonadAssistant m, MonadIO m) => m ()
 forgetEveryUsersKeys = do
+  -- The store's generation first: a key kept anywhere after it (a
+  -- sign-in that completed meanwhile) stops the deletion, which compares
+  -- it in the same transaction as it deletes.
+  generation <- liftIO vaultGenerationIO
   slots <- liftIO deviceSlotsIO
   let users = ordNub [UserId u | s <- slots, Just u <- [T.stripPrefix "vault:" s <|> T.stripPrefix "identity:" s]]
-  traverse_ forgetUserKeys users
+  doomed <- concat <$> traverse slotsOfUser users
+  unless (null doomed) (void (liftIO (dropSlotsIfIO generation doomed)))
 
 --------------------------------------------------------------------------------
 -- The user's keys

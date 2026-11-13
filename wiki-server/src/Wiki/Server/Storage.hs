@@ -1960,16 +1960,32 @@ stagedPage = run Reads . stagedPageTx
 commitConverted :: (MonadIO m) => PageId -> E.ConversionCommit -> StoredWiki m (Either WikiError E.ConversionProgress)
 commitConverted pid commit = do
   result <- run Writes (commitConvertedTx pid commit)
+  for_ result (afterConversionWrite . snd)
+  pure (fst <$> result)
+
+-- | Turn a conversion round. The staged rows of the pages not converted
+-- yet are dropped, and the conversion may end at once: the same cleanup
+-- as after a commit.
+reverseConversion :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError E.ConversionInfo)
+reverseConversion sid = do
+  result <- run Writes (reverseConversionTx sid)
+  for_ result (\info -> afterConversionWrite (isNothing info.running))
+  pure result
+
+-- | After a write of a conversion that deleted what was plain or staged:
+-- SQLite's log is emptied into its file, which writes over what was
+-- deleted ('checkpoint'), and, when the conversion ended, the blob store
+-- is collected, so that no file a staged row named (an attachment's bytes,
+-- decrypted or encrypted) stays behind. Every way a conversion ends goes
+-- through here: its last commit, and turning it back, at once or at its
+-- last commit.
+afterConversionWrite :: (MonadIO m) => Bool -> StoredWiki m ()
+afterConversionWrite ended = do
   st <- StoredWiki (asks (\env -> env.storage))
-  for_ result $ \(_, ended) -> liftIO $ case st.engine of
+  liftIO $ case st.engine of
     Engine p -> withResource p.writer $ \c -> do
       void (checkpoint c)
       when (ended && isJust st.lock) (collectGarbage c st.place.dataDir)
-  pure (fst <$> result)
-
--- | Turn a conversion round.
-reverseConversion :: (MonadIO m) => SpaceId -> StoredWiki m (Either WikiError E.ConversionInfo)
-reverseConversion = run Writes . reverseConversionTx
 
 -- | Set whether readers of an encrypted space confirm each time they open
 -- it ('Wiki.Core.Space.Entry'), as its administrators do.
@@ -2843,6 +2859,9 @@ deleteSpaceTx sid = do
   requireNoConversion c
   ctx <- ask
   let below = [sp | sp <- Map.elems ctx.spaces, sp.id /= sid, within sid (chainOf ctx sp.id)]
+  -- Nor a space with one below it being converted: its staged rows would
+  -- go with it, and the files they name with no cleanup.
+  for_ (head [x | sp <- below, Just x <- [sp.conversion]]) (failWith . Conflict . Offered.conversionRefusal)
   -- Count what is deleted with it, before deleting it.
   counts <- for (sid : map (\sp -> sp.id) below) $ \x -> db (countPagesIn x)
   db (deleteSpaceRow sid)
@@ -4913,6 +4932,14 @@ stagePlainTx pid req = do
     unless (Set.member x.id comments) $ invalid "This is not a comment of the page."
     db (upsertStagedPlain (stagedRow pid "comment" x.id.text Nothing Nothing (Just x.body) Nothing Nothing))
   attachments <- db (pageAttachmentIds pid)
+  -- A plain page takes one name once (the attachments' UNIQUE (page_id,
+  -- name)): names that would collide at the commit are refused here, and
+  -- the browser makes them distinct ('Wiki.Core.Attachment.distinctNamesBy').
+  names <- either invalid pure (traverse (\a -> (\n -> (a.id, n.text)) <$> parseFileName a.name) req.attachments)
+  stagedNames <- db (loadStagedPlain pid) <&> \rows -> [(r.item, n) | r <- rows, r.kind == "attachment", Just n <- [r.name]]
+  let together = Map.toList (Map.fromList ([(AttachmentId i, n) | (i, n) <- stagedNames] <> names))
+  for_ (head [n | (n, k) <- Map.toList (Map.fromListWith (+) [(n, 1 :: Int) | (_, n) <- together]), k > 1]) $ \n ->
+    failWith (Conflict ("Two attachments of this page would both be named " <> n <> " once plain: name them apart first."))
   for_ req.attachments $ \a -> do
     unless (a.id `elem` attachments) $ invalid "This is not an attachment of the page."
     n <- either invalid pure (parseFileName a.name)

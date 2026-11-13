@@ -62,14 +62,20 @@ data State = State
   , passwordField :: H.RefLabel
   , busy :: Bool
   , told :: Maybe Text
-  , way :: Maybe Way
-  -- ^ How the reader confirms, for a space that asks each time, once
+  , ways :: Maybe Ways
+  -- ^ How the reader may confirm, for a space that asks each time, once
   -- known.
   }
 
--- | 'Way': how a reader confirms for a space that asks each time: with a
--- passkey, with the password, or neither on this device.
-data Way = ByPasskeyHere | ByPasswordHere | NoWayHere
+-- | 'Ways': how a reader may confirm for a space that asks each time: with
+-- a passkey, where the vault has one and this browser can use passkeys,
+-- and with the password, where it unlocks the vault. Both are offered
+-- when both are there: a passkey not on this device (a security key left
+-- at home) fails, and the password is then the way in.
+data Ways = Ways
+  { passkey :: Bool
+  , password :: Bool
+  }
   deriving stock (Eq)
 
 data Action
@@ -88,7 +94,7 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           passwordField <- H.newRefLabel "encrypted-password"
-          pure State {input, keys = Nothing, typed = "", passwordField, busy = False, told = Nothing, way = Nothing}
+          pure State {input, keys = Nothing, typed = "", passwordField, busy = False, told = Nothing, ways = Nothing}
       , render
       , eval =
           H.mkEval
@@ -118,17 +124,17 @@ component =
           {% if st.keys == Just ConfirmFirst %}
             <div class="encrypted-confirm">
               <p class="encrypted-confirm-why">It guards against someone using your unlocked computer. It does not stop someone who opens the browser's developer tools on a device where your keys are unlocked.</p>
-              {% if st.way == Just ByPasskeyHere %}
+              {% if maybe False (\w -> w.passkey) st.ways %}
                 <button type="button" class="primary encrypted-confirm-passkey" disabled={{ st.busy }} onClick={{ const ConfirmByPasskey }}>Open with a passkey</button>
               {% end %}
-              {% if st.way == Just ByPasswordHere %}
+              {% if maybe False (\w -> w.password) st.ways %}
                 <label class="field">
                   <span>Your password</span>
                   <input type="password" name="encrypted-password" autocomplete="current-password" onValueInput={{ Typed }} {{ HP.ref st.passwordField }}>
                 </label>
                 <button type="button" class="primary encrypted-confirm-password" disabled={{ st.busy || T.null st.typed }} onClick={{ const ConfirmByPassword }}>Open with your password</button>
               {% end %}
-              {% if st.way == Just NoWayHere %}
+              {% if st.ways == Just Ways {passkey = False, password = False} %}
                 <p class="encrypted-confirm-none">It cannot be opened on this device: no passkey of yours opens your keys in this browser, and they do not open with a password. Open it on a device with your passkey.</p>
               {% end %}
             </div>
@@ -173,8 +179,9 @@ component =
             Right k -> do
               modify (\st -> st {keys = Just k})
               when (k == ConfirmFirst) findWay
-        -- How this reader confirms here: a passkey where their vault has
-        -- one and this browser can use passkeys, the password otherwise.
+        -- How this reader may confirm here: a passkey where their vault
+        -- has one and this browser can use passkeys, and the password where
+        -- it unlocks the vault, both when both are there.
         findWay =
           gets (\st -> st.input.context.session.user)
             >>= traverse_
@@ -184,11 +191,8 @@ component =
                     Left why -> modify (\st -> st {told = Just why})
                     Right keys -> do
                       let vault = (\v -> v.vault) <$> keys.vault
-                          way
-                            | here && maybe False (not . null . passkeyWraps) vault = ByPasskeyHere
-                            | isJust (vault >>= wrapFor ByPassword) = ByPasswordHere
-                            | otherwise = NoWayHere
-                      modify (\st -> st {way = Just way})
+                          ways = Ways {passkey = here && maybe False (not . null . passkeyWraps) vault, password = isJust (vault >>= wrapFor ByPassword)}
+                      modify (\st -> st {ways = Just ways})
               )
         -- The password goes with this one attempt, however it ends.
         takeTyped = do

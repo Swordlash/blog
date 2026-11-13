@@ -67,6 +67,8 @@ module Wiki.App.Assistant
   , holdKey
   , deviceKeyIO
   , deviceSlotsIO
+  , vaultGenerationIO
+  , dropSlotsIfIO
   , listenToOtherTabs
   , announceSignIn
   , keysDroppedElsewhere
@@ -144,6 +146,8 @@ $( browserJS
      , ("js_listen", "wiki_vault_listen", Safe, [t|IO ()|])
      , ("js_signed_in", "wiki_vault_signed_in", Safe, [t|IO ()|])
      , ("js_slotsPromise", "wiki_vault_slots", Safe, [t|IO (Promise JSText)|])
+     , ("js_generationPromise", "wiki_vault_generation", Safe, [t|IO (Promise Int)|])
+     , ("js_drop_ifPromise", "wiki_vault_drop_if", Safe, [t|Int -> JSText -> IO (Promise Bool)|])
      , ("js_passkeys_here", "wiki_vault_passkeys_here", Safe, [t|IO Bool|])
      , ("js_sealing_here", "wiki_vault_sealing_here", Safe, [t|IO Bool|])
      , ("js_createPromise", "wiki_vault_create", Safe, [t|JSText -> JSText -> JSText -> IO (Promise JSText)|])
@@ -215,6 +219,12 @@ js_drop_key a1 = if inBrowser then wait =<< js_drop_keyPromise a1 else pure iner
 
 js_slots :: IO JSText
 js_slots = if inBrowser then wait =<< js_slotsPromise else pure inert
+
+js_generation :: IO Int
+js_generation = if inBrowser then wait =<< js_generationPromise else pure inert
+
+js_drop_if :: Int -> JSText -> IO Bool
+js_drop_if a1 a2 = if inBrowser then wait =<< js_drop_ifPromise a1 a2 else pure inert
 
 js_create :: JSText -> JSText -> JSText -> IO JSText
 js_create a1 a2 a3 = if inBrowser then wait =<< js_createPromise a1 a2 a3 else pure inert
@@ -823,6 +833,21 @@ announceSignIn = when inBrowser js_signed_in
 -- private key, as its sign-out does.
 keysDroppedElsewhere :: (MonadBrowserDOM m, MonadUnliftIO m) => m (Emitter IO ())
 keysDroppedElsewhere = WindowEvent.windowEvent (EventType "wiki-keys-dropped") (const (Just ()))
+
+-- | How many times a key was kept on this device: what a page that lets
+-- go of every user's keys reads first, and compares when it deletes them
+-- ('dropSlotsIfIO').
+vaultGenerationIO :: IO Int
+vaultGenerationIO = if inBrowser then evaluate =<< js_generation else pure 0
+
+-- | Let go of these slots' keys on this device, in every tab, only if no
+-- key was kept since the generation given ('vaultGenerationIO') and no
+-- sign-in was heard of: decided and done in one transaction of the
+-- device's store. Whether they were let go.
+dropSlotsIfIO :: Int -> [UserId] -> IO Bool
+dropSlotsIfIO generation slots
+  | not inBrowser = pure False
+  | otherwise = evaluate =<< js_drop_if generation (toJSText (decodeUtf8 (BSL.toStrict (encode (map (\u -> u.text) slots)))))
 
 -- | The slots this device keeps a key in (a user's id, or "vault:" or
 -- "identity:" before it), in IndexedDB and in the page. Natively none.
