@@ -46,6 +46,18 @@ function wiki_test_master_selection_seen() {
   return at.top >= box.top && at.bottom <= box.bottom && at.top >= 0 && at.bottom <= window.innerHeight;
 }
 
+// Scroll the editor's own text to its end, the browser telling of the
+// scroll in its next frame, and give back a promise of two frames from
+// now: an editor closed in between gets that scroll late.
+function wiki_test_scroll_text_late() {
+  const view = document.querySelector(".editor-cm:not(.slide-row-body)")?.wikiEditor?.view;
+  if (view) view.scrollDOM.scrollTop = view.scrollDOM.scrollHeight;
+}
+
+function wiki_test_frames() {
+  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+}
+
 // The selection in the panel's text to find, as JSON [start, end], and the
 // field's length: what Ctrl+F leaves selected there.
 function wiki_test_search_field_selection() {

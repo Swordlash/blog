@@ -16,9 +16,10 @@ module Test.Browser.EditorSearch (spec) where
 import Control.Monad.UUID (MonadUUID)
 import Data.Aeson (decodeStrict)
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
+import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser)
+import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
-import Protolude hiding (find)
+import Protolude hiding (find, wait)
 import Test.Browser.Mount (slugs, startWith)
 import Test.Browser.Text (editorHost, editorSelection, inputsSeen, markdown, selectText, setMarkdown, utf16Length, watchEditor)
 import Test.Hspec.Halogen
@@ -33,8 +34,14 @@ $( browserJS
      , ("js_search_marks", "wiki_test_search_marks", Safe, [t|IO JSText|])
      , ("js_master_selection_seen", "wiki_test_master_selection_seen", Safe, [t|IO Bool|])
      , ("js_search_field_selection", "wiki_test_search_field_selection", Safe, [t|IO JSText|])
+     , ("js_scroll_text_late", "wiki_test_scroll_text_late", Safe, [t|IO ()|])
+     , ("js_framesPromise", "wiki_test_frames", Safe, [t|IO (Promise ())|])
      ]
  )
+
+-- | Two of the browser's frames from now.
+js_frames :: IO ()
+js_frames = if inBrowser then wait =<< js_framesPromise else pure inert
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
@@ -207,6 +214,16 @@ spec m = do
     eventually $ said ui `shouldReturn` "1 of 2, from the start"
     find ui ".editor-search-replace" >>= click
     markdown ui `shouldReturn` "# U\n\nA T here."
+
+  -- The browser tells of a scroll of the text in its next frame: an
+  -- editor closed in between gets it late, and reports it to nothing (its
+  -- live preview's channel is closed then). A page error fails the suite.
+  it "reports nothing of a scroll of its text that comes after it closed" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    setMarkdown ui page
+    unsafeIOToPageM js_scroll_text_late
+    unmount ui
+    unsafeIOToPageM js_frames
 
   it "replaces matches of no length one after the other, and steps past the count's limit, both ways" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor

@@ -906,7 +906,11 @@ const asker = (host, eventName) => {
     }
     return question;
   };
-  return { ask, answer: (id, found) => waiting.get(id)?.(found) };
+  // The editor goes: every question still out is given up, its wait ended.
+  const stop = () => {
+    for (const answer of [...waiting.values()]) answer(null);
+  };
+  return { ask, answer: (id, found) => waiting.get(id)?.(found), stop };
 };
 
 // The answer to a source's question, or null once the library has given up
@@ -1160,6 +1164,10 @@ const completions = (host) => {
     mentioned: people.answer,
     emojied: names.answer,
     status: (state) => completionStatus(state) ?? "",
+    stop: () => {
+      people.stop();
+      names.stop();
+    },
   };
 };
 
@@ -2175,6 +2183,21 @@ function following(host) {
   // back to with the text.
   let windowAt = null;
   let windowTimer = null;
+  // The preview's second scrolls, a moment after the text changed or the
+  // pane was shown.
+  const paneTimers = new Set();
+  // Once the editor has gone (stop): nothing more is sent, scrolled or
+  // waited for. A scroll of the text is told by an event the browser
+  // dispatches in its next frame, which can come after the editor went,
+  // and the channel is closed by then: posting on it throws.
+  let stopped = false;
+  const later = (run, ms) => {
+    const id = setTimeout(() => {
+      paneTimers.delete(id);
+      run();
+    }, ms);
+    paneTimers.add(id);
+  };
   const pane = () => host.closest(".editor-form")?.querySelector(".editor-preview");
   // The preview shown alone scrolls with the window: the block of the line
   // goes to just under the page's header and the editor's bar, which stay
@@ -2197,9 +2220,10 @@ function following(host) {
   const send = () => {
     clearTimeout(timer);
     timer = null;
-    if (view !== null) channel?.postMessage({ key, text: view.state.doc.toString(), title: host.dataset.liveTitle ?? "", line });
+    if (view !== null && !stopped) channel?.postMessage({ key, text: view.state.doc.toString(), title: host.dataset.liveTitle ?? "", line });
   };
   const sendSoon = () => {
+    if (stopped) return;
     clearTimeout(timer);
     timer = setTimeout(send, 150);
   };
@@ -2237,9 +2261,10 @@ function following(host) {
     // text follows at once, and again once it has rendered the new text;
     // the window is told when the typing pauses.
     moved: (newLine, textToo) => {
+      if (stopped) return;
       line = newLine;
       scrollPane();
-      if (textToo) setTimeout(scrollPane, 400);
+      if (textToo) later(scrollPane, 400);
       if (channel === null) return;
       if (textToo) {
         sendSoon();
@@ -2256,6 +2281,7 @@ function following(host) {
       windowAt = window.scrollY;
     },
     previewShown: () => {
+      if (stopped) return;
       scrollWindow();
       clearTimeout(windowTimer);
       windowTimer = setTimeout(scrollWindow, 400);
@@ -2270,22 +2296,35 @@ function following(host) {
       windowAt = null;
       window.scrollTo(0, y);
       // And once the text is laid out again, which the switch back started.
-      requestAnimationFrame(() => window.scrollTo(0, y));
+      requestAnimationFrame(() => {
+        if (!stopped) window.scrollTo(0, y);
+      });
     },
     // The preview beside the text was switched on: it goes to the line
     // followed meanwhile, now and once it has rendered.
     paneShown: () => {
+      if (stopped) return;
       scrollPane();
-      setTimeout(scrollPane, 400);
+      later(scrollPane, 400);
     },
     // A file was uploaded to the page: the window fetches the page's
     // attachments again, so that the reference about to be typed resolves.
-    uploaded: () => channel?.postMessage({ key, attachments: true }),
+    uploaded: () => {
+      if (!stopped) channel?.postMessage({ key, attachments: true });
+    },
+    // The editor goes: the window told, and then nothing more, whatever
+    // event or timer comes after.
     stop: () => {
+      if (stopped) return;
       titles?.disconnect();
       window.removeEventListener("pagehide", hidden);
       window.removeEventListener("pageshow", shown);
       gone();
+      stopped = true;
+      clearTimeout(timer);
+      clearTimeout(windowTimer);
+      for (const id of paneTimers) clearTimeout(id);
+      paneTimers.clear();
       channel?.close();
     },
   };
@@ -2463,11 +2502,13 @@ export function attach(textarea, host, original, codeTokens) {
   host.replaceChildren(view.dom);
   view.scrollDOM.scrollTop = scrolled;
   if (focused) view.focus();
-  // Scrolling the text, the preview follows its top line.
-  view.scrollDOM.addEventListener("scroll", () => {
+  // Scrolling the text, the preview follows its top line. The listener
+  // goes with the editor (destroy), before the channel it reports on.
+  const scrolledText = () => {
     const top = view.lineBlockAtHeight(view.scrollDOM.scrollTop).from;
     follow.moved(view.state.doc.lineAt(top).number, false);
-  });
+  };
+  view.scrollDOM.addEventListener("scroll", scrolledText);
   follow.start(view);
 
   // The text takes the focus: the master's, or slide by slide the row the
@@ -2876,11 +2917,17 @@ export function attach(textarea, host, original, codeTokens) {
     previewShowing: () => follow.previewShowing(),
     previewShown: () => follow.previewShown(),
     textShown: () => follow.textShown(),
+    // Let go of the editor: what it listens to and what it waits for go
+    // first, so that nothing it scheduled runs after (the scroll's
+    // listener, the count's wait, the live preview's channel and waits).
     destroy: () => {
+      view.scrollDOM.removeEventListener("scroll", scrolledText);
       clearTimeout(countTimer);
+      countTimer = null;
       editors.delete(editor);
       for (const row of host.wikiRows?.values() ?? []) row.destroy();
       host.wikiRows?.clear();
+      completion.stop();
       follow.stop();
       view.destroy();
       if (host.wikiEditor === editor) delete host.wikiEditor;
