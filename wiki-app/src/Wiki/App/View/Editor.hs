@@ -831,14 +831,16 @@ writesAtCursor st = not (slidesShown st && null st.openRows)
 
 -- | Whether Ctrl+F and F3 are the editor's own search (WP5.103b of
 -- docs/PLAN.md): one search over the whole text, run on CodeMirror, so
--- once it is in place. It is offered in the raw Markdown too, of a
+-- once it is in place, while the text is shown (with the preview shown
+-- alone, Ctrl+F is the browser's, over the preview). It is offered in the
+-- raw Markdown too, of a
 -- presentation and of a document: the browser's own find sees only the
 -- lines CodeMirror has drawn (not a folded spoiler, not text scrolled far
 -- away), and one search that behaves the same in both modes is one thing
 -- to learn. To offer it slide by slide only, this would be
 -- @slidesShown st@. Where it is not offered, Ctrl+F is the browser's.
 searchOffered :: State -> Bool
-searchOffered st = st.master == Attached
+searchOffered st = st.master == Attached && st.mode == Editing
 
 -- | The match the editor's selection is, if it is one: its index among the
 -- matches counted.
@@ -1834,7 +1836,9 @@ component =
         (HH.ElemName "div")
         [HP.class_ "editor-source"]
         ( [("providers", providerBar st)]
-            <> [("search", searchPanel st) | st.searchOpen && searchOffered st]
+            -- Kept while the preview is shown alone, hidden with the text, so
+            -- that its fields are there on the way back.
+            <> [("search", searchPanel st) | st.searchOpen && st.master == Attached]
             <> [
                  ( "cm"
                  , [hh|

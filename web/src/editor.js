@@ -1575,12 +1575,10 @@ const rowMatches = StateField.define({
   provide: (f) => EditorView.decorations.from(f),
 });
 
-// A row's marks as JSON, to tell whether new ones differ.
-const rowMatchesShown = new WeakMap();
 
 // The master's matches in a row's range, as the row's marks: the current
 // one is the match the master's selection is. The row is told only when
-// its marks are other than the ones it shows.
+// its marks are other than the ones it holds.
 const matchesToRow = (key, view, state) => {
   const range = rangeOf(state, key);
   if (range === null) return;
@@ -1596,9 +1594,15 @@ const matchesToRow = (key, view, state) => {
           current: match.from === a && match.to === b,
         }))
         .filter((match) => match.from < match.to && match.to <= length);
-  const said = JSON.stringify(inside);
-  if ((rowMatchesShown.get(view) ?? "[]") === said) return;
-  rowMatchesShown.set(view, said);
+  // Compared with the marks the row's field holds now, mapped through the
+  // row's changes since they were set: a change the master mirrors into
+  // the row as one replacement takes away every mark inside it, though
+  // the marks found again are the ones found before.
+  const shown = [];
+  view.state.field(rowMatches).between(0, length, (from, to, mark) => {
+    shown.push({ from, to, current: mark === currentMatchMark });
+  });
+  if (JSON.stringify(shown) === JSON.stringify(inside)) return;
   view.dispatch({
     effects: setRowMatches.of(Decoration.set(inside.map((match) => (match.current ? currentMatchMark : matchMark).range(match.from, match.to)), true)),
     annotations: mirrored.of(true),
@@ -2401,12 +2405,16 @@ export function attach(textarea, host, original, codeTokens) {
     // Whether the presentation is edited slide by slide, its rows typing
     // into the master: the master's completion is then off, and its focus
     // goes to a row (focus below).
+    // The mode is set before the master's transaction, so that what the
+    // transaction's update reads of it (the search's marks in the master,
+    // drawn in the raw Markdown only) is the new mode.
     slidesMode: (on) => {
-      if (on !== bySlide) {
+      const was = bySlide;
+      bySlide = on;
+      if (on !== was) {
         if (on) closeCompletion(view);
         view.dispatch({ effects: masterCompletion.reconfigure(on ? completion.quiet : completion.extension) });
       }
-      bySlide = on;
     },
     slidesShown: () => bySlide,
     // The whole text's undo (true) or redo (false), as Ctrl+Z and Ctrl+Y
