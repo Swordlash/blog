@@ -655,6 +655,10 @@ data State = State
   -- ^ The heading of each row's text ('SlideRows.rowHeading'), by the
   -- text: a row is parsed again for its heading only when its text
   -- changed.
+  , publication :: Int
+  -- ^ The number of the publication of the problems and the rows'
+  -- headers last begun ('publishProblems'): a publication writes what it
+  -- computed only while no later one has begun.
   , nextKey :: RowKey
   -- ^ The key the next new row gets: no key is given twice.
   , openRows :: [RowKey]
@@ -935,8 +939,11 @@ freshRows st = case st.loaded of
               , deletedOpen = []
               , rowHeads = headsOf st problems w.loadedBody rows (swallowedOf st w.loadedBody rows) headings
               , rowHeadings = Map.fromList (zip (map (.text) rows.rows) headings)
+              , -- Headers made here: a publication begun before them
+                -- does not write over them.
+                publication = st.publication + 1
               }
-  _ -> st {rows = Nothing, rowHeads = [], openRows = [], keptOpen = [], focusRow = Nothing, deletedOpen = []}
+  _ -> st {rows = Nothing, rowHeads = [], openRows = [], keptOpen = [], focusRow = Nothing, deletedOpen = [], publication = st.publication + 1}
 
 -- | The rows' headers of a text cut into rows, with what the last check
 -- and the last measures say of that text: the problems given, which are
@@ -1165,6 +1172,7 @@ component =
               , rows = Nothing
               , rowHeads = []
               , rowHeadings = mempty
+              , publication = 0
               , nextKey = RowKey 0
               , openRows = []
               , keptOpen = []
@@ -3125,13 +3133,15 @@ component =
     -- through the changes, and the next check marks them again.
     --
     -- On a long presentation this is seconds of work, and other handlers
-    -- run while it computes: the rows, the text checked or the measures
-    -- it read may change meanwhile. Each of those changes publishes again,
-    -- so what was computed from the ones before is not written over the
-    -- newer: the headers are written only while the rows, the text checked
-    -- and the measures are still those read.
+    -- run while it computes: what it read (the rows, the check, the
+    -- measures, the failed islands) may change meanwhile, and each such
+    -- change publishes again. So each publication is numbered as it
+    -- begins, and writes the marks, the count and the headers only while
+    -- it is the last begun: a later one read a state at least as new, and
+    -- no list of the inputs read has to be kept up to date.
     publishProblems :: H.HalogenM State Action Slots ViewOutput m ()
     publishProblems = do
+      modify (\s -> s {publication = s.publication + 1})
       st <- get
       let text = SlideRows.assemble <$> st.rows
           taken = swallowedOf st <$> text <*> st.rows
@@ -3139,7 +3149,7 @@ component =
           holdsChecked = case st.loaded of
             Ready w -> w.body == st.checkedText
             _ -> False
-          current s = s.rows == st.rows && s.checkedText == st.checkedText && s.measures == st.measures
+          current s = s.publication == st.publication
       when holdsChecked $ do
         let ranges = problemRanges st.checkedText problems
         _ <- liftIO (evaluate (length ranges))
