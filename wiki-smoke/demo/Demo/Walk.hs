@@ -176,9 +176,7 @@ spec walk = describe "the walk" $ onOnePage demoContext (holdProgram walk.gate) 
   step' "formats from a shortcut in the editor, previews what is typed with its formulas, and saves it" $ \page -> do
     click (withText "Edit" (locator page "#app .page-view .actions a"))
     arrive walk page (named "Edit" (at "/s/blog/p/hello-world/edit/" "editor")) "the editor"
-    -- CodeMirror, an island the program does not draw.
-    waitFor (editorText page) Visible
-    settle page
+    editorReady page
     let text = editorText page
     pressOn text "Control+End"
     typeText text "\n\n## Smoke test\n\nWritten by "
@@ -224,8 +222,7 @@ spec walk = describe "the walk" $ onOnePage demoContext (holdProgram walk.gate) 
     typeText (locator page "#app .new-page-title") "Smoke page"
     click (locator page "#app .new-page-view button.primary")
     arrive walk page (named "Edit" (at "/s/blog/p/smoke-page/edit/" "editor")) "the new page's editor"
-    waitFor (editorText page) Visible
-    settle page
+    editorReady page
     -- Only its title line, which the editor puts in, with the cursor under
     -- it.
     markdownIn page `shouldReturn` Just "# Smoke page\n\n"
@@ -261,8 +258,7 @@ spec walk = describe "the walk" $ onOnePage demoContext (holdProgram walk.gate) 
     check (locator (withText "Weekly sync" (locator page "#app .new-page-choice")) "input")
     click (locator page "#app .new-page-view button.primary")
     arrive walk page (named "Edit" (at "/s/team/p/smoke-sync/edit/" "editor")) "the editor on a page from a template"
-    waitFor (editorText page) Visible
-    settle page
+    editorReady page
     today <- Text.pack . show . utctDay <$> getCurrentTime
     made <- fromMaybe "" <$> markdownIn page
     expect ("# Smoke sync\n" `Text.isPrefixOf` made) ("the template's title not filled in: " <> show made)
@@ -320,8 +316,7 @@ spec walk = describe "the walk" $ onOnePage demoContext (holdProgram walk.gate) 
     checkAt walk page (named "Diagrams" (at "/s/docs/p/markdown-guide/diagrams/" "page-view")) "Diagrams"
     click (withText "Edit" (locator page "#app .page-view .actions a"))
     checkAt walk page (named "Edit" (at "/s/docs/p/markdown-guide/diagrams/edit/" "editor")) "editing Diagrams"
-    waitFor (editorText page) Visible
-    settle page
+    editorReady page
     pressOn (editorText page) "Control+End"
     typeText (editorText page) "\nNot to be kept."
     waitQuiet page
@@ -350,8 +345,7 @@ spec walk = describe "the walk" $ onOnePage demoContext (holdProgram walk.gate) 
     forM_ ["A second line.", "A third line."] $ \line -> do
       click (withText "Edit" (locator page "#app .page-view .actions a"))
       checkAt walk page (at "/s/blog/p/smoke-page/edit/" "editor") ("editing for " <> line)
-      waitFor (editorText page) Visible
-      settle page
+      editorReady page
       pressOn (editorText page) "Control+End"
       typeText (editorText page) ("\n\n" <> line)
       click (locator page "#app .editor-save-close")
@@ -500,7 +494,7 @@ spec walk = describe "the walk" $ onOnePage demoContext (holdProgram walk.gate) 
     _ <- load site gate page "/s/blog/p/hello-world/edit/"
     checkAt walk page (named "Edit" (at "/s/blog/p/hello-world/edit/" "editor")) "an editor's address"
     -- The demo starts as admin, who may edit it: CodeMirror comes.
-    waitFor (editorText page) Visible
+    editorReady page
     nothingWrong page
 
   -- A page's permanent address, as "Copy permanent link" gives it (the

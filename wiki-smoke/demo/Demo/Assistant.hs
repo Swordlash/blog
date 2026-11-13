@@ -62,9 +62,7 @@ spec site =
     -- the text, accepted.
     visit page (address site.demo "/s/blog/p/hello-world/edit/")
     waitQuiet page
-    -- CodeMirror, an island the program does not draw.
-    waitFor (editorText page) Visible
-    settle page
+    editorReady page
     -- The providers' bubbles over the text, with their logos: Claude's,
     -- which has a key, not ChatGPT's, which has none; the scripted
     -- provider's is there as the page has its script.

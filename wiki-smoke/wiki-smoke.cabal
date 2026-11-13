@@ -136,3 +136,19 @@ test-suite wiki-smoke-demo
         zip-archive,
         haskell-halogen-playwright,
         wiki-smoke
+
+-- The rules of Wiki.Smoke.Adoption that need no browser (which changes
+-- adoption may make, which pages a page embeds as presentations, which
+-- requests are a viewer's): pure examples, run by cabal test with no build.
+test-suite wiki-smoke-adoption
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Adoption.hs
+  if arch(wasm32) || arch(javascript)
+    buildable: False
+  else
+    build-depends:
+        base,
+        haskell-halogen-playwright,
+        wiki-smoke

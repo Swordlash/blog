@@ -56,9 +56,7 @@ spec site = do
     textContent (locator page "#app .user-switcher-toggle") >>= (`shouldSatisfy` Text.isInfixOf "Ada Admin")
     tap (withText "Edit" (locator page "#app .page-view .actions a"))
     waitQuiet page
-    -- CodeMirror, an island the program does not draw.
-    waitFor (editorText page) Visible
-    settle page
+    editorReady page
     isVisible (locator page "#app .editor-toolbar") `shouldReturn` True
     isVisible (locator page "#app .editor-side-by-side") `shouldReturn` False
     fits "the editor is wider than a phone"

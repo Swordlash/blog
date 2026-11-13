@@ -50,6 +50,7 @@ module Demo.Site
   , footerShown
   , crumb
   , editorText
+  , editorReady
   , markdownIn
   , contentText
   )
@@ -252,6 +253,14 @@ crumb page = textContent (locator page "#app .breadcrumbs [aria-current=page]")
 -- @islands/editor.js@ has loaded. What one types into is its content.
 editorText :: Page -> Locator
 editorText page = locator page "#app .editor-cm .cm-content"
+
+-- | Wait until CodeMirror has taken the place of the editor's textarea:
+-- an island the program does not draw, loaded from @islands/editor.js@,
+-- so a condition; then settle, as after every condition.
+editorReady :: Page -> IO ()
+editorReady page = do
+  waitFor (editorText page) Visible
+  settle page
 
 -- | The Markdown in the editor, read from CodeMirror through what its
 -- element carries for the application.

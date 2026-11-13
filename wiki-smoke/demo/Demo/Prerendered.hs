@@ -146,7 +146,8 @@ spec site paths visitorGate = do
   -- sizes as built, which are what the server sends.
   it "draws the first TikZ picture in a browser that has fetched nothing yet" $ onDemoPage demoContext $ \page -> do
     start <- getMonotonicTime
-    visit page (address site.demo "/s/docs/p/markdown-guide/")
+    -- The heaviest page with nothing cached: a longer timeout.
+    visit (withTimeout 120000 page) (address site.demo "/s/docs/p/markdown-guide/")
     -- TikZJax draws it, in its worker: a condition.
     waitFor (first (locator page "#app .wiki-tikz > svg")) Visible
     drawn <- getMonotonicTime
@@ -234,15 +235,22 @@ spec site paths visitorGate = do
   -- and each view is read once its action has settled and its content has
   -- been read.
   it "gives way to the next page at once while a TikZ picture is being drawn" $ onDemoPage demoContext $ \page -> do
-    format <- hold page "**/tikzjax/core.dump.bin"
-    visit page (address site.demo "/s/docs/p/markdown-guide/")
+    -- Held on the context: the request is TikZJax's worker's, which a
+    -- page's route may not see.
+    format <- hold (pageContext page) "**/tikzjax/core.dump.bin"
+    -- The guide, the heaviest page, in a browser that has fetched nothing:
+    -- app.wasm compiled and the page adopted may take longer than the other
+    -- calls, slowed down four times on a busy machine.
+    visit (withTimeout 120000 page) (address site.demo "/s/docs/p/markdown-guide/")
     waitQuiet page
+    -- TikZJax's worker has asked for TeX's format, which is held: the
+    -- picture is being drawn, and stays so until the end.
+    waitHeld format
     count (locator page "#app .wiki-tikz > svg") `shouldReturn` 0
     click (withText "Edit" (locator page "#app .page-view .actions a"))
     waitQuiet page
     (\s -> s.view) <$> shown page `shouldReturn` Just "editor"
-    -- CodeMirror, an island the program does not draw.
-    waitFor (editorText page) Visible
+    editorReady page
     goBack page
     waitQuiet page
     textContent (locator page "#app .page-view h1") `shouldReturn` "Markdown guide"
