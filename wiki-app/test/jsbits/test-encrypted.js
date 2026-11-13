@@ -127,7 +127,7 @@ function wikiTestEncServer(request) {
   if (path === "spaces" && request.method === "GET") {
     return wikiTestEncJson(200, [...wikiTestEncrypted.spaces.values()].filter((s) => s.readers.includes(me)).map((s) => s.space));
   }
-  if (path === "search" && request.method === "GET") return wikiTestEncJson(200, []);
+  if (path === "search" && request.method === "GET") return wikiTestEncJson(200, wikiTestEncrypted.searchHits ?? []);
   // Every page of the encrypted spaces the user reads, starred, with the
   // empty title the server lists for a page it holds only encrypted.
   if (path === "stars" && request.method === "GET") {
@@ -502,7 +502,7 @@ function wikiTestEncServer(request) {
 // as JSON) and its readers (user ids).
 function wiki_test_encrypted_start(space, readers) {
   const s = JSON.parse(space);
-  Object.assign(wikiTestEncrypted, { as: null, spaces: new Map([[s.id, { space: s, readers: JSON.parse(readers), admins: ["user-admin"], leaked: [], grants: [] }]]), directory: new Map(), pages: new Map(), next: 0, created: [], historyWithoutLatest: false, rotations: [], tamperLatest: false, subspaces: [], homes: [], headingsAsked: [], committed: [], swapStaged: null });
+  Object.assign(wikiTestEncrypted, { as: null, spaces: new Map([[s.id, { space: s, readers: JSON.parse(readers), admins: ["user-admin"], leaked: [], grants: [] }]]), directory: new Map(), pages: new Map(), next: 0, created: [], historyWithoutLatest: false, rotations: [], tamperLatest: false, subspaces: [], homes: [], headingsAsked: [], committed: [], swapStaged: null, searchHits: null });
   globalThis.wikiTestHandlers = [wikiTestEncServer, ...(globalThis.wikiTestHandlers ?? []).filter((h) => h !== wikiTestEncServer)];
 }
 
@@ -643,6 +643,12 @@ function wiki_test_encrypted_settle(space, state) {
     s.space.encryption = s.space.encryption ?? s.keyWas;
     for (const p of wikiTestEncrypted.pages.values()) if (p.space === space) delete p.plain;
   }
+}
+
+// What the server's search answers from now on: the hits given, as JSON
+// (none until this is called).
+function wiki_test_encrypted_search_hits(hits) {
+  wikiTestEncrypted.searchHits = JSON.parse(hits);
 }
 
 // A page turned back to encrypted by a conversion turned round elsewhere.

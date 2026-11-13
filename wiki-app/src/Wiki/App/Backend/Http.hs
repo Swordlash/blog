@@ -837,13 +837,17 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- words would tell the server what is looked for there, and the server
   -- finds nothing there anyway. The hits of the server and of the
   -- encrypted spaces are taken in turn, so that neither list pushes the
-  -- other out of the limit. Which spaces are encrypted is read from the
-  -- list the tab knows, cached or last read ('knownSpaces'), so that a
-  -- write between does not send the words.
+  -- other out of the limit. Both choices of one search, whether its words
+  -- go to the server and which spaces the browser searches, are made from
+  -- one list of spaces ('listedForSearch'): the cached one, or, when a
+  -- write emptied the cache, one read again. A space whose encryption
+  -- changed elsewhere since the tab last listed it is searched the right
+  -- way at the first search.
   searchPages q = do
-    limitedToEncrypted <- case q.space of
-      Just sid -> maybe False (isJust . encryptionIn sid) <$> knownSpaces
-      Nothing -> pure False
+    listed <- listedForSearch
+    let limitedToEncrypted = case q.space of
+          Just sid -> maybe False (isJust . encryptionIn sid) listed
+          Nothing -> False
     plain <-
       if limitedToEncrypted
         then pure []
@@ -853,7 +857,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
               (fmap Right . cachedSearch q)
               (searchParameters endpoints.search q)
               (either (const identity) (withSearch q))
-    found <- sealedSearch q
+    found <- sealedSearch q listed
     pure (take q.limit (inTurn plain found))
 
   -- A page of an encrypted space has no draft: the server would read it,
@@ -3162,16 +3166,14 @@ sealedComment sid pid tid editing body =
 -- at the first search that needs them, kept in this page's memory until
 -- they may have changed ('heldFound'), and matched as the demo's search
 -- matches ('searchPlain'). The
--- spaces searched are those of the list of spaces as it is now: the
--- cached one, or one read again when a write emptied the cache
--- ('spacesNow'), which lets go of what is held of a space it leaves out
--- ('learnListed'). Each is searched through its gate ('foundIn'); a space
--- whose key is not held here is not searched. A tab that has read no list
--- searches no encrypted space. This reads every page of a space at once,
--- which suits small spaces, the kind encrypted spaces are meant for.
-sealedSearch :: (MonadIO m) => SearchQuery -> HttpWiki m [SearchHit]
-sealedSearch q =
-  listedForSearch >>= \case
+-- spaces searched are those of the list of spaces the search was given
+-- ('listedForSearch'). Each is searched through its gate ('foundIn'); a
+-- space whose key is not held here is not searched. This reads every page
+-- of a space at once, which suits small spaces, the kind encrypted spaces
+-- are meant for.
+sealedSearch :: (MonadIO m) => SearchQuery -> Maybe [Space] -> HttpWiki m [SearchHit]
+sealedSearch q listed =
+  case listed of
     Nothing -> pure []
     Just spaces -> do
       let byId = Map.fromList [(s.id, s) | s <- spaces]
@@ -3195,14 +3197,21 @@ sealedSearch q =
               ]
       pure (searchPlain q (concat candidates))
 
--- | The list of spaces the encrypted search goes through: the cached one,
--- or, when a write emptied the cache, one read again; none before the tab
--- has read any list.
+-- | The list of spaces one search decides from, both whether its words go
+-- to the server and which spaces the browser searches ('searchPages'):
+-- the cached one, or, when a write emptied the cache, one read again,
+-- which lets go of what is held of a space it leaves out ('learnListed').
+-- With a full cache that costs nothing; with an emptied one, one read of
+-- the list. When that read fails, the last list read ('heldListed'), so
+-- that the words of a search limited to a space known encrypted are not
+-- sent; its spaces are then searched through their gates, which read the
+-- list again ('foundIn'). None before the tab has read any list: such a
+-- tab sends every search to the server and searches no encrypted space.
 listedForSearch :: (MonadIO m) => HttpWiki m (Maybe [Space])
 listedForSearch =
   knownSpaces >>= \case
     Nothing -> pure Nothing
-    Just _ -> rightToMaybe <$> spacesNow
+    Just known -> Just . either (const known) identity <$> spacesNow
 
 -- | A space's pages decrypted for the search, from memory or fetched now;
 -- none when the space's key cannot be held here.

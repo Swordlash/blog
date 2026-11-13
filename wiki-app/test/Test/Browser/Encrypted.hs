@@ -102,7 +102,7 @@ import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.Permission (Grants (..))
-import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
+import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchQuery)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Entry (..), Space (..))
 import Wiki.Core.Space qualified as Space
@@ -145,6 +145,7 @@ $( browserJS
      , ("js_committed", "wiki_test_encrypted_committed", Safe, [t|IO JSText|])
      , ("js_go_to", "wiki_test_encrypted_go_to", Safe, [t|JSText -> IO ()|])
      , ("js_settle", "wiki_test_encrypted_settle", Safe, [t|JSText -> JSText -> IO ()|])
+     , ("js_search_hits", "wiki_test_encrypted_search_hits", Safe, [t|JSText -> IO ()|])
      , ("js_sealed_again", "wiki_test_encrypted_sealed_again", Safe, [t|JSText -> IO ()|])
      , ("js_history_back", "wiki_test_encrypted_history_back", Safe, [t|IO ()|])
      , ("js_member", "wiki_test_encrypted_member", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
@@ -1821,6 +1822,43 @@ spec m = do
     [h | h <- hits, h.page == made.id] `shouldBe` []
     after <- unsafeIOToPageM (heldNow tab)
     (Set.member secret.id after.keys, Set.member secret.id after.found) `shouldBe` (False, False)
+
+  -- #264's second review: one search decides from one list of spaces, read
+  -- afresh when a write emptied the cache, whether its words go to the
+  -- server and which spaces the browser searches. A space decrypted
+  -- elsewhere since the tab listed it is searched by the server at the
+  -- first search; a space encrypted elsewhere since is not asked of the
+  -- server, and the browser finds its page with the key.
+  it "finds at the first search after a write a page of a space decrypted elsewhere since, by the server's search" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Thawed" "A walrus on the ice.")
+    tab <- as "user-admin"
+    run tab endPreload
+    void (run tab listSpaces)
+    let inSecret = (searchQuery "walrus") {space = Just secret.id, includeSubspaces = True}
+        hit = SearchHit {page = made.id, space = secret.id, title = Snippet [Piece "Thawed" False], spacePath = [secretSlug], pagePath = [made.slug], snippet = Snippet [Piece "A walrus on the ice." False]}
+    -- Decrypted elsewhere: the space plain, its page with it, which the
+    -- server's search finds.
+    unsafeIOToPageM (js_made_plain (toJSText made.id.text) (toJSText ("Thawed" :: Text)) (toJSText ("A walrus on the ice." :: Text)))
+    unsafeIOToPageM (js_settle (toJSText secret.id.text) (toJSText ("plain" :: Text)))
+    unsafeIOToPageM (js_search_hits (toJSText (decodeUtf8 (toS (encode [hit])) :: Text)))
+    void (run tab (deletePage (PageId "nowhere")))
+    map (\h -> h.page) <$> run tab (searchPages inSecret) `shouldReturn` [made.id]
+
+  it "sends no word of a space encrypted elsewhere since to the server at the first search after a write, and finds its page with the key" $ runPage $ do
+    env <- encryptedSpace "user-admin"
+    tab <- as "user-admin"
+    run tab endPreload
+    -- Listed plain; encrypted elsewhere since, with a page.
+    void (run tab listSpaces)
+    void (ok =<< run env (encryptSpace secret.id))
+    made <- ok =<< run env (createPage secret.id Nothing "Frozen" "A walrus under the ice.")
+    void (run tab (deletePage (PageId "nowhere")))
+    since <- length <$> asked
+    map (\h -> h.page) <$> run tab (searchPages ((searchQuery "walrus") {space = Just secret.id, includeSubspaces = True})) `shouldReturn` [made.id]
+    sent <- drop since <$> asked
+    [r.url | r <- sent, "api/v1/search" `T.isPrefixOf` r.url] `shouldBe` []
 
   -- Turning encryption off checks a page's history as an export does,
   -- before anything of it is staged: a history the server rolled back
