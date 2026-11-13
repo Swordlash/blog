@@ -325,7 +325,6 @@ import Wiki.App.Editor.Browser
   , restoreFocus
   , rowKeyOf
   , rowWanted
-  , rowWithFocus
   , rowsLayout
   , selectedSpan
   , setRows
@@ -2264,15 +2263,11 @@ component =
       FromRow SlideRow.DragEnded -> modify (\st -> st {dragging = Nothing, dropAt = Nothing})
       -- A step, or its undo or redo, changed the master's layout: the rows
       -- are read again at once, and a row brought back by the undo of its
-      -- delete opens again if it was open. When the step took away the row
-      -- the focus was in (the undo of a new slide, the redo of a delete),
-      -- the focus goes to the row the history put the cursor in: to its
-      -- text if it is open, else to its header, so that the next Ctrl+Z or
-      -- Ctrl+Y has somewhere to go.
-      Relaid -> do
-        had <- rowWithFocus
-        recutRowsWith True
-        for_ had $ \key -> unlessM (gets (elem key . rowKeys)) focusCursorRow
+      -- delete opens again if it was open. Where the focus goes is the
+      -- master's rule (web/src/editor.js's rowsSync): an undo or a redo
+      -- takes it to the row the history put the cursor in, which the
+      -- "wiki-row-wanted" after this event opens.
+      Relaid -> recutRowsWith True
       -- CodeMirror's module did not load: there will be no master, and the
       -- presentation is its Markdown in the textarea, as on a page without
       -- the editor's script. Only while the master is awaited: a failure
@@ -2727,22 +2722,6 @@ component =
       when taken $ do
         modify (\s -> s {nextKey = succ s.nextKey, openRows = s.openRows <> [key], focusRow = Just key})
         gets (slideNamed key) >>= say . (<> " added.") . capital
-
-    -- Give the focus to the row the master's cursor is in: its text if it
-    -- is open, else its header.
-    focusCursorRow :: H.HalogenM State Action Slots ViewOutput m ()
-    focusCursorRow = do
-      st <- get
-      shown <- H.getRef st.rowsList
-      for_ ((,,) <$> st.hostElement <*> st.rows <*> shown) $ \(host, rows, items) ->
-        H.liftEffect (rowsLayout host)
-          >>= traverse_
-            ( \layout ->
-                for_ (atMay rows.rows (SlideRows.rowAt rows layout.cursor)) $ \row ->
-                  if row.key `elem` st.openRows
-                    then H.liftEffect (focusText host)
-                    else H.liftEffect (focusHeader items row.key)
-            )
 
     -- The index of the row with a key.
     indexOf :: RowKey -> Rows -> Maybe Int

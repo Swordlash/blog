@@ -1406,7 +1406,7 @@ const problemsToRow = (key, view, state) => {
   forEachDiagnostic(state, (d, from, to) => {
     if (from >= range.from && from <= range.to) found.push({ ...d, from: from - range.from, to: Math.min(to, range.to) - range.from });
   });
-  view.dispatch(setDiagnostics(view.state, found));
+  view.dispatch({ ...setDiagnostics(view.state, found), annotations: mirrored.of(true) });
 };
 
 // The spoilers' folds the master offers in a row's range, moved to the
@@ -1415,7 +1415,7 @@ const foldsToRow = (key, view, state) => {
   const range = rangeOf(state, key);
   if (range === null) return;
   const inside = state.field(offered).filter((fold) => fold.from >= range.from && fold.to <= range.to);
-  view.dispatch({ effects: offerFolds.of(inside.map((fold) => ({ from: fold.from - range.from, to: fold.to - range.from }))) });
+  view.dispatch({ effects: offerFolds.of(inside.map((fold) => ({ from: fold.from - range.from, to: fold.to - range.from }))), annotations: mirrored.of(true) });
 };
 
 // The master's side: the rows a change did not come from shown the
@@ -1458,12 +1458,11 @@ const rowsSync = (host) =>
       if (shown) cursorIntoView(shown);
     }
     // A step, or its undo or redo: the component reads the rows again at
-    // once ("wiki-relayout"), and decides which open and which has the
-    // focus.
-    if (relaid) {
-      host.dispatchEvent(new CustomEvent("wiki-relayout"));
-      return;
-    }
+    // once ("wiki-relayout"), and decides which open. The focus follows as
+    // for any other change, below; the event goes first, so that the
+    // component knows a row an undo brought back before it is asked to
+    // open it.
+    if (relaid) host.dispatchEvent(new CustomEvent("wiki-relayout"));
     const editor = host.wikiEditor;
     if (!editor?.slidesShown() || origin !== undefined) return;
     // The row a jump leaves: the open row whose text has the focus now, if
@@ -1482,19 +1481,27 @@ const rowsSync = (host) =>
       for (const key of written) if (key !== undefined && !rows.has(key)) want(key, false, false, "assistant");
       return;
     }
+    // The rule this listener keeps, the one place every change of the
+    // master's passes: while a row's text has the focus, the master's
+    // selection is that row's, moved by the row's start. A row's own
+    // transactions keep it (forwarded); the master's changes the row did
+    // not make (an undo, a redo, a structural step or its undo, the next
+    // problem, a toolbar command) bring the row's selection with them when
+    // the cursor stays in the row (mirror, above), and otherwise move the
+    // focus to the cursor's row: an open row takes it, a closed one opens
+    // with it (the component, on "wiki-row-wanted"), and the row left
+    // closes after an undo, a redo or the next problem. With no row's text
+    // focused, a write at the cursor opens the cursor's row the same way.
     if (!(update.docChanged || update.selectionSet)) return;
     const target = rowAtPosition(update.state, update.state.selection.main.head);
-    // Nothing to open or focus when the cursor stays in the row with the
-    // focus. Anywhere else, an open row takes the focus, and a closed one
-    // opens with it (the component, on "wiki-row-wanted").
     if (target === undefined || target === left) return;
-    const reason = editor.jumping()
-      ? "problem"
-      : update.transactions.some((tr) => tr.isUserEvent("undo"))
-        ? "undo"
-        : update.transactions.some((tr) => tr.isUserEvent("redo"))
-          ? "redo"
-          : "write";
+    const undoing = update.transactions.some((tr) => tr.isUserEvent("undo"));
+    const redoing = update.transactions.some((tr) => tr.isUserEvent("redo"));
+    // A structural step of the component's own (a move, a delete, a new
+    // slide) made from a header or the toolbar: the step gives the focus
+    // itself (the next header, the new row).
+    if (relaid && left === undefined && !undoing && !redoing) return;
+    const reason = editor.jumping() ? "problem" : undoing ? "undo" : redoing ? "redo" : "write";
     host.wikiFocusedRow = target;
     const open = rows.get(target);
     if (open) {
@@ -1507,7 +1514,7 @@ const rowsSync = (host) =>
 // Scroll a row's cursor into view: CodeMirror's focus does not scroll, and
 // a row opened or focused by a jump (an undo, the next problem) may be
 // below or above the window.
-const cursorIntoView = (view) => view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: "nearest" }) });
+const cursorIntoView = (view) => view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: "nearest" }), annotations: mirrored.of(true) });
 
 // Put the row with this key of the master's layout in `rowHost`: a
 // CodeMirror over its range of the master's text, the master being the
@@ -1600,6 +1607,9 @@ export function attachRow(masterHost, rowHost, key, focus) {
     }),
     dispatchTransactions: (trs, rowView) => {
       rowView.update(trs);
+      // What the master told the row (mirrored: its text, problems, folds,
+      // changes) goes no further, nor does a selection a filter of the row's
+      // own (the title line's guard) set on it.
       for (const tr of trs) {
         if (tr.annotation(mirrored) || (!tr.docChanged && !tr.selection)) continue;
         const now = rangeOf(masterView.state, key);
@@ -2090,6 +2100,9 @@ export function attach(textarea, host, original, codeTokens) {
       const chars = charactersOfAll(all, [anchor, head, ...layout.map((r) => r.from)]);
       return JSON.stringify({ text: all, anchor: chars[0], head: chars[1], focused: host.wikiFocusedRow ?? -1, rows: layout.map((r, i) => [r.key, chars[i + 2]]) });
     },
+    // The rows' layout as it is now, [{key, from, to}] in UTF-16 units, for
+    // the browser tests.
+    rowRanges: () => view.state.field(rowsLayout),
     hasFocus: () => view.hasFocus,
     text: () => view.state.doc.toString(),
     selectionStart: () => view.state.selection.main.from,

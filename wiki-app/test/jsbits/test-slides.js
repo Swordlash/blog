@@ -92,6 +92,58 @@ function wiki_test_slide_row_cursor_seen(index) {
   return at.top >= 0 && at.bottom <= window.innerHeight;
 }
 
+// What the slide mode must always hold, checked in the page once it is
+// quiet: "" when it holds, else what does not. The rows' ranges tile the
+// master's text with a line break between each two; every open row's
+// editor shows its range of the master's text; and an editor with the
+// focus has the master's selection, moved by its row's start. Offsets are
+// UTF-16 units: the walk that asks types ASCII only.
+function wiki_test_slide_invariants() {
+  const host = document.querySelector(".editor-cm:not(.slide-row-body)");
+  const editor = host?.wikiEditor;
+  if (!editor?.rowRanges) return "no editor";
+  const text = editor.view.state.doc.toString();
+  const ranges = editor.rowRanges();
+  const found = [];
+  if (ranges.length === 0) found.push("no rows");
+  else {
+    if (ranges[0].from !== 0) found.push(`the first row starts at ${ranges[0].from}`);
+    const last = ranges[ranges.length - 1];
+    if (last.to !== text.length) found.push(`the last row ends at ${last.to} of ${text.length}`);
+    for (let i = 1; i < ranges.length; i++) {
+      const gap = text.slice(ranges[i - 1].to, ranges[i].from);
+      if (gap !== "\n" && gap !== "\r\n") found.push(`between rows ${i - 1} and ${i}: ${JSON.stringify(gap)}`);
+    }
+  }
+  const master = editor.view.state.selection.main;
+  for (const [key, row] of host.wikiRows ?? []) {
+    const range = ranges.find((r) => r.key === key);
+    if (!range) {
+      found.push(`row ${key} is open but not in the layout`);
+      continue;
+    }
+    if (row.state.doc.toString() !== text.slice(range.from, range.to)) found.push(`row ${key} shows ${JSON.stringify(row.state.doc.toString())}, not ${JSON.stringify(text.slice(range.from, range.to))}`);
+    if (row.hasFocus) {
+      const { anchor, head } = row.state.selection.main;
+      if (master.anchor !== anchor + range.from || master.head !== head + range.from) {
+        found.push(`row ${key} has the focus at ${anchor}-${head} (its start ${range.from}), the editor's selection is ${master.anchor}-${master.head}`);
+      }
+    }
+  }
+  return found.join("; ");
+}
+
+// The open rows' indices in the list, as JSON.
+function wiki_test_open_rows() {
+  return JSON.stringify([...document.querySelectorAll(".editor-slides > li")].flatMap((item, i) => (item.querySelector(".slide-row.open") ? [i] : [])));
+}
+
+// The master's layout as the component reads it (web/src/editor.js's
+// rows): {text, anchor, head, focused, rows: [[key, from]]}, characters.
+function wiki_test_master_layout() {
+  return document.querySelector(".editor-cm:not(.slide-row-body)")?.wikiEditor?.rows?.() ?? "{}";
+}
+
 // Where the focus is in the rows' list: "text N" in the text of the row at
 // index N, "header N" on its header's button, "elsewhere" outside the list,
 // and "nowhere" when nothing has it.

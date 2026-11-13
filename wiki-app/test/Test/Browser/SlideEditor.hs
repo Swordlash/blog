@@ -37,6 +37,7 @@ import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Page (Page (id, updatedAt))
 import Wiki.Core.PageKind qualified as Kind
 import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), assemble, cutRows, deleteRow, newRow)
+import Wiki.Core.SlideRows qualified as SlideRows
 import Wiki.Core.Slides (moveSlide)
 import Wiki.Core.Space (Space (id))
 
@@ -46,6 +47,9 @@ $( browserJS
      , ("js_slide_focus", "wiki_test_slide_focus", Safe, [t|IO JSText|])
      , ("js_mermaid", "wiki_test_mermaid", Safe, [t|JSText -> IO ()|])
      , ("js_stall_start", "wiki_test_stall_start", Safe, [t|IO ()|])
+     , ("js_slide_invariants", "wiki_test_slide_invariants", Safe, [t|IO JSText|])
+     , ("js_open_rows", "wiki_test_open_rows", Safe, [t|IO JSText|])
+     , ("js_master_layout", "wiki_test_master_layout", Safe, [t|IO JSText|])
      , ("js_master_problems", "wiki_test_master_problems", Safe, [t|IO ()|])
      , ("js_stall", "wiki_test_stall", Safe, [t|IO Int|])
      , ("js_row_cursor_seen", "wiki_test_slide_row_cursor_seen", Safe, [t|Int -> IO Bool|])
@@ -635,7 +639,7 @@ spec m = do
     eventually $ markdown ui `shouldReturn` long
     eventually $ rowCursorSeen 30 `shouldReturn` True
 
-  it "gives the focus to the row an undo or a redo takes the cursor to when it takes away the row the focus was in, its text when open and its header when closed" $ runPage $ do
+  it "gives the focus to the row an undo or a redo takes the cursor to when it takes away the row the focus was in, opening it when it is closed" $ runPage $ do
     (ui, _) <- openDeck deck
     rowHeader ui "One" >>= click
     eventually $ openTitles ui `shouldReturn` ["Deck", "One"]
@@ -656,18 +660,21 @@ spec m = do
     eventually $ markdown ui `shouldReturn` deck
     slideFocus >>= (`shouldSatisfy` T.isPrefixOf "text ")
     -- The redo of a delete, with the focus in the deleted row's text: the
-    -- row the cursor goes to is closed, and its header takes the focus.
+    -- row the cursor goes to is closed, and opens with the focus.
     rowHeader ui "One" >>= click
     rowHeader ui "Two" >>= click
     eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
     rowDelete ui "Two" >>= click
     eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Three"]
+    -- The undo takes the cursor back to "One", where it was before the
+    -- delete: that row opens with the focus, and "Two" comes back open.
     press "Control+z"
-    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    eventually $ openTitles ui `shouldReturn` ["Deck", "One", "Two"]
+    eventually $ slideFocus `shouldReturn` "text 1"
     rowContent ui "Two" >>= click
     press "Control+y"
     eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Three"]
-    eventually $ slideFocus >>= (`shouldSatisfy` T.isPrefixOf "header ")
+    eventually $ slideFocus >>= (`shouldSatisfy` T.isPrefixOf "text ")
     press "Control+z"
     eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
 
@@ -965,6 +972,16 @@ spec m = do
     press "g"
     eventually $ markdown ui `shouldReturn` typed <> "g"
 
+  -- A random walk over the slide mode, seeded: after every step, once the
+  -- page is quiet, the editor's selection is the focused row's, every open
+  -- row shows its range, the rows tile the text, and the text is the one a
+  -- model of the steps computes.
+  for_ [11 :: Int, 23, 47] $ \seed ->
+    it ("holds the rows' invariants through a random walk of typing, splits, joins, moves, deletes, new slides, undos, redos and jumps (seed " <> show seed <> ")") $ runPage $ do
+      (ui, _) <- openDeck walkDeck
+      eventually $ openTitles ui `shouldReturn` ["One"]
+      randomWalk ui seed 50
+
   it "renders the deck whole for one slide's preview: a macro of an earlier slide, a footnote's number, the same slide in every view" $ runPage $ do
     (ui, wiki) <- openDeck macros
     find ui ".editor-side-by-side" >>= click
@@ -1175,6 +1192,148 @@ spec m = do
           after <- slideCut 1024
           after.slide `shouldBe` n + 1
 
+    -- The walk: each step chosen by the seed's numbers from what the page
+    -- shows (the rows, the open ones), made, and checked once the page is
+    -- quiet. The model's text follows the steps whose effect is known
+    -- (typing, a split, Backspace, a move, a delete, a new slide, undo and
+    -- redo through a stack of texts); after a toolbar command the page's
+    -- text is taken. A failure says the seed and the steps so far.
+    randomWalk :: forall s. Mounted s Shell.Query Void m -> Int -> Int -> PageM s ()
+    randomWalk ui seed total = go (fromIntegral seed * 2654435761 + 1) (Model walkDeck [] []) [] 1
+      where
+        go :: Word64 -> Model -> [Text] -> Int -> PageM s ()
+        go g model done n
+          | n > total = pass
+          | otherwise = do
+              lay <- walkLayout
+              open <- openRowIndices
+              let (r1, g1) = nextRandom g
+                  (r2, g2) = nextRandom g1
+                  (r3, g3) = nextRandom g2
+              (label, predicted) <- walkStep ui n lay open model (r1 `mod` 100) r2 r3
+              let done' = done <> [label]
+                  failing what = expectationFailure (T.unlines (("seed " <> show seed <> ", step " <> show n <> ": " <> what) : "steps:" : map ("  " <>) done'))
+              -- Quiet: the re-cut and the check after the pause in the
+              -- typing; after typing, long enough that what is typed next is
+              -- another entry of the history, not joined to this one.
+              let typing = any (`T.isPrefixOf` label) ["type", "split", "Backspace"]
+              settle
+              unsafeIOToPageM (threadDelay (if typing then 600_000 else 300_000))
+              broken <- unsafeIOToPageM (fromJSText <$> js_slide_invariants)
+              unless (T.null broken) (failing broken)
+              shown <- markdown ui
+              let model' = fromMaybe (pushText shown model) predicted
+              unless (shown == model'.text) (failing ("the text is " <> show shown <> ", the model's " <> show model'.text))
+              go g3 model' done' (n + 1)
+
+    -- One step of the walk: what it was, and the model after it ('Nothing':
+    -- take the page's text).
+    walkStep :: forall s. Mounted s Shell.Query Void m -> Int -> WalkLayout -> [Int] -> Model -> Word64 -> Word64 -> Word64 -> PageM s (Text, Maybe Model)
+    walkStep ui n lay open model kind r2 r3 = case () of
+      _
+        | kind < 20
+        , Just i <- pick open -> do
+            t <- rowText i
+            let p = fromIntegral r3 `mod` (T.length t + 1)
+                word = fromMaybe "w" (atMay ["w", "ab", "xyz"] (fromIntegral r2 `mod` 3))
+                at = afterMark (startOf i + p)
+            rowSelect i p p
+            openRowContent ui >>= (`typeText` word)
+            pure ("type " <> show word <> " in row " <> show i <> " at " <> show p, Just (pushText (insertAt at word model.text) model))
+        | kind < 28
+        , Just i <- pick open -> do
+            t <- rowText i
+            let ends = [k | k <- [0 .. T.length t], k == T.length t || T.index t k == '\n', startOf i + k > 2]
+            case pickFrom ends of
+              Nothing -> pure ("no line to split in row " <> show i, Just model)
+              Just p -> do
+                let typed = "\n## S" <> show n
+                rowSelect i p p
+                openRowContent ui >>= (`typeText` typed)
+                pure ("split row " <> show i <> " at " <> show p, Just (pushText (insertAt (startOf i + p) typed model.text) model))
+        | kind < 36
+        , Just i <- pick open -> do
+            t <- rowText i
+            let p = fromIntegral r3 `mod` (T.length t + 1)
+                at = startOf i + p
+            if at <= 2
+              then pure ("no Backspace at " <> show at, Just model)
+              else do
+                rowSelect i p p
+                press "Backspace"
+                pure ("Backspace in row " <> show i <> " at " <> show p, Just (pushText (T.take (at - 1) model.text <> T.drop at model.text) model))
+        | kind < 44
+        , Just i <- pick open -> do
+            t <- rowText i
+            let a = fromIntegral r3 `mod` (T.length t + 1)
+                b = fromIntegral r2 `mod` (T.length t + 1)
+            rowSelect i a b
+            pure ("select " <> show a <> "-" <> show b <> " in row " <> show i, Just model)
+        | kind < 52 || null open -> do
+            let i = fromIntegral r2 `mod` count
+            rowHeaderAt ui i >>= click
+            pure ("toggle row " <> show i, Just model)
+        | kind < 58 -> do
+            let i = fromIntegral r2 `mod` count
+            rowHeaderAt ui i >>= focus
+            pure ("focus the header of row " <> show i, Just model)
+        | kind < 64 -> do
+            let i = fixed + fromIntegral r2 `mod` max 1 (count - fixed)
+                by = if even r3 then -1 else 1
+            if i >= count
+              then pure ("no row to move", Just model)
+              else do
+                rowHeaderAt ui i >>= focus
+                press (if by < 0 then "Alt+ArrowUp" else "Alt+ArrowDown")
+                pure ("move row " <> show i <> " by " <> show by, Just (maybe model (\(r, _) -> stepText (assemble r) model) (rows >>= SlideRows.moveRow i (i + by))))
+        | kind < 69 -> do
+            let i = fixed + fromIntegral r2 `mod` max 1 (count - fixed)
+            case rows >>= SlideRows.deleteRow i of
+              Nothing -> pure ("no row to delete", Just model)
+              Just (r, _) -> do
+                find ui (".editor-slides > li:nth-child(" <> show (i + 1) <> ") .slide-row-delete") >>= click
+                pure ("delete row " <> show i, Just (pushText (assemble r) model))
+        | kind < 73
+        , Just r <- rows -> do
+            let at = maybe (length r.rows) (+ 1) (head [k | (k, (key, _)) <- zip [0 ..] lay.starts, key == RowKey lay.focused])
+            find ui ".editor-new-slide" >>= click
+            pure ("new slide at " <> show at, Just (pushText (assemble (fst (newRow (RowKey 0) "New slide" at r))) model))
+        | kind < 83 -> do
+            inList
+            press "Control+z"
+            pure ("undo", Just (undoModel model))
+        | kind < 90 -> do
+            inList
+            press "Control+y"
+            pure ("redo", Just (redoModel model))
+        | kind < 95
+        , not (null open) -> do
+            find ui ".editor-toolbar button.tool[aria-label=\"Bold\"]" >>= click
+            pure ("bold", Nothing)
+        | otherwise -> do
+            problems <- findAll ui ".editor-problems"
+            case problems of
+              button : _ -> click button >> pure ("next problem", Just model)
+              [] -> pure ("no problem to go to", Just model)
+      where
+        count = length lay.starts
+        rows = SlideRows.fromLayout lay.text lay.starts
+        fixed = maybe 0 SlideRows.fixedRows rows
+        startOf i = maybe 0 snd (atMay lay.starts i)
+        -- The title line's "# " keeps the caret after it.
+        afterMark at = if at < 2 then 2 else at
+        pick = pickFrom
+        pickFrom xs = if null xs then Nothing else atMay xs (fromIntegral r2 `mod` length xs)
+        -- Undo and redo need the focus in the list: on a header if it is
+        -- nowhere there.
+        inList = do
+          at <- slideFocus
+          unless ("text " `T.isPrefixOf` at || "header " `T.isPrefixOf` at) (rowHeaderAt ui 0 >>= focus)
+
+    -- The header of the row at an index.
+    rowHeaderAt :: forall s. Mounted s Shell.Query Void m -> Int -> PageM s (Element s)
+    rowHeaderAt ui i = find ui (".editor-slides > li:nth-child(" <> show (i + 1) <> ") .slide-row-toggle")
+
     -- The demo's "Hello, world", made a presentation with the deck as its
     -- text, open in the editor.
     openDeck :: forall s. Text -> PageM s (Mounted s Shell.Query Void m, IORef MemState)
@@ -1199,6 +1358,72 @@ spec m = do
 -- with no line break at the end.
 deck :: Text
 deck = T.intercalate "\n" ["# Deck", "", "By me.", "", "## One", "", "First.", "", "## Two", "", "Second.", "", "## Three", "", "Third."]
+
+-- | The deck the random walk starts from: a title slide, three slides, and
+-- a formula KaTeX cannot read in the second, for "next problem".
+walkDeck :: Text
+walkDeck = T.intercalate "\n" ["# Walk", "", "## One", "", "First line.", "", "## Two", "", "Half: $\\frac{1}$ here.", "", "## Three", "", "Third line."]
+
+-- | The walk's model: the text, the texts an undo goes back to (the last
+-- first) and those a redo goes forward to.
+data Model = Model
+  { text :: Text
+  , past :: [Text]
+  , future :: [Text]
+  }
+
+-- | A step that made the text this: one more entry of the history, unless
+-- the text did not change.
+pushText :: Text -> Model -> Model
+pushText new model
+  | new == model.text = model
+  | otherwise = Model {text = new, past = model.text : model.past, future = []}
+
+-- | A structural step the page made: one more entry of the history even
+-- when the text is the same (two rows of the same text swapped).
+stepText :: Text -> Model -> Model
+stepText new model = Model {text = new, past = model.text : model.past, future = []}
+
+undoModel, redoModel :: Model -> Model
+undoModel model = case model.past of
+  p : ps -> Model {text = p, past = ps, future = model.text : model.future}
+  [] -> model
+redoModel model = case model.future of
+  f : fs -> Model {text = f, past = model.text : model.past, future = fs}
+  [] -> model
+
+-- | A text with another put in at a character.
+insertAt :: Int -> Text -> Text -> Text
+insertAt at typed whole = T.take at whole <> typed <> T.drop at whole
+
+-- | The next number of the walk's generator (a linear congruential one,
+-- Knuth's MMIX constants), and the generator after it.
+nextRandom :: Word64 -> (Word64, Word64)
+nextRandom g = let g' = g * 6364136223846793005 + 1442695040888963407 in (g' `div` 8589934592, g')
+
+-- | The master's text, the row whose text had the focus last, and the
+-- rows' keys and starts, in characters, as the component reads them.
+data WalkLayout = WalkLayout
+  { text :: Text
+  , focused :: Int
+  , starts :: [(RowKey, Int)]
+  }
+
+instance FromJSON WalkLayout where
+  parseJSON = withObject "WalkLayout" $ \o -> do
+    text <- o .: "text"
+    focused <- o .: "focused"
+    pairs <- o .: "rows"
+    pure WalkLayout {text, focused, starts = [(RowKey k, s) | (k, s) <- pairs]}
+
+walkLayout :: PageM s WalkLayout
+walkLayout = do
+  json <- unsafeIOToPageM (fromJSText <$> js_master_layout)
+  maybe (expectationFailure ("no layout: " <> json) >> pure (WalkLayout "" (-1) [])) pure (decodeStrict (encodeUtf8 json))
+
+-- | The indices of the open rows.
+openRowIndices :: PageM s [Int]
+openRowIndices = fromMaybe [] . decodeStrict . encodeUtf8 <$> unsafeIOToPageM (fromJSText <$> js_open_rows)
 
 -- | A deck to measure: its look, a title slide, slides of 1, 3, … 29
 -- paragraphs, a slide with an image 600 pixels wide, one with an @html@
