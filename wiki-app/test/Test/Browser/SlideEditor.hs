@@ -782,6 +782,27 @@ spec m = do
     eventuallyWithin 15000 $ rowProblems ui `shouldReturn` []
     length <$> findAll ui ".editor-problems" `shouldReturn` 0
 
+  it "measures a slide again when its diagram draws after the slides were measured, with nothing else changing" $ runPage $ do
+    -- A diagram tall enough to cut its slide, held until every slide is
+    -- measured without it: the slide fits then.
+    let tall = T.intercalate "\n" ["# Deck", "", "## Diagram", "", "Above it.", "", "```mermaid", "graph TD", T.intercalate "\n" ["  N" <> show i <> " --> N" <> show (i + 1) | i <- [1 .. 12 :: Int]], "```"]
+    unsafeIOToPageM js_fit_log_start
+    unsafeIOToPageM (js_mermaid (toJSText "hold"))
+    (ui, _) <- openDeck tall
+    eventually $ previewFits ui `shouldReturn` ["fits", "fits"]
+    eventually $ editorFits `shouldReturn` ["fits", "fits"]
+    before <- fitLog
+    [d.drawn | d <- before, d.diagrams > 0] `shouldSatisfy` (\drawn -> not (null drawn) && all (== 0) drawn)
+    -- The diagram drawn, and nothing else: no keystroke, no other slide
+    -- shown. The watch of the cards measures again by itself.
+    unsafeIOToPageM (js_mermaid (toJSText "as-is"))
+    eventuallyWithin 15000 $ length <$> findAll ui ".editor-preview .wiki-mermaid svg" `shouldReturn` 1
+    eventuallyWithin 15000 $ do
+      after <- fitLog
+      lastMay [d.drawn | d <- after, d.diagrams > 0] `shouldBe` Just 1
+    eventuallyWithin 15000 $ previewFits ui `shouldReturn` ["fits", "overflowing"]
+    eventuallyWithin 15000 $ editorFits `shouldReturn` ["fits", "overflowing"]
+
   it "puts every key typed through a split and a join where the caret is, keys coming as the rows are cut again" $ runPage $ do
     (ui, _) <- openDeck deck
     eventually $ openTitles ui `shouldReturn` ["Deck"]
