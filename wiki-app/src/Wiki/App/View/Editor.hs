@@ -321,6 +321,7 @@ import Wiki.App.Editor.Browser
   , previewShown
   , pushPreviewEntry
   , readPickedFile
+  , readyFocused
   , restoreFocus
   , rowKeyOf
   , rowWanted
@@ -755,7 +756,7 @@ data Action
   | SlidesMode Bool
   | OneSlide Bool
   | CursorAt Int
-  | EditorReady
+  | EditorReady Bool
   | EditorFailed
   | FromRow SlideRow.Output
   | RowWantedBy RowWanted
@@ -1740,7 +1741,7 @@ component =
                 {{ HE.handler' (EventType "wiki-mention") (\ev -> uncurry MentionAsked <$> mentionAsked ev) }}
                 {{ HE.handler' (EventType "wiki-emoji") (\ev -> uncurry EmojiAsked <$> emojiAsked ev) }}
                 {{ HE.handler' (EventType "wiki-cursor-line") (fmap CursorAt . cursorLineOf) }}
-                {{ HE.handler' (EventType "wiki-ready") (const (Just EditorReady)) }}
+                {{ HE.handler' (EventType "wiki-ready") (\ev -> Just $! EditorReady (readyFocused ev)) }}
                 {{ HE.handler' (EventType "wiki-editor-failed") (const (Just EditorFailed)) }}
                 {{ HE.handler' (EventType "wiki-row-wanted") (fmap RowWantedBy . rowWanted) }}
                 {{ HE.handler' (EventType "wiki-relayout") (const (Just Relaid)) }}
@@ -2280,7 +2281,11 @@ component =
       -- CodeMirror has taken the textarea's place: the master is told the
       -- mode and given the rows of the text it holds, which can open now,
       -- the row its cursor starts in first.
-      EditorReady -> do
+      -- When the textarea had the focus (the author typing while CodeMirror
+      -- loaded), the cursor's row opens with it, its caret where the
+      -- textarea's was: the master, which took the textarea's text and
+      -- selection, is hidden slide by slide.
+      EditorReady hadFocus -> do
         -- The cursor's line from the start: CodeMirror tells it only when
         -- it changes, and it may start below the title line.
         gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (cursorLine host) >>= \line -> modify (\st -> st {cursorAt = line}))
@@ -2300,7 +2305,13 @@ component =
                     taken <- H.liftEffect (setRows host layout.text rows)
                     when taken $ do
                       let start = atMay rows.rows (SlideRows.rowAt rows layout.cursor)
-                      modify (\s -> s {rows = Just rows, nextKey, openRows = if already then [k | k <- s.openRows, k `elem` map (.key) rows.rows] else [r.key | Just r <- [start]]})
+                      modify $ \s ->
+                        s
+                          { rows = Just rows
+                          , nextKey
+                          , openRows = if already then [k | k <- s.openRows, k `elem` map (.key) rows.rows] else [r.key | Just r <- [start]]
+                          , focusRow = if hadFocus && slidesShown s then (.key) <$> start else s.focusRow
+                          }
                       publishProblems
                 )
       DiscardOffered -> do

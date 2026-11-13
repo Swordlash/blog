@@ -86,6 +86,7 @@ module Wiki.App.Editor.Browser
     -- * Slides
   , cursorLine
   , cursorLineOf
+  , readyFocused
 
     -- * A presentation's rows
   , attachRow
@@ -581,6 +582,11 @@ cursorLine host = liftIO $ maybe (pure 1) (.cursorLine) =<< codeMirror host
 -- | The line a @wiki-cursor-line@ event says the cursor is now on.
 cursorLineOf :: Event -> Maybe Int
 cursorLineOf = fmap foreignToInt . detailOf
+
+-- | Whether the text had the focus when CodeMirror took its place, as the
+-- @wiki-ready@ event says (@web/src/editor.js@).
+readyFocused :: Event -> Bool
+readyFocused = maybe False ((== 1) . foreignToInt) . detailOf
 
 -- | Ranges of lines as CodeMirror's side reads and writes them: JSON,
 -- @[[first, last]]@.

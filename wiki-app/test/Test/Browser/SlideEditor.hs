@@ -946,6 +946,25 @@ spec m = do
     unsafeIOToPageM (threadDelay 1_000_000)
     length <$> findAll ui ".cm-tooltip-autocomplete" `shouldReturn` 0
 
+  it "hands the focus from the textarea to the cursor's row when CodeMirror arrives, nothing typed lost, the caret after it" $ runPage $ do
+    unsafeIOToPageM (js_editor_script (toJSText "hold"))
+    (ui, _) <- openDeckWith False deck
+    eventually $ rowTitles ui `shouldReturn` ["Deck", "One", "Two", "Three"]
+    area <- find ui ".editor-text"
+    focus area
+    press "Control+End"
+    typeText area "\n\nAbc"
+    unsafeIOToPageM (js_editor_script (toJSText "as-is"))
+    -- Typing on at once, as the editor arrives.
+    traverse_ press ["d", "e", "f"]
+    let typed = deck <> "\n\nAbcdef"
+    eventually $ markdown ui `shouldReturn` typed
+    eventually $ slideFocus `shouldReturn` "text 3"
+    let end = T.length (rowTextOf typed 3)
+    rowSelection 3 `shouldReturn` (end, end)
+    press "g"
+    eventually $ markdown ui `shouldReturn` typed <> "g"
+
   it "renders the deck whole for one slide's preview: a macro of an earlier slide, a footnote's number, the same slide in every view" $ runPage $ do
     (ui, wiki) <- openDeck macros
     find ui ".editor-side-by-side" >>= click

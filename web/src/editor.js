@@ -78,7 +78,10 @@
 //   presentation shows the cursor's slide.
 // - once CodeMirror is in place, a "wiki-ready" event on the host says so:
 //   the component gives a presentation's rows to it then, which it cannot
-//   do before.
+//   do before. Its detail is 1 when the text had the focus as CodeMirror
+//   took its place (the author was typing in the textarea), 0 otherwise:
+//   slide by slide, the master is hidden and cannot take the focus, and
+//   the row the cursor is in takes it instead.
 //
 // The text is never normalised: the document's only line separator is
 // "\n", so a "\r" the page holds stays where it is and the text handed back
@@ -2288,5 +2291,5 @@ export function attach(textarea, host, original, codeTokens) {
   editors.add(editor);
   // CodeMirror is ready: what the component does only once it is (folding
   // a presentation's slides, marking them) is done now.
-  host.dispatchEvent(new CustomEvent("wiki-ready"));
+  host.dispatchEvent(new CustomEvent("wiki-ready", { detail: focused ? 1 : 0 }));
 }
