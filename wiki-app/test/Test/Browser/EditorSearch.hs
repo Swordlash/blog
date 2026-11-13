@@ -136,6 +136,33 @@ spec m = do
     press "Control+f"
     length <$> findAll ui ".editor-search" `shouldReturn` 0
 
+  it "replaces matches of no length one after the other, and steps past the count's limit, both ways" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    setMarkdown ui "# Hello, world\n\nA\nB\nC"
+    selectText ui 16 16
+    press "Control+f"
+    find ui ".editor-search-regexp" >>= click
+    find ui ".editor-search-find" >>= (`typeText` "^")
+    find ui ".editor-search-replacement" >>= (`typeText` "X")
+    -- The cursor is a match, at the start of "A": each Replace writes there
+    -- and goes on to the next line, not to the same place again.
+    replaceButton <- find ui ".editor-search-replace"
+    replicateM_ 3 (click replaceButton)
+    markdown ui `shouldReturn` "# Hello, world\n\nXA\nXB\nXC"
+    press "Escape"
+    -- Past the thousandth line: a step goes on to the next, and back.
+    setMarkdown ui ("# Hello, world\n\n" <> T.replicate 1100 "x\n")
+    let lineAt k = 16 + 2 * (k - 2)
+    selectText ui (lineAt 999) (lineAt 999)
+    press "Control+f"
+    eventually $ said ui `shouldReturn` "1000+ matches"
+    press "Enter"
+    editorSelection ui `shouldReturn` (lineAt 1000, lineAt 1000)
+    press "Enter"
+    editorSelection ui `shouldReturn` (lineAt 1001, lineAt 1001)
+    press "Shift+Enter"
+    editorSelection ui `shouldReturn` (lineAt 1000, lineAt 1000)
+
   it "says a regular expression that is not one and matches nothing, matches case and whole words when asked, and stops counting at 1000" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     setMarkdown ui "# Hello, world\n\nCat cat category CAT.\n"

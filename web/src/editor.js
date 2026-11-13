@@ -1313,9 +1313,15 @@ const forwarded = (key, offset, tr) => {
 // a header's button) changes no selection of its own, and without this an
 // undo of what is typed next would put the master's cursor back in the row
 // the focus came from.
+//
+// Not when the master's selection is wider than the row and the row shows
+// the part of it in the row (widerThanRow): a match of the search across
+// two rows, which a step selected in the master whole and showed in the
+// row it starts in (revealMatch). The master keeps the whole match, which
+// Replace replaces and the count names.
 const selectionToMaster = (key, view, masterView) => {
   const range = rangeOf(masterView.state, key);
-  if (range === null) return;
+  if (range === null || widerThanRow(masterView.state, range, view.state.selection)) return;
   const { ranges, mainIndex } = view.state.selection;
   masterView.dispatch({
     selection: EditorSelection.create(
@@ -1325,6 +1331,18 @@ const selectionToMaster = (key, view, masterView) => {
     annotations: [rowOf.of(key), Transaction.addToHistory.of(false)],
     filter: false,
   });
+};
+
+// Whether the master's selection is wider than a row's range, {from, to},
+// and the row's selection (an EditorSelection of the row's) is the part of
+// it in the row: the one case where a focused row's selection is not the
+// master's (rowsSync's rule).
+const widerThanRow = (state, range, own) => {
+  const { from, to } = state.selection.main;
+  if (state.selection.ranges.length > 1 || own.ranges.length > 1 || (from >= range.from && to <= range.to)) return false;
+  const a = Math.max(from, range.from) - range.from;
+  const b = Math.min(to, range.to) - range.from;
+  return b >= a && own.main.anchor === a && own.main.head === b;
 };
 
 // Whether a position of a text is between the two halves of a surrogate
@@ -1516,6 +1534,29 @@ const matchesIn = (state, query, from, to) => {
     if (match.to > from && match.to > match.from) found.push({ from: match.from, to: match.to });
   }
   return found;
+};
+
+// The first match of a query at or after a position that `wanted` takes,
+// or null: looked for from the position on, never collected from the
+// text's start, so that no count's limit stops a step.
+const matchFrom = (query, state, at, wanted) => {
+  const cursor = query.getCursor(state, at);
+  while (!cursor.next().done) if (wanted(cursor.value)) return { from: cursor.value.from, to: cursor.value.to };
+  return null;
+};
+
+// The last match of a query that starts at or before a position and that
+// `wanted` takes, or null: looked for in a stretch of text before the
+// position, twice as long each time it holds none, as the library looks
+// for a previous match.
+const matchBefore = (query, state, at, wanted) => {
+  for (let size = 10000; ; size *= 2) {
+    const start = Math.max(0, at - size);
+    let found = null;
+    const cursor = query.getCursor(state, start);
+    while (!cursor.next().done && cursor.value.from <= at) if (wanted(cursor.value)) found = { from: cursor.value.from, to: cursor.value.to };
+    if (start === 0 || (found !== null && found.from > start + matchMargin)) return found;
+  }
 };
 
 // The scroll a step of the search asks for slide by slide: none.
@@ -1753,7 +1794,10 @@ const rowsSync = (host) =>
     }
     // The rule this listener keeps, the one place every change of the
     // master's passes: while a row's text has the focus, the master's
-    // selection is that row's, moved by the row's start. A row's own
+    // selection is that row's, moved by the row's start; or, for a match of
+    // the search wider than the row (across two rows), the row's selection
+    // is the part of the master's in the row (widerThanRow), and the master
+    // keeps the whole match. A row's own
     // transactions keep it (forwarded); the master's changes the row did
     // not make (an undo, a redo, a structural step or its undo, the next
     // problem, a toolbar command) bring the row's selection with them when
@@ -2239,6 +2283,13 @@ export function attach(textarea, host, original, codeTokens) {
   // the raw Markdown, and none slide by slide, where the master is hidden
   // and the match's row scrolls instead (rowsSync).
   const matchInView = (range) => (bySlide ? noScroll.of(null) : EditorView.scrollIntoView(range, { y: "center" }));
+  // A match selected as a step of the search selects it.
+  const selectMatch = (match) =>
+    view.dispatch({
+      selection: EditorSelection.single(match.from, match.to),
+      effects: matchInView(EditorSelection.range(match.from, match.to)),
+      userEvent: "select.search",
+    });
   let countTimer = null;
   const countMatches = () => {
     clearTimeout(countTimer);
@@ -2657,18 +2708,13 @@ export function attach(textarea, host, original, codeTokens) {
       const stepped = (forward ? findNext : findPrevious)(view);
       const now = view.state.selection.main;
       if (!stepped || (now.from === before.from && now.to === before.to)) {
-        const all = [];
-        const cursor = query.getCursor(view.state);
-        while (all.length < countLimit && !cursor.next().done) all.push({ from: cursor.value.from, to: cursor.value.to });
-        if (all.length === 0) return 0;
+        const { state } = view;
         const after = forward
-          ? (all.find((m) => m.from > before.from || (m.from === before.from && m.to > before.to)) ?? all[0])
-          : (all.findLast((m) => m.from < before.from || (m.from === before.from && m.to < before.to)) ?? all[all.length - 1]);
-        view.dispatch({
-          selection: EditorSelection.single(after.from, after.to),
-          effects: matchInView(EditorSelection.range(after.from, after.to)),
-          userEvent: "select.search",
-        });
+          ? (matchFrom(query, state, before.from, (m) => m.from > before.from || (m.from === before.from && m.to > before.to)) ?? matchFrom(query, state, 0, () => true))
+          : (matchBefore(query, state, before.from, (m) => m.from < before.from || (m.from === before.from && m.to < before.to)) ??
+            matchBefore(query, state, state.doc.length, () => true));
+        if (after === null) return 0;
+        selectMatch(after);
       }
       const after = view.state.selection.main;
       return (forward ? after.from < before.to : after.from >= before.from) ? 2 : 1;
@@ -2688,7 +2734,20 @@ export function attach(textarea, host, original, codeTokens) {
           host.dispatchEvent(new CustomEvent("wiki-row-wanted", { detail: { key, left: -1, close: false, focus: false, reason: "search" } }));
         }
       }
-      return replaceNext(view) ? 1 : 0;
+      const before = view.state.selection.main;
+      const length = view.state.doc.length;
+      const at = matchFrom(query, view.state, before.from, () => true);
+      const empty = at !== null && at.from === before.from && at.to === before.to && before.empty;
+      if (!replaceNext(view)) return 0;
+      // A match of no length (a regular expression such as "^") replaced:
+      // the library's next match is the same place again, before the text
+      // put in. The next is looked for after that text, and past the place.
+      if (empty) {
+        const end = before.from + view.state.doc.length - length;
+        const next = matchFrom(query, view.state, end, (m) => m.from > before.from || m.to > before.to) ?? matchFrom(query, view.state, 0, () => true);
+        if (next !== null) selectMatch(next);
+      }
+      return 1;
     },
     // Replace every match, as one step of the history (replaceAll,
     // input.replace.all): how many were replaced.

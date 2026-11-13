@@ -1126,6 +1126,32 @@ spec m = do
     eventually $ map (\(i, t, _) -> (i, t)) <$> searchMarks `shouldReturn` [(-1, "NEEDLE"), (-1, "NEEDLE"), (-1, "NEEDLE")]
     unsafeIOToPageM (fromJSText <$> js_slide_invariants) `shouldReturn` ""
 
+  it "keeps a match across two rows whole when F3 gives its row the focus, the row showing its part of it, and Replace replaces it whole" $ runPage $ do
+    (ui, _) <- openDeck searchDeck
+    eventually $ openTitles ui `shouldReturn` ["Deck 😀"]
+    rowSelect 0 2 2
+    press "Control+f"
+    find ui ".editor-search-regexp" >>= click
+    find ui ".editor-search-find" >>= (`typeText` "needle here\\.(\\s+## Two)")
+    find ui ".editor-search-replacement" >>= (`typeText` "pin.$1")
+    eventually $ said ui `shouldReturn` "1 match"
+    -- F3 in the text of "Deck": "One", where the match starts, opens with
+    -- the focus, showing the match's part in it.
+    rowSelect 0 2 2
+    press "F3"
+    eventually $ searchFocus `shouldReturn` "text 1"
+    rowSelection 1 `shouldReturn` (10, 23)
+    -- The editor keeps the whole match: the count names it, and the rows'
+    -- invariant holds by its one exception.
+    eventually $ said ui `shouldReturn` "1 of 1"
+    unsafeIOToPageM (fromJSText <$> js_slide_invariants) `shouldReturn` ""
+    find ui ".editor-search-replace" >>= click
+    markdown ui `shouldReturn` T.replace "A needle here." "A pin." searchDeck
+    -- Escape, after Replace: the focus in "One".
+    press "Escape"
+    eventually $ searchFocus `shouldReturn` "text 1"
+    unsafeIOToPageM (fromJSText <$> js_slide_invariants) `shouldReturn` ""
+
   it "selects a regular expression's match across two slides in the row it starts in" $ runPage $ do
     (ui, _) <- openDeck searchDeck
     eventually $ openTitles ui `shouldReturn` ["Deck 😀"]
@@ -1531,6 +1557,25 @@ spec m = do
         -- match opens, the others staying as they are. F3 where a row's
         -- text has the focus, which moves the focus to the match's row;
         -- Next in the panel elsewhere, the focus staying there.
+        -- One step in three is to a regular expression's match across a
+        -- row's edge ("line.", then the next slide's heading), with F3 in
+        -- an open row's text when there is one: the row the match starts
+        -- in takes the focus and shows its part of the match, the editor
+        -- keeping it whole, the invariant's one exception.
+        | kind < 90
+        , r3 `mod` 3 == 0 -> do
+            searching
+            findAsked True walkAcross
+            label <- case pick open of
+              Just i -> do
+                rowSelect i 0 0
+                press "F3"
+                pure ("F3 across a row's edge from row " <> show i)
+              Nothing -> do
+                find ui ".editor-search-next" >>= click
+                pure "search step across a row's edge"
+            findAsked False walkQuery
+            pure (label, Just model)
         | kind < 90 -> do
             searching
             at <- slideFocus
@@ -1593,6 +1638,14 @@ spec m = do
             replacement <- find ui ".editor-search-replacement"
             clear replacement
             typeText replacement walkReplacement
+        -- The search's text to find, as a regular expression or not.
+        findAsked regexp text = do
+          toggle <- find ui ".editor-search-regexp"
+          pressed <- getAttribute toggle "aria-pressed"
+          when (pressed /= Just (if regexp then "true" else "false")) (click toggle)
+          field <- find ui ".editor-search-find"
+          clear field
+          typeText field text
         -- Undo and redo need the focus in the list: on a header if it is
         -- nowhere there.
         inList = do
@@ -1639,6 +1692,12 @@ walkDeck = T.intercalate "\n" ["# Walk", "", "## One", "", "First line.", "", "#
 walkQuery, walkReplacement :: Text
 walkQuery = "line"
 walkReplacement = "LINE"
+
+-- | A regular expression of the walk's whose match runs across a row's
+-- edge: a line that ends with "line.", the blank line, and the next
+-- slide's heading's marks.
+walkAcross :: Text
+walkAcross = "line\\.\\s+## "
 
 -- | The presentation the search's tests search: "needle" once in "One",
 -- not in "Two", twice in "Three" ("Needle" once), and an emoji in the
