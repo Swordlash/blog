@@ -185,8 +185,14 @@ spec m = do
             when (n == 0) $ do
               find ui ".editor-search-replace-all" >>= click
               ((asked,) <$> markdown ui) `shouldReturn` (asked, text)
-            unless (n == 0) $ caseFound text asked n
-          caseFound text pattern' n = do
+            unless (n == 0) $ caseFound text asked (whole || any (`T.isInfixOf` pattern') ["(?<", "(?=", "(?!", "\\b", "\\B"]) n
+          -- A query whose matches look at their neighbours (whole word, a
+          -- look behind or ahead, a word's edge) may match otherwise once
+          -- a replacement is next to them: for it, each Replace replaces a
+          -- match of the text as it then is, and Replace all may end
+          -- elsewhere. For any other query, each Replace replaces one, and
+          -- once for each match ends where Replace all ends.
+          caseFound text pattern' neighbours n = do
             next <- find ui ".editor-search-next"
             visited <- replicateM (n + 1) (click next >> editorSelection ui)
             let distinct = ordNub (take n visited)
@@ -201,13 +207,20 @@ spec m = do
             selectText ui 2 2
             click next
             replaceButton <- find ui ".editor-search-replace"
-            replicateM_ n (click replaceButton)
+            changed <- for [1 .. n] $ \_ -> do
+              was <- markdown ui
+              click replaceButton
+              (/= was) <$> markdown ui
             byOne <- markdown ui
             setMarkdown ui text
             selectText ui 2 2
             find ui ".editor-search-replace-all" >>= click
             every <- markdown ui
-            (pattern', text, byOne) `shouldBe` (pattern', text, every)
+            -- Each Replace replaced a match; for a query whose matches look
+            -- at their neighbours, the first did, the others replacing what
+            -- the text as it then was still matches.
+            (pattern', text, if neighbours then take 1 changed else changed) `shouldBe` (pattern', text, if neighbours then [True] else replicate n True)
+            unless neighbours $ (pattern', text, byOne) `shouldBe` (pattern', text, every)
             (pattern', text, every /= text) `shouldBe` (pattern', text, True)
       -- Slide by slide the text is hidden: Ctrl+F on a row's header.
       if bySlide then find ui ".editor-slides .slide-row-toggle" >>= focus else selectText ui 2 2
@@ -262,6 +275,43 @@ spec m = do
         selectText ui 2 2
         find ui ".editor-search-replace-all" >>= click
         ((asked,) <$> markdown ui) `shouldReturn` (asked, "# T\n\n" <> expected)
+
+  -- Replace replaces only a match of the search as it is now: after the
+  -- search changed, nothing is remembered of the one before; and with the
+  -- groups the match has in the text as it then is.
+  it "replaces only a match of the search as it is now, with its groups in the text as it then is" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    setMarkdown ui "# T\n\ncat cat"
+    selectText ui 2 2
+    press "Control+f"
+    find ui ".editor-search-find" >>= (`typeText` "cat")
+    find ui ".editor-search-replacement" >>= (`typeText` "dog")
+    replaceButton <- find ui ".editor-search-replace"
+    click replaceButton
+    click replaceButton
+    markdown ui `shouldReturn` "# T\n\ndog cat"
+    -- Another search, which has no match: Replace writes nothing.
+    find ui ".editor-search-find" >>= clear
+    find ui ".editor-search-find" >>= (`typeText` "wolf")
+    find ui ".editor-search-replacement" >>= clear
+    find ui ".editor-search-replacement" >>= (`typeText` "fox")
+    eventually $ said ui `shouldReturn` "No matches"
+    click replaceButton
+    markdown ui `shouldReturn` "# T\n\ndog cat"
+    -- A look behind: the second "b" follows an "a" once the first is
+    -- replaced, and is replaced with the group that match has.
+    setMarkdown ui "# T\n\nbb"
+    selectText ui 2 2
+    find ui ".editor-search-regexp" >>= click
+    find ui ".editor-search-find" >>= clear
+    find ui ".editor-search-find" >>= (`typeText` "(?<=a)(b)|(b)")
+    find ui ".editor-search-replacement" >>= clear
+    find ui ".editor-search-replacement" >>= (`typeText` "$1a")
+    replicateM_ 3 (click replaceButton)
+    markdown ui `shouldReturn` "# T\n\naba"
+    setMarkdown ui "# T\n\nbb"
+    find ui ".editor-search-replace-all" >>= click
+    markdown ui `shouldReturn` "# T\n\naa"
 
   it "counts no match in the title line's guarded \"# \", steps to none and replaces none, and finds the title's own text, in the raw Markdown" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor

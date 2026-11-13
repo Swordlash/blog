@@ -2481,14 +2481,6 @@ export function attach(textarea, host, original, codeTokens) {
       effects: matchInView(EditorSelection.range(match.from, match.to)),
       userEvent: "select.search",
     });
-  // The match a Replace selected to replace next ({from, to, match}, and
-  // the text it was found for): a match of the text before that Replace,
-  // which the replacement may have made no longer one (a whole word that a
-  // replacement's letter now touches). The next Replace replaces it all
-  // the same, so that Replace pressed once for each match replaces what
-  // Replace all replaces. Forgotten as soon as the text is another (any
-  // other change) or a step selects something else.
-  let replacingNext = null;
   let countTimer = null;
   const countMatches = () => {
     clearTimeout(countTimer);
@@ -2901,7 +2893,6 @@ export function attach(textarea, host, original, codeTokens) {
       const query = view.state.field(searching);
       if (!query?.valid) return 0;
       const step = stepFrom(query, view.state, view.state.selection.main, forward);
-      replacingNext = null;
       if (step === null) return 0;
       selectMatch(step.match);
       return step.wrapped ? 2 : 1;
@@ -2915,10 +2906,11 @@ export function attach(textarea, host, original, codeTokens) {
       if (!query?.valid) return 0;
       const { state } = view;
       const before = state.selection.main;
-      const selected = (m) => m !== null && m.from === before.from && m.to === before.to;
-      const member = matchFrom(query, state, before.from, () => true);
-      const here = selected(member) ? member : replacingNext?.doc === state.doc && selected(replacingNext) ? replacingNext : null;
-      replacingNext = null;
+      // The selection is replaced only when it is a match of the text as it
+      // is now, with that match's groups: nothing else is remembered from
+      // one Replace to the next.
+      const found = matchFrom(query, state, before.from, () => true);
+      const here = found !== null && found.from === before.from && found.to === before.to ? found : null;
       if (here === null) {
         // No match selected: the next one is.
         const step = stepFrom(query, state, before, true);
@@ -2930,29 +2922,29 @@ export function attach(textarea, host, original, codeTokens) {
       if (bySlide && key !== undefined && !host.wikiRows?.has(key)) {
         host.dispatchEvent(new CustomEvent("wiki-row-wanted", { detail: { key, left: -1, close: false, focus: false, reason: "search" } }));
       }
-      // The match selected replaced, and the next selected: the match after
-      // it in the text before the replacement, as Replace all, which
-      // decides every match in the text before it, goes on to it (a match
-      // of no length where the replaced one ended is none of the
-      // sequence). Moved past the text put in. Past the end, the first
-      // match of the text after the replacement.
+      // The match selected replaced, and the next selected: the first match
+      // of the text after the replacement that starts after the text put
+      // in, or where it ends only if it has a length (a match of no length
+      // there is the place just replaced, as the cursor's sequence has
+      // none right after a match). Past the end, the first match there is.
+      //
+      // So each Replace replaces a match of the text as it then is, which
+      // the author has seen selected: as an editor's Replace does. Where a
+      // replacement changes the next match's surroundings (a whole word
+      // that a replaced letter now touches, a look behind or ahead, "\b"),
+      // Replace pressed once for each match may end elsewhere than Replace
+      // all, which decides every match in the text before it.
       const insert = replacementOf(query, here);
       const changes = state.changes({ from: here.from, to: here.to, insert });
-      const after = matchFrom(query, state, here.to, (m) => m.from !== here.from || m.to !== here.to);
-      let next = null;
-      if (after !== null) {
-        const from = changes.mapPos(after.from, 1);
-        next = { from, to: Math.max(from, changes.mapPos(after.to, -1)), match: after.match };
-      } else {
-        next = matchFrom(query, state.update({ changes }).state, 0, () => true);
-      }
+      const replaced = state.update({ changes }).state;
+      const end = here.from + insert.length;
+      const next = matchFrom(query, replaced, end, (m) => m.from > end || m.to > m.from) ?? matchFrom(query, replaced, 0, () => true);
       view.dispatch({
         changes,
         selection: next === null ? undefined : EditorSelection.single(next.from, next.to),
         effects: next === null ? [] : matchInView(EditorSelection.range(next.from, next.to)),
         userEvent: "input.replace",
       });
-      if (next !== null) replacingNext = { ...next, doc: view.state.doc };
       return 1;
     },
     // Replace every match, as one step of the history (input.replace.all):
