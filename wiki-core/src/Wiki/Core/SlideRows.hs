@@ -48,6 +48,7 @@ module Wiki.Core.SlideRows
   , cutRows
   , assemble
   , rowStarts
+  , rowLines
   , fromLayout
   , changedSince
   , recut
@@ -142,6 +143,12 @@ assemble r = T.concat (concat (zipWith (\row sep -> [row.text, sep]) r.rows (r.s
 -- | The character each row starts at in the text 'assemble' gives.
 rowStarts :: Rows -> [Int]
 rowStarts r = scanl (+) 0 (zipWith (\row sep -> T.length row.text + T.length sep) r.rows r.separators)
+
+-- | The line each row starts on in the text 'assemble' gives, from 1, as
+-- an editor counts lines (a line feed ends one), found in one walk over
+-- the rows.
+rowLines :: Rows -> [Int]
+rowLines r = scanl (+) 1 [T.count "\n" row.text + T.count "\n" sep | (row, sep) <- zip r.rows (r.separators <> repeat "")]
 
 -- | The rows of a text as the browser's editor holds them after an edit:
 -- each row's key and the character it now starts at, in order, mapped
@@ -463,25 +470,35 @@ swallowed r = go 0 (zip [0 ..] (rowStarts r))
 -- | Where a row leaves a block open (a code fence, a box, an HTML
 -- comment), which takes the slides after it into its own in the whole
 -- text: the first character of the line that opens it, read from the row's
--- own text: the line from which on, to the row's end, a heading put after
--- the text, on a line of its own after a blank line, would not open a
--- slide (a block opened and closed before it does not count). 'Nothing'
--- when the row leaves nothing open, and when the line would be the row's
--- first, its opener.
+-- own text. 'Nothing' when the row leaves nothing open, and when the line
+-- would be the row's first, its opener.
+--
+-- The row's text is parsed once, with a heading put after it on a line of
+-- its own after a blank line, as the next slide's would be. When that
+-- heading opens no slide, a block left open has taken it in: the last
+-- block of the top level that starts before it (a block opened and closed
+-- before that one is over by then). The parser says on which line that
+-- block starts. One parse per row, so that the time is linear in the
+-- row's length: this runs after every pause in the typing, on the page's
+-- one thread, while the author writes a long code block whose fence is not
+-- closed yet.
 leftOpenAt :: Row -> Maybe Int
-leftOpenAt row = case reverse run of
-  (at, _) : _ | length run < length flags -> Just at
-  _ -> Nothing
+leftOpenAt row = case parseDeckSpans probe of
+  Left _ -> Nothing
+  Right spans ->
+    let located = [(l, b) | (Just (l, _), b) <- deckLevel spans]
+        opensSlide = any (\(l, b) -> l == probeLine && isOpener b) located
+     in case lastMay [l | (l, _) <- located, l < probeLine] of
+          Just l | not opensSlide, l > 1 -> atMay lineStarts (l - 1)
+          _ -> Nothing
   where
-    -- Each line's start, and whether the text up to its end takes in a
-    -- heading after it; the lines at the end that do.
-    flags = zip starts (map (swallows . (`T.take` row.text)) ends)
-    run = takeWhile snd (reverse flags)
-    starts = scanl (+) 0 (map ((+ 1) . T.length) lines')
-    ends = [s + T.length l | (s, l) <- zip starts lines']
-    lines' = T.splitOn "\n" row.text
-    -- Whether a heading after this text is taken in by it.
-    swallows before = let probe = before <> "\n\n## Probe\n" in (T.length before + 2) `notElem` openerStarts probe
+    probe = row.text <> "\n\n## Probe\n"
+    lineStarts = parserLineStarts probe
+    -- The probe's line, from 1, as the parser counts lines.
+    probeLine = length (takeWhile (<= T.length row.text + 2) lineStarts)
+    isOpener = \case
+      Heading level _ _ -> level <= 2
+      _ -> False
 
 -- | The character each opener of a text starts at: the first character of
 -- the line of each heading of level one or two at the presentation's top

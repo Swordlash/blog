@@ -59,6 +59,25 @@ function wiki_test_mermaid(how) {
   }
 }
 
+// The longest time, in milliseconds, the page's thread was held without a
+// break since the measure started: a timer due every 10 ms that comes late
+// by that much.
+function wiki_test_stall_start() {
+  clearInterval(globalThis.wikiTestStallTimer);
+  let last = performance.now();
+  globalThis.wikiTestStall = 0;
+  globalThis.wikiTestStallTimer = setInterval(() => {
+    const now = performance.now();
+    globalThis.wikiTestStall = Math.max(globalThis.wikiTestStall, now - last);
+    last = now;
+  }, 10);
+}
+
+function wiki_test_stall() {
+  clearInterval(globalThis.wikiTestStallTimer);
+  return Math.round(globalThis.wikiTestStall ?? 0);
+}
+
 // Whether the cursor of the row at an index can be seen: inside the window
 // and inside every element around it that scrolls.
 function wiki_test_slide_row_cursor_seen(index) {

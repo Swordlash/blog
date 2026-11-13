@@ -775,6 +775,19 @@ sideBySideKey = "editor-side-by-side"
 slidesShown :: State -> Bool
 slidesShown st = st.slidesMode && st.master /= Absent && isDeck st
 
+-- | Whether there is a text to write into at the cursor: what every
+-- control that writes there asks (the toolbar's buttons and menus, the
+-- dialogs that insert, an attachment's "Insert", a file's link after its
+-- upload). Slide by slide, the text is the rows': with no row open there
+-- is none, and those controls are disabled, their titles saying why. With
+-- a row open, they write at the editor's cursor; when the cursor's row is
+-- closed (the author closed it after typing there), the change opens it,
+-- as a jump does (@web/src/editor.js@'s rowsSync), so that nothing is
+-- written where it cannot be seen. The keyboard's shortcuts write only in
+-- a text ('Wiki.App.Editor.Browser.editorKey'), so never from a header.
+writesAtCursor :: State -> Bool
+writesAtCursor st = not (slidesShown st && null st.openRows)
+
 -- | 'Master' is where CodeMirror, the master, is: not in place yet, in
 -- place, or never to be, the page having no editor's script.
 data Master = Waiting | Attached | Absent
@@ -817,10 +830,9 @@ swallowProblems st = case st.rows of
     | isDeck st && SlideRows.assemble rows == st.checkedText ->
         [ Problems.Problem {from = line, to = line, kind = Problems.SlideSwallows, severity = Problems.Error, message = "A code block, a box or an HTML block on this slide is not closed: in the presentation it takes in the slides after it, up to the end."}
         | holder <- ordNub (map snd (SlideRows.swallowed rows))
-        , Just start <- [atMay (SlideRows.rowStarts rows) holder]
+        , Just startLine <- [atMay (SlideRows.rowLines rows) holder]
         , Just row <- [atMay rows.rows holder]
-        , let at = start + fromMaybe 0 (SlideRows.leftOpenAt row)
-              line = 1 + T.count "\n" (T.take at st.checkedText)
+        , let line = startLine + T.count "\n" (T.take (fromMaybe 0 (SlideRows.leftOpenAt row)) row.text)
         ]
   _ -> []
 
@@ -1092,7 +1104,7 @@ component =
               {% end %}
             </div>
           </div>
-          {{ toolbar st.menuHolder Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, emojiSearch = st.emojiQuery, deck = deckBar st, textless = slidesShown st && null st.openRows} }}
+          {{ toolbar st.menuHolder Bar {menuOpen = st.menu, twoPanes = st.sideBySide, textSize = st.fontStep, detached = livePreviewHref st.input, kinds = boxChoices st.input.context.session.boxes, newKind = mayDefineKinds st.input.context, macrosShown = st.macrosOpen, emojiSearch = st.emojiQuery, deck = deckBar st, textless = not (writesAtCursor st)} }}
           {{ cornerNotices st }}
           </div>
           <div class="editor-notices">
@@ -1128,7 +1140,7 @@ component =
             {{ previewPane st work }}
             {{ conflictPane st }}
           </div>
-          {{ attachmentList work }}
+          {{ attachmentList (writesAtCursor st) work }}
           <div class="editor-assistant-holder">{{ assistantPane st work }}</div>
         </form>
       |]
@@ -1549,18 +1561,23 @@ component =
     -- (slide by slide, with no row open).
     toolButton :: Bar -> Tool -> H.ComponentHTML Action Slots m
     toolButton bar tool =
-      [hh|<button type="button" class="tool" title={{ toolTitle tool }} aria-label={{ tool.label }} disabled={{ bar.textless }} onClick={{ const (Run tool.command) }}>{{ icon tool.icon }}</button>|]
+      [hh|<button type="button" class="tool" title={{ writingTitle bar (toolTitle tool) }} aria-label={{ tool.label }} disabled={{ bar.textless }} onClick={{ const (Run tool.command) }}>{{ icon tool.icon }}</button>|]
+
+    -- A writing control's title, which says why it is disabled when there
+    -- is no text to write into ('writesAtCursor').
+    writingTitle :: Bar -> Text -> Text
+    writingTitle bar title = if bar.textless then title <> ": open a slide to write in it" else title
 
     -- A link to a page of the wiki, chosen in a dialog
     -- ("Wiki.App.View.LinkDialog").
     linkPageButton :: Bar -> H.ComponentHTML Action Slots m
     linkPageButton bar =
-      [hh|<button type="button" class="tool" title="Link to a page (Ctrl+Shift+K)" aria-label="Link to a page" disabled={{ bar.textless }} onClick={{ const LinkPage }}>{{ icon linkPageIcon }}</button>|]
+      [hh|<button type="button" class="tool" title={{ writingTitle bar "Link to a page (Ctrl+Shift+K)" }} aria-label="Link to a page" disabled={{ bar.textless }} onClick={{ const LinkPage }}>{{ icon linkPageIcon }}</button>|]
 
     -- An image, or any other file: an attachment, through the file input.
     imageButton :: Bar -> H.ComponentHTML Action Slots m
     imageButton bar =
-      [hh|<button type="button" class="tool" title="Image or attachment: upload a file" aria-label="Image or attachment" disabled={{ bar.textless }} onClick={{ const AttachOrImage }}>{{ icon imageIcon }}</button>|]
+      [hh|<button type="button" class="tool" title={{ writingTitle bar "Image or attachment: upload a file" }} aria-label="Image or attachment" disabled={{ bar.textless }} onClick={{ const AttachOrImage }}>{{ icon imageIcon }}</button>|]
 
     -- The kinds of box, each writing its marker ('Box'), and for an
     -- administrator the way to define another.
@@ -1568,14 +1585,14 @@ component =
     boxMenu holder bar =
       [hh|
         <div class="toolbar-menu-holder" {{ [HP.ref holder | bar.menuOpen == Just BoxMenu] }}>
-          <button type="button" class="tool" title="Box" aria-label="Box" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just BoxMenu) }} onClick={{ const (ToggleMenu BoxMenu) }}>{{ icon boxIcon }}</button>
+          <button type="button" class="tool" title={{ writingTitle bar "Box" }} aria-label="Box" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just BoxMenu) }} disabled={{ bar.textless }} onClick={{ const (ToggleMenu BoxMenu) }}>{{ icon boxIcon }}</button>
           {% if bar.menuOpen == Just BoxMenu %}
             <div class="toolbar-menu box-menu" role="menu" aria-label="Box">
               {% for (marker, label) in bar.kinds %}
-                <button type="button" role="menuitem" data-kind={{ marker }} onClick={{ const (Run (Box marker)) }}>{{ label }}<code>{{ "[!" <> marker <> "]" }}</code></button>
+                <button type="button" role="menuitem" data-kind={{ marker }} disabled={{ bar.textless }} onClick={{ const (Run (Box marker)) }}>{{ label }}<code>{{ "[!" <> marker <> "]" }}</code></button>
               {% end %}
               {% if bar.newKind %}
-                <button type="button" role="menuitem" class="box-menu-new" onClick={{ const NewKind }}>New kind…</button>
+                <button type="button" role="menuitem" class="box-menu-new" disabled={{ bar.textless }} onClick={{ const NewKind }}>New kind…</button>
               {% end %}
             </div>
           {% end %}
@@ -1591,11 +1608,11 @@ component =
     htmlMenu holder bar =
       [hh|
         <div class="toolbar-menu-holder" {{ [HP.ref holder | bar.menuOpen == Just HtmlMenu] }}>
-          <button type="button" class="tool" title="HTML" aria-label="HTML" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just HtmlMenu) }} onClick={{ const (ToggleMenu HtmlMenu) }}>{{ icon htmlIcon }}</button>
+          <button type="button" class="tool" title={{ writingTitle bar "HTML" }} aria-label="HTML" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just HtmlMenu) }} disabled={{ bar.textless }} onClick={{ const (ToggleMenu HtmlMenu) }}>{{ icon htmlIcon }}</button>
           {% if bar.menuOpen == Just HtmlMenu %}
             <div class="toolbar-menu" role="menu" aria-label="HTML">
               {% for tag in htmlTags %}
-                <button type="button" role="menuitem" onClick={{ const (Run (Html tag)) }}>{{ htmlTagLabel tag }}<code>{{ "<" <> htmlTagName tag <> ">" :: Text }}</code></button>
+                <button type="button" role="menuitem" disabled={{ bar.textless }} onClick={{ const (Run (Html tag)) }}>{{ htmlTagLabel tag }}<code>{{ "<" <> htmlTagName tag <> ">" :: Text }}</code></button>
               {% end %}
             </div>
           {% end %}
@@ -1610,22 +1627,22 @@ component =
     colourMenu holder bar =
       [hh|
         <div class="toolbar-menu-holder" {{ [HP.ref holder | bar.menuOpen == Just ColourMenu] }}>
-          <button type="button" class="tool" title="Colour" aria-label="Colour" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just ColourMenu) }} onClick={{ const (ToggleMenu ColourMenu) }}>{{ icon colourIcon }}</button>
+          <button type="button" class="tool" title={{ writingTitle bar "Colour" }} aria-label="Colour" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just ColourMenu) }} disabled={{ bar.textless }} onClick={{ const (ToggleMenu ColourMenu) }}>{{ icon colourIcon }}</button>
           {% if bar.menuOpen == Just ColourMenu %}
             <div class="toolbar-menu colour-menu" role="menu" aria-label="Colour">
               <div class="colour-row" role="group" aria-label="Text colour">
                 <span class="colour-row-name" aria-hidden="true">Text</span>
                 {% for c in textColours %}
-                  <button type="button" role="menuitem" class="swatch" title={{ colourLabel c <> " text" }} aria-label={{ colourLabel c <> " text" }} onClick={{ const (Run (TextColour (Just c))) }}><span class="swatch-sample {{ textColourClass c }}" aria-hidden="true">A</span></button>
+                  <button type="button" role="menuitem" class="swatch" disabled={{ bar.textless }} title={{ colourLabel c <> " text" }} aria-label={{ colourLabel c <> " text" }} onClick={{ const (Run (TextColour (Just c))) }}><span class="swatch-sample {{ textColourClass c }}" aria-hidden="true">A</span></button>
                 {% end %}
-                <button type="button" role="menuitem" class="swatch swatch-none" title="No text colour" aria-label="No text colour" onClick={{ const (Run (TextColour Nothing)) }}>{{ icon noColourIcon }}</button>
+                <button type="button" role="menuitem" class="swatch swatch-none" disabled={{ bar.textless }} title="No text colour" aria-label="No text colour" onClick={{ const (Run (TextColour Nothing)) }}>{{ icon noColourIcon }}</button>
               </div>
               <div class="colour-row" role="group" aria-label="Highlight">
                 <span class="colour-row-name" aria-hidden="true">Highlight</span>
                 {% for c in highlightColours %}
-                  <button type="button" role="menuitem" class="swatch" title={{ colourLabel c <> " highlight" }} aria-label={{ colourLabel c <> " highlight" }} onClick={{ const (Run (Highlight (Just c))) }}><span class="swatch-sample {{ highlightClass c }}" aria-hidden="true">A</span></button>
+                  <button type="button" role="menuitem" class="swatch" disabled={{ bar.textless }} title={{ colourLabel c <> " highlight" }} aria-label={{ colourLabel c <> " highlight" }} onClick={{ const (Run (Highlight (Just c))) }}><span class="swatch-sample {{ highlightClass c }}" aria-hidden="true">A</span></button>
                 {% end %}
-                <button type="button" role="menuitem" class="swatch swatch-none" title="No highlight" aria-label="No highlight" onClick={{ const (Run (Highlight Nothing)) }}>{{ icon noColourIcon }}</button>
+                <button type="button" role="menuitem" class="swatch swatch-none" disabled={{ bar.textless }} title="No highlight" aria-label="No highlight" onClick={{ const (Run (Highlight Nothing)) }}>{{ icon noColourIcon }}</button>
               </div>
             </div>
           {% end %}
@@ -1641,7 +1658,7 @@ component =
     emojiMenu holder bar =
       [hh|
         <div class="toolbar-menu-holder" {{ [HP.ref holder | bar.menuOpen == Just EmojiMenu] }}>
-          <button type="button" class="tool" title="Emoji" aria-label="Emoji" aria-haspopup="dialog" aria-expanded={{ ariaBool (bar.menuOpen == Just EmojiMenu) }} onClick={{ const (ToggleMenu EmojiMenu) }}>{{ icon emojiIcon }}</button>
+          <button type="button" class="tool" title={{ writingTitle bar "Emoji" }} aria-label="Emoji" aria-haspopup="dialog" aria-expanded={{ ariaBool (bar.menuOpen == Just EmojiMenu) }} disabled={{ bar.textless }} onClick={{ const (ToggleMenu EmojiMenu) }}>{{ icon emojiIcon }}</button>
           {% if bar.menuOpen == Just EmojiMenu %}
             <div class="toolbar-menu emoji-menu" role="dialog" aria-label="Emoji" {{ HE.preventingDefault (HE.handler' (EventType "keydown") (emojiKey found)) }}>
               <input type="text" class="emoji-search" placeholder="Search emoji" aria-label="Search emoji" autocomplete="off" spellcheck="false" onValueInput={{ SearchEmoji }}>
@@ -1650,7 +1667,7 @@ component =
               {% else %}
                 <div class="emoji-grid" role="group" aria-label="Emoji found">
                   {% for (n, (name, emoji)) in zip [0 :: Int ..] found %}
-                    <button type="button" class="emoji-choice" title={{ ":" <> name <> ":" }} aria-label={{ name }} {{ attr "data-index" (show n) }} onClick={{ const (PickEmoji name) }}>{{ emoji }}</button>
+                    <button type="button" class="emoji-choice" disabled={{ bar.textless }} title={{ ":" <> name <> ":" }} aria-label={{ name }} {{ attr "data-index" (show n) }} onClick={{ const (PickEmoji name) }}>{{ emoji }}</button>
                   {% end %}
                 </div>
               {% end %}
@@ -1823,8 +1840,8 @@ component =
       | st.uploading > 0 = "Uploading " <> show st.uploading <> (if st.uploading == 1 then " file…" else " files…")
       | otherwise = "Drop or paste files here to attach them. Ctrl+S saves; Tab indents."
 
-    attachmentList :: Work -> H.ComponentHTML Action Slots m
-    attachmentList work =
+    attachmentList :: Bool -> Work -> H.ComponentHTML Action Slots m
+    attachmentList writable work =
       [hh|
         <section class="editor-attachments">
           <h2>Attachments</h2>
@@ -1836,7 +1853,7 @@ component =
                 <li>
                   <a href={{ Body.linkUrlOf work.addresses a.id }} download={{ a.name.text }}>{{ a.name.text }}</a>
                   <span class="attachment-meta">{{ a.mediaType.text }}, {{ fileSize a.size }}</span>
-                  <button type="button" class="attachment-insert" onClick={{ const (Insert a) }}>Insert</button>
+                  <button type="button" class="attachment-insert" disabled={{ not writable }} title={{ if writable then "Insert a reference to it at the cursor" else "Open a slide to insert it there" :: Text }} onClick={{ const (Insert a) }}>Insert</button>
                 </li>
               {% end %}
             </ul>
@@ -1955,7 +1972,8 @@ component =
       ToggleMenu which -> do
         was <- gets (\st -> st.menu)
         closeMenu
-        unless (was == Just which) $ do
+        writable <- gets writesAtCursor
+        unless (was == Just which || not writable) $ do
           modify (\st -> st {menu = Just which, emojiQuery = ""})
           watch <- gets (\st -> st.menuHolder) >>= (`watchPopup` CloseMenu)
           modify (\st -> st {menuWatch = watch})
@@ -1977,7 +1995,7 @@ component =
       FromNewKind NewKindDialog.Closed -> modify (\st -> st {kindDialogOpen = False})
       LinkPage -> do
         closeMenu
-        whenM (gets (\st -> st.mode == Editing)) $ modify (\st -> st {linkDialogOpen = True})
+        whenM (gets (\st -> st.mode == Editing && writesAtCursor st)) $ modify (\st -> st {linkDialogOpen = True})
       FromLinkDialog LinkDialog.Closed -> modify (\st -> st {linkDialogOpen = False})
       ChoseHome homeChoice -> modify (\st -> st {homeChoice})
       -- The icon was saved: the shell reads the wiki again.
@@ -2190,7 +2208,9 @@ component =
       -- The mode changes what is shown, never the text. The rows close on
       -- the way to the Raw mode (their CodeMirrors go), and the ones open
       -- then open again on the way back, if they are still there.
-      SlidesMode wanted -> do
+      -- The mode already chosen, chosen again, changes nothing: the rows
+      -- open stay open, and those kept for the way back stay kept.
+      SlidesMode wanted -> unlessM (gets (\st -> st.slidesMode == wanted)) $ do
         modify $ \st ->
           if wanted
             then st {slidesMode = True, openRows = [k | k <- st.keptOpen, k `elem` rowKeys st], keptOpen = [], focusRow = Nothing}
@@ -2201,17 +2221,22 @@ component =
       OneSlide wanted -> modify (\st -> st {oneSlide = wanted})
       CursorAt line -> modify (\st -> st {cursorAt = line})
       -- A row's header: it opens, or closes.
+      -- A key the rows no longer have (a click on a row being taken away)
+      -- opens nothing.
       FromRow (SlideRow.Toggled key) ->
         modify $ \st ->
           if key `elem` st.openRows
             then st {openRows = filter (/= key) st.openRows}
-            else st {openRows = st.openRows <> [key], focusRow = Nothing}
+            else
+              if key `elem` rowKeys st
+                then st {openRows = st.openRows <> [key], focusRow = Nothing}
+                else st
       -- Ctrl+Z or Ctrl+Y on a header: the whole text's undo or redo.
       FromRow (SlideRow.History undoing) -> gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (undoIn host undoing))
       -- A change took the master's cursor to another row: that row opens,
       -- with the focus, and the row left closes when the author went there
       -- (an undo, a redo, the next problem); other open rows stay open.
-      RowWantedBy wanted -> do
+      RowWantedBy wanted -> whenM (gets (elem wanted.key . rowKeys)) $ do
         keepingRowsFocus $
           modify $ \st ->
             let opened = if wanted.key `elem` st.openRows then st.openRows else st.openRows <> [wanted.key]
@@ -2259,6 +2284,8 @@ component =
         -- The cursor's line from the start: CodeMirror tells it only when
         -- it changes, and it may start below the title line.
         gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (cursorLine host) >>= \line -> modify (\st -> st {cursorAt = line}))
+        -- Told again for the master in place, the rows open stay open.
+        already <- gets (\st -> st.master == Attached)
         modify (\st -> st {master = Attached})
         st <- get
         for_ st.hostElement $ \host -> do
@@ -2273,7 +2300,7 @@ component =
                     taken <- H.liftEffect (setRows host layout.text rows)
                     when taken $ do
                       let start = atMay rows.rows (SlideRows.rowAt rows layout.cursor)
-                      modify (\s -> s {rows = Just rows, nextKey, openRows = [r.key | Just r <- [start]]})
+                      modify (\s -> s {rows = Just rows, nextKey, openRows = if already then [k | k <- s.openRows, k `elem` map (.key) rows.rows] else [r.key | Just r <- [start]]})
                       publishProblems
                 )
       DiscardOffered -> do
@@ -2429,11 +2456,18 @@ component =
     -- Run a toolbar command on the text. Its input event, handled before
     -- this returns, brings the change into the work. A save in progress
     -- does not block it, just as it does not block typing.
+    --
+    -- A command that writes at the cursor runs only where there is a text
+    -- to write into ('writesAtCursor'); the page's macros have a place of
+    -- their own in the text, and are written wherever the cursor is.
     run :: Command -> H.HalogenM State Action Slots ViewOutput m ()
     run command = do
       closeMenu
       st <- get
-      when (st.mode == Editing) $
+      let ownPlace = case command of
+            PageMacros _ -> True
+            _ -> False
+      when (st.mode == Editing && (ownPlace || writesAtCursor st)) $
         H.getRef st.host >>= traverse_ (\host -> H.liftEffect (applyCommand host command))
 
     closeMenu :: H.HalogenM State Action Slots ViewOutput m ()
@@ -3019,8 +3053,10 @@ component =
 
     -- Insert text at the text's cursor. The input event that puts it in the
     -- work is handled before this returns, like a keystroke.
+    -- Nothing where there is no text to write into ('writesAtCursor'): a
+    -- file uploaded then is attached, and its link not written.
     insert :: Text -> H.HalogenM State Action Slots ViewOutput m ()
-    insert text = do
+    insert text = whenM (gets writesAtCursor) $ do
       ref <- gets (\st -> st.host)
       H.getRef ref >>= traverse_ (\host -> H.liftEffect (insertAtCursor host text))
 

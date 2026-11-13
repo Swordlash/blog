@@ -20,7 +20,7 @@ module Wiki.App.View.SlideRow
 where
 
 import Control.Monad.UUID (MonadUUID)
-import Data.List (zip3)
+import Data.List (span, zip3, zip5)
 import Data.Map.Strict qualified as Map
 import Data.Row (Empty)
 import Data.Text qualified as T
@@ -33,7 +33,7 @@ import Web.DOM.Internal.Types (Element)
 import Web.Event.Event (EventType (..))
 import Wiki.App.Editor.Browser (attachRow, detachRow, dragCarries, historyKey, markDragged, moveKey, pointerAfter)
 import Wiki.App.Editor.Problems (ProblemRange (..))
-import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), rowHeading, rowStarts, swallowed)
+import Wiki.Core.SlideRows (Row (..), RowKey (..), Rows (..), rowHeading, rowLines, rowStarts, swallowed)
 import Wiki.Core.Slides (Fit (..), SlideSpan (..), fitName)
 
 -- | 'Head' is what a row's header shows: its key, its number among the
@@ -61,32 +61,43 @@ data Head = Head
 -- ('Wiki.Core.SlideRows.swallowed') has none, and is part of the slide of
 -- the row above that takes it in.
 heads :: Text -> Rows -> [SlideSpan] -> [Fit] -> [ProblemRange] -> [Head]
-heads text rows spans fits problems = [headOf i row s e | (i, row, (s, e)) <- zip3 [0 :: Int ..] rows.rows (zip starts ends)]
+heads text rows spans fits problems = [headOf i row opener line count | (i, row, opener, line, count) <- zip5 [0 :: Int ..] rows.rows openers startLines counts]
   where
+    -- Each row read once, and the whole text walked once: this runs after
+    -- every pause in the typing, on the page's one thread, so its time
+    -- must grow with the text's length and no faster.
+    openers = map rowHeading rows.rows
     starts = rowStarts rows
     ends = drop 1 starts <> [T.length text]
+    startLines = rowLines rows
+    -- The problems that start in each row: a problem at the text's very
+    -- end is the last row's.
+    counts = countIn (zip starts ends) (sort [p.from | p <- problems])
+    countIn ranges froms = case ranges of
+      [] -> []
+      (s, e) : rest ->
+        let (inside, after) = span (\f -> f < e || (e == T.length text && f == e)) (dropWhile (< s) froms)
+         in length inside : countIn rest after
     taken = Map.fromList (swallowed rows)
     fitAt = Map.fromList [(sp.from, f) | (sp, f) <- zip spans fits]
     preambleIsSlide = any (isNothing . (\sp -> sp.level)) spans
-    lineOf c = 1 + T.count "\n" (T.take c text)
-    numbered = Map.fromList (numbers 0 (zip [0 :: Int ..] rows.rows))
+    numbered = Map.fromList (numbers 0 (zip3 [0 :: Int ..] rows.rows openers))
     numbers n = \case
       [] -> []
-      (i, row) : rest
+      (i, _, opener) : rest
         | Map.member i taken -> numbers n rest
-        | isJust (rowHeading row) || (i == 0 && preambleIsSlide) -> (i, n + 1) : numbers (n + 1) rest
+        | isJust opener || (i == 0 && preambleIsSlide) -> (i, n + 1) : numbers (n + 1) rest
         | otherwise -> numbers n rest
-    headOf i row s e =
-      let opener = rowHeading row
-       in Head
-            { key = row.key
-            , number = Map.lookup i numbered
-            , title = maybe "" snd opener
-            , preamble = isNothing opener
-            , fit = if Map.member i taken then Unmeasured else fromMaybe Unmeasured (Map.lookup (lineOf s) fitAt)
-            , partOf = Map.lookup i taken >>= (`Map.lookup` numbered)
-            , problems = length [() | p <- problems, p.from >= s, p.from < e || (e == T.length text && p.from == e)]
-            }
+    headOf i row opener line count =
+      Head
+        { key = row.key
+        , number = Map.lookup i numbered
+        , title = maybe "" snd opener
+        , preamble = isNothing opener
+        , fit = if Map.member i taken then Unmeasured else fromMaybe Unmeasured (Map.lookup line fitAt)
+        , partOf = Map.lookup i taken >>= (`Map.lookup` numbered)
+        , problems = count
+        }
 
 -- | A row's input: its header, whether it is open, the master (the
 -- editor's CodeMirror's host) once it is in place, and whether the row

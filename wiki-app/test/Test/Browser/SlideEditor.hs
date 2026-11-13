@@ -45,6 +45,8 @@ $( browserJS
      [ ("js_slide_fits", "wiki_test_slide_fits", Safe, [t|IO JSText|])
      , ("js_slide_focus", "wiki_test_slide_focus", Safe, [t|IO JSText|])
      , ("js_mermaid", "wiki_test_mermaid", Safe, [t|JSText -> IO ()|])
+     , ("js_stall_start", "wiki_test_stall_start", Safe, [t|IO ()|])
+     , ("js_stall", "wiki_test_stall", Safe, [t|IO Int|])
      , ("js_row_cursor_seen", "wiki_test_slide_row_cursor_seen", Safe, [t|Int -> IO Bool|])
      , ("js_drop_filePromise", "wiki_test_drop_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
      , ("js_pastePromise", "wiki_test_paste", Safe, [t|JSText -> JSText -> JSText -> JSText -> JSText -> IO (Promise Bool)|])
@@ -791,6 +793,83 @@ spec m = do
     rowSelect 1 end end
     press "Delete"
     eventually $ markdown ui `shouldReturn` T.replace "First.\n\n## Two" "First.\n## Two" deck
+
+  it "changes nothing when the mode already chosen is chosen again, and makes two slides of a double click on New slide" $ runPage $ do
+    (ui, _) <- openDeck deck
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    modeButton ui "Slides" >>= click
+    settle
+    openTitles ui `shouldReturn` ["Deck", "Two"]
+    modeButton ui "Raw" >>= click
+    eventually $ length <$> findAll ui ".editor-slides" `shouldReturn` 0
+    modeButton ui "Raw" >>= click
+    settle
+    modeButton ui "Slides" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Deck", "Two"]
+    -- Two slides, each with a key of its own.
+    newSlide <- find ui ".editor-new-slide"
+    click newSlide
+    click newSlide
+    eventually $ length <$> findAll ui ".editor-slides .slide-row" `shouldReturn` 6
+    keys <- findAll ui ".editor-slides .slide-row" >>= traverse (`getAttribute` "data-row-key")
+    length (ordNub keys) `shouldBe` 6
+
+  it "writes nothing at the cursor while no row is open: the toolbar's buttons and menus disabled, saying why, and the shortcuts on a header" $ runPage $ do
+    (ui, _) <- openDeck deck
+    eventually $ openTitles ui `shouldReturn` ["Deck"]
+    rowHeader ui "Deck" >>= click
+    eventually $ openTitles ui `shouldReturn` []
+    let writing = ["Bold", "Italic", "Link to a page", "Image or attachment", "Colour", "Emoji", "Box", "HTML"]
+    for_ writing $ \label -> do
+      control <- find ui (".editor-toolbar button.tool[aria-label=\"" <> label <> "\"]")
+      eventually $ getProperty control "disabled" `shouldReturn` "true"
+      getAttribute control "title" >>= (`shouldSatisfy` maybe False (T.isSuffixOf "open a slide to write in it"))
+    -- The math macros write the page's block, at its own place: not
+    -- disabled.
+    find ui ".editor-toolbar .editor-macros-toggle" >>= (`getProperty` "disabled") >>= (`shouldBe` "false")
+    -- A shortcut on a header is the browser's.
+    header <- rowHeader ui "Two"
+    focus header
+    for_ ["Control+b", "Control+i", "Control+k", "Control+e", "Control+Shift+K", "Control+Shift+7", "Tab"] press
+    settle
+    markdown ui `shouldReturn` deck
+    openTitles ui `shouldReturn` []
+    -- A row open again: the menus write in it.
+    rowHeader ui "Two" >>= click
+    eventually $ openTitles ui `shouldReturn` ["Two"]
+    rowSelect 2 8 15
+    find ui ".editor-toolbar button.tool[aria-label=\"HTML\"]" >>= click
+    find ui ".toolbar-menu [role=menuitem]" >>= click
+    eventually $ markdown ui >>= (`shouldSatisfy` (/= deck))
+
+  it "stays responsive while a row leaves a fence open with 500 lines after it" $ runPage $ do
+    let code = T.intercalate "\n" (["# Deck", "", "## Code", "", "```haskell"] <> ["x = " <> show k | k <- [1 .. 500 :: Int]] <> ["```", "", "## After", "", "Text."])
+    (ui, _) <- openDeck code
+    -- The cursor starts in "Code", under the title line.
+    eventually $ openTitles ui `shouldReturn` ["Code"]
+    shown <- eventually (rowText 1 >>= \t -> t <$ (t `shouldSatisfy` T.isInfixOf "x = 500"))
+    -- The closing fence taken away: the fence is left open, and takes in
+    -- "After".
+    let (before, _) = T.breakOnEnd "\n```" shown
+    rowSelect 1 (T.length before - 3) (T.length before)
+    -- The page's thread is held for about half a second after the pause
+    -- (the check, the preview of a long code block, the measures); the
+    -- line of the block left open, found by parsing the row again for
+    -- each of its lines, held it for twenty seconds. The bound leaves room
+    -- for a slow machine.
+    unsafeIOToPageM js_stall_start
+    press "Backspace"
+    eventually $ (findAll ui ".editor-slides .slide-row-problems" >>= traverse textContent) `shouldReturn` ["1 problem"]
+    unsafeIOToPageM (threadDelay 1_000_000)
+    stalled <- unsafeIOToPageM js_stall
+    stalled `shouldSatisfy` (< 5000)
+    -- A keystroke in the open fence, and the pause after it.
+    unsafeIOToPageM js_stall_start
+    openRowContent ui >>= (`typeText` "y")
+    unsafeIOToPageM (threadDelay 1_000_000)
+    typed <- unsafeIOToPageM js_stall
+    typed `shouldSatisfy` (< 5000)
 
   it "renders the deck whole for one slide's preview: a macro of an earlier slide, a footnote's number, the same slide in every view" $ runPage $ do
     (ui, wiki) <- openDeck macros

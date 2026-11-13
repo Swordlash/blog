@@ -4,6 +4,7 @@
 module Test.SlideRows (spec) where
 
 import Data.Text qualified as T
+import Data.Time (diffUTCTime, getCurrentTime)
 import Protolude
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
@@ -278,6 +279,23 @@ spec = describe "SlideRows" $ do
       map (\t -> leftOpenAt (Row (RowKey 0) t)) ["## A\n\nText.\n\n```\nopen", "## A\n```\nclosed\n```\n\n<!--\nopen\n", "## A\n\n[[!spoiler]]{x}(Q)\nopen", "## A\n\nText.\n", "## A\n\n<div>\nopen"]
         `shouldBe` [Just 13, Just 21, Just 6, Nothing, Nothing]
 
+    prop "finds the same line as reading the row line by line, whose time grows with the square of its length" $
+      forAll ((,,) <$> aDeck <*> elements openBlocks <*> elements ["", "\n\nAfter.\n\n```\nclosed\n```\n"]) $ \(source, block, earlier) ->
+        conjoin
+          [ leftOpenAt row === lineByLine row
+          | row <- (cut source).rows <> [Row (RowKey 0) (t <> earlier <> "\n\n" <> block <> "\nmore\n\n## Not a slide") | Row _ t <- take 2 (cut source).rows]
+          ]
+
+    -- A fence left open with 4000 lines after it: read line by line, each
+    -- line's prefix parsed again, this took minutes; read once, it takes a
+    -- few hundredths of a second. The bound leaves room for a slow machine.
+    it "finds the line of a fence left open with thousands of lines after it in time linear in the row" $ do
+      let row = Row (RowKey 0) (T.intercalate "\n" (["## Code", "", "Text.", "", "```haskell"] <> ["x = " <> show k | k <- [1 .. 4000 :: Int]]))
+      started <- getCurrentTime
+      leftOpenAt row `shouldBe` Just 16
+      done <- getCurrentTime
+      diffUTCTime done started `shouldSatisfy` (< 3)
+
     prop "says no row is taken in exactly when the rows are where a fresh cut puts them" $
       checkCoverage $
         forAll anyDeck $ \source ->
@@ -300,6 +318,22 @@ spec = describe "SlideRows" $ do
 -- | The rows of a text, cut fresh with keys from 0.
 cut :: Text -> Rows
 cut = fst . cutRows (RowKey 0)
+
+-- | 'leftOpenAt' as it was first written: each line's prefix of the row
+-- parsed with a heading after it, and the lines at the end whose prefixes
+-- all take the heading in. Right, and quadratic: the model the one parse
+-- is checked against.
+lineByLine :: Row -> Maybe Int
+lineByLine row = case reverse run of
+  (at, _) : _ | length run < length flags -> Just at
+  _ -> Nothing
+  where
+    flags = zip starts (map (swallows . (`T.take` row.text)) ends)
+    run = takeWhile snd (reverse flags)
+    starts = scanl (+) 0 (map ((+ 1) . T.length) lines')
+    ends = [s + T.length l | (s, l) <- zip starts lines']
+    lines' = T.splitOn "\n" row.text
+    swallows prefix = let probe = prefix <> "\n\n## Probe\n" in (T.length prefix + 2) `notElem` openerStarts probe
 
 -- | The counter after a fresh cut's keys.
 nextOf :: Text -> RowKey
