@@ -1877,44 +1877,6 @@ which the wiki pins since #227.
   Shell, Tasks, Spaces, Slides, Search and Notifications move (about
   70 examples), and AGENTS.md's gate names the native suite. Until
   then nothing moves.
-- **WP5.110 CI's run in a quarter of an hour (the owner, 2026-11-13:
-  "testy trwające pół godziny to jest jakaś kpina, parę dni temu to
-  było 13").** Measured from the runs' own times: every native job
-  takes 10 to 14 minutes and has not grown; the `wasm` job took 15
-  minutes on 2026-11-11 and takes 24 to 27 now, and it is the run's
-  length. Its `Test` step went from 7.2 to 13.3 minutes and is exactly
-  as long as `wiki-core-test` compiled to wasm and run under Node (425
-  s for 1235 examples on 2026-11-11, 524 s at midnight on the 13th,
-  790 s for 1404 that evening: half as slow again in a day, for 3%
-  more examples), beside which the two shards of the browser suite
-  take 6 minutes (481 examples then, 676 now). Its smoke step went
-  from 2.6 to 6.4 minutes, after the tests and one suite after another
-  (the demo 106 s, the server on SQLite 109 s and again on PostgreSQL
-  114 s). The rest is 5 minutes of setting up and building. So: find
-  which of wiki-core's examples take the time on wasm and what made
-  them slower on 2026-11-13 (a property run 1600 times, a text grown,
-  a quadratic function: fix the function, not the count, if it is
-  one); then give the three kinds of work their own jobs from one
-  build (the browser suite, wiki-core and wiki-api on wasm, the smoke
-  suites), each no longer than the native jobs, and say what it costs
-  in runner minutes, which the repository pays for while it is
-  private. A check keeps it: the workflow's summary prints each
-  suite's time, and a suite over its budget fails with the slowest
-  examples named.
-- **WP5.108 The pause after typing in a long presentation (found by
-  WP5.105's measures, #269).** On the deck of 60 slides of 100 lines,
-  the pause after a keystroke holds the page 7 to 11 seconds at its
-  longest and 12 to 18 in all; the 4.6, 11.5 and 23.6 seconds WP5.105
-  began from were jumps that fell into it. Measured, each alone: the
-  check (`Problems.checkText`) about 4.5 s; `publishProblems` run
-  three times in one pause (after the slides' measures, after the
-  re-cut, after the check), each time `problemsOf` 1.8 to 3.4 s and
-  `headsOf` 4.6 to 6.4 s. A lead, not timed: `Wiki.Core.Slides
-  .slideLines` splits the whole text once for each slide, and
-  `fitsNow` and `measuresFor` call it for every slide, so they cost
-  slides times text. Publish once for a pause, split the text once,
-  then measure again and take what is next; a test holds the pause's
-  longest hold on that deck.
 - **WP5.109 A resource made on a worker and kept a step later (found
   by #268).** #268 fixed the owners of addresses and the embedded
   deck's watch: a view's program made a resource through `lift` or
@@ -3023,6 +2985,55 @@ needs. Each was true when its package merged; check before relying on one.
   (response bodies, CDP events, request bodies in the log,
   `waitForFunction` under the server's policy, a history step that
   moves a frame, `exposeFunction`, popups, a hold by resource type).
+- **The pause after typing in a long presentation, after #273
+  (WP5.108).** One keystroke and its pause held the page 8 to 11
+  seconds at a stretch on 60 slides of 100 lines, because the whole
+  deck was parsed about twelve times in the pause (the check, the
+  preview, the measures, and three publications of the problems with
+  three or four parses each); it is under half a second now, and under
+  a second on 120 slides. The rule: problems and row headers are
+  published from the rows, the checked text and the measures, once for
+  a pause (the check publishes after its own re-cut; a measure only for
+  the checked text, and one that comes before its text's check waits
+  for it; another re-cut still publishes); the check gives the rows its
+  openers; a row's heading is kept by the row's text; the text is split
+  once. A publication is sliced work, so each of its writes is decided
+  in the step that writes: it is numbered as it begins and writes only
+  while no later one has begun, and the marks are taken only while
+  CodeMirror holds the very text they were found in
+  (`wiki_editor_problems` checks it in the same call). One browser
+  example on one opened deck holds both the far jump and the pause (66
+  seconds of a page). Left: a keystroke's own handler costs 36 to 76 ms
+  on 60 slides, since the whole text crosses from JavaScript on every
+  key; `Slides.moveSlide` parses the text three to four times a call
+  and splits it once per slide; the interleavings the guards are for
+  (typing, or an island failing, while a publication computes) have no
+  test that forces them.
+- **CI's run after #274 (WP5.110; the owner, 2026-11-13: "testy
+  trwające pół godziny to jest jakaś kpina").** The run took 25 to 27
+  minutes and takes 13.6 (its own first run). The time was the `wasm`
+  job's: wiki-core's tests compiled to wasm (790 s; the Markdown parser
+  is 10 to 12 times slower there, and a property under `checkCoverage`
+  ran 1600 times) and the smoke suites one after another behind them.
+  Now: on wasm a property of wiki-core runs a quarter of its cases and
+  coverage is checked natively only (`wiki-core/test/Test/Cases.hs`
+  holds the rule: the wasm run is for what the compiler makes
+  different, the native run keeps the count); the smoke suites run in
+  a job of their own, `smoke test`, beside `wasm` and side by side
+  (`npm run smoke-test` builds every suite's program once, then runs
+  them together); `toolchain/ci-suite-time.sh` writes each wasm and
+  smoke suite's time, budget and five slowest examples to the run's
+  summary. In that run: wiki-core on wasm 195 s, the browser shards
+  311 and 333 s, the demo 151 s, the server 161 s and 167 s on
+  PostgreSQL; `wasm` 13.2 minutes, `smoke test` 8.3, the native jobs 9
+  to 12. Left: the budgets warn only (`budgets_fail=false`), to be set
+  from a few hosted runs and then made to fail; `smoke` saves no
+  cache, so a change that compiles from cold compiles in both jobs,
+  and a dependency bump is paid twice, once; the browser suite now
+  sets the `wasm` job's length and has doubled in two days (481 to 678
+  examples, three to six minutes a shard): the next thing to shorten,
+  by a third shard or by cheaper examples (the long deck's alone is 66
+  seconds).
 - **The editor's search after #263.** Codex ran eight rounds (3, 2, 2,
   2, 3, 2, 1, 0); most findings came from leaning on
   `@codemirror/search` for more than its cursors (its `test` and
