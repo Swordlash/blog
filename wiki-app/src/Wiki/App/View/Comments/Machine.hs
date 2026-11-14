@@ -37,6 +37,7 @@ module Wiki.App.View.Comments.Machine
   )
 where
 
+import Data.Map.Strict qualified as Map
 import Protolude hiding (State)
 import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.App.Backend (WikiError)
@@ -69,6 +70,9 @@ data Model = Model
   -- ^ The reads of the threads made, and which one's answer is shown.
   , written :: Int
   -- ^ How many writes were sent: the number of the latest.
+  , writes :: Map Int PageId
+  -- ^ The writes sent on this visit of the page that have not been
+  -- answered, by number, with the page each is for.
   , closed :: Bool
   -- ^ Whether the page view has gone away: after that nothing changes and
   -- nothing is asked.
@@ -138,7 +142,7 @@ data Effect a
 -- read at once if the backend could.
 initial :: Maybe PageId -> Bool -> Bool -> Maybe (Either WikiError [Thread]) -> Model
 initial page comments encrypted read' =
-  Model {page, comments, encrypted, threads = maybe ThreadsLoading (either ThreadsFailed ThreadsReady) (read' >>= \r -> r <$ guard comments), asks = noAsks, written = 0, closed = False}
+  Model {page, comments, encrypted, threads = maybe ThreadsLoading (either ThreadsFailed ThreadsReady) (read' >>= \r -> r <$ guard comments), asks = noAsks, written = 0, writes = mempty, closed = False}
 
 -- | The threads after an event, and what the page view is asked to do.
 step :: Event a -> Model -> (Model, [Effect a])
@@ -149,16 +153,24 @@ step event m
         ThreadsLoading -> reading m
         _ -> (m, [])
       Finished -> (m {closed = True}, [])
-      Fetched page comments encrypted -> reading m {page = Just page, comments, encrypted}
-      Left' -> (m {page = Nothing, threads = ThreadsLoading, asks = supersede m.asks}, [])
+      -- Another page is another visit: the answers to the writes sent on
+      -- the last one are not taken.
+      Fetched page comments encrypted ->
+        reading m {page = Just page, comments, encrypted, writes = if m.page == Just page then m.writes else mempty}
+      Left' -> (m {page = Nothing, threads = ThreadsLoading, asks = supersede m.asks, writes = mempty}, [])
       -- The ticket is taken whichever page the answer is for; its threads
       -- only for the page shown.
       Loaded asked page answer -> case takes asked m.asks of
         Just after -> (m {asks = after, threads = if m.page == Just page then either ThreadsFailed ThreadsReady answer else m.threads}, [Changed])
         Nothing -> (m, [Changed])
-      Write place page request -> let n = m.written + 1 in (m {written = n}, [Send place n page request])
-      Wrote _ (Right e) -> (m {threads = applied e m.threads}, [Changed])
-      Wrote _ (Left _) -> (m, [])
+      Write place page request ->
+        let n = m.written + 1
+         in (m {written = n, writes = if m.page == Just page then Map.insert n page m.writes else m.writes}, [Send place n page request])
+      -- The answer to a write is taken only on the visit of the page it was
+      -- sent on.
+      Wrote n answer -> case (Map.lookup n m.writes, answer) of
+        (Just page, Right e) | m.page == Just page -> (m {writes = Map.delete n m.writes, threads = applied e m.threads}, [Changed])
+        _ -> (m {writes = Map.delete n m.writes}, [])
       Heard page e
         | m.page /= Just page -> (m, [])
         | e == ThreadsChanged -> reading m
