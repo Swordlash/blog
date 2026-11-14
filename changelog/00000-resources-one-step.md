@@ -22,6 +22,7 @@ title: A view closed at once leaves nothing running, and Back no longer bounces 
   draft, and the wiki's own corrections of an address (a space's home
   page, the administration's sections) could likewise undo a route you
   had followed in the same instant.
-- A double click on Send in the writing assistant's panel sent the
+- A double click on Send in the writing assistant's panel, while the
+  page was busy (a long presentation being checked, say), could send the
   message twice, in two conversations, each one answered and each one
   counted by the provider.
