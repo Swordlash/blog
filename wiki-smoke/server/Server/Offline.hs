@@ -55,8 +55,8 @@ spec smoke = describe "reading offline, through the service worker" $
       eventually reader (keptPaths reader "answers" >>= \as -> expect (not (null as)) "nothing kept")
       answers <- keptPaths reader "answers"
       expect (all (not . neverKept) answers) ("kept what is never kept: " <> show answers)
-      pages <- keptPaths reader "pages"
-      report ("the worker kept " <> tshow (length pages) <> " pages and " <> tshow (length answers) <> " answers of the API")
+      keptPages <- keptPaths reader "pages"
+      report ("the worker kept " <> tshow (length keptPages) <> " pages and " <> tshow (length answers) <> " answers of the API")
       offlineFine reader
 
     -- Offline: the page reloaded is the copy kept, saying so, with the

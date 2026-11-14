@@ -136,7 +136,7 @@ spec site = do
         \  ['.wiki-header', '.wiki-sidebar', '.slides-controls'].filter((s) => document.querySelector(`#app ${s}`)?.checkVisibility()),\
         \]"
     printed `shouldBe` (9, [])
-    pages <$> pdf page `shouldReturn` 9
+    pdfPages <$> pdf page `shouldReturn` 9
     emulateMedia page Screen
     _ <- load site gate page (slides <> "?slide=7")
     textContent (locator current ".slide-title") `shouldReturn` "Steps"
@@ -157,7 +157,7 @@ spec site = do
         \  [...document.querySelectorAll('#app .slide-frame:not(.slide-step-copy) .slide-step')].filter((e) => !e.checkVisibility({ visibilityProperty: true })).length,\
         \]"
     printedSteps `shouldBe` (13, 0)
-    pages <$> pdf page `shouldReturn` 13
+    pdfPages <$> pdf page `shouldReturn` 13
     nothingWrong page
 
   -- Copy puts the Markdown on the clipboard, as written. Headless Chromium
@@ -281,8 +281,8 @@ besides page selectors =
 
 -- | How many pages a PDF has: its objects of type Page (not Pages, the
 -- tree of them).
-pages :: ByteString -> Int
-pages = go 0
+pdfPages :: ByteString -> Int
+pdfPages = go 0
   where
     go n bytes = case ByteString.breakSubstring "/Type" bytes of
       (_, rest)

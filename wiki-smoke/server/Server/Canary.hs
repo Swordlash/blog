@@ -87,11 +87,11 @@ data Canary = Canary
   , markers :: IORef [(Text, Text)]
   -- ^ Each place and its marker, in the order they were made.
   , seen :: IORef (Seq Place)
-  , pages :: IORef [(Int, Page, Int)]
+  , watchedPages :: IORef [(Int, Page, Int)]
   -- ^ The watched pages still open, by a number of their own, and how many
   -- of each one's frames are already in 'seen'.
   , next :: IORef Int
-  , asked :: IORef (Seq Asked)
+  , asked :: IORef (Seq BrowserRequest)
   -- ^ Every request the watched browsers made of the server, oldest
   -- first.
   , wiki :: Wiki
@@ -99,7 +99,7 @@ data Canary = Canary
 
 -- | A request a watched browser made of the server: its method, its
 -- address, and whose session the browser had when it asked.
-data Asked = Asked {method :: Text, url :: Text, who :: Maybe Session}
+data BrowserRequest = BrowserRequest {method :: Text, url :: Text, who :: Maybe Session}
 
 -- | A page watched, to stop watching it.
 newtype Watched = Watched Int
@@ -113,10 +113,10 @@ newCanary wiki = do
   run <- Text.decodeUtf8 . convertToBase Base16 <$> (getRandomBytes 6 :: IO ByteString)
   markers <- newIORef []
   seen <- newIORef Seq.empty
-  pages <- newIORef []
+  watchedPages <- newIORef []
   next <- newIORef 0
   asked <- newIORef Seq.empty
-  pure Canary {run, markers, seen, pages, next, asked, wiki}
+  pure Canary {run, markers, seen, watchedPages, next, asked, wiki}
 
 -- | The marker for a place, made the first time it is asked for.
 marker :: Canary -> Text -> IO Text
@@ -151,7 +151,7 @@ watch c ctx = do
       let who = case jar of
             Right cs -> (\k -> Session k.value) <$> find (\k -> k.name == "wiki_session") cs
             Left (_ :: PlaywrightError) -> Nothing
-      atomicModifyIORef' c.asked (\a -> (a |> Asked {method = request.method, url = request.url, who}, ()))
+      atomicModifyIORef' c.asked (\a -> (a |> BrowserRequest {method = request.method, url = request.url, who}, ()))
     pure Continue
   pure ()
 
@@ -161,7 +161,7 @@ watch c ctx = do
 watchPage :: Canary -> Page -> IO Watched
 watchPage c page = do
   n <- atomicModifyIORef' c.next (\k -> (k + 1, k))
-  atomicModifyIORef' c.pages (\ps -> (ps <> [(n, page, 0)], ()))
+  atomicModifyIORef' c.watchedPages (\ps -> (ps <> [(n, page, 0)], ()))
   pure (Watched n)
 
 -- | Take the page's frames into what was seen, and stop watching it,
@@ -169,7 +169,7 @@ watchPage c page = do
 unwatchPage :: Canary -> Watched -> IO ()
 unwatchPage c (Watched n) = do
   collect c
-  atomicModifyIORef' c.pages (\ps -> (filter (\(k, _, _) -> k /= n) ps, ()))
+  atomicModifyIORef' c.watchedPages (\ps -> (filter (\(k, _, _) -> k /= n) ps, ()))
 
 -- | Something the suite read from the server itself.
 saw :: Canary -> Text -> ByteString -> IO ()
@@ -181,13 +181,13 @@ add c what bytes = atomicModifyIORef' c.seen (\s -> (s |> Place {what, bytes}, (
 -- | The frames of every watched page that are not in 'seen' yet.
 collect :: Canary -> IO ()
 collect c = do
-  ps <- readIORef c.pages
+  ps <- readIORef c.watchedPages
   updated <- forM ps $ \(n, page, taken) -> do
     frames' <- webSocketFrames page
     let new = drop taken frames'
     mapM_ (\f -> add c ((if f.sent then "frame sent on " else "frame received on ") <> f.url) (Text.encodeUtf8 f.payload)) new
     pure (n, page, taken + length new)
-  atomicModifyIORef' c.pages (const (updated, ()))
+  atomicModifyIORef' c.watchedPages (const (updated, ()))
 
 -- | Where a later check starts: what was seen, and asked, so far.
 data Since = Since Int Int
