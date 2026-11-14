@@ -1,8 +1,13 @@
 ---
-pr: 0
-title: The embedded presentation's viewer is a state machine
-technical: true
+pr: 287
+title: An embedded presentation is read again after you sign in again
 ---
+
+## Bug fixes
+
+- A presentation embedded in a page is read again after you sign out
+  and sign in as the same user. Before, it could stay as it was, with
+  pictures that no longer loaded.
 
 ## Other changes
 
@@ -13,6 +18,3 @@ technical: true
   its guards, against an extra watch of the link and against a page read
   for an earlier reader, are now rules the tests check rather than
   conventions in the code.
-- The application counts the reader's sessions, so that a view can tell
-  the same user signed out and in again from one who stayed: the
-  embedded presentation reads its page again in that case.
