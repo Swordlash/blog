@@ -2969,6 +2969,31 @@ needs. Each was true when its package merged; check before relying on one.
   (38 pairs of an action and a read that does not wait, 3 fixed, #268)
   and the server's, the passkeys' and the shared modules (218
   actions, 7 such pairs, 1 fixed, #270).
+- **The editor is usable before it knows who else edits (found by
+  #277).** When a reader clicks Edit on a page that shows "Ada is
+  editing", the page view unwatches the page (its last watcher, so the
+  tab forgets who edits it), the editor mounts and watches again, and
+  the warning with its question comes only with the server's answer
+  over the WebSocket. Typing before that answer makes the editor
+  announce the reader without asking (the code's intent for someone
+  already typing). Not one line: the handover would keep the page
+  watched across the swap of views.
+- **What a smoke suite must wait for besides the program, after #268,
+  #270 and #277.** Three kinds, each read for in every suite and held
+  by a named condition: an event the browser fires late (`afterEvent`);
+  something pushed to the tab over the WebSocket or from another tab,
+  which `waitQuiet` does not count (`pushed`: wait for it visible, then
+  settle); and a request of the document before, which lands in a
+  count of requests "since a point" on a shared page (each count
+  starts after a navigation to `about:blank`; the driver's log does
+  not say which document asked). Left: in the server's `loadAdopted` a
+  handler of an old document's request, forked before that navigation
+  was answered, could still record microseconds after the count is
+  cleared (never seen). Tests that assert on a clock were listed in
+  #277: wiki-core's and wiki-app's native ones count now; the browser
+  examples that measure the page's longest hold keep their clocks, the
+  far jump's with the thinnest margin (1.3 times its slowest measure
+  under load).
 - **The server's smoke suite after #267 (WP5.98c).** Found by the port
   and left: "Back to editing" in the editor's preview, with an SVG
   there that navigates its own frame, undoes the frame's navigation;
