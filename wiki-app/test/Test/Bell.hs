@@ -426,11 +426,22 @@ spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (const 2000) $ d
         settles (foldl' play start (filter (/= Finish) run))
 
   describe "over the HTTP backend's cache" $ do
-    for_ [minBound .. maxBound] $ \rule ->
+    for_ [rule | rule <- [minBound .. maxBound], rule `notElem` map fst brokenByTheCache] $ \rule ->
       it (ruleText rule) $
         QC.property $
           forAllShrinkShow genRun shrinkRun show $ \run ->
             verdict rule (foldl' play startCached (if rule == QuietAfterClose then run <> [Finish] <> run else run))
+
+    for_ brokenByTheCache $ \(rule, run) ->
+      it ("is known to break this rule, until the cache is fixed: " <> ruleText rule) $
+        [t | (r, t) <- (foldl' play startCached run).faults, r == rule] `shouldNotBe` []
+
+    it "keeps a notification the channel told when a mark handled before it was made is answered last" $ do
+      -- n2 is told while a read is out; the backend merges it into the
+      -- read's answer, and the bell takes that list; the reader's mark,
+      -- asked after the read and handled before n2 was made, comes last.
+      let w = foldl' play startCached [Reconnect, Handle, Reconnect, ClickBell, Handle, Deliver 0, Handle, Make, Tell, Handle, ClickLink 0, Handle, Make, Deliver 0, Tell, Deliver 0, Deliver 1]
+      [t | (NothingLost, t) <- w.faults] `shouldBe` []
 
     it "shows the server's list once everything out has come back and the channel reopened" $
       QC.property $
@@ -445,6 +456,28 @@ settles w0 = counterexample (toS (T.unlines (reverse w.trace))) (shown === truth
     w = settled w0
     shown = [(n.id, n.read) | n <- listed w.bell]
     truth = [(n.id, n.read) | n <- w.server.notes]
+
+-- | The rules the HTTP backend's cache still breaks, whatever the bell
+-- does (WP5.118's report): the cache answers a read at once with the list
+-- it holds, and that list can be older than an answer the bell already
+-- took. A read's answer is stored when the cache did not change since the
+-- read was sent, even when a read sent later was answered already, and a
+-- mark's answer replaces the list whenever it comes, even when a read sent
+-- after the mark brought a newer one. The bell takes the cache's answer,
+-- its ask being the latest. Shrunk:
+--
+-- > answer to a read: [n3* n2* n1]     (taken, not stored: a mark's answer changed the cache)
+-- > clicks the bell -> read            (answered from the cache: [n2* n1])
+-- > answer to a read                   [count 1, list [n2* n1]]   n3 gone
+--
+-- Each is held by a run QuickCheck shrank, which shows the fault; once
+-- the cache is fixed the example fails, and the rule goes back to the
+-- properties above.
+brokenByTheCache :: [(Rule, [Step])]
+brokenByTheCache =
+  [ (ReadStaysRead, [Make, Handle, ReadElsewhere 0, ClickBell, Deliver 0, Handle, ClickBell, ClickBell, Deliver 0, Deliver 0])
+  , (NothingLost, [Handle, Make, ClickBell, Deliver 0, ClickBell, ClickBell, Handle, Deliver 0, Deliver 0])
+  ]
 
 -- | What a rule says, as an example's name.
 ruleText :: Rule -> [Char]

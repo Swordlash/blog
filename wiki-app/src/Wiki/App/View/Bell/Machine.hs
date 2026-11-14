@@ -65,8 +65,9 @@ data Model = Model
   , marking :: Int
   -- ^ How many marks of notifications read are out.
   , heard :: [(Notification, Asks)]
-  -- ^ The notifications the live channel told of since the list was last
-  -- taken, each with the asks as they were when it was told.
+  -- ^ The notifications the live channel told of that no answer to an ask
+  -- made after them has been taken for, each with the asks as they were
+  -- when it was told.
   , revision :: Int
   -- ^ The revision of the wiki the bell was last given
   -- ("Wiki.App.View.Common"'s 'Context').
@@ -181,14 +182,18 @@ step event m
 
 -- | The answer to an ask taken, if no answer to a later ask was: the list
 -- with what the live channel told after the ask was made and the list
--- does not have.
+-- does not have. What the channel told is kept until an answer to an ask
+-- made after it is taken, even when a list taken meanwhile has it: an
+-- answer taken later may be one handled before the notification was made
+-- (a mark answered last, over a backend that merged the channel's
+-- messages into a read's answer).
 taking :: Ask -> Either WikiError Notifications -> Model -> Model
 taking asked answer m = case takes asked m.asks of
   Nothing -> m
   Just after -> case answer of
     Right ns ->
-      let kept = [(n, at) | (n, at) <- m.heard, not (asked `madeAfter` at), all (\x -> x.id /= n.id) ns.items]
-          missing = map fst kept
+      let kept = [(n, at) | (n, at) <- m.heard, not (asked `madeAfter` at)]
+          missing = [n | (n, _) <- kept, all (\x -> x.id /= n.id) ns.items]
        in m {asks = after, notices = Just (Right ns {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}), heard = kept}
     Left _ -> m {asks = after, notices = Just answer}
 
