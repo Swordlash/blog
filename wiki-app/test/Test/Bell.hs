@@ -60,7 +60,7 @@ import Test.Hspec.QuickCheck (modifyMaxSuccess)
 import Test.QuickCheck (Gen, Property, chooseInt, counterexample, forAllShrinkShow, frequency, listOf, shrinkList, (.&&.), (===))
 import Test.QuickCheck qualified as QC
 import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
-import Wiki.App.Backend.Http.Cache (Cache (notices), Reading (..), Stored (..), changedBy, emptyCache, forgetNotices, storedAnswer, storedOf, withNotice, withNotices)
+import Wiki.App.Backend.Http.Cache (Cache (notices), Stored (..), askingNotices, changedBy, emptyCache, forgetNotices, markedAnswer, storedNotices, storedOf, withNotice, withNotices)
 import Wiki.App.View.Bell.Machine
 import Wiki.App.View.Latest (madeAfter)
 import Wiki.Core.Id (NotificationId (..), PageId (..), UserId (..))
@@ -189,7 +189,7 @@ shrinkRun = shrinkList shrinkStep
 data Out = Out
   { ask :: Effect ()
   , answer :: Maybe Notifications
-  , sent :: Maybe (Stored, [NotificationId])
+  , sent :: Maybe (Int, Stored, [NotificationId])
   -- ^ Over the HTTP backend's cache, for a read sent to the server: the
   -- cache as it was when the read was sent, and the notifications the
   -- live channel had told of then ("Wiki.App.Backend.Http"'s
@@ -290,13 +290,13 @@ play w = \case
               -- Over the cache, a read sent to the server: its answer
               -- with what the channel told meanwhile, stored if the cache
               -- did not change since it was sent.
-              (Just t, Just (sentAt, toldBefore)) ->
+              (Just t, Just (asked, sentAt, toldBefore)) ->
                 let missing = [n | n <- t.told, n.id `notElem` toldBefore, all (\x -> x.id /= n.id) a.items]
                     merged = Notifications {unread = a.unread + length (filter (\n -> not n.read) missing), items = missing <> a.items}
-                    t' = t {stored = storedAnswer PlainRead sentAt (withNotices (Right merged)) t.stored}
+                    t' = t {stored = storedNotices asked sentAt (withNotices (Right merged)) t.stored}
                  in afterEvent ("answer to " <> askText o.ask <> ": " <> listText merged) (Loaded f (Right merged)) w' {tab = Just t'}
               _ -> afterEvent ("answer to " <> askText o.ask) (Loaded f (Right a)) w'
-            MarkRead m _ -> afterEvent ("answer to " <> askText o.ask) (Marked m (Right a)) (changing (withNotices (Right a)) w')
+            MarkRead m _ -> afterEvent ("answer to " <> askText o.ask) (Marked m (Right a)) w' {tab = (\t -> t {stored = maybe identity (\(_, sentAt, _) -> markedAnswer sentAt (Right a)) o.sent t.stored}) <$> w'.tab}
             _ -> w
     Nothing -> w
   Revise -> afterEvent ("revision " <> show (w.revisions + 1)) (Revised (w.revisions + 1) (Sealer identity)) w {revisions = w.revisions + 1}
@@ -312,6 +312,7 @@ afterEvent what event w =
     $ w
       { bell
       , outs = w.outs <> [outOf e | e <- effects, isAsk e]
+      , tab = counted <$> w.tab
       , listening = w.listening + length (filter (== Listen) effects) - length (filter (== Unlisten) effects)
       , faults =
           w.faults
@@ -320,12 +321,15 @@ afterEvent what event w =
       }
   where
     (bell, effects) = step event w.bell
+    -- The tab with the reads it sends to the server counted.
+    counted t = foldl' (\t' e -> case (e, t'.stored.cache.notices) of (Load _, Nothing) -> t' {stored = snd (askingNotices t'.stored)}; _ -> t') t effects
     -- An ask out. Over the cache, a read the cache can answer is answered
     -- at once, from it, and goes to no server.
     outOf e = case (e, w.tab) of
       (Load _, Just t) -> case t.stored.cache.notices of
         Just (Right known) -> Out {ask = e, answer = Just known, sent = Nothing}
-        _ -> Out {ask = e, answer = Nothing, sent = Just (t.stored, map (\n -> n.id) t.told)}
+        _ -> let (asked, sentAt) = askingNotices t.stored in Out {ask = e, answer = Nothing, sent = Just (asked, sentAt, map (\n -> n.id) t.told)}
+      (MarkRead _ _, Just t) -> Out {ask = e, answer = Nothing, sent = Just (0, t.stored, [])}
       _ -> Out {ask = e, answer = Nothing, sent = Nothing}
     effectsText = if null effects then "" else " -> " <> T.intercalate ", " (map effectText effects)
     isAsk = isJust . ticketOf
