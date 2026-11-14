@@ -19,8 +19,10 @@ title: A page's comments keep every change, in its place
   reads its comments again after each of your writes when it cannot
   tell where yours belongs.
 - When reading a page's comments again fails, the comments you were
-  reading stay on the page, instead of turning into an error and a "Try
-  again" button.
+  reading stay on the page under the line "Comments could not be
+  refreshed." and a "Try again" button, instead of turning into an error.
+  The line goes once the comments are read again, or the page is told
+  them anew.
 
 ## Other changes
 
