@@ -1,5 +1,5 @@
 ---
-pr: 0
+pr: 274
 title: CI runs the smoke tests beside the wasm tests and says which tests take time
 technical: true
 ---
