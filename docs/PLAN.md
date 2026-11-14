@@ -1854,29 +1854,62 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
+- **WP5.111 The pin of haskell-halogen past its pull request 118 (the
+  owner, 2026-11-14, with the library's answer to the wiki's lists).**
+  Its own pull request, with the reason in the pin's commit, and
+  nothing adopted in it beyond what the bump breaks: `Router.pageBase`
+  is now `(MonadBrowserDOM m, MonadIO m) => m Text` (a call in plain
+  `IO` no longer compiles); `pages` is a new export of the driver (a
+  local of that name is renamed); the driver's records `RoutedRequest`
+  and `ContextOptions` grew. What the library now gives, each taken up
+  by a package after this one: components tested natively over
+  `remote` (`Halogen.Remote.Test`: WP5.106); the driver's response
+  bodies and exchanges, `waitForFunction` under the page's policy,
+  `goBack` within a document, `exposeFunction`, popups, a hold by
+  resource type, CDP events (WP5.112); memoized nodes that keep their
+  child components (WP5.113). Not answered yet, asked on 2026-11-14:
+  `settle` ending before an event the browser fires late, and a
+  request log that names the document that asked.
 - **WP5.106 Components without JavaScript tested natively, over
   haskell-halogen's `remote` (the owner, 2026-11-13: "jeśli będzie to
-  szybsze. Wszystkie pure halogen testy").** The spike is done (branch
-  `wp5106-remote-tests-spike`, one commit, not pushed: a test-suite
-  `wiki-app-remote-test` with a harness and the permissions spec
-  written a second time). **It is faster**: from an edit to a result
-  18.6 s natively against 50.5 s on wasm, cold 139 s against 446 s,
-  the run alone 6.9 s against 22 s (each example about 0.2 s slower
-  natively, and the examples run one at a time). **But one module of
-  53 can move today.** Of 674 examples, 436 in 27 modules stay in wasm
-  whatever happens (the editor, the islands, the vault, the HTTP
-  backend); about 103 are of Halogen alone, and all but the 5 of the
-  permissions spec follow a router link, which does nothing over the
-  wire: `Router.isPlainLeftClick` is never true natively. **Waits for
-  haskell-halogen**: the router's plain click read from the event's
-  JSON, the probe answered by the session (per session), a mount per
-  connection, a client that does not reconnect, and `focus`,
-  `showModal` and `scrollIntoView` forwarded as operations (the list
-  is with the spike's notes). With those: new specs of such views are
-  written natively, the three pure modules and the pure parts of
-  Shell, Tasks, Spaces, Slides, Search and Notifications move (about
-  70 examples), and AGENTS.md's gate names the native suite. Until
-  then nothing moves.
+  szybsze. Wszystkie pure halogen testy").** The spike (branch
+  `wp5106-remote-tests-spike`, one commit, not pushed) showed it
+  faster: from an edit to a result 18.6 s natively against 50.5 s on
+  wasm, cold 139 s against 446 s. It moved one module of 53, because a
+  router link did nothing over the wire and the harness was the
+  spike's own. **No longer waits (after WP5.111)**: the library has
+  `Halogen.Remote.Test` (a server per suite, a mount per example, the
+  page answering the driver's probe for its own session, so examples
+  run side by side), a router that follows the page's address, the
+  page's storage, and `focus`, `showModal`, `scrollIntoView` and the
+  title crossing the wire. In the application: a handler that prevents
+  a default on a condition declares its match (`HE.matching (HE.keys
+  […])`: the slides' arrows, "/" for search, Escape), or it does not
+  work over the wire. Then: a native suite `wiki-app-remote-test` on
+  the library's harness; the specs of views of Halogen alone move to
+  it (the three pure modules and the pure parts of Shell, Tasks,
+  Spaces, Slides, Search and Notifications first, about 70 examples of
+  the 103 that are of Halogen alone; the 436 of the editor, the
+  islands, the vault and the HTTP backend stay in wasm); new specs of
+  such views are written natively; AGENTS.md's gate names the suite;
+  CI runs it in a native job. What still does not cross: reads of the
+  page (`document.activeElement`, a dialog's `open`, measuring), the
+  clipboard, a canvas.
+- **WP5.112 The smoke suites on the driver's additions (after
+  WP5.111).** The canary reads every answer from the context's
+  recorded exchanges, the answers to writes among them, in place of
+  asking each GET again; `waitForFunction` in place of `eventually`
+  with `evaluate` and of `holdsInPage`; `goBack` in place of the
+  history walk by hand in the SVG's section; `holdWith` by resource
+  type in place of the suite's own route for fetches; `exposeFunction`
+  and `waitForPopup` where the suites worked around their absence.
+  Each workaround removed is named in the README's section.
+- **WP5.113 The preview's cards memoized (after WP5.111).** A move to
+  another slide still renders every card and has Halogen compare them
+  (60 to 75 ms on 60 slides, growing with the deck): memoize each
+  card by its slide's content, its islands inside, now that a skipped
+  node keeps its child components (a kept child gets no `Receive`
+  while its node is skipped: check what the islands need from one).
 - **WP5.95 No view takes an older answer over a newer one (found by
   Codex on #243, rounds 12 and 13; left there on purpose).** The page view
   drops a fetched page older than the one it shows (`takesPage`, by
