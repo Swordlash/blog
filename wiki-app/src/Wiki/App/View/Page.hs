@@ -116,7 +116,8 @@
 -- then stays until the answer. Each visit
 -- of an address has a number ('visit'), and an answer to a request of an
 -- earlier visit changes nothing of this one; a fetch's answer is shown
--- only if it is the latest fetch ('fetches'). The page shown is never
+-- only if no later fetch's answer was ('fetches', by
+-- "Wiki.App.View.Latest"'s rule). The page shown is never
 -- replaced by an older version of itself ('takesPage'), whatever asked
 -- for it and whenever the answer comes.
 module Wiki.App.View.Page
@@ -281,9 +282,10 @@ data State = State
   -- ^ Which visit of an address the view is on: one more each time it
   -- shows another page or version. An answer to a write asked for on an
   -- earlier visit changes nothing of this one.
-  , fetches :: Int
-  -- ^ How many fetches of the page the view has started: only the answer
-  -- to the latest, on this visit, is shown.
+  , fetches :: Asks
+  -- ^ The fetches of the page the view has started: an answer is shown
+  -- only if no later fetch's answer was ("Wiki.App.View.Latest"). Another
+  -- visit puts something newer in place of every fetch out.
   , writing :: Bool
   -- ^ Whether a write of the page that the view started (a rename, a
   -- move, a delete, the template switch) is out, until its answer on
@@ -390,7 +392,7 @@ component =
               , copiedText
               , staging = maybe Ticking.unstaged (\p -> Ticking.step (Ticking.Offered p) Ticking.unstaged) (pageOf loaded)
               , visit = 0
-              , fetches = 0
+              , fetches = noAsks
               , lastBox = Nothing
               , writing = False
               , chainProblem = Nothing
@@ -869,8 +871,8 @@ component =
           -- ticks ('HasUnsaved'), and the reader chose Leave.
           stage (Ticking.Clear LeftConfirmed)
           modify (\st -> st {lastBox = Nothing, writing = False})
-          -- The threads of the page left are not taken after this.
-          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, threadAsks = Latest.supersede st.threadAsks, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
+          -- The page left, and its threads, are not taken after this.
+          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, threadAsks = Latest.supersede st.threadAsks, fetches = Latest.supersede st.fetches, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
           -- The people mentioned are looked up again: the current user may
           -- be someone else now.
@@ -1137,8 +1139,8 @@ component =
     load = do
       latest <- startFetch
       (owner, loaded) <- fetchOwned
-      -- Only the answer to the latest fetch of this visit: another
-      -- navigation, or another reload, may have overtaken this one.
+      -- Not after a later fetch's answer: another navigation, or another
+      -- reload, may have overtaken this one.
       answering latest owner $ do
         void (takeFetched owner loaded)
         H.raise Loaded
@@ -1328,11 +1330,12 @@ component =
       loaded <- gets (\st -> st.input) >>= fetch owner
       pure (owner, loaded)
 
-    -- Run what an answer to this fetch does, if it is still the latest
-    -- fetch of the visit; the addresses of an answer overtaken are let go.
-    answering :: (Int, Int) -> UrlOwner -> H.HalogenM State Action Slots ViewOutput m () -> H.HalogenM State Action Slots ViewOutput m ()
+    -- Run what an answer to this fetch does, if no later fetch's answer
+    -- was taken ("Wiki.App.View.Latest"); the addresses of an answer
+    -- overtaken are let go.
+    answering :: Latest.Ask -> UrlOwner -> H.HalogenM State Action Slots ViewOutput m () -> H.HalogenM State Action Slots ViewOutput m ()
     answering which owner act =
-      gets (\st -> (st.visit, st.fetches) == which) >>= \case
+      Latest.answered (\st -> st.fetches) (\a st -> st {fetches = a}) which identity >>= \case
         True -> act
         False -> Body.settleOwned ownersOf' setOwners owner False
 
@@ -1342,11 +1345,9 @@ component =
     setOwners :: Body.Owners -> State -> State
     setOwners owners st = st {owners}
 
-    -- A fetch of the page begins: its number, with the visit's.
-    startFetch :: H.HalogenM State Action Slots ViewOutput m (Int, Int)
-    startFetch = do
-      modify (\st -> st {fetches = st.fetches + 1})
-      gets (\st -> (st.visit, st.fetches))
+    -- A fetch of the page begins: its ticket.
+    startFetch :: H.HalogenM State Action Slots ViewOutput m Latest.Ask
+    startFetch = Latest.asking (\st -> st.fetches) (\a st -> st {fetches = a})
 
     -- Run what an answer to a request made on this visit does, if the view
     -- is still on it.
