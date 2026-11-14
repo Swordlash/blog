@@ -1889,22 +1889,6 @@ WP5.92 and WP5.93 wait.
   carry it; the dearest examples made cheaper (the long deck's 66
   seconds, the three random walks, the search's table); and what
   WP5.106 moves out of it.
-- **WP5.111 The pin of haskell-halogen past its pull request 118 (the
-  owner, 2026-11-14, with the library's answer to the wiki's lists).**
-  Its own pull request, with the reason in the pin's commit, and
-  nothing adopted in it beyond what the bump breaks: `Router.pageBase`
-  is now `(MonadBrowserDOM m, MonadIO m) => m Text` (a call in plain
-  `IO` no longer compiles); `pages` is a new export of the driver (a
-  local of that name is renamed); the driver's records `RoutedRequest`
-  and `ContextOptions` grew. What the library now gives, each taken up
-  by a package after this one: components tested natively over
-  `remote` (`Halogen.Remote.Test`: WP5.106); the driver's response
-  bodies and exchanges, `waitForFunction` under the page's policy,
-  `goBack` within a document, `exposeFunction`, popups, a hold by
-  resource type, CDP events (WP5.112); memoized nodes that keep their
-  child components (WP5.113). Not answered yet, asked on 2026-11-14:
-  `settle` ending before an event the browser fires late, and a
-  request log that names the document that asked.
 - **WP5.106 Components without JavaScript tested natively, over
   haskell-halogen's `remote` (the owner, 2026-11-13: "jeśli będzie to
   szybsze. Wszystkie pure halogen testy").** The spike (branch
@@ -1912,7 +1896,8 @@ WP5.92 and WP5.93 wait.
   faster: from an edit to a result 18.6 s natively against 50.5 s on
   wasm, cold 139 s against 446 s. It moved one module of 53, because a
   router link did nothing over the wire and the harness was the
-  spike's own. **No longer waits (after WP5.111)**: the library has
+  spike's own. **No longer waits (the pin is at 522e423 since #280)**:
+  the library has
   `Halogen.Remote.Test` (a server per suite, a mount per example, the
   page answering the driver's probe for its own session, so examples
   run side by side), a router that follows the page's address, the
@@ -1929,9 +1914,15 @@ WP5.92 and WP5.93 wait.
   such views are written natively; AGENTS.md's gate names the suite;
   CI runs it in a native job. What still does not cross: reads of the
   page (`document.activeElement`, a dialog's `open`, measuring), the
-  clipboard, a canvas.
-- **WP5.112 The smoke suites on the driver's additions (after
-  WP5.111).** The canary reads every answer from the context's
+  clipboard, a canvas. And what the library's declared matches cannot
+  say yet (found by #280): a link's click delegated to a container
+  (`Body.followingLinksIn`, the help: `plainLeftClick` reads
+  `currentTarget`, the container), and `dragover`, `drop` and `paste`
+  that prevent the default only for some payloads; the views with
+  those stay in wasm until the library has such a match. #280's
+  description lists the wiki's 75 handlers by kind.
+- **WP5.112 The smoke suites on the driver's additions (the pin has
+  them since #280).** The canary reads every answer from the context's
   recorded exchanges, the answers to writes among them, in place of
   asking each GET again; `waitForFunction` in place of `eventually`
   with `evaluate` and of `holdsInPage`; `goBack` in place of the
@@ -1939,7 +1930,8 @@ WP5.92 and WP5.93 wait.
   type in place of the suite's own route for fetches; `exposeFunction`
   and `waitForPopup` where the suites worked around their absence.
   Each workaround removed is named in the README's section.
-- **WP5.113 The preview's cards memoized (after WP5.111).** A move to
+- **WP5.113 The preview's cards memoized (the pin allows it since
+  #280).** A move to
   another slide still renders every card and has Halogen compare them
   (60 to 75 ms on 60 slides, growing with the deck): memoize each
   card by its slide's content, its islands inside, now that a skipped
@@ -3035,6 +3027,15 @@ needs. Each was true when its package merged; check before relying on one.
   (38 pairs of an action and a read that does not wait, 3 fixed, #268)
   and the server's, the passkeys' and the shared modules (218
   actions, 7 such pairs, 1 fixed, #270).
+- **The pin of haskell-halogen at 522e423 (#280, WP5.111).** Its pull
+  requests 111 to 118; the toolchain's pins did not move. Only
+  `wiki-smoke` broke, by names the driver now exports (`Asked`,
+  `pages`). Nothing changed for the wiki's behaviour on wasm. Asked of
+  the library on 2026-11-14 and being built there: `settle` waiting for
+  an event the browser fires late, and a request log that names the
+  document; when they are on its master the pin moves again, and
+  `afterEvent` and the navigation to `about:blank` before a count go
+  from the smoke suites.
 - **The HTTP backend's cache and the spaces' list, after #279.** The
   cache stored an answer whenever it came, so a read sent before a
   write, an event or a sign-in and answered after it put the older
