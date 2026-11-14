@@ -606,9 +606,9 @@ visitor smoke loadsRef = do
         waitQuiet administration
         hasText (locator dialog ".account-state") "With a password"
         -- Escape closes the modal dialog, whose close event the browser
-        -- fires with the next animation frame: the program hears of it
-        -- then, after the press has settled.
-        afterEvent administration "document.querySelector('#app .user-dialog')" "close" (press administration "Escape")
+        -- fires with the next animation frame: the press settles after
+        -- that frame and the program's handling of the event.
+        press administration "Escape"
         waitQuiet administration
         hasText (locator administration "#app .admin-view .user-row[data-login=olive] .user-sign-in") "With a password"
       -- She signs in with it in her browser, from the header's form.
