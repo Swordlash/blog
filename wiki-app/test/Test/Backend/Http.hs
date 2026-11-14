@@ -555,6 +555,31 @@ caching = describe "what it keeps" $ do
     runHttpWiki env (atOnce listSpaces) `shouldReturn` Nothing
     (\c -> Map.null c.pages) <$> cacheOf env `shouldReturn` True
 
+  it "keeps no answer read before a write that came while the read was out" $ do
+    -- The first read of the spaces is answered with the list as it was,
+    -- and only once a write has come; every read after it, with the list
+    -- as the write left it.
+    gate <- newEmptyMVar
+    count <- newIORef (0 :: Int)
+    let older = take 1 (Map.elems demo.spaces)
+        newer = Map.elems demo.spaces
+        respond r
+          | methodOf r /= "GET" = pure (status 204 "")
+          | otherwise =
+              atomicModifyIORef' count (\n -> (n + 1, n)) >>= \case
+                0 -> readMVar gate $> ok older
+                _ -> pure (ok newer)
+        out = readIORef count >>= \n -> unless (n > 0) (threadDelay 1000 >> out)
+    env <- newHttpEnv (Transport respond)
+    early <- async (runHttpWiki env listSpaces)
+    out
+    _ <- runHttpWiki env (deletePage (PageId "x"))
+    putMVar gate ()
+    -- The read gets the answer it asked for; the cache does not keep it.
+    wait early `shouldReturn` older
+    runHttpWiki env listSpaces `shouldReturn` newer
+    (\c -> c.spaces) <$> cacheOf env `shouldReturn` Just newer
+
   it "keeps the rest after a draft's write, which puts the draft in its place" $ do
     (env, asked) <- backend answering
     _ <- runHttpWiki env (listPages hello.space)
