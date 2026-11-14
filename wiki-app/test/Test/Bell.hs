@@ -21,8 +21,11 @@
 -- * a notification shown read is never shown unread again: the server
 --   never marks one unread, so an unread one shown after a read one is an
 --   older answer taken over a newer one, or the reader's own mark undone;
--- * a notification once listed stays listed: this server never drops one;
--- * the count is the number of unread notifications listed;
+-- * a notification once listed stays listed while it is among the
+--   server's newest (an answer lists the newest 'limit'; this server
+--   never drops one);
+-- * the count is at least the number of unread notifications listed (the
+--   server counts every unread one, and lists only the newest);
 -- * the buttons that mark are disabled exactly while a mark is out;
 -- * nothing is asked or listened to after the bell went away;
 -- * every ask is made under a new ticket, which the state names;
@@ -80,11 +83,16 @@ data Server = Server
   , untold :: [Notification]
   -- ^ The notifications the live channel has yet to tell the tab of, the
   -- oldest first.
+  , limit :: Int
+  -- ^ How many of the newest notifications an answer lists: the real
+  -- server's 'Wiki.Core.Notification.maxListed' (50), and 3 here, so that
+  -- runs go past it often and stay short when shrunk. The machine has no
+  -- such number: it shows what an answer lists.
   }
   deriving stock (Show)
 
 emptyServer :: Server
-emptyServer = Server {count = 0, notes = [], untold = []}
+emptyServer = Server {count = 0, notes = [], untold = [], limit = 3}
 
 -- | The server after it made one more notification for the reader, to be
 -- told over the live channel.
@@ -113,7 +121,7 @@ noticeOf k =
 
 -- | The server's answer to a read: its list as it is now.
 handleRead :: Server -> Notifications
-handleRead s = Notifications {unread = length (filter (\n -> not n.read) s.notes), items = s.notes}
+handleRead s = Notifications {unread = length (filter (\n -> not n.read) s.notes), items = take s.limit s.notes}
 
 -- | A mark handled by the server: its list after the mark, and the answer.
 handleMark :: ReadMark -> Server -> (Server, Notifications)
@@ -380,8 +388,8 @@ checked w = w {faults = w.faults <> problems, seenRead = Map.unionWith (||) w.se
     marksOut = not w.finished && any (\o -> case o.ask of MarkRead _ _ -> True; _ -> False) w.outs
     problems =
       [(ReadStaysRead, idText n <> " was shown read, and is shown unread again") | n <- shown, not n.read, Map.lookup n.id w.seenRead == Just True]
-        <> [(NothingLost, "listed before and gone: " <> T.intercalate ", " gone) | let gone = [unId i | i <- Map.keys w.seenRead, i `notElem` map (\n -> n.id) shown], not (null gone), isJust (rightNotices w.bell)]
-        <> [(CountMatches, "the count says " <> show (unreadCount w.bell) <> ", and " <> show (length (filter (\n -> not n.read) shown)) <> " are listed unread") | isJust (rightNotices w.bell), unreadCount w.bell /= length (filter (\n -> not n.read) shown)]
+        <> [(NothingLost, "listed before and gone: " <> T.intercalate ", " gone) | let gone = [unId i | i <- Map.keys w.seenRead, i `notElem` map (\n -> n.id) shown, i `elem` map (\n -> n.id) (take w.server.limit w.server.notes)], not (null gone), isJust (rightNotices w.bell)]
+        <> [(CountMatches, "the count says " <> show (unreadCount w.bell) <> ", and " <> show (length (filter (\n -> not n.read) shown)) <> " are listed unread") | isJust (rightNotices w.bell), unreadCount w.bell < length (filter (\n -> not n.read) shown)]
         <> [(BusyWhileMarking, "the buttons that mark are " <> (if busy w.bell then "disabled with no mark out" else "enabled with a mark out")) | not w.finished, busy w.bell /= marksOut]
         <> [(ListedOnce, "a notification is listed twice") | let ids = map (\n -> n.id) shown, nub ids /= ids]
         <> [(QuietAfterClose, "listening after the bell went away") | w.finished, w.listening /= 0]
@@ -502,6 +510,13 @@ spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (max cases) $ do
           forAllShrinkShow genRun shrinkRun show $ \run ->
             verdict rule (foldl' play startCached (if rule == QuietAfterClose then run <> [Finish] <> run else run))
 
+    it "counts what the server counts after a mark of all, when the cache answered a read made while it was out" $
+      -- Codex's case on #282: more unread than an answer lists; "Mark all
+      -- read"; the bell closed and opened again before the mark's answer,
+      -- so the cache answers at once with the list from before the mark,
+      -- under a later ticket.
+      settles quieted (foldl' play startCached [Make, Make, Make, Make, Reconnect, Handle, Handle, Deliver 0, Deliver 0, ClickBell, ClickMarkAll, ClickBell, ClickBell, Handle, Deliver 0])
+
     it "keeps a notification the channel told when a mark handled before it was made is answered last" $ do
       -- n2 is told while a read is out; the backend merges it into the
       -- read's answer, and the bell takes that list; the reader's mark,
@@ -548,7 +563,12 @@ spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (max cases) $ do
 -- | Whether a run, settled, shows the server's list and count, with no
 -- mark out.
 settles :: (World -> World) -> World -> Property
-settles settle w0 = counterexample (toS (T.unlines (reverse w.trace))) (shown === truth .&&. unreadCount w.bell === length (filter (not . snd) truth) .&&. busy w.bell === False)
+settles settle w0 =
+  counterexample (toS (T.unlines (reverse w.trace))) $
+    counterexample "every notification shown as the server has it" ([x | x <- shown, x `notElem` truth] === [])
+      .&&. counterexample "the server's newest, all shown" ([x | x <- take w.server.limit truth, x `notElem` shown] === [])
+      .&&. counterexample "the count, the server's count of unread" (unreadCount w.bell === length (filter (not . snd) truth))
+      .&&. busy w.bell === False
   where
     w = settle w0
     shown = [(n.id, n.read) | n <- listed w.bell]

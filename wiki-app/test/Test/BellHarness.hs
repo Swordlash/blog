@@ -266,6 +266,7 @@ runSteps how rig ui run = do
         drive rig ui ref w.finished s
         let w' = play w s
         page <- if w'.finished then pure (shownBy w') else ui.shown
+        server <- readIORef ref
         waiting <- readTVarIO rig.gate
         listening <- readIORef rig.listening
         let expected = shownBy w'
@@ -274,6 +275,7 @@ runSteps how rig ui run = do
             asksOut = if w'.finished then holding else length w'.outs
             -- Every notification listed so far, and whether it was ever
             -- listed read.
+            newest = [k | n <- take server.limit server.notes, let NotificationId t = n.id, Just k <- [readMaybe (T.drop 1 t)]]
             seen' = if page.open then Map.unionWith (||) seen (Map.fromList [(k, not unread) | (k, unread) <- page.rows]) else seen
             beside =
               ["the page shows " <> show page <> ", the machine " <> show expected | page /= expected]
@@ -282,8 +284,8 @@ runSteps how rig ui run = do
               | w'.finished = ["the feed is listened to " <> show listening <> " times after the bell went away" | listening /= 0]
               | otherwise =
                   ["n" <> show k <> " was shown read, and is shown unread again" | page.open, (k, True) <- page.rows, Map.lookup k seen == Just True]
-                    <> ["listed before and gone: " <> show gone | page.open, let gone = [k | k <- Map.keys seen, k `notElem` map fst page.rows], not (null gone)]
-                    <> ["the count says " <> show page.count <> ", and " <> show (length (filter snd page.rows)) <> " are listed unread" | page.open, page.count /= length (filter snd page.rows)]
+                    <> ["listed before and gone: " <> show gone | page.open, let gone = [k | k <- Map.keys seen, k `notElem` map fst page.rows, k `elem` newest], not (null gone)]
+                    <> ["the count says " <> show page.count <> ", and " <> show (length (filter snd page.rows)) <> " are listed unread" | page.open, page.count < length (filter snd page.rows)]
                     <> ["Mark read is enabled while a mark is held" | page.open, any snd page.rows, marksHeld > 0, not page.busy]
                     <> ["Mark read is disabled with no mark held" | page.open, page.busy, marksHeld == 0]
                     <> ["the feed is listened to " <> show listening <> " times" | listening /= 1]
