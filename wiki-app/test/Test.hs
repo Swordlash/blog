@@ -18,6 +18,7 @@ import Test.Hspec.Runner (Config (..), defaultConfig, hspecWith)
 import Test.Hydrate qualified as Hydrate
 import Test.Import qualified as Import
 import Test.Islands qualified as Islands
+import Test.Latest qualified as Latest
 import Test.Licence qualified as Licence
 import Test.Link qualified as Link
 import Test.Live qualified as Live
@@ -56,6 +57,7 @@ main = do
       Link.spec
       Live.spec
       Ticking.spec
+      Latest.spec
       Shell.spec
       Server.spec
       Passwords.spec

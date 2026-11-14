@@ -161,6 +161,7 @@ import Wiki.App.View.Comments qualified as CommentsView
 import Wiki.App.View.Common
 import Wiki.App.View.DeckViewer qualified as DeckViewer
 import Wiki.App.View.Export qualified as ExportView
+import Wiki.App.View.Latest (takesPage)
 import Wiki.App.View.Star qualified as StarView
 import Wiki.App.View.Ticking (Clearing (..), Staging (..), TickNote (..))
 import Wiki.App.View.Ticking qualified as Ticking
@@ -1546,26 +1547,6 @@ pageOf :: Loaded -> Maybe Page
 pageOf = \case
   Ready page _ _ _ -> Just page
   _ -> Nothing
-
--- | Whether the view takes a page it was given (a fetch's answer, a
--- save's), with the page it shows: not when the two are the same page
--- (the same 'Page.id') and the one given is an older version.
---
--- A version is the page's @updatedAt@, which the backend sets on every
--- save of the title or the text, later than the one before. Restoring an
--- old version saves it again, as a newer version, which is taken. A page
--- deleted and made again at the same address has another id, and is
--- taken. The same version is taken: it has the same title and text.
--- What a save does not version (the page's place in the tree, the
--- template mark, the attachments) comes as the answer has it, which a
--- late answer may have older.
---
--- So the order the answers come in cannot put an older version back: a
--- fetch asked for before a save and answered after it is dropped.
-takesPage :: Maybe Page -> Page -> Bool
-takesPage shown given = case shown of
-  Just page | page.id == given.id -> given.updatedAt >= page.updatedAt
-  _ -> True
 
 -- | The place the page's links, and its comments' links, are resolved
 -- from: where the page is.
