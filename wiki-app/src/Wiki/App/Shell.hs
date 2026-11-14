@@ -1768,7 +1768,7 @@ component =
       -- editor shown with its text.
       router <- gets (\st -> st.router)
       fromPreview <- H.liftEffect onPreviewEntry
-      for_ next (if fromPreview then H.liftEffect . replacingEntry . Router.redirect router else Router.navigate router)
+      for_ next (if fromPreview then H.liftEffect . replacingEntry . Router.redirect router else H.liftEffect . Router.navigate router)
 
     -- Load who is signed in and the tree of spaces, on a worker thread. If
     -- they cannot be loaded, the route's content says why, with a button
