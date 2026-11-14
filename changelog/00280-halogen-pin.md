@@ -1,5 +1,5 @@
 ---
-pr: 0
+pr: 280
 title: The wiki builds on a newer haskell-halogen, with nothing changed for it
 technical: true
 ---
