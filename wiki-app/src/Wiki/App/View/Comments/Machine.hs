@@ -44,9 +44,10 @@
 --   the threads are as they were when it was sent, and a read asked after
 --   it follows, which puts it in its place ('wrote'). What the answer does
 --   beside the threads is the machine's too, and only then: the comments
---   view that asked is told it ('Answered'), and a thread opened about the
---   quote still being commented on stops the quoting and is chosen
---   ('opened').
+--   view that asked is told it ('Answered'), and a thread opened in the
+--   session of quoting still open ends it and is chosen ('opened'). A
+--   session is numbered ('Quoting'): the same quote chosen again is
+--   another.
 --
 -- The quote being commented on and the thread chosen are the model's
 -- ('quoting', 'focused'): the reader's own changes to them are events
@@ -56,6 +57,7 @@
 module Wiki.App.View.Comments.Machine
   ( Model (..)
   , Writing (..)
+  , Quoting (..)
   , Threads (..)
   , Request (..)
   , Event (..)
@@ -111,9 +113,11 @@ data Model = Model
   , writtenSince :: Bool
   -- ^ Whether another write was answered after that read was asked: one
   -- more read follows when its answer comes.
-  , quoting :: Maybe Anchor
-  -- ^ The quote of the page the reader is commenting on: a new thread
-  -- about it is being written, in the panel beside the page.
+  , quoting :: Maybe Quoting
+  -- ^ The quote of the page the reader is commenting on, in its session:
+  -- a new thread about it is being written, in the panel beside the page.
+  , sessions :: Int
+  -- ^ How many sessions of quoting were opened: the number of the latest.
   , focused :: Maybe CommentThreadId
   -- ^ The thread the reader has chosen, by clicking its quote in the page
   -- or the thread itself, or that the reader's write opened.
@@ -128,10 +132,23 @@ data Model = Model
   }
   deriving stock (Eq, Show)
 
+-- | 'Quoting' is one session of commenting on a quote: from the reader's
+-- choice of the quote to its thread sent and answered, or the quote given
+-- up. The same quote chosen again is another session, with a form of its
+-- own: the number tells them apart, as the anchor cannot.
+data Quoting = Quoting
+  { session :: Int
+  , anchor :: Anchor
+  }
+  deriving stock (Eq, Show)
+
 -- | 'Writing' is a write sent on this visit of the page, until its answer
 -- comes.
 data Writing = Writing
   { page :: PageId
+  , session :: Maybe Int
+  -- ^ For a thread about a quote, the session of quoting it was written
+  -- in.
   , told :: [PageEvent]
   -- ^ What the live channel told about the page since the write was sent.
   , quiet :: Bool
@@ -217,7 +234,7 @@ data Effect a
 -- read at once if the backend could.
 initial :: Maybe PageId -> Bool -> Bool -> Maybe (Either WikiError [Thread]) -> Model
 initial page comments encrypted read' =
-  Model {page, comments, encrypted, threads = maybe ThreadsLoading (either ThreadsFailed ThreadsReady) (read' >>= \r -> r <$ guard comments), asks = noAsks, written = 0, writes = mempty, heard = [], following = Nothing, writtenSince = False, quoting = Nothing, focused = Nothing, behind = False, closed = False}
+  Model {page, comments, encrypted, threads = maybe ThreadsLoading (either ThreadsFailed ThreadsReady) (read' >>= \r -> r <$ guard comments), asks = noAsks, written = 0, writes = mempty, heard = [], following = Nothing, writtenSince = False, quoting = Nothing, sessions = 0, focused = Nothing, behind = False, closed = False}
 
 -- | The threads after an event, and what the page view is asked to do.
 step :: Event a -> Model -> (Model, [Effect a])
@@ -233,7 +250,7 @@ step event m
       Fetched page comments encrypted ->
         reading (if m.page == Just page then m {comments, encrypted} else (elsewhere m) {page = Just page, comments, encrypted})
       Left' -> ((elsewhere m) {page = Nothing, threads = ThreadsLoading, asks = supersede m.asks}, [])
-      Quoted a -> (m {quoting = Just a, focused = Nothing}, [])
+      Quoted a -> let k = m.sessions + 1 in (m {quoting = Just Quoting {session = k, anchor = a}, sessions = k, focused = Nothing}, [])
       GaveUp -> (m {quoting = Nothing}, [])
       Closed -> (m {quoting = Nothing}, [])
       Chose tid -> (m {focused = Just tid}, [])
@@ -247,7 +264,12 @@ step event m
         Nothing -> second (Changed :) (followed asked m)
       Write place page request ->
         let n = m.written + 1
-            writing = Writing {page, told = [], quiet = True}
+            -- A thread about the quote of the session open is that
+            -- session's.
+            session = case (request, m.quoting) of
+              (OpenThread (Just a) _, Just q) | q.anchor == a -> Just q.session
+              _ -> Nothing
+            writing = Writing {page, session, told = [], quiet = True}
          in (m {written = n, writes = if m.page == Just page then Map.insert n writing m.writes else m.writes}, [Send place n page request])
       -- The answer of a write sent on another visit, of this page or
       -- another, changes nothing and asks nothing: the forms it came from
@@ -255,7 +277,7 @@ step event m
       Wrote place n request answer -> case Map.lookup n m.writes of
         Just w
           | m.page == Just w.page ->
-              let (m', fx) = wrote w answer (opened request answer m {writes = Map.delete n m.writes})
+              let (m', fx) = wrote w answer (opened w answer m {writes = Map.delete n m.writes})
                in (m', fx <> [Answered place request (leftToMaybe answer)])
         _ -> (m {writes = Map.delete n m.writes}, [])
       Heard page e
@@ -274,12 +296,12 @@ elsewhere :: Model -> Model
 elsewhere m = m {writes = mempty, heard = [], following = Nothing, writtenSince = False, behind = False, quoting = Nothing, focused = Nothing}
 
 -- | The model after the answer to a write sent on this visit: a thread
--- opened about the quote the reader still comments on stops the quoting,
--- and is chosen. A thread about a quote given up since, or another quote,
--- changes neither.
-opened :: Request -> Either WikiError PageEvent -> Model -> Model
-opened request answer m = case (request, answer) of
-  (OpenThread (Just a) _, Right (ThreadOpened t)) | m.quoting == Just a -> m {quoting = Nothing, focused = Just t.id}
+-- opened in the session of quoting still open ends it, and is chosen. A
+-- thread of a session ended since changes neither, also when the reader
+-- comments on the same quote again.
+opened :: Writing -> Either WikiError PageEvent -> Model -> Model
+opened w answer m = case answer of
+  Right (ThreadOpened t) | isJust w.session, w.session == ((\q -> q.session) <$> m.quoting) -> m {quoting = Nothing, focused = Just t.id}
   _ -> m
 
 -- | The writes out, with the threads shown changed since they were sent.

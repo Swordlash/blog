@@ -720,7 +720,7 @@ component =
               ThreadsReady ts -> CommentsView.CommentsReady (shownIn text placement ts)
           , behind = st.discussion.behind
           , focused = st.discussion.focused
-          , quoting = st.discussion.quoting
+          , quoting = (\q -> q.anchor) <$> st.discussion.quoting
           , avatars = st.avatars
           }
         (FromComments placement)
