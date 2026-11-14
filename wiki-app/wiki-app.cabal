@@ -329,6 +329,7 @@ test-suite wiki-app-test
         Test.Assistant
         Test.Backend.Http
         Test.Backend.Opaque
+        Test.Bell
         Test.Opaque
         Test.Browser.Opaque
         Test.Backend.Mem
