@@ -204,7 +204,7 @@ import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Comment (Thread)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
-import Wiki.Core.Notification (Notification, PageLocation, Watch, WatchTarget)
+import Wiki.Core.Notification (Notification (..), PageLocation, Watch, WatchTarget)
 import Wiki.Core.Page (Page, PageSummary)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
@@ -547,9 +547,11 @@ withNotices :: Either WikiError Notifications -> Cache -> Cache
 withNotices n c = c {notices = Just n}
 
 -- | Add a notification received over the live channel at the front of the
--- cached notifications.
+-- cached notifications, unless they have it: the server sends the message
+-- after the notification is made, so a read it answered in between
+-- brought it already.
 withNotice :: Notification -> Cache -> Cache
-withNotice n c = c {notices = fmap (\ns -> Notifications {unread = ns.unread + 1, items = n : ns.items}) <$> c.notices}
+withNotice n c = c {notices = fmap (\ns -> if any (\x -> x.id == n.id) ns.items then ns else Notifications {unread = ns.unread + 1, items = n : ns.items}) <$> c.notices}
 
 -- | Remove the cached notifications, because some may have been missed.
 forgetNotices :: Cache -> Cache
