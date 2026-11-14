@@ -1136,11 +1136,13 @@ comments m = describe "a page's comments" $ do
   it "reads them with the page, sends a new one, hears another tab's, and catches up after a lost connection" $ runPage $ do
     serverStarts
     serveDemo
-    hello <- unsafeIOToPageM $ do
+    (hello, demoThreads) <- unsafeIOToPageM $ do
       wiki <- newMemWiki (demoState demoNow)
       runMemWiki wiki $ do
         blog <- either (panic . show) identity <$> getSpace (slugs ["blog"])
-        either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])
+        page <- either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])
+        threads <- either (panic . show) identity <$> listThreads page.id
+        pure (page, threads)
     ui <- startServer m (Page (slugs ["blog"]) (slugs ["hello-world"]))
     find ui "mark.comment-mark[data-thread='thread-hello-1']" >>= (`shouldHaveText` "a blog that is also a wiki")
     eventually $ said `shouldReturn` [Subscribe hello.id]
@@ -1149,6 +1151,9 @@ comments m = describe "a page's comments" $ do
         comment' tid cid body = Comment {id = CommentId cid, thread = CommentThreadId tid, author = ada, body, createdAt = demoNow, editedAt = Nothing}
         made = Thread {id = CommentThreadId "thread-new", page = hello.id, anchor = Nothing, resolved = False, createdAt = demoNow, comments = [comment' "thread-new" "comment-new" "Sent."]}
     answerWith "POST" (endpointUrl (\e -> (e.comments hello.id).open NewThread {anchor = Nothing, body = ""})) 201 made
+    -- The server's threads hold it once it is made: the page reads them
+    -- after the write's answer, to put it in its place.
+    answerWith "GET" (endpointUrl (\e -> (e.comments hello.id).list)) 200 (demoThreads <> [made])
     text <- find ui ".page-comments .comment-new textarea"
     typeText text "Sent."
     clickButton ui ".page-comments .comment-new button" "Comment"

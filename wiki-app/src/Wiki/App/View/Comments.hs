@@ -13,10 +13,10 @@
 -- finds the quotes in the page ("Wiki.Core.Anchor"). This component gets
 -- them, and holds only what is being written: the new thread's comment,
 -- each thread's reply, the comment being edited, and the deletion being
--- confirmed. It reports what a write did to the page view as the event the
--- server would send ('Did'). The page view applies that event to its
--- threads as it applies the events it receives, so a write counts once
--- however it is reported.
+-- confirmed. It asks the page view for each write ('Write'), and the page
+-- view sends it ("Wiki.App.View.Comments.Machine") and tells this
+-- component its answer ('Answered'): the form it came from is emptied, or
+-- the reason it failed is shown.
 --
 -- A comment is Markdown, rendered as the page is ("Wiki.App.View.Body":
 -- links resolved against the page, islands drawn, raw HTML through the
@@ -36,27 +36,29 @@ module Wiki.App.View.Comments
   , Shown (..)
   , Input (..)
   , Output (..)
+  , Mount (..)
+  , Query (..)
   , Slots
   , component
   , threadElementId
   )
 where
 
-import Control.Monad.UUID (MonadUUID)
+import Control.Monad.UUID (MonadUUID (..))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Data.UUID.Types (UUID)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Wiki.Api.Events (PageEvent (CommentAdded, CommentDeleted, CommentEdited, ThreadDeleted, ThreadOpened, ThreadResolved))
 import Wiki.App.Backend (WikiError (..))
-import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.View.Body qualified as Body
+import Wiki.App.View.Comments.Machine qualified as Threads
 import Wiki.App.View.Common
 import Wiki.Core.Anchor (Anchor (..), Located (..))
 import Wiki.Core.Comment (Comment (..), Thread (..), mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
@@ -94,21 +96,34 @@ data Input = Input
   , space :: SpaceId
   , placement :: Placement
   , comments :: Comments
+  , behind :: Bool
+  -- ^ Whether the comments shown are known to be behind the server's: a
+  -- read of them failed after they were shown
+  -- ("Wiki.App.View.Comments.Machine"'s @behind@).
   , focused :: Maybe CommentThreadId
   -- ^ The thread the reader has chosen, by clicking its quote in the page
   -- or the thread itself.
-  , quoting :: Maybe Anchor
-  -- ^ A quote of the page the reader chose to comment on: a new inline
-  -- thread, in the panel beside the page.
+  , quoting :: Maybe Threads.Quoting
+  -- ^ A quote of the page the reader chose to comment on, in its session
+  -- of quoting: a new inline thread, in the panel beside the page. Its
+  -- write names the session.
   , avatars :: Map UserId Text
   -- ^ The URLs of the comments' authors' avatars, by user, which the page
   -- view keeps ('avatarUrls').
   }
 
+-- | 'Mount' is one mounting of the comments view: made when the component
+-- is, and new when the panel is closed and opened again. A write's answer
+-- names the mount that asked for it ('Answered'), so that a view mounted
+-- since leaves its own forms alone.
+newtype Mount = Mount UUID
+  deriving stock (Eq, Show)
+
 -- | What the comments view sends to the page view.
 data Output
-  = -- | A write was made, with this event as its result.
-    Did PageEvent
+  = -- | The reader asked, in this mount of the view, for a write to this
+    -- page's threads.
+    Write Mount PageId Threads.Request
   | -- | The reader chose a thread.
     Focus CommentThreadId
   | -- | The reader abandoned the new inline thread.
@@ -118,6 +133,15 @@ data Output
   | -- | The threads failed to load: try again.
     Reload
 
+-- | 'Query' is what the page view tells the comments view: the answer to
+-- a write a mount of it asked for, and why it failed if it did. The
+-- threads' machine decides when ("Wiki.App.View.Comments.Machine"'s
+-- @Answered@): only on the visit of the page the write was sent on. A
+-- mount other than the one that asked changes nothing ('handleQuery'):
+-- the machine cannot know which mount is shown, since a mount reaches the
+-- page view only as an output its loop handles later.
+data Query a = Answered Mount Threads.Request (Maybe WikiError) a
+
 -- | A deletion awaiting confirmation.
 data Deleting
   = DeletingComment CommentThreadId CommentId
@@ -126,6 +150,8 @@ data Deleting
 
 data State = State
   { input :: Input
+  , self :: Mount
+  -- ^ This mount of the view.
   , drafted :: Text
   -- ^ The new thread's first comment.
   , replies :: Map CommentThreadId Text
@@ -157,13 +183,15 @@ data Action
 -- written at (each under a key no Markdown island has).
 type Slots = Body.IslandSlots
 
-component :: forall query m. (MonadComments m, MonadIslands m, MonadUUID m) => H.Component query Input Output m
+component :: forall m. (MonadIslands m, MonadUUID m) => H.Component Query Input Output m
 component =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \input -> pure State {input, drafted = "", replies = mempty, editing = Nothing, deleting = Nothing, problem = Nothing}
+      { initialState = \input -> do
+          self <- Mount <$> generateV4
+          pure State {input, self, drafted = "", replies = mempty, editing = Nothing, deleting = Nothing, problem = Nothing}
       , render
-      , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.receive = Just . Receive}
+      , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.handleQuery = handleQuery, H.receive = Just . Receive}
       }
   where
     render :: State -> H.ComponentHTML Action Slots m
@@ -193,7 +221,20 @@ component =
         |]
 
     listed :: State -> [H.ComponentHTML Action Slots m]
-    listed st = case st.input.comments of
+    listed st = [behindLine | st.input.behind, CommentsReady _ <- [st.input.comments]] <> shownList st
+
+    -- The comments shown stay under this line when a read of them failed.
+    behindLine :: H.ComponentHTML Action Slots m
+    behindLine =
+      [hh|
+        <div class="error stale-reload comments-behind" role="alert">
+          <p>Comments could not be refreshed.</p>
+          <button type="button" class="retry" onClick={{ const TryAgain }}>Try again</button>
+        </div>
+      |]
+
+    shownList :: State -> [H.ComponentHTML Action Slots m]
+    shownList st = case st.input.comments of
       CommentsLoading -> [[hh|<p class="loading">Loading the comments…</p>|]]
       CommentsFailed e -> [failureView e TryAgain]
       CommentsReady [] -> case st.input.placement of
@@ -334,7 +375,7 @@ component =
             |]
 
     newInline :: State -> Maybe (H.ComponentHTML Action Slots m)
-    newInline st = case st.input.quoting of
+    newInline st = case (\q -> q.anchor) <$> st.input.quoting of
       Just a
         | canComment st ->
             Just
@@ -397,7 +438,7 @@ component =
               Beside -> st.input.quoting
               Below -> Nothing
         unless (blank st.drafted || (st.input.placement == Beside && isNothing anchor)) $
-          openThread st.input.page anchor st.drafted >>= done (\t -> ThreadOpened t) (\s -> s {drafted = ""})
+          H.raise (Write st.self st.input.page (Threads.OpenThread anchor st.drafted))
       GiveUp -> do
         modify (\st -> st {drafted = "", problem = Nothing})
         H.raise StopQuoting
@@ -406,44 +447,50 @@ component =
         st <- get
         let text = Map.findWithDefault "" tid st.replies
         unless (blank text) $
-          reply st.input.page tid text >>= done CommentAdded (\s -> s {replies = Map.delete tid s.replies})
+          H.raise (Write st.self st.input.page (Threads.Reply tid text))
       Edit c -> modify (\st -> st {editing = Just (c.id, c.body), deleting = Nothing, problem = Nothing})
       Editing t -> modify (\st -> st {editing = (\(cid, _) -> (cid, t)) <$> st.editing})
       SaveEdit tid -> do
         st <- get
         for_ st.editing $ \(cid, text) ->
-          editComment st.input.page tid cid text >>= done CommentEdited (\s -> s {editing = Nothing})
+          H.raise (Write st.self st.input.page (Threads.EditComment tid cid text))
       StopEditing -> modify (\st -> st {editing = Nothing})
       AskDelete what -> modify (\st -> st {deleting = Just what, editing = Nothing, problem = Nothing})
       KeepIt -> modify (\st -> st {deleting = Nothing})
       Delete -> do
         st <- get
         case st.deleting of
-          Just (DeletingComment tid cid) -> do
-            -- The first comment of a thread stands for the whole thread.
-            let first' = case st.input.comments of
-                  CommentsReady shown -> any (\s -> s.thread.id == tid && fmap (\c -> c.id) (head s.thread.comments) == Just cid) shown
-                  _ -> False
-                event = if first' then ThreadDeleted tid else CommentDeleted tid cid
-            deleteComment st.input.page tid cid >>= done (const event) (\s -> s {deleting = Nothing})
-          Just (DeletingThread tid) ->
-            deleteThread st.input.page tid >>= done (const (ThreadDeleted tid)) (\s -> s {deleting = Nothing})
+          Just (DeletingComment tid cid) -> H.raise (Write st.self st.input.page (Threads.DeleteComment tid cid))
+          Just (DeletingThread tid) -> H.raise (Write st.self st.input.page (Threads.DeleteThread tid))
           Nothing -> pass
       Resolve tid resolved -> do
-        page <- gets (\st -> st.input.page)
-        setResolved page tid resolved >>= done (\t -> ThreadResolved t.id t.resolved) identity
+        st <- get
+        H.raise (Write st.self st.input.page (Threads.Resolve tid resolved))
       Choose tid -> H.raise (Focus tid)
       CloseIt -> H.raise Close
       TryAgain -> H.raise Reload
 
-    -- Handle a write's result: report it as the event it was and empty the
-    -- form it came from; or show why it failed.
-    done :: (a -> PageEvent) -> (State -> State) -> Either WikiError a -> H.HalogenM State Action Slots Output m ()
-    done event after = \case
-      Left e -> modify (\st -> st {problem = Just e})
-      Right a -> do
-        modify (\st -> after st {problem = Nothing})
-        H.raise (Did (event a))
+    -- A write's answer: the form it came from emptied, or why it failed
+    -- shown, if this mount asked for it. The threads' machine tells it only
+    -- on the visit of the page the write was sent on.
+    handleQuery :: Query a -> H.HalogenM State Action Slots Output m (Maybe a)
+    handleQuery (Answered asker request failure next) = do
+      modify $ \st ->
+        if asker /= st.self
+          then st
+          else case failure of
+            Just e -> st {problem = Just e}
+            Nothing -> emptied request st {problem = Nothing}
+      pure (Just next)
+
+    emptied :: Threads.Request -> State -> State
+    emptied request st = case request of
+      Threads.OpenThread _ _ -> st {drafted = ""}
+      Threads.Reply tid _ -> st {replies = Map.delete tid st.replies}
+      Threads.EditComment {} -> st {editing = Nothing}
+      Threads.DeleteComment {} -> st {deleting = Nothing}
+      Threads.DeleteThread _ -> st {deleting = Nothing}
+      Threads.Resolve _ _ -> st
 
     canComment :: State -> Bool
     canComment st = mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space) && writable st.input.context st.input.space

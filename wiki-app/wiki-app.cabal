@@ -128,6 +128,7 @@ library
       Wiki.App.View.Body
       Wiki.App.View.BoxKindForm
       Wiki.App.View.Comments
+      Wiki.App.View.Comments.Machine
       Wiki.App.View.Common
       Wiki.App.View.DeckViewer
       Wiki.App.View.Diff
@@ -362,6 +363,7 @@ test-suite wiki-app-test
         Test.Scripted
         Test.Server
         Test.Shell
+        Test.Threads
         Test.Ticking
     build-depends:
         HUnit,

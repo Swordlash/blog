@@ -33,6 +33,7 @@ import Test.Rect qualified as Rect
 import Test.Route qualified as Route
 import Test.Server qualified as Server
 import Test.Shell qualified as Shell
+import Test.Threads qualified as Threads
 import Test.Ticking qualified as Ticking
 
 main :: IO ()
@@ -60,6 +61,7 @@ main = do
       Live.spec
       Ticking.spec
       Bell.spec
+      Threads.spec
       Latest.spec
       Shell.spec
       Server.spec

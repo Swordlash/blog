@@ -84,7 +84,7 @@ import Data.Aeson (FromJSON (..), ToJSON (..), Value, object, withObject, (.!=),
 import Data.Aeson.Types (Parser, parseFail)
 import Data.Time (UTCTime)
 import Protolude
-import Wiki.Core.Comment (Comment, Thread, resolvedAs, withComment, withThread, withoutComment, withoutThread)
+import Wiki.Core.Comment (Comment, Thread, resolvedAs, withComment, withReply, withThread, withoutComment, withoutThread)
 import Wiki.Core.Id
 import Wiki.Core.Notification (Notification)
 import Wiki.Core.Version (Author)
@@ -157,11 +157,14 @@ instance FromJSON PageEvent where
 -- | A page's threads after an event. The application applies events to the
 -- threads it shows, both the results of its own writes and the events the
 -- server sends. An event already applied changes nothing, so that a write
--- the tab made, and then receives from the server, counts once.
+-- the tab made, and then receives from the server, counts once. A thread
+-- opened or a reply added that the threads hold already is kept as they
+-- hold it: they may have been read after it was made, with later changes
+-- to it.
 applyEvent :: PageEvent -> [Thread] -> [Thread]
 applyEvent = \case
   ThreadOpened t -> withThread t
-  CommentAdded c -> withComment c
+  CommentAdded c -> withReply c
   CommentEdited c -> withComment c
   CommentDeleted t c -> withoutComment t c
   ThreadResolved t r -> resolvedAs t r
