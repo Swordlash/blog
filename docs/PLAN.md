@@ -1762,8 +1762,20 @@ confirms it against reality and the plan is amended if it does not hold.
     where there is one ask and no change of input. A property's case
     count is set by what it missed: 2,000 cases let a real fault of
     the bell through in 2 runs of 30; 20,000 is the ordinary run, a
-    million the nightly. The bell is the first; the views that raced
-    follow in the order under "Open work".
+    million the nightly. **A view infers nothing about what an answer
+    covers from a property of its items** (#282's Codex rounds: the
+    bell told what a list already counted from how many it listed,
+    then from their times, then from the database's numbers, and each
+    was wrong: the server lists only its newest, a time may be taken
+    before the write waits for the writer, and SQLite gives a deleted
+    newest row's number again). What was heard since an ask is applied
+    again by id onto that ask's answer, and where that cannot be exact
+    a read asked afterwards follows and replaces everything. A model
+    of the server takes from the real code the answers' shape, limits,
+    counts, order and atomicity, every way the server deletes, and
+    every bounded buffer between the server and the view; its header
+    lists them with where each was read. The bell is the first; the
+    views that raced follow in the order under "Open work".
 
 ## Repository layout
 
@@ -3176,6 +3188,31 @@ needs. Each was true when its package merged; check before relying on one.
   `pages`). Nothing changed for the wiki's behaviour on wasm. The two
   things asked of the library on 2026-11-14 are on its master (its
   pull requests 119 and 120): WP5.117.
+- **The bell as a machine (#282, WP5.118).** `View/Bell/Machine.hs`
+  with `Bell.hs` as its shell; the properties, the in-memory DOM spec
+  and four examples over `remote` (`wiki-app-remote-test`, which no CI
+  job runs: WP5.122). Left and known. (1) If the server handles two
+  reads in the other order than they were sent, the bell takes the
+  later ask's answer, which is the older list, until the next read or
+  notification told; only a version on the server's list would close
+  it (held in the suite as an expected failure). (2) The count can be
+  too high for one request's time: a notification told after an
+  answer's ask that the answer counts and does not list. (3) Every
+  notification told costs each tab one GET (one for a burst): the
+  HTTP backend forgets its cached list when one is told. The server
+  has no rate limit on reads. (4) The browser example "keeps … only
+  what came while the list was fetched" no longer tells whether the
+  held answer had the new notification; that case is covered natively
+  only. (5) For any later code: `notifications.seq` on SQLite is not
+  `AUTOINCREMENT`, so a number is given again after the newest row is
+  deleted (a page's cascade, a user removed); a notification's
+  `createdAt` is no order (a password reset and the console take the
+  time before the write waits for the writer); `seq` is the commit
+  order only because one process writes through one connection. (6)
+  Natively the press outside and Escape on the bell's list are not
+  tested: the in-memory DOM has no bubbling dispatch, no `target` and
+  no `isConnected` (the nine items given to haskell-halogen's owner on
+  2026-11-14, in the pull request's notes).
 - **The pin at 762416b and the smoke suites without their
   workarounds (#283, WP5.117).** Only the driver changed between the
   pins, so the browser suite was not run for it. `afterEvent` is gone
