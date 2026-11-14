@@ -1,6 +1,6 @@
 ---
 pr: 0
-title: CI's run takes a quarter of an hour again, and says which tests take the time
+title: CI runs the smoke tests beside the wasm tests and says which tests take time
 technical: true
 ---
 
@@ -19,7 +19,7 @@ technical: true
 
 - The wasm run of wiki-core's tests runs a quarter of each property's
   cases; the native run keeps the full count. The test of the cost of
-  deeply nested HTML times smaller inputs.
+  deeply nested HTML reads smaller inputs.
 - Each CI run's summary lists every wasm and smoke test suite with its
   time, its budget and its five slowest examples, and warns of a suite
   over its budget.
