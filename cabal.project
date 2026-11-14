@@ -63,7 +63,7 @@ package wiki-smoke
 source-repository-package
   type: git
   location: https://github.com/Swordlash/haskell-halogen
-  tag: 68c0a79657027fc4e4d322f4c80e39ee32432460
+  tag: 1f68320db5435927d7b305cf3f00ad62e3ff19e6
   subdir:
     core
     jsbits
