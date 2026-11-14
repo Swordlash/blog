@@ -160,6 +160,7 @@ import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (browserOnline, forgetReads, offlineCopy)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.Vault (identitySlot)
+import Wiki.App.View.Latest (Ask, Asks, newAsk, noAsks, takes)
 import Wiki.Core.Anchor (Anchor)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), distinctAttachments, mimeEssence, parseFileName, shownInBrowser, uploadedMimeType)
 import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody)
@@ -1738,14 +1739,21 @@ data Held = Held
   -- ('forgetHeldOf'): a key opened for the user before is not held after
   -- ('holdKeyIn').
   , heldListed :: Maybe [Space]
-  -- ^ The last list of spaces this tab read, or started with
-  -- ('learnListed'): which spaces are encrypted, which are converted,
-  -- and which ask for a passkey or the password each time they are opened
-  -- ('Wiki.Core.Space.gateOf'). A write empties the cache's list; this one
-  -- stays, so that a read after the write chooses its route, and checks
-  -- the space's gate, from what the tab knew before the write
-  -- ('knownSpaces'). Kept across a change of user: the state of a space is
-  -- the same for every user, and the shell lists the spaces again.
+  -- ^ The list of spaces this tab knows: the answer to the latest read
+  -- of the list taken ('learnListed'), or the one it started with. It
+  -- says which spaces are encrypted, which are converted, and which ask
+  -- for a passkey or the password each time they are opened
+  -- ('Wiki.Core.Space.gateOf'). It is the one record every reader of the
+  -- list reads ('knownSpaces', 'spacesNow'); the cache's list says only
+  -- whether it may be used without a read. A write empties the cache's
+  -- list; this one stays, so that a read after the write chooses its
+  -- route, and checks the space's gate, from what the tab knew before the
+  -- write. Kept across a change of user: the state of a space is the same
+  -- for every user, and the shell lists the spaces again.
+  , heldListAsks :: Asks
+  -- ^ The reads of the list of spaces ('fetchSpaces'). The list has no
+  -- version of its own, so the reads are ordered by their asks: an answer
+  -- is taken only if no later read's answer was ("Wiki.App.View.Latest").
   , heldHome :: Maybe SpaceId
   -- ^ The front page's space ('getHomeDocument'), which no list of spaces
   -- names: the server makes it plain, at the top, and nothing gates it
@@ -1757,7 +1765,7 @@ data Held = Held
   }
 
 noneHeld :: Held
-noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldOwners = mempty, heldNextOwner = 1, heldLowest = mempty, heldReaders = mempty, heldConfirmed = mempty, heldLeases = mempty, heldClosings = mempty, heldWasSealed = mempty, heldSession = 0, heldListed = Nothing, heldHome = Nothing}
+noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldOwners = mempty, heldNextOwner = 1, heldLowest = mempty, heldReaders = mempty, heldConfirmed = mempty, heldLeases = mempty, heldClosings = mempty, heldWasSealed = mempty, heldSession = 0, heldListed = Nothing, heldListAsks = noAsks, heldHome = Nothing}
 
 -- | Where the bytes of an attachment of an encrypted page are, and what
 -- decrypts them: its space and page, the key of its page's that encrypts
@@ -1968,19 +1976,40 @@ keepingSpaces pagesOf result = do
   for_ result $ \a -> modifyHeld (\h -> h {heldSpaces = Map.union (Map.fromList (pagesOf a)) h.heldSpaces})
   pure result
 
--- | The spaces the user may see, as 'listSpaces' reads them: the cached
--- list, or the list read now ('fetchSpaces').
+-- | The spaces the user may see, as 'listSpaces' reads them: the list the
+-- tab knows, when the cache holds a list (no write came since a read of
+-- it), or the list read now ('fetchSpaces').
 spacesNow :: (MonadIO m) => HttpWiki m (Either WikiError [Space])
-spacesNow = (\c -> c.spaces) <$> readCache >>= maybe fetchSpaces (pure . Right)
+spacesNow = cachedSpaces >>= maybe fetchSpaces (pure . Right)
 
--- | The list of spaces read from the server, put in the cache, and taken
--- as the truth about every space ('learnListed').
+-- | The list of spaces the tab knows ('heldListed'), when the cache holds
+-- a list, so that it may be used without a read. The cache's own list
+-- may be older than the one known: a read whose answer the cache did not
+-- store, for another change came meanwhile, was still learnt. So the
+-- cache says only whether a read is needed, and the list is the one
+-- known.
+cachedSpaces :: (MonadIO m) => HttpWiki m (Maybe [Space])
+cachedSpaces =
+  (\c -> c.spaces) <$> readCache >>= \case
+    Nothing -> pure Nothing
+    Just inCache -> Just . fromMaybe inCache . (\h -> h.heldListed) <$> readHeld
+
+-- | The list of spaces read from the server, taken as the truth about
+-- every space ('learnListed') unless a list asked for later was taken
+-- already, and then put in the cache, as a read's answer is
+-- ('storeAnswer'). The result is the list the tab knows after it: this
+-- read's answer, or the later one's, so that a caller routes by what the
+-- tab knows, never by an older list.
 fetchSpaces :: (MonadIO m) => HttpWiki m (Either WikiError [Space])
 fetchSpaces = do
   before <- readStored
-  result <- send endpoints.spaces.list
-  for_ result $ \spaces -> storeAnswer PlainRead before (withSpaces spaces) >> learnListed spaces
-  pure result
+  ticket <- atomicHeld (\h -> let (t, after) = newAsk h.heldListAsks in (h {heldListAsks = after}, t))
+  send endpoints.spaces.list >>= \case
+    Left e -> pure (Left e)
+    Right spaces ->
+      learnListed ticket spaces >>= \case
+        True -> storeAnswer PlainRead before (withSpaces spaces) $> Right spaces
+        False -> Right . fromMaybe spaces . (\h -> h.heldListed) <$> readHeld
 
 -- | What the tab does with a list of spaces read from the server. It is
 -- the last list known ('heldListed'), which outlives a write that empties
@@ -1991,23 +2020,31 @@ fetchSpaces = do
 -- readers, its attachments' object URLs. A space plain now no longer
 -- has its pages taken for encrypted ones ('heldWasSealed'). A gate the
 -- list no longer names is no longer confirmed.
-learnListed :: (MonadIO m) => [Space] -> HttpWiki m ()
-learnListed spaces = do
+--
+-- Only for the answer to the read with this ticket, if no read asked for
+-- later was answered first ('heldListAsks'): an older list answered late
+-- changes nothing, lets go of nothing, and says whether it was taken.
+learnListed :: (MonadIO m) => Ask -> [Space] -> HttpWiki m Bool
+learnListed ticket spaces = do
   let named = Set.fromList [s.id | s <- spaces]
       plain = Set.fromList [s.id | s <- spaces, isNothing s.encryption]
       gone sid = Set.member sid plain || Set.notMember sid named
-  dropped <- atomicHeld $ \h ->
-    let (h', dropped) = dropSpaces gone h
-        (wasSealed, kept') = Map.partition (\(sid, _) -> Set.member sid plain) h'.heldPages
-     in ( h'
-            { heldPages = kept'
-            , heldWasSealed = Set.union (Map.keysSet wasSealed) h'.heldWasSealed
-            , heldConfirmed = Set.filter (`Set.member` named) h'.heldConfirmed
-            , heldListed = Just spaces
-            }
-        , dropped
-        )
-  liftIO (letGo dropped)
+  taken <- atomicHeld $ \h -> case takes ticket h.heldListAsks of
+    Nothing -> (h, Nothing)
+    Just after ->
+      let (h', dropped) = dropSpaces gone h
+          (wasSealed, kept') = Map.partition (\(sid, _) -> Set.member sid plain) h'.heldPages
+       in ( h'
+              { heldPages = kept'
+              , heldWasSealed = Set.union (Map.keysSet wasSealed) h'.heldWasSealed
+              , heldConfirmed = Set.filter (`Set.member` named) h'.heldConfirmed
+              , heldListed = Just spaces
+              , heldListAsks = after
+              }
+          , Just dropped
+          )
+  for_ taken (liftIO . letGo)
+  pure (isJust taken)
 
 -- | The front page's space, given its record: known plain, at the top,
 -- behind no gate ('heldHome'). 'Nothing' for a record that does not say
@@ -2021,9 +2058,9 @@ homeSpaceOf home = guard (isNothing home.encryption && isNothing home.parent) $>
 -- read) does not depend on whether a write came between.
 knownSpaces :: (MonadIO m) => HttpWiki m (Maybe [Space])
 knownSpaces =
-  (\c -> c.spaces) <$> readCache >>= \case
+  (\h -> h.heldListed) <$> readHeld >>= \case
     Just spaces -> pure (Just spaces)
-    Nothing -> (\h -> h.heldListed) <$> readHeld
+    Nothing -> (\c -> c.spaces) <$> readCache
 
 -- | Whether a space is behind a gate, in the list given, that the reader
 -- has not confirmed in this tab ('heldConfirmed'): the one rule every
@@ -2126,7 +2163,7 @@ encryptedOr sid plain sealed = do
 -- teaches otherwise ('send', 'Stale').
 heldSealedOr :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError a) -> (KeyId -> HttpWiki m (Either WikiError a)) -> HttpWiki m (Either WikiError a)
 heldSealedOr sid plain sealed =
-  (\c -> c.spaces) <$> readCache >>= \case
+  cachedSpaces >>= \case
     Just spaces -> maybe plain sealed (encryptionIn sid spaces)
     Nothing -> do
       h <- readHeld
