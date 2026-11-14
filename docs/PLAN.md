@@ -1877,18 +1877,6 @@ which the wiki pins since #227.
   Shell, Tasks, Spaces, Slides, Search and Notifications move (about
   70 examples), and AGENTS.md's gate names the native suite. Until
   then nothing moves.
-- **WP5.109 A resource made on a worker and kept a step later (found
-  by #268).** #268 fixed the owners of addresses and the embedded
-  deck's watch: a view's program made a resource through `lift` or
-  `liftIO` (which run on a worker thread) and wrote it into its state
-  in the next step, so a view closed between the two left it behind.
-  The same shape is still in `Preview.startWatch` (`watchFits` makes
-  the callback and the measuring, the `modify` after keeps them), and
-  nobody has read the other views for it: every callback
-  (`mkSyncCallback`), observer, listener and timer a view keeps in its
-  state to stop in `Finalize`. Read them all, make each in the step
-  that keeps it (`H.liftEffect`), and say the rule in AGENTS.md's
-  conventions.
 - **WP5.95 No view takes an older answer over a newer one (found by
   Codex on #243, rounds 12 and 13; left there on purpose).** The page view
   drops a fetched page older than the one it shows (`takesPage`, by
@@ -2969,6 +2957,39 @@ needs. Each was true when its package merged; check before relying on one.
   (38 pairs of an action and a read that does not wait, 3 fixed, #268)
   and the server's, the passkeys' and the shared modules (218
   actions, 7 such pairs, 1 fixed, #270).
+- **A view's resources and its late writes, after #275 and #276
+  (WP5.109).** Every component was read for the two rules now in
+  AGENTS.md's conventions: a resource a `Finalize` releases is made
+  through `H.liftEffect` and kept by the `modify` after it; a write
+  that cannot be taken back (the address, CodeMirror, a request sent)
+  is decided in the step that makes it. Fixed: the preview's measuring
+  of slides left by an editor closed as it opened; the embedded deck's
+  watch, one more left running at each change of reader (nine after
+  four); the avatar's cropper put into a panel that had left the page;
+  the slide, the editor's "Back to the page" and the shell's
+  corrections writing the address a step late, which undid a Back or a
+  link followed in that instant, and the same in the users' list and
+  the help; the assistant's Send, sent twice for two clicks at once;
+  the sign-in's password key, left in the page when its control went
+  during the vault's read; a passkey made as the account's panel
+  closed, now registered by the panel's finalizer. With the last, the
+  server's rule changed: a passkey's waiting challenge is used up only
+  by the answer to it (`takeCeremony` takes the challenge the response
+  names), for making a passkey, unlocking the vault and the sign-in's
+  second step; before, any answer of the session used it up, and two
+  tabs at once refused each other. A guard added for the first rule
+  must itself be one step: #275's first form of the deck's guard
+  waited inside it and left the deck unread after a change of reader,
+  which CI caught. Read and sound: the shell forgetting every user's
+  keys cannot take the keys of someone signing in meanwhile (the
+  store's generation is checked inside the deleting transaction).
+  Left: a vault step cut off by its view's close still leaves the keys
+  it holds then (`withKey` is not safe against the cancel; WP5.74b1);
+  a passkey whose panel closed while the authenticator was still
+  making it, or whose registration gave way to a newer one, stays on
+  the device unknown to the wiki; the windows of the address writes in
+  the editor and the shell cannot be forced and have no example of
+  their own.
 - **The editor is usable before it knows who else edits (found by
   #277).** When a reader clicks Edit on a page that shows "Ada is
   editing", the page view unwatches the page (its last watcher, so the
