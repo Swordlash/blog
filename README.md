@@ -3050,8 +3050,8 @@ the store complete can wait for that with `sh toolchain/bootstrap.sh warm`.
 base branch, and every push to `main`, in parallel after a first job, `plan` (below): `native` (build and
 test natively), `wasm` (build for wasm, run the wasm test suites, the browser suite in
 headless Chromium among them, and keep the built page as the run's `app` artifact),
-`smoke` (build the same page and run the smoke suites in headless Chromium, side by
-side) and `format` (`npm run format-check`).
+`smoke` (build the same page and run the smoke suites in headless Chromium, one
+after another) and `format` (`npm run format-check`).
 
 The smoke suites have a job of their own so that the run ends when the native jobs do
 (WP5.110 of `docs/PLAN.md`): after the wasm suites, in the wasm job, they made it 24
@@ -3062,7 +3062,8 @@ storage refused uploads while the repository is private, and waiting for `wasm`'
 build would add its time to the run's. `wasm` builds the smoke suites' programs after
 its tests, so that the build directories it saves carry them for the next run's
 `smoke`. Both run on the runner `plan` picks for wasm (below), and on the owner's
-machine one after the other.
+machine one after the other. `wasm` takes 11 to 15 minutes and sets the run's length;
+`smoke` about 9 to 11.
 
 Each wasm suite and each smoke suite is timed against a budget
 (`toolchain/ci-suite-time.sh`): the run's summary lists each suite's wall time, its
@@ -3070,9 +3071,10 @@ budget and its five slowest examples, from hspec's `--print-slow-items`, and a s
 that takes longer than its budget on GitHub's hosted runners is named in a warning
 with that list. The budgets are in the script, each with the measure it was set
 from; one suite's time growing by half in a day is what they are there to catch.
-Until they are set from hosted runs they warn only; the script's one switch,
-`budgets_fail`, then makes a suite over its budget fail its job. On the owner's
-machine the times are reported only. `wiki-core-test` runs a quarter of its
+They were set from the hosted runs of 2026-11-14, about one and a half times the
+longest time seen, and they warn only: the script's one switch, `budgets_fail`,
+makes a suite over its budget fail its job, and turning it on is the owner's to
+say. On the owner's machine the times are reported only. `wiki-core-test` runs a quarter of its
 properties' cases on wasm (`wiki-core/test/Test/Cases.hs`): the native jobs search
 the inputs at the full count, and the wasm run checks that the wasm build agrees.
 
@@ -3412,7 +3414,7 @@ npm run build-wasm-opt          # the same with every package at -O2 (cabal-wasm
 npm run serve-wasm              # build-wasm, then serve it on http://127.0.0.1:8080
 npm run test-wasm               # the test suites on wasm, under Node; wiki-app-browser-test in Chromium
 npm run test                    # test-native, then test-wasm
-npm run smoke-test              # the built page in headless Chromium, the suites side by side: the demo (wiki-smoke-demo: every prerendered route, a walk with back, forward and reload, dark and phone), passkeys (wiki-smoke-passkeys), and the server's build against a real wiki-server (wiki-smoke-server, on SQLite and on PostgreSQL)
+npm run smoke-test              # the built page in headless Chromium, the suites one after another (WIKI_SMOKE_JOBS=n: n side by side): the demo (wiki-smoke-demo: every prerendered route, a walk with back, forward and reload, dark and phone), passkeys (wiki-smoke-passkeys), and the server's build against a real wiki-server (wiki-smoke-server, on SQLite and on PostgreSQL)
 npm run screenshots             # the README's screenshots, from the built demo in headless Chromium, into docs/screenshots
 npm run smoke-waits             # that the Haskell smoke suites' waits hold on the built demo (wiki-smoke-waits)
 npm run dev-test                # wiki-app-browser-test in browser GHCi, rerun on save (needs ghciwatch)
@@ -3563,12 +3565,15 @@ page's Halogen program says it is idle. Each suite runs with
 `toolchain/ci-postgres.sh` prints them), and says it did not run it
 otherwise; `WIKI_SMOKE_EXTRA` names more suites to run with them (CI gives
 `waits screenshots`). It builds every suite's program, `wiki-server` and
-`wiki-app-prerender` in one run of cabal, then runs the built programs side
-by side (`WIKI_SMOKE_PROGRAM` of `smoke-suite.sh`, which runs a built program
-from `wiki-smoke/` as cabal would), since cabal must not run twice at once in
-one build directory. Each suite's output goes to a log of its own, printed
-when the suite ends, and the command fails if any suite failed or gave no
-status. Through `smoke-suite.sh` a suite needs its builds and fails
+`wiki-app-prerender` in one run of cabal, then runs the built programs one
+after another (`WIKI_SMOKE_PROGRAM` of `smoke-suite.sh`, which runs a built
+program from `wiki-smoke/` as cabal would), and fails if any suite failed.
+`WIKI_SMOKE_JOBS=<n>` runs up to n suites side by side instead, each its
+output in a log of its own printed when it ends: quicker on a machine with
+cores to spare, but each suite then runs slower, which on four cores made it
+about twice as slow and let two races a suite did not wait for fail CI's
+runs by chance (2026-11-14). In a row is the default, and CI's: races are
+looked for on purpose, with the processor throttled (below). Through `smoke-suite.sh` a suite needs its builds and fails
 without them; under a plain `cabal test` it is one pending example instead
 (`WIKI_SMOKE_REQUIRED=1` makes it fail). The demo is
 `dist-newstyle/wasm/public/app` or `WIKI_DEMO_DIR`; the server's suites take
@@ -3583,9 +3588,8 @@ processor slowed down by that factor), `HALOGEN_PLAYWRIGHT_ARTIFACTS` (where
 a failing example's screenshot goes), `HALOGEN_PLAYWRIGHT_CONSOLE=1` (the
 pages' console as it comes) and `HALOGEN_PLAYWRIGHT_HEADED=1`. CI runs
 `npm run smoke-test` in its job `smoke`, with `waits` and `screenshots`
-beside, each call's limit 60 seconds (side by side a suite took up to twice
-as long as alone), and its weekly job `smoke-throttled` runs `demo`,
-`passkeys` and `server`, one after another, with
+first, one after another, and its weekly job `smoke-throttled` runs `demo`,
+`passkeys` and `server`, one after another too, with
 `HALOGEN_PLAYWRIGHT_THROTTLE=4`, to find on purpose a test that passes only
 because the page is quick enough.
 
@@ -3614,7 +3618,7 @@ test waits for is `liftIO (threadDelay n)` (`Wiki.App.View.Common`).
 What stays in node is what tests or serves JavaScript without a browser,
 and one tool: `toolchain/test-assistant.mjs` (the writing assistant's
 providers over the real SDKs) and `toolchain/test-tikz-letters.mjs`, which
-`npm run smoke-test` runs through `toolchain/run-smoke-tests.mjs` beside the
+`npm run smoke-test` runs through `toolchain/run-smoke-tests.mjs` after the
 suites; `toolchain/deploy-server.mjs`, the deploy's static server, which
 `toolchain/test-deploy-server.mjs` tests over HTTP alone (from
 `toolchain/test-deploy-local.sh`); `toolchain/compress.mjs`, the deploy's

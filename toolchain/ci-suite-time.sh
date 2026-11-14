@@ -29,10 +29,11 @@
 set -eu
 
 # Whether a suite over its budget on a hosted runner fails its job (true)
-# or is only named in a warning (false). False since 2026-11-14: the
-# budgets below are estimates until they are set from hosted runs, and a
-# budget the runners' spread can cross would make a failure of chance.
-# Turned to true once they are (WP5.110 of docs/PLAN.md).
+# or is only named in a warning (false). False since 2026-11-14. Whether a
+# budget fails a job is the owner's to say. Turning it on needs his word,
+# and before it a few hosted runs whose every suite stayed under its
+# budget below, so that the runners' spread alone never crosses one: a
+# budget a slow runner can cross would make a failure of chance.
 budgets_fail=false
 budgets_fail=${WIKI_SUITE_BUDGETS_FAIL:-$budgets_fail}
 
@@ -45,33 +46,30 @@ shift
 # without one.
 budget_of() {
   case $1 in
-    # Set on 2026-11-14 (WP5.110), to be set again from the first hosted
-    # run that has them, which measures each suite as CI runs it.
+    # Set on 2026-11-14 from the hosted runs after WP5.110 (#274):
+    # about one and a half times the longest time seen, rounded up.
     #
-    # wiki-core-test on wasm, under Node, beside the browser suite: 790 s
-    # on 2026-11-13 (run 43504709479) before WP5.110 cut its cases on wasm;
-    # after the cut and WP5.108 (#273), 111 s alone on a quiet machine, so
-    # about 120 to 200 s expected on a hosted runner beside the browser
-    # suite. The 265 s that one day added would cross the budget.
-    wiki-core-test) echo 420 ;;
-    # wiki-api-test on wasm: 2.3 to 2.8 s from 2026-11-11 to 13.
-    wiki-api-test) echo 60 ;;
-    # The browser suite, its two shards side by side: 352 and 378 s on
-    # 2026-11-13 (run 43504709479), 183 and 162 s two days before.
-    wiki-app-browser-test) echo 600 ;;
-    # The smoke suites, side by side in the smoke job. One after another
-    # on 2026-11-13 (run 43504709479) they took: waits 17 s, screenshots
-    # 10 s, demo 106 s, passkeys 5 s, the server 109 s on SQLite and 114 s
-    # on PostgreSQL. Side by side on four cores of a loaded machine, where
-    # one after another the demo took 161 s and the server 189 s: waits 35
-    # s, screenshots 48 s, demo 352 s, passkeys 40 s, the server 373 s and
-    # 388 s.
-    smoke-waits) echo 120 ;;
-    smoke-screenshots) echo 120 ;;
-    smoke-demo) echo 420 ;;
-    smoke-passkeys) echo 120 ;;
-    smoke-server) echo 420 ;;
-    smoke-server-postgres) echo 420 ;;
+    # wiki-core-test on wasm, under Node, beside the browser suite: 139,
+    # 156, 180, 195 and 248 s in the six hosted runs of 2026-11-14 00:08
+    # to 03:10 UTC (790 s on 2026-11-13, before WP5.110 cut its cases on
+    # wasm). 1.5 x 248 = 372.
+    wiki-core-test) echo 400 ;;
+    # wiki-api-test on wasm: 2 to 4 s in those runs. 1.5 x 4 = 6.
+    wiki-api-test) echo 10 ;;
+    # The browser suite, its two shards side by side: 277, 344, 363, 402
+    # and 426 s in those runs. 1.5 x 426 = 639.
+    wiki-app-browser-test) echo 650 ;;
+    # The smoke suites, one after another in the smoke job. The hosted
+    # runs above ran them side by side, each about twice as slow, so the
+    # base is the last run in a row, 2026-11-13 (run 43504709479): waits
+    # 17 s, screenshots 10 s, demo 106 s, passkeys 5 s, the server 109 s
+    # on SQLite and 114 s on PostgreSQL.
+    smoke-waits) echo 30 ;;
+    smoke-screenshots) echo 20 ;;
+    smoke-demo) echo 160 ;;
+    smoke-passkeys) echo 10 ;;
+    smoke-server) echo 170 ;;
+    smoke-server-postgres) echo 180 ;;
     *) echo "" ;;
   esac
 }

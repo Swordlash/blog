@@ -678,6 +678,12 @@ jobs:
       if: matrix.group == 'deploy'
       run: sh toolchain/test-ci-suite-time.sh
 
+    # The smoke test's running of its suites, in a row and side by side,
+    # against fake suites: a few seconds.
+    - name: Test smoke-test.sh
+      if: matrix.group == 'deploy'
+      run: sh toolchain/test-smoke-test.sh
+
     # The browser suite's kept bundle (wiki-app/test/web/bundle.sh), against
     # a fake islands bundle: reused while its inputs are unchanged, built
     # again when one changes, and never reused half built. A few seconds.
@@ -811,6 +817,8 @@ jobs:
   # The smoke suites have a job of their own beside this one, rather than
   # steps after its tests (WP5.110 of docs/PLAN.md, 2026-11-14): after the
   # tests they made this job 24 to 27 minutes long, and the run with it.
+  # Beside it they take 9 to 11 minutes one after another, and this job,
+  # 11 to 15, sets the run's length.
   # Each job builds the page from the same restored caches, about three and
   # a half minutes on a hosted runner; the build is not handed from one job
   # to the other as an artifact, since the account's artifact storage quota
@@ -1158,29 +1166,32 @@ jobs:
     # dist-newstyle/native-fast, that drive the demo just built in Chromium
     # through haskell-halogen-playwright, which waits after every action
     # until the page's program says it is idle. toolchain/smoke-test.sh
-    # builds them all at once, then runs them side by side: the waits'
+    # builds them all at once, then runs them one after another: the waits'
     # check on the wiki's own pages, the README's screenshots (into a
     # directory of the runner's, not docs/screenshots, each checked to be
     # under 300 KB), the demo's (wiki-smoke-demo), the passkeys'
     # (wiki-smoke-passkeys), and the server's build against a real
     # wiki-server (wiki-smoke-server) on SQLite and on the PostgreSQL
-    # started above; and beside them the node programs that test
-    # JavaScript modules without a browser. Each suite's log is printed when
-    # it ends, a failing one outside a group, and each is timed against its
-    # budget (toolchain/ci-suite-time.sh). The suites require the build
+    # started above; then the node programs that test JavaScript modules
+    # without a browser. Each suite is timed against its budget
+    # (toolchain/ci-suite-time.sh). The suites require the build
     # (toolchain/smoke-suite.sh), so a missing demo fails rather than passes
-    # as pending. Side by side on four cores each suite took up to twice
-    # as long as alone (2026-11-14), so each call of the driver may take
-    # twice the plain 30 seconds.
+    # as pending.
+    #
+    # In a row, not side by side (WIKI_SMOKE_JOBS, unset here): side by side
+    # on four cores each suite ran about twice as slow, the job was no
+    # shorter than wasm either way, and in six runs (2026-11-14) two races
+    # a suite did not wait for failed it by chance. Such races are looked
+    # for on purpose, by smoke-throttled (decision 81 of docs/PLAN.md). Each
+    # call of the driver has its plain limit, 30 seconds.
     - name: Smoke-test the page in a browser
       if: github.job == 'smoke'
       env:
         WIKI_SMOKE_EXTRA: waits screenshots
         WIKI_SCREENSHOTS_DIR: ${{ runner.temp }}/screenshots
         WIKI_SUITE_TIMES: '1'
-        HALOGEN_PLAYWRIGHT_TIMEOUT: '60000'
       run: |
-        echo "### The smoke suites, side by side on $(nproc) cores: wall time, budget, slowest examples" >> "$GITHUB_STEP_SUMMARY"
+        echo "### The smoke suites, one after another on $(nproc) cores: wall time, budget, slowest examples" >> "$GITHUB_STEP_SUMMARY"
         npm run smoke-test
 
     - name: Stop PostgreSQL
@@ -1233,7 +1244,7 @@ jobs:
         if-no-files-found: error
         retention-days: 3
 
-  # The smoke suites, side by side, on the page this job builds itself, on
+  # The smoke suites, one after another, on the page this job builds itself, on
   # the runner plan picked for wasm (see the top and the wasm job). It runs
   # the wasm job's steps (the anchor wasm-steps): the steps for the smoke
   # suites only here (github.job is smoke). It restores the caches the wasm
@@ -1299,7 +1310,10 @@ jobs:
   # request's run tested the tree, and a throttled run for every merge would
   # then build the page again for a check whose purpose is a regular search,
   # which the weekly run makes. A failure fails the run it is in; deploy does
-  # not wait for it.
+  # not wait for it. Its suites run one after another too: the throttle
+  # slows every page by the same factor, run after run, so a race it finds
+  # is found again; suites side by side slow each other by whatever the
+  # others do at that moment, and a race found so is found by chance.
   smoke-throttled:
     needs: [plan, wasm, smoke]
     if: >-
