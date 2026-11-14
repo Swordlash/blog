@@ -64,13 +64,13 @@ import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
 import System.Timeout (timeout)
-import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, offline, release, serveDemo, serverStarts, startServer, startServerOver, startServerThrough, tellServer)
+import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, offline, release, said, serveDemo, serverStarts, startServer, startServerOver, startServerThrough, tellServer)
 import Test.Browser.Mount (clickButton)
 import Test.Browser.Text (editorText)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (EncryptedApi (..), SpacesApi (..), WikiApi (..))
-import Wiki.Api.Events (PageEvent (..), ServerMessage (..))
+import Wiki.Api.Events (ClientMessage (Subscribe), PageEvent (..), ServerMessage (..))
 import Wiki.Api.Notifications (Notifications (..))
 import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Stars (StarredPage (..))
@@ -655,6 +655,9 @@ spec m = do
     void (ok =<< run other (openThread made.id Nothing "Written in another tab."))
     let event = Event made.id ThreadsChanged
     decodeUtf8 (toS (encode event)) `shouldSatisfy` (not . T.isInfixOf "Written")
+    -- Told once the page has subscribed: before, its socket may not be
+    -- open, and the event would reach nothing.
+    eventually ((Subscribe made.id `elem`) <$> said `shouldReturn` True)
     tellServer event
     eventually (find ui ".page-comments" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Written in another tab."))
     unmount ui
