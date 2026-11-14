@@ -330,6 +330,7 @@ test-suite wiki-app-test
         Test.Backend.Http
         Test.Backend.Opaque
         Test.Bell
+        Test.BellDom
         Test.Opaque
         Test.Browser.Opaque
         Test.Backend.Mem
@@ -375,12 +376,16 @@ test-suite wiki-app-test
         http-media,
         http-types,
         opaque-hs,
+        primitive,
         protolude,
+        row-types,
         servant,
         servant-client-core,
         servant-multipart-api,
+        stm,
         text,
         time,
+        transformers,
         unliftio-core,
         haskell-halogen-core,
         haskell-halogen-net,

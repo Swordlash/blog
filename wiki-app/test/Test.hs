@@ -6,6 +6,7 @@ import Test.Backend.Http qualified as Http
 import Test.Backend.Mem qualified as Mem
 import Test.Backend.Persist qualified as Persist
 import Test.Bell qualified as Bell
+import Test.BellDom qualified as BellDom
 import Test.Blog qualified as Blog
 import Test.DecryptedExport qualified as DecryptedExport
 import Test.Demo qualified as Demo
@@ -73,4 +74,5 @@ main = do
       Readme.spec
     around_ (holding maxBound) $ do
       Hydrate.storageSpec
+      BellDom.spec
       Assistant.spec
