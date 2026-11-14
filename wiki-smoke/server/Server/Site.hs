@@ -246,6 +246,12 @@ data Loaded = Loaded
 -- ('framesFitted': the frame's document loading, not the program).
 loadAdopted :: Smoke -> Loads -> Page -> Text -> IO Loaded
 loadAdopted smoke loads page path = do
+  -- What the program asks is kept from here. The document before may
+  -- still be asking (what its program does after the API opened, a viewer
+  -- reading a presentation): it ends at a navigation, and its requests
+  -- reach their route before the driver's answer to it. So the page is
+  -- taken to a blank document first, before what is asked is cleared.
+  goto page "about:blank"
   rearm loads.program
   atomically $ do
     writeTVar loads.apiOpen False
