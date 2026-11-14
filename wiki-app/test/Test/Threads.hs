@@ -79,6 +79,10 @@
 -- * a comment shown is on the server, unless a message the channel has
 --   still to deliver removes it;
 -- * a failed read is shown only where no threads are;
+-- * a write's answer empties the form it came from (or shows why it
+--   failed), and, for a thread opened about a quote, stops the quoting and
+--   chooses the thread, once, on the visit of the page it was sent on, and
+--   does none of these on another visit, of the same page or another;
 -- * nothing is asked after the view went away;
 -- * after a read whose answer the view needed failed, with threads shown,
 --   the view says its threads are behind, until a read's or a
@@ -305,8 +309,8 @@ shrinkRun = shrinkList $ \case
   _ -> []
 
 -- | An ask the view made: a read under its ticket, or a write under its
--- number.
-data Asked = ARead Ask PageId | AWrite Int PageId Request
+-- number, with the visit it was sent on.
+data Asked = ARead Ask PageId | AWrite Int PageId Request Int
   deriving stock (Show)
 
 -- | An ask out, and its answer once handled.
@@ -333,6 +337,11 @@ data World = World
   , faults :: [(Rule, Text)]
   , seen :: Map CommentId (Text, PageId)
   , owed :: Bool
+  , visit :: Int
+  -- ^ How many times the view went to another page: the visit shown.
+  , asksOfView :: [ViewAsk]
+  -- ^ What the page view was asked to do on the comments' view and its
+  -- page for writes' answers, the oldest first.
   -- ^ Whether a read of the threads shown whose answer the view needed
   -- failed, with no read's or subscription's answer taken since: the view
   -- must say its threads are behind.
@@ -346,7 +355,7 @@ startOver :: Maybe Stored -> World
 startOver cache =
   checked Nothing . fromTheCache $
     let (view, fx) = step (Fetched pageA True False) (initial (Just pageA) True False Nothing)
-        w0 = World {view, server = emptyServer {watched = Just pageA, untold = [MReplaced pageA []]}, outs = [], shownPage = pageA, finished = False, tabCache = cache, trace = [], faults = [], seen = mempty, owed = False}
+        w0 = World {view, server = emptyServer {watched = Just pageA, untold = [MReplaced pageA []]}, outs = [], shownPage = pageA, finished = False, tabCache = cache, trace = [], faults = [], seen = mempty, owed = False, visit = 0, asksOfView = []}
      in effected "mounted on page A" fx w0
 
 start, startCached :: World
@@ -372,7 +381,7 @@ effected what fx w =
     outsMade = mapMaybe outOf fx
     outOf = \case
       Load t p -> Just (show (t, p), readOut t p)
-      Send () n p r -> Just ("write " <> show n, Out {asked = AWrite n p r, answer = Nothing, sent = Nothing})
+      Send () n p r -> Just ("write " <> show n, Out {asked = AWrite n p r w.visit, answer = Nothing, sent = Nothing})
       Changed -> Nothing
     readOut t p = case w.tabCache of
       Just c | Just cached <- Map.lookup p c.cache.threads -> Out {asked = ARead t p, answer = Just (Left <$> cached), sent = Nothing}
@@ -439,7 +448,7 @@ play w = \case
             -- The page view stops watching the old page and watches the new
             -- one: the server answers the new subscription after what it
             -- had queued.
-            w' = event "goes to the other page" Left' (changing (forgetThreads w.shownPage) w {shownPage = next, owed = False})
+            w' = event "goes to the other page" Left' (changing (forgetThreads w.shownPage) w {shownPage = next, owed = False, visit = w.visit + 1})
             w'' = w' {server = w'.server {watched = Just next, untold = w'.server.untold <> [MReplaced next (threadsOn next w'.server)]}}
          in event ("shows " <> show next) (Fetched next True False) w''
   PageAgain
@@ -476,7 +485,7 @@ handleAt i w = case atMay [k | (k, o) <- zip [0 :: Int ..] w.outs, isNothing o.a
     | Just o <- atMay w.outs k ->
         let (server, answer) = case o.asked of
               ARead _ p -> (w.server, Right (Left (threadsOn p w.server)))
-              AWrite _ p r -> second (fmap Right) (handleWrite "reader" p r w.server)
+              AWrite _ p r _ -> second (fmap Right) (handleWrite "reader" p r w.server)
          in noted ("the server handles " <> show o.asked) w {server, outs = [if j == k then x {answer = Just answer} else x | (j, x) <- zip [0 ..] w.outs]}
   _ -> w
 
@@ -495,13 +504,43 @@ deliver k w = case atMay w.outs k of
           (ARead t p, Right (Right _)) -> event "a read" (Loaded t p (Right [])) w'
           -- The backend applies the write's answer to its cache, then the
           -- page view takes it.
-          (AWrite n p r, Right (Right e)) ->
+          (AWrite n p r v, Right (Right e)) ->
             let e' = answerOf r e
-             in event ("the answer to write " <> show n <> ": " <> show e') (Wrote n (Right e')) (changing (afterComment p) w')
+             in answeredOnce v (Right e') w' (shell (Right e') (event ("the answer to write " <> show n <> ": " <> show e') (Wrote n (Right e')) (changing (afterComment p) w')))
           -- A write is never answered with a list.
-          (AWrite _ _ _, Right (Left _)) -> w'
-          (AWrite n p _, Left e) -> event ("write " <> show n <> " refused: " <> show e) (Wrote n (Left e)) (changing (afterComment p) w')
+          (AWrite {}, Right (Left _)) -> w'
+          (AWrite n p _ v, Left e) -> answeredOnce v (Left e) w' (shell (Left e) (event ("write " <> show n <> " refused: " <> show e) (Wrote n (Left e)) (changing (afterComment p) w')))
   _ -> w
+
+-- | 'ViewAsk' is what a write's answer asks of the page view beside its
+-- threads: tell the comments view that asked (its form emptied, or the
+-- reason shown), and, for a thread opened about a quote, stop quoting and
+-- choose the thread.
+data ViewAsk = TellForm | ChooseOpened
+  deriving stock (Eq, Ord, Show)
+
+-- | The page view's handler of a write's answer, as "Wiki.App.View.Page"
+-- has it: after the machine's step, the comments view is told, and a
+-- thread opened about a quote is chosen.
+shell :: Either WikiError PageEvent -> World -> World
+shell answer w = w {asksOfView = w.asksOfView <> [TellForm] <> [ChooseOpened | opensInline answer]}
+
+opensInline :: Either WikiError PageEvent -> Bool
+opensInline = \case
+  Right (ThreadOpened t) -> isJust t.anchor
+  _ -> False
+
+-- | The world checked against the rule that a write's answer asks the
+-- view for its effects once on the visit it was sent on, and for none on
+-- another.
+answeredOnce :: Int -> Either WikiError PageEvent -> World -> World -> World
+answeredOnce sentOn answer was now
+  | now.finished = now
+  | sort made == sort wanted = now
+  | otherwise = now {faults = now.faults <> [(AnsweredOnce, "the answer to a write sent on visit " <> show sentOn <> ", taken on visit " <> show now.visit <> ", asked the view for " <> show made <> ", not " <> show wanted)]}
+  where
+    made = drop (length was.asksOfView) now.asksOfView
+    wanted = if sentOn == now.visit then TellForm : [ChooseOpened | opensInline answer] else []
 
 -- | Whether the answer to this read of this page is the view's to take: on
 -- the page shown, and no answer to a later read taken.
@@ -610,7 +649,7 @@ settles w0 =
 
 -- | 'Rule' is each rule a run is checked against, as the module's Haddock
 -- lists them.
-data Rule = OtherPage | Lost | Older | Ghost | FailureOverThreads | Unsaid | AfterClose
+data Rule = OtherPage | Lost | Older | Ghost | FailureOverThreads | Unsaid | AnsweredOnce | AfterClose
   deriving stock (Eq, Show, Enum, Bounded)
 
 ruleText :: Rule -> [Char]
@@ -620,6 +659,7 @@ ruleText = \case
   Older -> "shows no comment's text older than one it showed, on any run"
   Ghost -> "shows no comment the server deleted, on any run"
   Unsaid -> "says its threads are behind after a read it needed failed, until it takes another, on any run"
+  AnsweredOnce -> "carries out a write's answer in the comments view and the page once on the visit it was sent on, and never on another, on any run"
   FailureOverThreads -> "shows a failed read only where it shows no threads, on any run"
   AfterClose -> "asks nothing once it has gone away"
 
@@ -646,6 +686,11 @@ spec = describe "Wiki.App.View.Comments.Machine" $ modifyMaxSuccess (max cases) 
       -- someone else's comment was made, answered after the channel told
       -- of it (WP5.95's open case).
       [t | (Lost, t) <- (foldl' play w0 [Tell, PageAgain, Handle, Handle, OtherOpens True, Tell, Deliver 1]).faults] `shouldBe` []
+
+    it ("leaves a new visit's forms alone when a write sent on an earlier visit of the page is answered" <> how) $
+      -- Codex on #284: the reader writes on page A, goes to B and back to
+      -- A, and the old write's answer emptied the new visit's form.
+      [t | (AnsweredOnce, t) <- (foldl' play w0 [Handle, Tell, ReaderOpens False, Deliver 0, Navigate, Navigate, Handle, Deliver 0]).faults] `shouldBe` []
 
     it ("shows the server's threads once everything out has come back" <> how) $
       QC.property $
