@@ -165,7 +165,11 @@ step event m
               let f = m.fetched + 1
                in (m {watching = Nothing, fetched = f, fetches = Map.insert f m.generation m.fetches, pendingOwners = f : m.pendingOwners}, [Fetch f reading.link host])
             Shown _ -> (m {watching = Nothing}, [])
-      Fetched f answer -> settled f True m {fetches = Map.delete f m.fetches, loaded = maybe Link (uncurry Ready) answer}
+      -- An answer read for an earlier reading is not shown, and its
+      -- addresses are let go.
+      Fetched f answer
+        | Map.lookup f m.fetches == Just m.generation -> settled f True m {fetches = Map.delete f m.fetches, loaded = maybe Link (uncurry Ready) answer}
+        | otherwise -> settled f False m {fetches = Map.delete f m.fetches}
       Go move -> (moved move m, [])
 
 -- | The link watched, for an embedded page.
