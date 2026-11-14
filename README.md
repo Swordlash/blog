@@ -3588,9 +3588,10 @@ the bell's spec, `Test.BellDom`, is the example to copy.
   `withHeldWaits`, for the real backend's answer at a moment the test
   chooses (`pending`, then `release` in any order).
 - The in-memory document is one for the process: a press on it reaches
-  every mounted view's listeners, and a router's address is the process's
-  one. So `withView` mounts one view at a time; the rest of the suite runs
-  beside it.
+  every mounted view's listeners. So `withView` mounts one view at a time;
+  the rest of the suite runs beside it. The address is the process's one
+  too, and the prerender's router (`Wiki.App.Static`) writes it beside
+  them: read where a view went from its router's `Router.changes`.
 
 A pause a test waits for is `H.delayCounted`, in seconds: a debounce, an
 autosave, a look again later. It counts as the program waiting, so a wait
@@ -3682,7 +3683,7 @@ to it. A failure is raised through `expectationFailure` (or
 every compiler: base's `fail` carries a call stack only from GHC 9.14. In
 the application, a pause that only takes a notice off the screen or ticks
 is `H.delay`, which `waitQuiet` does not wait for; one followed by work a
-test waits for is `liftIO (threadDelay n)` (`Wiki.App.View.Common`).
+test waits for is `H.delayCounted` (`Wiki.App.View.Common`).
 
 What stays in node is what tests or serves JavaScript without a browser,
 and one tool: `toolchain/test-assistant.mjs` (the writing assistant's

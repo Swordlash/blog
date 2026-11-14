@@ -3,7 +3,7 @@
 --
 -- * After typing in the editor, 'waitQuiet' returns once the preview,
 --   which follows the text after a pause in typing (a debounce, written
---   @liftIO (threadDelay n)@), shows what was typed.
+--   @H.delayCounted@), shows what was typed.
 -- * After a save, 'waitQuiet' returns once the save is done, with
 --   \"Saved\" still shown: the notice's timer is @H.delay@, which
 --   'waitQuiet' does not wait for.
