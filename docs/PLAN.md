@@ -1922,8 +1922,10 @@ WP5.92 and WP5.93 wait.
   close and choice reaching the machine), and then the browser
   examples it replaces cut (four of nine in `Test/Browser/Comments.hs`,
   two in `Test/Browser/Http.hs`, one shrunk to its wiring). (2) The
-  embedded deck
-  (`DeckViewer.hs`: the watch, the generation, the fetch); a day. (3)
+  embedded deck: the machine and its properties are merged (#287);
+  left: its in-memory DOM spec on the harness (first cases: a close
+  between the watch's making and its keeping, the channel made late)
+  and the cut of 5 of the 11 browser examples it replaces. (3)
   The sign-in's keys (`SignIn.hs`); two days. (4) The assistant's
   panel; two days. (5) The shell's world (the session, the spaces, the
   tree, the backlinks); three days. (6) The editor's publication and
@@ -3177,6 +3179,21 @@ needs. Each was true when its package merged; check before relying on one.
   `pages`). Nothing changed for the wiki's behaviour on wasm. The two
   things asked of the library on 2026-11-14 are on its master (its
   pull requests 119 and 120): WP5.117.
+- **The embedded presentation's viewer as a machine (#287, WP5.121's
+  second).** `View/DeckViewer/Machine.hs`; #275's three guards are
+  rules the properties check. `Context` has `sessionNumber`, raised by
+  the shell with every new session: a reader out and in again as the
+  same user is another session, and the viewer reads again (its
+  pictures' addresses were let go at the sign-out). Left and known.
+  (1) `SearchResults.hs` and `Preview.hs` still compare the session by
+  value; `Shell.sameUser` compares user ids, so the same user out and
+  in again in another tab between two loads of the world is not seen.
+  (2) A write by another person between the viewer's read of the page
+  and of the list shows the page as first read with links laid out
+  against the newer list, until the next reading. (3) Not in the
+  model: encrypted decks' sealed reads. (4) The embedded page is not
+  watched by the live channel: the viewer refreshes on a new reading
+  only, by design.
 - **The native harness and the pin at 1f68320 (#286, WP5.123).**
   `Test.Harness.MemDom` mounts a view on the in-memory DOM in a
   connected container, dispatches events that bubble, reads with
