@@ -139,6 +139,17 @@ spec = describe "Wiki.App.View.Bell, mounted on the in-memory DOM" $ do
       ui.settle
       isOpen view `shouldReturn` False
 
+  -- A reader's click on the bell's button is a press and then a click:
+  -- the press is inside, so the list is not closed by it and opened again
+  -- by the click.
+  it "closes its list on its own button once, without opening it again" $
+    withBell $ \rig ui view -> do
+      opened rig ui view
+      find view ".notifications-toggle" >>= traverse_ (\b -> N.dispatch "pointerdown" (object []) b >> clickAt b)
+      ui.settle
+      isOpen view `shouldReturn` False
+      textOf view ".notifications-toggle[aria-expanded=false] .notifications-bell" `shouldReturn` Just "🔔"
+
   it "closes its list on Escape pressed anywhere in the page, and not on another key" $
     withBell $ \rig ui view -> do
       opened rig ui view

@@ -2,10 +2,11 @@
 
 -- | The menus closing when the reader turns away from them
 -- ("Wiki.App.View.Popup"), in a browser, over the demo: the header's
--- Starred list, the bell and the demo's menu of users, the sidebar's space
--- switcher, and the editor's toolbar menus (the emoji's among them). Each closes on a press outside
--- it and on Escape, and its own button closes it once, without opening it
--- again. A click inside a menu leaves it open.
+-- Starred list and the demo's menu of users, the sidebar's space switcher,
+-- and the editor's toolbar menus (the emoji's among them). Each closes on
+-- a press outside it and on Escape, and its own button closes it once,
+-- without opening it again. A click inside a menu leaves it open. The
+-- bell's list does the same on the in-memory DOM ("Test.BellDom").
 module Test.Browser.Menus (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -31,9 +32,8 @@ data Menu = Menu
   , popup :: Text
   }
 
-starred, bell, users, switcher, box, html, colour, emoji :: Menu
+starred, users, switcher, box, html, colour, emoji :: Menu
 starred = Menu {toggle = ".starred-toggle", popup = ".starred-panel"}
-bell = Menu {toggle = ".notifications-toggle", popup = ".notifications-panel"}
 users = Menu {toggle = ".user-switcher-toggle", popup = ".user-menu"}
 switcher = Menu {toggle = ".space-switcher-toggle", popup = ".space-switcher-menu"}
 box = Menu {toggle = ".editor-toolbar button[aria-label='Box']", popup = ".box-menu"}
@@ -55,17 +55,6 @@ spec m = do
     -- A real click on the page, outside the list.
     find ui ".page-body h1" >>= click
     shut ui starred
-
-  it "closes the bell's list on a press outside, on Escape and on its button, and not on a click inside" $ runPage $ do
-    ui <- start m (Just "user-reader") hello
-    closesAway ui bell
-    opened ui bell
-    find ui ".notifications-panel h2" >>= click
-    stillOpen ui bell
-    -- Opening the Starred list is a press outside the bell's: one list
-    -- is open at a time.
-    opened ui starred
-    shut ui bell
 
   it "closes the demo's menu of users on a press outside, on Escape and on its button" $ runPage $ do
     ui <- start m (Just "user-reader") hello
