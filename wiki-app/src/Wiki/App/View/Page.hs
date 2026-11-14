@@ -965,9 +965,12 @@ component =
           case event of
             ThreadOpened t | isInline t -> modify (\st -> st {quoting = Nothing, focused = Just t.id})
             _ -> pass
+        -- The scrolls to a thread or its mark ('reveal') run on the loop, in
+        -- the step of the render that shows them ('H.liftEffect'), not on
+        -- a thread of their own after whatever ran meanwhile.
         CommentsView.Focus tid -> do
           modify (\st -> st {focused = Just tid})
-          reveal ("mark.comment-mark[data-thread=\"" <> tid.text <> "\"]")
+          H.liftEffect (reveal ("mark.comment-mark[data-thread=\"" <> tid.text <> "\"]"))
         CommentsView.StopQuoting -> modify (\st -> st {quoting = Nothing})
         CommentsView.Close -> modify (\st -> st {panelOpen = False, quoting = Nothing})
         CommentsView.Reload -> loadThreads
@@ -1015,12 +1018,12 @@ component =
           >>= traverse_
             ( \s -> do
                 modify (\st -> st {quoting = Just s.anchor, selected = Nothing, panelOpen = True, focused = Nothing})
-                reveal ".comments-panel .new-thread"
+                H.liftEffect (reveal ".comments-panel .new-thread")
             )
       ToggleComments -> modify (\st -> st {panelOpen = not st.panelOpen, quoting = if st.panelOpen then Nothing else st.quoting})
       ClickedQuote tid -> do
         modify (\st -> st {panelOpen = True, focused = Just tid})
-        reveal ("#" <> CommentsView.threadElementId tid)
+        H.liftEffect (reveal ("#" <> CommentsView.threadElementId tid))
       -- The shell reloads what it shows, including the page and its tree.
       -- With unsaved ticks, the page as it is now is shown here, with
       -- the ticks on it, or not shown, as after a save's conflict.
