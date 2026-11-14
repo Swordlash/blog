@@ -330,10 +330,9 @@ data Action
   | Retry
   | Finalize
   | FromComments CommentsView.Placement CommentsView.Output
-  | -- | An answer to a read of the threads, as the threads' machine takes it.
+  | -- | An answer to a read or a write of the threads, as the threads'
+    -- machine takes it.
     ThreadsHappened (Threads.Event CommentsView.Placement)
-  | -- | The answer to a write the comments view in this place asked for.
-    Written CommentsView.Placement PageId Threads.Request Int (Either WikiError PageEvent)
   | Heard Heard
   | Selecting
   | CommentOnSelection
@@ -982,14 +981,6 @@ component =
         CommentsView.Close -> modify (\st -> st {panelOpen = False, quoting = Nothing})
         CommentsView.Reload -> threadsStep Threads.Reload
       ThreadsHappened event -> threadsStep event
-      -- The machine takes the answer, then the comments view that asked is
-      -- told it; a thread opened about a quote is chosen.
-      Written placement page request n answer -> do
-        threadsStep (Threads.Wrote n answer)
-        void (H.tell "comments" placement (CommentsView.Answered page request (leftToMaybe answer)))
-        case answer of
-          Right (ThreadOpened t) | isInline t -> modify (\st -> st {quoting = Nothing, focused = Just t.id})
-          _ -> pass
       Heard heard -> do
         here <- gets (\st -> st.watching)
         encrypted <- gets (\st -> isJust st.input.space.encryption)
@@ -1153,7 +1144,9 @@ component =
       effects <- state (\st -> let (discussion, fx) = Threads.step event st.discussion in (fx, st {discussion}))
       for_ effects $ \case
         Threads.Load ticket page -> void . H.fork $ listThreads page >>= handleAction . ThreadsHappened . Threads.Loaded ticket page
-        Threads.Send placement n page request -> void . H.fork $ sendWrite page request >>= handleAction . Written placement page request n
+        Threads.Send placement n page request -> void . H.fork $ sendWrite page request >>= handleAction . ThreadsHappened . Threads.Wrote placement n request
+        Threads.Answered placement request failure -> void (H.tell "comments" placement (CommentsView.Answered request failure))
+        Threads.Opened tid -> modify (\st -> st {quoting = Nothing, focused = Just tid})
         Threads.Changed -> resolvePeople
 
     -- Look up the people the page and its comments mention, for the

@@ -123,8 +123,12 @@ data Output
     Reload
 
 -- | 'Query' is what the page view tells the comments view: the answer to
--- a write it asked for, for this page, and why it failed if it did.
-data Query a = Answered PageId Threads.Request (Maybe WikiError) a
+-- a write it asked for, and why it failed if it did. The threads' machine
+-- decides when ("Wiki.App.View.Comments.Machine"'s @Answered@): only on
+-- the visit of the page the write was sent on. The component no longer
+-- checks the page itself: a page's id cannot tell one visit of it from
+-- the next, which is how an answer emptied a new visit's draft.
+data Query a = Answered Threads.Request (Maybe WikiError) a
 
 -- | A deletion awaiting confirmation.
 data Deleting
@@ -450,17 +454,14 @@ component =
       CloseIt -> H.raise Close
       TryAgain -> H.raise Reload
 
-    -- A write's answer, for the page shown: the form it came from emptied,
-    -- or why it failed shown. An answer for a page shown before changes
-    -- nothing: its forms were emptied when the page changed.
+    -- A write's answer: the form it came from emptied, or why it failed
+    -- shown. The threads' machine tells it only on the visit of the page
+    -- the write was sent on.
     handleQuery :: Query a -> H.HalogenM State Action Slots Output m (Maybe a)
-    handleQuery (Answered page request failure next) = do
-      modify $ \st ->
-        if st.input.page /= page
-          then st
-          else case failure of
-            Just e -> st {problem = Just e}
-            Nothing -> emptied request st {problem = Nothing}
+    handleQuery (Answered request failure next) = do
+      modify $ \st -> case failure of
+        Just e -> st {problem = Just e}
+        Nothing -> emptied request st {problem = Nothing}
       pure (Just next)
 
     emptied :: Threads.Request -> State -> State

@@ -375,6 +375,7 @@ effected what fx w =
   noted (what <> (if null outsMade then "" else " -> " <> T.intercalate ", " (map fst outsMade))) $
     w
       { outs = w.outs <> map snd outsMade
+      , asksOfView = w.asksOfView <> [TellForm | Answered {} <- fx] <> [ChooseOpened | Opened _ <- fx]
       , faults = w.faults <> [(AfterClose, "asked after the view went away: " <> what) | w.finished, not (null outsMade)]
       }
   where
@@ -382,6 +383,8 @@ effected what fx w =
     outOf = \case
       Load t p -> Just (show (t, p), readOut t p)
       Send () n p r -> Just ("write " <> show n, Out {asked = AWrite n p r w.visit, answer = Nothing, sent = Nothing})
+      Answered {} -> Nothing
+      Opened _ -> Nothing
       Changed -> Nothing
     readOut t p = case w.tabCache of
       Just c | Just cached <- Map.lookup p c.cache.threads -> Out {asked = ARead t p, answer = Just (Left <$> cached), sent = Nothing}
@@ -506,10 +509,10 @@ deliver k w = case atMay w.outs k of
           -- page view takes it.
           (AWrite n p r v, Right (Right e)) ->
             let e' = answerOf r e
-             in answeredOnce v (Right e') w' (shell (Right e') (event ("the answer to write " <> show n <> ": " <> show e') (Wrote n (Right e')) (changing (afterComment p) w')))
+             in answeredOnce v (Right e') w' (event ("the answer to write " <> show n <> ": " <> show e') (Wrote () n r (Right e')) (changing (afterComment p) w'))
           -- A write is never answered with a list.
           (AWrite {}, Right (Left _)) -> w'
-          (AWrite n p _ v, Left e) -> answeredOnce v (Left e) w' (shell (Left e) (event ("write " <> show n <> " refused: " <> show e) (Wrote n (Left e)) (changing (afterComment p) w')))
+          (AWrite n p r v, Left e) -> answeredOnce v (Left e) w' (event ("write " <> show n <> " refused: " <> show e) (Wrote () n r (Left e)) (changing (afterComment p) w'))
   _ -> w
 
 -- | 'ViewAsk' is what a write's answer asks of the page view beside its
@@ -518,12 +521,6 @@ deliver k w = case atMay w.outs k of
 -- choose the thread.
 data ViewAsk = TellForm | ChooseOpened
   deriving stock (Eq, Ord, Show)
-
--- | The page view's handler of a write's answer, as "Wiki.App.View.Page"
--- has it: after the machine's step, the comments view is told, and a
--- thread opened about a quote is chosen.
-shell :: Either WikiError PageEvent -> World -> World
-shell answer w = w {asksOfView = w.asksOfView <> [TellForm] <> [ChooseOpened | opensInline answer]}
 
 opensInline :: Either WikiError PageEvent -> Bool
 opensInline = \case

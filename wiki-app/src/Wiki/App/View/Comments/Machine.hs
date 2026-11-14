@@ -42,7 +42,11 @@
 --   on. When the channel told of what it made or changed since it was
 --   sent, the threads have it already; otherwise it is applied only when
 --   the threads are as they were when it was sent, and a read asked after
---   it follows, which puts it in its place ('wrote').
+--   it follows, which puts it in its place ('wrote'). What the answer does
+--   beside the threads is asked by the machine too, and only then: the
+--   comments view that asked is told it ('Answered'), and a thread opened
+--   about a quote is chosen ('Opened'). The page view carries these out
+--   and decides nothing of its own after the wait.
 module Wiki.App.View.Comments.Machine
   ( Model (..)
   , Writing (..)
@@ -159,9 +163,10 @@ data Event a
     Loaded Ask PageId (Either WikiError [Thread])
   | -- | The reader asked for a write to this page's threads.
     Write a PageId Request
-  | -- | The answer to the write sent under this number: the event the
-    -- write made, or why it failed.
-    Wrote Int (Either WikiError PageEvent)
+  | -- | The answer to the write sent under this number, from the place
+    -- that asked for it ('Send' gives both): the event the write made, or
+    -- why it failed.
+    Wrote a Int Request (Either WikiError PageEvent)
   | -- | The live channel's event on a page.
     Heard PageId PageEvent
   | -- | The live channel's answer to the page's subscription: its threads
@@ -176,8 +181,16 @@ data Effect a
   = -- | Read the page's threads; the answer comes back as 'Loaded'.
     Load Ask PageId
   | -- | Send this write under this number. The answer comes back as
-    -- 'Wrote', and the page view tells it to the comments view that asked.
+    -- 'Wrote'.
     Send a Int PageId Request
+  | -- | Tell the comments view in this place the answer to the write it
+    -- asked for: its form emptied, or why the write failed shown. Asked
+    -- only on the visit of the page the write was sent on.
+    Answered a Request (Maybe WikiError)
+  | -- | The write opened this thread about a quote: stop quoting, and
+    -- choose the thread. Asked only on the visit of the page the write was
+    -- sent on.
+    Opened CommentThreadId
   | -- | The threads shown changed: look up the people they mention.
     Changed
   deriving stock (Eq, Show)
@@ -215,8 +228,14 @@ step event m
         let n = m.written + 1
             writing = Writing {page, told = [], quiet = True}
          in (m {written = n, writes = if m.page == Just page then Map.insert n writing m.writes else m.writes}, [Send place n page request])
-      Wrote n answer -> case Map.lookup n m.writes of
-        Just w | m.page == Just w.page -> wrote w answer m {writes = Map.delete n m.writes}
+      -- The answer of a write sent on another visit, of this page or
+      -- another, changes nothing and asks nothing: the forms it came from
+      -- were emptied when the page changed.
+      Wrote place n request answer -> case Map.lookup n m.writes of
+        Just w
+          | m.page == Just w.page ->
+              let (m', fx) = wrote w answer m {writes = Map.delete n m.writes}
+               in (m', fx <> [Answered place request (leftToMaybe answer)] <> [Opened t.id | Right (ThreadOpened t) <- [answer], isJust t.anchor])
         _ -> (m {writes = Map.delete n m.writes}, [])
       Heard page e
         | m.page /= Just page -> (m, [])
