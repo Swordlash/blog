@@ -330,8 +330,9 @@ shrinkRun = shrinkList $ \case
   _ -> []
 
 -- | An ask the view made: a read under its ticket, or a write under its
--- number, with the visit it was sent on and the comments view that sent it.
-data Asked = ARead Ask PageId | AWrite Int PageId Request Int Int
+-- number, with the visit it was sent on, the comments view that sent it,
+-- and the session of quoting it was written in.
+data Asked = ARead Ask PageId | AWrite Int PageId Request Int Int (Maybe Int)
   deriving stock (Show)
 
 -- | An ask out, and its answer once handled.
@@ -365,6 +366,11 @@ data World = World
   -- must say its threads are behind.
   , visit :: Int
   -- ^ How many times the view went to another page: the visit shown.
+  , session :: Maybe Int
+  -- ^ The session of quoting open: each time the reader comments on a
+  -- quote is another, the same quote too, until it is given up.
+  , sessions :: Int
+  -- ^ How many sessions of quoting were opened.
   , mounted :: Int
   -- ^ The comments view mounted now: a view mounted anew (the panel closed
   -- and opened again) is another.
@@ -384,7 +390,7 @@ startOver :: Maybe Stored -> World
 startOver cache =
   checked Nothing . fromTheCache $
     let (view, fx) = step (Fetched pageA True False) (initial (Just pageA) True False Nothing)
-        w0 = World {view, server = emptyServer {watched = Just pageA, untold = [MReplaced pageA []]}, outs = [], shownPage = pageA, finished = False, tabCache = cache, trace = [], faults = [], seen = mempty, owed = False, visit = 0, mounted = 0, asksOfView = [], waiting = False, held = []}
+        w0 = World {view, server = emptyServer {watched = Just pageA, untold = [MReplaced pageA []]}, outs = [], shownPage = pageA, finished = False, tabCache = cache, trace = [], faults = [], seen = mempty, owed = False, visit = 0, session = Nothing, sessions = 0, mounted = 0, asksOfView = [], waiting = False, held = []}
      in effected "mounted on page A" fx w0
 
 start, startCached :: World
@@ -417,7 +423,7 @@ carry what e w
   | w.waiting = (w {held = w.held <> [e]}, [])
   | otherwise = case e of
       Load t p -> asking (show (t, p)) (readOut t p)
-      Send sender n p r -> asking ("write " <> show n) Out {asked = AWrite n p r w.visit sender, answer = Nothing, sent = Nothing}
+      Send sender n p r -> asking ("write " <> show n) Out {asked = AWrite n p r w.visit sender w.session, answer = Nothing, sent = Nothing}
       Answered asker _ _ -> (w {asksOfView = w.asksOfView <> [TellForm | asker == w.mounted]}, [])
       Changed -> (w, [])
   where
@@ -502,7 +508,7 @@ play w = \case
             -- The page view stops watching the old page and watches the new
             -- one: the server answers the new subscription after what it
             -- had queued.
-            w' = event "goes to the other page" Left' (changing (forgetThreads w.shownPage) w {shownPage = next, owed = False, visit = w.visit + 1})
+            w' = event "goes to the other page" Left' (changing (forgetThreads w.shownPage) w {shownPage = next, owed = False, visit = w.visit + 1, session = Nothing})
             w'' = w' {server = w'.server {watched = Just next, untold = w'.server.untold <> [MReplaced next (threadsOn next w'.server)]}}
          in event ("shows " <> show next) (Fetched next True False) w''
   PageAgain
@@ -539,7 +545,7 @@ focusedOf w = w.view.focused
 
 -- | The reader comments on a quote: the page view's @CommentOnSelection@.
 quoted :: Anchor -> World -> World
-quoted a = event ("the reader comments on " <> a.exact) (Quoted a)
+quoted a w = event ("the reader comments on " <> a.exact) (Quoted a) w {session = Just (w.sessions + 1), sessions = w.sessions + 1}
 
 -- | The reader chooses a thread: the comments view's @Focus@.
 chosen :: CommentThreadId -> World -> World
@@ -547,7 +553,7 @@ chosen tid = event ("the reader chooses " <> show tid) (Chose tid)
 
 -- | The panel closed: the page view's @Close@.
 closed :: World -> World
-closed = event "the panel closes" Closed
+closed w = event "the panel closes" Closed w {session = Nothing}
 
 -- | The channel closed and open again: what it had to tell is lost, the
 -- page is subscribed to again, and the backend drops its threads.
@@ -562,7 +568,7 @@ handleAt i w = case atMay [k | (k, o) <- zip [0 :: Int ..] w.outs, isNothing o.a
     | Just o <- atMay w.outs k ->
         let (server, answer) = case o.asked of
               ARead _ p -> (w.server, Right (Left (threadsOn p w.server)))
-              AWrite _ p r _ _ -> second (fmap Right) (handleWrite "reader" p r w.server)
+              AWrite _ p r _ _ _ -> second (fmap Right) (handleWrite "reader" p r w.server)
          in noted ("the server handles " <> show o.asked) w {server, outs = [if j == k then x {answer = Just answer} else x | (j, x) <- zip [0 ..] w.outs]}
   _ -> w
 
@@ -581,12 +587,12 @@ deliver k w = case atMay w.outs k of
           (ARead t p, Right (Right _)) -> event "a read" (Loaded t p (Right [])) w'
           -- The backend applies the write's answer to its cache, then the
           -- page view takes it.
-          (AWrite n p r v sender, Right (Right e)) ->
+          (AWrite n p r v sender ses, Right (Right e)) ->
             let e' = answerOf r e
-             in answeredOnce v sender (Right e') w' (event ("the answer to write " <> show n <> ": " <> show e') (Wrote sender n r (Right e')) (changing (afterComment p) w'))
+             in answeredOnce v sender ses (Right e') w' (event ("the answer to write " <> show n <> ": " <> show e') (Wrote sender n r (Right e')) (changing (afterComment p) w'))
           -- A write is never answered with a list.
           (AWrite {}, Right (Left _)) -> w'
-          (AWrite n p r v sender, Left e) -> answeredOnce v sender (Left e) w' (event ("write " <> show n <> " refused: " <> show e) (Wrote sender n r (Left e)) (changing (afterComment p) w'))
+          (AWrite n p r v sender ses, Left e) -> answeredOnce v sender ses (Left e) w' (event ("write " <> show n <> " refused: " <> show e) (Wrote sender n r (Left e)) (changing (afterComment p) w'))
   _ -> w
 
 -- | 'ViewAsk' is what a write's answer asks of the page view beside its
@@ -604,16 +610,18 @@ anchorOf = \case
 
 -- | The world checked against the rule that a write's answer asks the
 -- view for its effects once on the visit it was sent on, and for none on
--- another; and that it empties a form only of the comments view that sent
--- it, not of one mounted since.
-answeredOnce :: Int -> Int -> Either WikiError PageEvent -> World -> World -> World
-answeredOnce sentOn sentFrom answer was now
+-- another; that it empties a form only of the comments view that sent it,
+-- not of one mounted since; and that a thread it opened about a quote ends
+-- the quoting and is chosen only in the session of quoting it was written
+-- in, not in a later one, of the same quote or another.
+answeredOnce :: Int -> Int -> Maybe Int -> Either WikiError PageEvent -> World -> World -> World
+answeredOnce sentOn sentFrom sentIn answer was now
   | now.finished = now
   | sort made == sort wanted = now
   | otherwise = now {faults = now.faults <> [(AnsweredOnce, "the answer to a write sent on visit " <> show sentOn <> " by comments view " <> show sentFrom <> ", taken on visit " <> show now.visit <> " with comments view " <> show now.mounted <> ", asked the view for " <> show made <> ", not " <> show wanted)]}
   where
     made = drop (length was.asksOfView) now.asksOfView <> [ChooseOpened | (quotingOf was, focusedOf was) /= (quotingOf now, focusedOf now)]
-    wanted = if sentOn == now.visit then [TellForm | sentFrom == now.mounted] <> [ChooseOpened | Just a <- [anchorOf answer], quotingOf was == Just a] else []
+    wanted = if sentOn == now.visit then [TellForm | sentFrom == now.mounted] <> [ChooseOpened | Just a <- [anchorOf answer], quotingOf was == Just a, isJust sentIn, sentIn == was.session] else []
 
 -- | Whether the answer to this read of this page is the view's to take: on
 -- the page shown, and no answer to a later read taken.
@@ -782,6 +790,13 @@ spec = describe "Wiki.App.View.Comments.Machine" $ modifyMaxSuccess (max cases) 
       -- stopped the new quoting and chose the old thread.
       let w = foldl' play w0 [Tell, PeopleFound, Quote 0, ReaderOpens True, Handle, Handle, Reopen, Quote 1, Deliver 1, PeopleFound]
        in (quotingOf w, focusedOf w) `shouldBe` (Just (quoteOf 1), Nothing)
+
+    it ("leaves a new session of the same quote alone when the thread of an old one is answered" <> how) $
+      -- Codex on #284: the reader comments on a quote, sends, closes the
+      -- panel, comments on the same quote again; the old write's answer
+      -- ended the new session and chose the old thread.
+      let w = foldl' play w0 [Tell, PeopleFound, Quote 0, ReaderOpens True, Handle, Handle, Reopen, Quote 0, Deliver 1, PeopleFound]
+       in (quotingOf w, focusedOf w) `shouldBe` (Just (quoteOf 0), Nothing)
 
     it ("shows the server's threads once everything out has come back" <> how) $
       QC.property $
