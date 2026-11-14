@@ -50,11 +50,13 @@
 -- program's first render, with quotes highlighted and page threads shown.
 --
 -- On a backend with a live channel ("Wiki.App.Live"), the page is watched
--- while it is shown, and changes to its comments made elsewhere are
--- applied to what is shown, like the view's own writes. The server's
--- answer to each subscription (the first, and each one after the channel
--- reopens) carries the page's threads, which replace what is shown, so
--- whatever changed since they were read is caught up.
+-- while it is shown, and changes to its comments are applied to what is
+-- shown, in the order they were made. The server's answer to each
+-- subscription (the first, and each one after the channel reopens)
+-- carries the page's threads, which replace what is shown, so whatever
+-- changed since they were read is caught up. How a read's or a write's
+-- answer is taken beside these is the threads' machine's
+-- ("Wiki.App.View.Comments.Machine").
 --
 -- = Who wrote it, who reads it
 --
