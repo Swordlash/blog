@@ -69,6 +69,7 @@ module Test.Bell
   , shrinkRun
   , made
   , madeEarly
+  , madeMany
   , handleRead
   , handleMark
   , forgotten
@@ -76,7 +77,6 @@ module Test.Bell
   )
 where
 
-import Data.List (nub)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -121,7 +121,19 @@ emptyServer = Server {count = 0, notes = [], untold = [], limit = 3}
 made :: Server -> Server
 made s = s {count = s.count + 1, notes = n : s.notes, untold = s.untold <> [n]}
   where
-    n = noticeOf (s.count + 1)
+    n = (noticeOf (s.count + 1)) {position = Just (nextSeq s)}
+
+-- | The number SQLite gives the next notification: one more than the
+-- greatest it holds (@seq@ is @INTEGER PRIMARY KEY@ with no
+-- @AUTOINCREMENT@), so the number of one deleted last is given again.
+nextSeq :: Server -> Int64
+nextSeq s = 1 + fromMaybe 0 (maximumMay (mapMaybe (\n -> n.position) s.notes))
+
+-- | The server after it made this many notifications at once, told one
+-- after the other: more than any bound on the client's side (an answer's
+-- 'limit', the HTTP backend's 50 last told).
+madeMany :: Int -> Server -> Server
+madeMany k s = foldl' (\x _ -> made x) s [1 .. k]
 
 -- | The server after it made one more notification for the reader whose
 -- time is earlier than its newest one's: the real server orders its
@@ -132,7 +144,7 @@ made s = s {count = s.count + 1, notes = n : s.notes, untold = s.untold <> [n]}
 madeEarly :: Server -> Server
 madeEarly s = s {count = s.count + 1, notes = n : s.notes, untold = s.untold <> [n]}
   where
-    n = (noticeOf (s.count + 1)) {createdAt = maybe (noticeOf (s.count + 1)).createdAt (\x -> addUTCTime (-0.5) x.createdAt) (head s.notes)}
+    n = (noticeOf (s.count + 1)) {createdAt = maybe (noticeOf (s.count + 1)).createdAt (\x -> addUTCTime (-0.5) x.createdAt) (head s.notes), position = Just (nextSeq s)}
 
 -- | The notification numbered so.
 noticeOf :: Int -> Notification
@@ -192,8 +204,12 @@ data Step
     -- another tab: the server changes, and nothing tells this tab.
     ReadElsewhere Int
   | -- | The notification at this place leaves the server's list: its page
-    -- is one the reader may no longer read. Nothing tells the tab.
+    -- is one the reader may no longer read, or was deleted (the delete
+    -- cascades), or the retention dropped it. Nothing tells the tab.
     Forget Int
+  | -- | The server makes 51 notifications at once, one more than the HTTP
+    -- backend keeps of what was told ('madeMany').
+    MakeMany
   | -- | The live channel tells the oldest notification it has to tell.
     Tell
   | -- | The live channel closes and opens again: what it had to tell is
@@ -232,6 +248,7 @@ genStep more =
          , (1, ClickLink <$> chooseInt (0, 3))
          , (4, pure Make)
          , (1, pure MakeEarly)
+         , (1, pure MakeMany)
          , (2, ReadElsewhere <$> chooseInt (0, 3))
          , (1, Forget <$> chooseInt (0, 3))
          , (4, pure Tell)
@@ -343,6 +360,7 @@ play w = \case
     | w.bell.open, Just n <- atMay (listed w.bell) i -> afterEvent ("follows " <> idText n) (Followed n.id ()) w
     | otherwise -> w
   Make -> noted ("the server makes n" <> show (w.server.count + 1)) w {server = made w.server}
+  MakeMany -> noted ("the server makes 51, from n" <> show (w.server.count + 1)) w {server = madeMany 51 w.server}
   MakeEarly -> noted ("the server makes n" <> show (w.server.count + 1) <> ", timed before its newest") w {server = madeEarly w.server}
   ReadElsewhere i -> case atMay [n | n <- w.server.notes, not n.read] i of
     Just n -> noted ("another tab marks " <> idText n <> " read") w {server = fst (handleMark ReadMark {ids = [n.id], everything = False} w.server)}
@@ -445,10 +463,10 @@ checked w = w {faults = w.faults <> problems, seenRead = Map.unionWith (||) w.se
     marksOut = not w.finished && any (\o -> case o.ask of MarkRead _ _ -> True; _ -> False) w.outs
     problems =
       [(ReadStaysRead, idText n <> " was shown read, and is shown unread again") | n <- shown, not n.read, Map.lookup n.id w.seenRead == Just True]
-        <> [(NothingLost, "listed before and gone: " <> T.intercalate ", " gone) | let gone = [unId i | i <- Map.keys w.seenRead, i `notElem` map (\n -> n.id) shown, i `elem` map (\n -> n.id) (take w.server.limit w.server.notes), i `Set.notMember` w.leftNewest], not (null gone), isJust (rightNotices w.bell)]
+        <> [(NothingLost, "listed before and gone: " <> T.intercalate ", " gone) | let shownIds = Set.fromList (map (\n -> n.id) shown); newest = Set.fromList (map (\n -> n.id) (take w.server.limit w.server.notes)); gone = [unId i | i <- Map.keys w.seenRead, i `Set.notMember` shownIds, i `Set.member` newest, i `Set.notMember` w.leftNewest], not (null gone), isJust (rightNotices w.bell)]
         <> [(CountMatches, "the count says " <> show (unreadCount w.bell) <> ", and " <> show (length (filter (\n -> not n.read) shown)) <> " are listed unread") | isJust (rightNotices w.bell), unreadCount w.bell < length (filter (\n -> not n.read) shown)]
         <> [(BusyWhileMarking, "the buttons that mark are " <> (if busy w.bell then "disabled with no mark out" else "enabled with a mark out")) | not w.finished, busy w.bell /= marksOut]
-        <> [(ListedOnce, "a notification is listed twice") | let ids = map (\n -> n.id) shown, nub ids /= ids]
+        <> [(ListedOnce, "a notification is listed twice") | let ids = map (\n -> n.id) shown, Set.size (Set.fromList ids) /= length ids]
         <> [(QuietAfterClose, "listening after the bell went away") | w.finished, w.listening /= 0]
 
 -- | 'Rule' is each rule a run is checked against, as the module's Haddock
@@ -628,14 +646,16 @@ spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (max cases) $ do
 settles :: (World -> World) -> World -> Property
 settles settle w0 =
   counterexample (toS (T.unlines (reverse w.trace))) $
-    counterexample "every notification shown as the server has it" ([x | x <- shown, x `notElem` truth] === [])
-      .&&. counterexample "the server's newest, all shown" ([x | x <- take w.server.limit truth, x `notElem` shown] === [])
+    counterexample "every notification shown as the server has it" ([x | x <- shown, x `Set.notMember` truthSet] === [])
+      .&&. counterexample "the server's newest, all shown" ([x | x <- take w.server.limit truth, x `Set.notMember` shownSet] === [])
       .&&. counterexample "the count, the server's count of unread" (unreadCount w.bell === length (filter (not . snd) truth))
       .&&. busy w.bell === False
   where
     w = settle w0
     shown = [(n.id, n.read) | n <- listed w.bell]
     truth = [(n.id, n.read) | n <- w.server.notes]
+    truthSet = Set.fromList truth
+    shownSet = Set.fromList shown
 
 -- | Whether a step changes the server in a way nothing tells the tab of.
 elsewhere :: Step -> Bool
