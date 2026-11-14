@@ -695,6 +695,17 @@ component =
       -- where the browser has it), which for a passkey the server did take
       -- would hide one that works. A panel closed while the authenticator
       -- makes the passkey does not learn it at all.
+      --
+      -- What the registration sent again meets at the server, which keeps
+      -- one registration's challenge for a session and takes it only for
+      -- an answer to it: the request the close cut off was taken (the
+      -- passkey is the account's, and this one is refused, saying nothing
+      -- here); it never arrived (this one registers the passkey, which is
+      -- what it is for); or the panel was opened again and another passkey
+      -- begun first (this one answers a challenge replaced since, and is
+      -- refused, leaving the new one's for its own answer: the first
+      -- passkey stays on the authenticator unknown to the wiki, as before
+      -- this was sent again).
       Finalize ->
         gets (\st -> st.unregistered) >>= traverse_ (\named -> void (lift (finishRegistration named)))
       RemoveKey i -> busily $ do
