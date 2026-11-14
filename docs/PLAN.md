@@ -1915,7 +1915,7 @@ WP5.92 and WP5.93 wait.
 - **WP5.121 The views that raced, as machines (decision 82; for the
   order above), one pull request each, in this order.** (1) The
   page's comments: the machine and its properties are merged (#284);
-  left, after WP5.123's harness: the page view and the comments view
+  left, on the harness (#286): the page view and the comments view
   on the in-memory DOM with held waits (first cases: the runner
   carrying out `Answered` and the forked lookup; a panel closed and
   opened again while a write is out; the reader's quote, give-up,
@@ -1928,7 +1928,7 @@ WP5.92 and WP5.93 wait.
   panel; two days. (5) The shell's world (the session, the spaces, the
   tree, the backlinks); three days. (6) The editor's publication and
   rows; four days or more, with time the test controls (the library's
-  `withTestClock`, WP5.123). Each: main's logic translated
+  `withTestClock`, in the harness since #286). Each: main's logic translated
   faithfully first, the properties shown failing on it where a race is
   known, then the fix; the cache in the model for a view over HTTP;
   the component on the in-memory DOM; the view's browser examples cut
@@ -1944,43 +1944,8 @@ WP5.92 and WP5.93 wait.
   haskell-halogen-core, so that the compiler refuses a step that
   waits. (3) A nightly job that runs the native properties with a
   million cases each and reports a failure with its seed as a finding.
-  (4) `wiki-app-remote-test` (four examples of the bell today) run by
-  a native job, or dropped if the in-memory DOM route covers what it
-  shows: decide in WP5.123, with the library's tools in hand.
-- **WP5.123 The pin at 1f68320 and the native harness on the library's
-  tools (decision 82; for the order above; WP5.120 is merged, #285;
-  the owner gave the library's answer to the nine items on
-  2026-11-14: its pull requests 125 to 128).** The bump is its own
-  commit. Then the bell's in-memory DOM spec is rewritten on what the
-  library now has, as one shared harness the other views' specs use:
-  the component mounted into `N.newContainer` (connected, in the
-  ambient document); `N.dispatch` for events that bubble with a real
-  `target` (so "press outside closes the list" and Escape are tested
-  natively, and their browser examples go); `N.querySelector`,
-  `N.querySelectorAll`, `N.textContent`, `N.attribute` in place of
-  the spec's own forty lines; `socket.waitActivity` in place of
-  polling `activity` each millisecond, so the spec runs beside others
-  and the exclusive semaphore goes; `withHeldWaits` where the real
-  action should run when the test lets it go (the backend wrapper
-  whose methods block on an `MVar` stays only where the test answers
-  with values of its own: say which is used where and why);
-  `waitSession` over `remote`, and the millisecond wait on the feed's
-  count after `Session.dispose` goes. Then the rule for pauses: a
-  pause a test waits for is `H.delayCounted`, not `liftIO
-  (threadDelay n)` (the preview's and the users' search's debounce,
-  the draft's autosave, the backups' re-look), so that
-  `withTestClock` and `advance` move it; one spec shows a debounce
-  advanced by the test's clock with no real sleep. The README says
-  both, and AGENTS.md's machine rule gains two sentences, written by
-  the session on this branch (the owner, 2026-11-14: "Jak uważasz że
-  tak to spoko"): a view infers nothing about what an answer covers
-  from a property of its items and a model takes every delete and
-  bounded buffer from the real code; a pause a test waits for is
-  `H.delayCounted`. To settle in it: whether `wiki-app-remote-test`
-  is kept (then a native CI job runs it) or dropped (WP5.122's fourth
-  point); what the ambient document being one for the process means
-  for specs run side by side (two bells both hear a press on the
-  document).
+  (`wiki-app-remote-test` is gone, #286: the native spec checks all
+  it checked of the wiki.)
 - **WP5.114 The browser suite searched for races on purpose (for the
   order above).** The smoke suites have a throttled job that finds a
   race again once it has found it; the browser suite has none, and its
@@ -3212,6 +3177,24 @@ needs. Each was true when its package merged; check before relying on one.
   `pages`). Nothing changed for the wiki's behaviour on wasm. The two
   things asked of the library on 2026-11-14 are on its master (its
   pull requests 119 and 120): WP5.117.
+- **The native harness and the pin at 1f68320 (#286, WP5.123).**
+  `Test.Harness.MemDom` mounts a view on the in-memory DOM in a
+  connected container, dispatches events that bubble, reads with
+  selectors, waits on `socket.waitActivity`, holds asks with a gate
+  (answers of the test's own) or the library's `withHeldWaits` (the
+  real backend's answer at a chosen moment), and owns the clock
+  (`withTestClock`). The pauses a test waits for are `H.delayCounted`;
+  `Test.Users` moves the users' search by the test's clock. Left and
+  known. (1) The ambient document is one for the process, so the
+  harness mounts one view at a time (two bells side by side heard each
+  other's presses: 72 of 201 examples failed); the address is shared
+  too, so a spec reads where a view went from its own router. (2) A
+  wait on a socket cannot be woken by the test's own gate; the harness
+  races the two. (3) `N.dispatch "click"` is a click only: a reader's
+  press before it is dispatched by hand. (4) `Router.newRouter` on the
+  in-memory DOM listens on the one window until `Router.stop`. All
+  four are in the pull request's notes for the library's owner. (5)
+  `Wiki.App.Static`'s prerender still settles by polling a clock.
 - **The page's comments as a machine (#284, WP5.121's first).**
   `View/Comments/Machine.hs`, held in the page view's state; the
   comments view asks for a write and is told its answer. Costs: one
