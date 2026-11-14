@@ -1925,8 +1925,8 @@ WP5.92 and WP5.93 wait.
   waits, time the test controls, and two about `remote`).
 - **WP5.120 The pin past haskell-halogen's pull requests 121 to 124:
   the browser suite's harness waits for the program (for the order
-  above; the owner gave the library's notes on 2026-11-14; after
-  WP5.117, on which it is stacked).** hspec-halogen's actions and
+  above; the owner gave the library's notes on 2026-11-14; WP5.117
+  is merged, #283).** hspec-halogen's actions and
   `settle` now wait for the program to be idle, for a history step a
   handler asked for, and for the page's next frame; `waitQuiet` and
   `waitQuietWithin` are the library's, in place of reading
@@ -1945,24 +1945,6 @@ WP5.92 and WP5.93 wait.
   library's `waitQuiet`. Not in it: the declared matches for delegated
   clicks and for what an event carries (its pull request 121), which
   are WP5.106's.
-- **WP5.117 The pin past haskell-halogen's pull requests 119 and 120,
-  and the two workarounds gone (for the order above; the owner gave
-  the library's answer on 2026-11-14).** The driver's `settle` now
-  waits for what the browser fires late (a dialog's `close`, the
-  `popstate` after a page's own step through its history), and each
-  logged request names its document (`requestsOf page`). The bump is
-  its own commit with the reason; then, in the same package:
-  `afterEvent` goes from the smoke suites (its reads become plain
-  reads; `waitForEvent` where an event is neither a frame nor a
-  history step away), and a count of what a page asked for is
-  `requestsOf page`, not a navigation to `about:blank` and a count
-  since a point. To settle in it: an action costs about 12 ms more
-  (the suites' times against their budgets); the driver wraps
-  `History.prototype.back`, `forward` and `go` in every page; and
-  Chromium's RenderDocument trial makes a request sent as a document
-  goes show in the log on one machine and not on another (pin the
-  mode for the suites with `HALOGEN_PLAYWRIGHT_ARGS`, or count no such
-  request). Records that grew: `Request`, `Exchange`.
 - **WP5.114 The browser suite searched for races on purpose (for the
   order above).** The smoke suites have a throttled job that finds a
   race again once it has found it; the browser suite has none, and its
@@ -3194,6 +3176,25 @@ needs. Each was true when its package merged; check before relying on one.
   `pages`). Nothing changed for the wiki's behaviour on wasm. The two
   things asked of the library on 2026-11-14 are on its master (its
   pull requests 119 and 120): WP5.117.
+- **The pin at 762416b and the smoke suites without their
+  workarounds (#283, WP5.117).** Only the driver changed between the
+  pins, so the browser suite was not run for it. `afterEvent` is gone
+  (three plain actions and reads; `waitForEvent` was needed nowhere);
+  the server's suite counts with `requestsOf page`. The demo keeps its
+  navigation to `about:blank` before a count: a dedicated worker's
+  request is given the document its frame shows when the request is
+  reported, so TikZJax's worker of the page before can land on the
+  next page. The SVG section steps back by hand (`history.go(-2)`,
+  then `settle`). The frame the driver waits for after each action
+  costs: on hosted runners the suites take 123 to 131 s (demo), 127 to
+  134 s (server) and 133 to 142 s (PostgreSQL), against 97, 99 and 104
+  before; all are inside their budgets, and the `smoke test` job is
+  still shorter than `wasm`. One commit leaves out a console error the
+  library's pull request 119 brought (a frame sandboxed without
+  `allow-scripts`); the library has fixed it since, and the commit goes
+  with WP5.120. Settled by reading: nothing of the wiki looks at
+  `History.prototype`'s wrapped methods, and the wiki sends no request
+  as a document goes, so Chromium's RenderDocument mode is not pinned.
 - **The HTTP backend's cache and the spaces' list, after #279.** The
   cache stored an answer whenever it came, so a read sent before a
   write, an event or a sign-in and answered after it put the older
