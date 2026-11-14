@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | Stars and help in a browser (WP5.44 of docs/PLAN.md), over the demo. A
 -- page's "Star" button stars it, and the header's "Starred" list then
 -- holds it, as a link that goes to the page; the button takes the star
@@ -7,7 +9,9 @@
 module Test.Browser.Stars (spec) where
 
 import Control.Monad.UUID (MonadUUID)
+import Data.Aeson (decodeStrict)
 import Data.Text qualified as T
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, start)
@@ -18,6 +22,11 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
 type Specs m = (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
+
+$( browserJS
+     ["jsbits/test-location.js"]
+     [("js_location_after_click", "wiki_test_location_after_click", Safe, [t|JSText -> IO JSText|])]
+ )
 
 spec :: forall m -> (Specs m) => Spec
 spec m = do
@@ -89,4 +98,19 @@ helping m = describe "help" $ do
     find ui ".help-dialog-close" >>= click
     eventually (dialogOpen `shouldReturn` "false")
     length <$> findAll ui ".help-section" `shouldReturn` 0
+    unmount ui
+
+  -- A link in a section goes where it leads in the click's own dispatch, as
+  -- the dialog closes: written by a thread of its own, the address came
+  -- after whatever ran meanwhile.
+  it "follows a link in a section in the click's own dispatch" $ runPage $ do
+    ui <- start m Nothing Home
+    find ui ".help-toggle" >>= click
+    _ <- find ui ".help-section .page-body a[href*='#/s/']"
+    settle
+    led <- unsafeIOToPageM (fromJSText <$> js_location_after_click (toJSText ".help-section .page-body a[href*='#/s/']"))
+    case decodeStrict (encodeUtf8 led) :: Maybe [Text] of
+      -- The address is the link's, from its fragment on ("/#/s/…").
+      Just [href, now] -> (href, now) `shouldSatisfy` \(h, n) -> "#/s/" `T.isPrefixOf` n && n `T.isSuffixOf` h
+      _ -> expectationFailure ("not where a link led: " <> toS led)
     unmount ui

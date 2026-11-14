@@ -13,3 +13,22 @@ function wiki_test_location_after_key(key) {
   document.body.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
   return window.location.hash;
 }
+
+// Choose the option at this index in the first select a selector finds, as
+// the browser does (a change event), and say where the page is the moment
+// the event's dispatch returns.
+function wiki_test_location_after_choice(selector, index) {
+  const select = document.querySelector(selector);
+  select.selectedIndex = index;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  return window.location.hash;
+}
+
+// Click the first element a selector finds, and say, as JSON, where it led
+// ([its href, the page's address the moment the click's dispatch returns]).
+function wiki_test_location_after_click(selector) {
+  const element = document.querySelector(selector);
+  const href = element?.getAttribute("href") ?? "";
+  element?.click();
+  return JSON.stringify([href, window.location.hash]);
+}
