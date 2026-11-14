@@ -211,6 +211,49 @@ spec m = do
       find ui (".user-menu button[data-login=" <> login <> "]") >>= click
     settle
     eventually $ deckWatches `shouldReturn` watching
+    -- The one watch is heard: near the window, the presentation is read
+    -- for the reader now, and the watch, having told, is gone.
+    bringNear ui
+    eventuallyWithin 30000 $ position ui `shouldReturn` "1 / 9"
+    deckWatches `shouldReturn` watching - 1
+    unmount ui
+    settle
+    deckWatches `shouldReturn` before
+
+  -- A change of reader as the viewer begins to watch its link: in memory,
+  -- another user chosen right after the page is mounted; over HTTP, the
+  -- answers that come after the first render (the session, the spaces),
+  -- which move the shell's revision on. The watch the viewer keeps then
+  -- tells with the reading it is for, so the presentation is read when its
+  -- link comes near, and no other watch runs.
+  it "reads the presentation near the window after the reader changes as the viewer starts watching" $ runPage $ do
+    before <- deckWatches
+    ui <- start m (Just "user-admin") (Page docs guide)
+    _ <- find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child"
+    find ui ".user-switcher-toggle" >>= click
+    find ui ".user-menu button[data-login=editor]" >>= click
+    settle
+    bringNear ui
+    eventuallyWithin 30000 $ position ui `shouldReturn` "1 / 9"
+    deckWatches `shouldReturn` before
+    unmount ui
+    settle
+    deckWatches `shouldReturn` before
+
+  it "reads the presentation near the window when the wiki's answers come after the first render, over HTTP" $ runPage $ do
+    serverStarts
+    serveDemo
+    before <- deckWatches
+    ui <- startServer m (Page docs guide)
+    _ <- find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child"
+    settle
+    docsId <- unsafeIOToPageM $ do
+      demo <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
+      runMemWiki demo ((\sp -> sp.id) . either (panic . show) identity <$> getSpace (slugs ["docs"]))
+    let deckAt = endpointUrl (\e -> e.spaces.pageAt docsId (slugs ["markdown-guide", "presentations"]))
+    bringNear ui
+    eventuallyWithin 30000 $ ((\r -> r.url) <$>) <$> asked >>= (`shouldSatisfy` elem deckAt)
+    eventuallyWithin 30000 $ position ui `shouldReturn` "1 / 9"
     unmount ui
     settle
     deckWatches `shouldReturn` before
