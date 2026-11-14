@@ -2298,7 +2298,7 @@ component =
       EditAnyway -> announce
       BackToPage -> do
         st <- get
-        Router.navigate st.input.context.router (leaving st.input)
+        H.liftEffect (Router.navigate st.input.context.router (leaving st.input))
       -- Saved over theirs: the save is made against their version.
       KeepMine ->
         gets (\st -> st.conflict) >>= \case
@@ -2616,7 +2616,10 @@ component =
         modify (\s -> s {presence = Said})
 
     -- Navigate to the page, as Cancel does, without the shell asking about
-    -- the work again: the author has said what becomes of it.
+    -- the work again: the author has said what becomes of it. The address
+    -- is written on the loop, in this step ('H.liftEffect'): through
+    -- 'liftIO' it was written on a thread of its own, after whatever ran
+    -- meanwhile, and a route the reader had gone to since was left again.
     leave :: H.HalogenM State Action Slots ViewOutput m ()
     leave = do
       modify (\st -> st {closing = True, askingCancel = False})
@@ -2626,7 +2629,7 @@ component =
       -- the history, as Save and close does (see "Wiki.App.Shell").
       H.liftEffect onPreviewEntry >>= \case
         True -> H.liftEffect (replacingEntry (Router.redirect st.input.context.router (leaving st.input)))
-        False -> Router.navigate st.input.context.router (leaving st.input)
+        False -> H.liftEffect (Router.navigate st.input.context.router (leaving st.input))
 
     -- Put CodeMirror in place of the textarea rendered last, with the text
     -- it was created with. CodeMirror arrives once the page has loaded it,

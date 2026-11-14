@@ -1494,7 +1494,7 @@ component =
         now <- H.liftEffect historyEntry
         if st.entry /= now
           then H.liftEffect (historyGo (st.entry - now))
-          else Router.redirect st.router st.route
+          else H.liftEffect (Router.redirect st.router st.route)
       Followed f -> gets (\st -> st.router) >>= (`Router.follow` f)
       ToggleSwitcher ->
         gets (\st -> st.switcherOpen) >>= \case
@@ -1616,13 +1616,19 @@ component =
     -- another address in place of the one the shell started with (a page
     -- number back in range). Then the shell goes to the route the address
     -- names now, rather than writing back the route it started with.
+    --
+    -- The address is read and written on the loop ('H.liftEffect'), in the
+    -- step that compares it, as every write of the shell's to the address
+    -- is ('announce', 'Stay'): through 'liftIO' the write came on a thread
+    -- of its own, after whatever ran meanwhile, and could take the reader
+    -- back from a route followed since.
     canonicalAdmin :: H.HalogenM (State m) Action Slots output m ()
     canonicalAdmin = do
       st <- get
-      now <- Router.current st.router
+      now <- H.liftEffect (Router.current st.router)
       if
         | now /= st.route -> handleAction (Arrived now)
-        | isAdminRoute st.route -> Router.redirect st.router st.route
+        | isAdminRoute st.route -> H.liftEffect (Router.redirect st.router st.route)
         | otherwise -> pass
 
     -- The session ended by itself, or changed elsewhere: everything is
@@ -1890,7 +1896,7 @@ component =
           , homeSpace (context before) space.id -> do
               let target = documentRoute (context before) space.id before.route
                   canonical = if target == before.route then Home else target
-              Router.redirect before.router canonical
+              H.liftEffect (Router.redirect before.router canonical)
         _ -> pass
       st <- get
       H.liftEffect (setDocumentTitle (documentTitle st))
