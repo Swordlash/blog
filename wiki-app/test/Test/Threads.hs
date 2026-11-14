@@ -76,6 +76,8 @@
 --   deliver brings it back;
 -- * a comment's text shown is never older than a text shown before, unless
 --   a message the channel has still to deliver brings the newer one;
+-- * a comment shown is on the server, unless a message the channel has
+--   still to deliver removes it;
 -- * a failed read is shown only where no threads are;
 -- * nothing is asked after the view went away;
 -- * once everything out has come back and everything the channel had to
@@ -543,6 +545,15 @@ checked shownBefore w = w {faults = w.faults <> problems, seen = seen'}
                | Just (ThreadsReady _) <- [shownBefore]
                , ThreadsFailed _ <- [w.view.threads]
                ]
+            <> [ (Ghost, "a comment the server deleted is shown: " <> show c.id)
+               | w.view.page == Just w.shownPage
+               , not w.server.behind
+               , null [() | MReplaced p _ <- w.server.untold, p == w.shownPage]
+               , (c, _) <- shownComments
+               , c.id `notElem` onServer
+               , null [() | MHeard _ (CommentDeleted _ cid) <- w.server.untold, cid == c.id]
+               , null [() | MHeard _ (ThreadDeleted tid) <- w.server.untold, tid == c.thread]
+               ]
 
 readyThreadsOf :: Model -> Maybe [Thread]
 readyThreadsOf m = case m.threads of
@@ -578,7 +589,7 @@ settles w0 =
 
 -- | 'Rule' is each rule a run is checked against, as the module's Haddock
 -- lists them.
-data Rule = OtherPage | Lost | Older | FailureOverThreads | AfterClose
+data Rule = OtherPage | Lost | Older | Ghost | FailureOverThreads | AfterClose
   deriving stock (Eq, Show, Enum, Bounded)
 
 ruleText :: Rule -> [Char]
@@ -586,6 +597,7 @@ ruleText = \case
   OtherPage -> "shows no thread of another page, on any run"
   Lost -> "loses no comment the server still has, on any run"
   Older -> "shows no comment's text older than one it showed, on any run"
+  Ghost -> "shows no comment the server deleted, on any run"
   FailureOverThreads -> "shows a failed read only where it shows no threads, on any run"
   AfterClose -> "asks nothing once it has gone away"
 
