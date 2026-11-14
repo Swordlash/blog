@@ -33,6 +33,7 @@ module Test.Browser.Http
   , startServerOver
   , startServerThrough
   , tellServer
+  , said
   , holdAt
   , release
   , hangUp
@@ -1217,14 +1218,24 @@ presence m = describe "who is editing and reading" $ do
     said `shouldReturn` []
     signIn ui
     eventually $ (Subscribe home.id `elem`) <$> said `shouldReturn` True
+    -- The sign-in restarts the tab's channel, so the socket that said
+    -- this subscription may be closed by now: who edits the page is then
+    -- told again with the answer to the subscription on the new one, as
+    -- the server tells it (test-fetch.js's presence).
     tell (Event home.id (Editing [edgar]))
     find ui ".page-editors" >>= (`shouldHaveText` "Edgar Editor is editing this page.")
     let later = addUTCTime 60 home.updatedAt
         saved = home {P.body = "Home saved in another tab.", P.updatedAt = later}
     answerWith "GET" (endpointUrl (\e -> e.homeDocument)) 200 (space, saved)
     answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [])) 200 saved
-    tell (Event home.id (PageChanged later))
-    find ui ".page-body p" >>= (`shouldHaveText` "Home saved in another tab.")
+    -- A save is told once, and no subscription's answer says it again: told
+    -- on a socket the restart closed, it is lost. The server tells it
+    -- again until the tab shows the version saved; once it does, the same
+    -- save told again changes nothing.
+    eventuallyWithin 10000 $ do
+      tell (Event home.id (PageChanged later))
+      settle
+      (traverse textContent =<< findAll ui ".page-body p") >>= (`shouldSatisfy` elem "Home saved in another tab.")
     length <$> findAll ui ".comments-toggle, .page-comments" `shouldReturn` 0
     find ui ".account .sign-out" >>= click
     _ <- find ui ".sign-in-toggle"
