@@ -168,7 +168,9 @@ async function open(page) {
     // Spans: every wiki-* event's dispatch (the Halogen handler and the
     // render and patch it runs, synchronously), the fit measures, and any
     // line "wpspan <name> <ms>" the program writes on stderr (a build with
-    // clocks put around Haskell's code by hand, for a measure).
+    // clocks put around Haskell's code by hand, for a measure), or
+    // "wpspan{<name>|<ms>}" anywhere in a line: the shim's line buffer can
+    // lose the first characters of a line that green threads write.
     globalThis.wpSpans = [];
     const span = (name, t0) => globalThis.wpSpans.push([name, t0, performance.now() - t0]);
     globalThis.wpSpan = span;
@@ -190,7 +192,7 @@ async function open(page) {
     };
     const log = console.error.bind(console);
     console.error = (...a) => {
-      const m = typeof a[0] === "string" && a[0].match(/^wpspan (\S+) ([\d.]+)/);
+      const m = typeof a[0] === "string" && (a[0].match(/wpspan\{([^|}]+)\|([\d.]+)\}/) ?? a[0].match(/^wpspan (\S+) ([\d.]+)/));
       if (m) globalThis.wpSpans.push([`hs ${m[1]}`, performance.now() - Number(m[2]), Number(m[2])]);
       else log(...a);
     };
@@ -204,9 +206,9 @@ async function open(page) {
     const ed = [...document.querySelectorAll(".editor-cm .cm-content")].find((c) => c.wikiEditor).wikiEditor;
     ed.replace(0, ed.text().length, text, 0, 0);
   }, text);
-  await page.waitForFunction((n) => document.querySelectorAll(".editor-slides > li").length >= n, slides + 1, { timeout: 180000 });
-  await page.waitForFunction(() => ![...document.querySelectorAll(".editor-slides .slide-row")].some((r) => r.dataset.fit === "unmeasured"), null, { timeout: 180000 });
-  await settle(page, 2500, 180000);
+  await page.waitForFunction((n) => document.querySelectorAll(".editor-slides > li").length >= n, slides + 1, { timeout: 600000 });
+  await page.waitForFunction(() => ![...document.querySelectorAll(".editor-slides .slide-row")].some((r) => r.dataset.fit === "unmeasured"), null, { timeout: 600000 });
+  await settle(page, 2500, 600000);
   return Date.now() - t0;
 }
 
@@ -235,8 +237,8 @@ async function jump(page, label, target, action) {
   }, target);
   const wall = Date.now();
   await action();
-  await page.waitForFunction((target) => !!document.querySelectorAll(".editor-slides > li")[target]?.querySelector(".cm-editor"), target, { timeout: 180000, polling: 50 });
-  await settle(page, quietMs, 180000);
+  await page.waitForFunction((target) => !!document.querySelectorAll(".editor-slides > li")[target]?.querySelector(".cm-editor"), target, { timeout: 600000, polling: 50 });
+  await settle(page, quietMs, 600000);
   const r = await page.evaluate(() => {
     clearInterval(globalThis.wpStallTimer);
     const t0 = globalThis.wpT0;
@@ -252,7 +254,16 @@ async function jump(page, label, target, action) {
       holdSum: Math.round(globalThis.wpGaps.filter(([s]) => s >= t0 - 5).reduce((a, [, d]) => a + d, 0)),
       holdMax: Math.round(Math.max(0, ...globalThis.wpGaps.filter(([s]) => s >= t0 - 5).map(([, d]) => d))),
       heapMB: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1e6) : null,
-      spans: globalThis.wpSpans.filter(([, s]) => s >= t0 - 5).map(([n, s, d]) => `${n}@${Math.round(s - t0)}:${Math.round(d)}`),
+      // A span is the move's when it ended after the move began.
+      spans: globalThis.wpSpans.filter(([, s, d]) => s + d >= t0).map(([n, s, d]) => `${n}@${Math.round(s - t0)}:${Math.round(d)}`),
+      // The same, summed by name: how many times, and their milliseconds.
+      totals: Object.fromEntries(
+        Object.entries(
+          globalThis.wpSpans
+            .filter(([, s, d]) => s + d >= t0)
+            .reduce((acc, [n, , d]) => ({ ...acc, [n]: [(acc[n]?.[0] ?? 0) + 1, (acc[n]?.[1] ?? 0) + d] }), {}),
+        ).map(([n, [c, d]]) => [n, `${c}x ${Math.round(d)}`]),
+      ),
     };
   });
   const row = { label, deck: kind, how, ...r, wallMs: Date.now() - wall, load: load() };

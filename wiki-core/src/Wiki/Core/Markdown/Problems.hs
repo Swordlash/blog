@@ -49,6 +49,7 @@ where
 
 import Data.List (span, zip3)
 import Data.Map.Strict qualified as Map
+import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Core (HTML (..))
@@ -59,6 +60,7 @@ import Wiki.Core.Markdown.Box (readAlertKind)
 import Wiki.Core.Markdown.Folds (Fold, foldsParsed, isSpoiler)
 import Wiki.Core.Markdown.Render (IslandKey (..), Options (..), defaultOptions, renderSections)
 import Wiki.Core.PageKind (PageKind (..))
+import Wiki.Core.SlideRows qualified as SlideRows
 import Wiki.Core.Slides qualified as Slides
 
 -- | 'Problem' is a place in a page's source that does not render as
@@ -144,6 +146,11 @@ data Checked = Checked
   , slides :: [Slides.SlideSpan]
   -- ^ A presentation's slides, as its editor lists them
   -- ('Slides.slideSpans'); none for a document.
+  , openers :: Maybe [Int]
+  -- ^ The character each of a presentation's openers starts at
+  -- ('Wiki.Core.SlideRows.openerStarts'), from the same parse, which the
+  -- editor's rows are compared with ('Wiki.Core.SlideRows.swallowedFrom');
+  -- 'Nothing' for a document.
   }
   deriving stock (Eq, Show)
 
@@ -156,6 +163,7 @@ instance NFData Checked where
       `seq` rnf [(k.source, k.occurrence, p.from, p.to, p.kind) | (k, p) <- Map.toList c.islands]
       `seq` rnf c.folds
       `seq` rnf c.slides
+      `seq` rnf c.openers
 
 instance NFData ProblemKind where
   rnf k = k `seq` ()
@@ -174,6 +182,7 @@ checkText pageKind source =
     , islands = islandsIn source located
     , folds = filter isSpoiler (foldsParsed source parsed)
     , slides = if pageKind == Presentation then Slides.slideSpansParsed source deck else []
+    , openers = if pageKind == Presentation then Just (SlideRows.openerStartsParsed source deck) else Nothing
     }
   where
     (located, markers, deck) = either (const ([], [], [])) identity (A.parseWithLinesMarkersAndDeck source)
@@ -337,9 +346,11 @@ islandsIn source located =
       before earlier = [written | (_, _, found) <- earlier, Probe _ _ written <- found]
    in Map.fromList (concat [placed (before earlier) block | run <- sameLines, (earlier, block) <- zip (inits run) run])
   where
-    sourceLines = T.lines source
-    lineCount = max 1 (length sourceLines)
-    lineAt n = fromMaybe "" (head (drop (n - 1) sourceLines))
+    -- The lines in a sequence: each block and each island looks its lines
+    -- up by their numbers.
+    sourceLines = Seq.fromList (T.lines source)
+    lineCount = max 1 (Seq.length sourceLines)
+    lineAt n = if n < 1 then fromMaybe "" (Seq.lookup 0 sourceLines) else fromMaybe "" (Seq.lookup (n - 1) sourceLines)
     blank n = T.all isSpace (lineAt n)
 
     -- Each block's first and last line: from the line it starts on to the

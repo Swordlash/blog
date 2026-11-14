@@ -206,7 +206,7 @@ $( browserJS
      , ("js_mentioned", "wiki_editor_mentioned", Safe, [t|Element -> Int -> JSText -> IO ()|])
      , ("js_emojied", "wiki_editor_emojied", Safe, [t|Element -> Int -> JSText -> IO ()|])
      , ("js_title_line", "wiki_editor_title_line", Safe, [t|Element -> IO ()|])
-     , ("js_problems", "wiki_editor_problems", Safe, [t|Element -> JSText -> IO ()|])
+     , ("js_problems", "wiki_editor_problems", Safe, [t|Element -> JSText -> JSText -> IO Bool|])
      , ("js_next_problem", "wiki_editor_next_problem", Safe, [t|Element -> IO ()|])
      , ("js_offer_folds", "wiki_editor_offer_folds", Safe, [t|Element -> JSText -> JSText -> IO ()|])
      , ("js_search", "wiki_editor_search", Safe, [t|Element -> JSText -> IO ()|])
@@ -545,9 +545,11 @@ clickElement element = liftIO (coerce element :: HTMLElement).click
 -- the ones marked before: CodeMirror underlines each range, puts a marker
 -- in its gutter and shows the message on hover. Before CodeMirror has
 -- loaded, the problems are kept on the host and marked once it has. The
--- textarea marks nothing.
-showProblems :: (MonadIO m) => Element -> [ProblemRange] -> m ()
-showProblems host ranges = liftIO (js_problems host (jsonText ranges))
+-- textarea marks nothing. The ranges are of the text given, and are taken
+-- only while CodeMirror holds that text, in the same step: whether they
+-- were.
+showProblems :: (MonadIO m) => Element -> Text -> [ProblemRange] -> m Bool
+showProblems host text ranges = liftIO (js_problems host (toJSText text) (jsonText ranges))
 
 -- | Move the editor's cursor to the next problem after it, or to the first
 -- after the last one, show its message and give the text the focus. Run

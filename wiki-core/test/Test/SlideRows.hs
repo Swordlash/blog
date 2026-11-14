@@ -7,9 +7,11 @@ import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
 import Protolude
 import Test.Hspec
-import Test.Hspec.QuickCheck (prop)
+import Test.Hspec.QuickCheck (modifyMaxSuccess, prop)
 import Test.QuickCheck (Gen, Property, checkCoverage, choose, conjoin, counterexample, cover, elements, forAll, oneof, property, suchThat, vectorOf, (.&&.), (===))
 import Test.Slides (aDeck, aMove)
+import Wiki.Core.Markdown.Problems (Checked (..), checkText)
+import Wiki.Core.PageKind (PageKind (..))
 import Wiki.Core.SlideRows
 import Wiki.Core.Slides (SlideSpan (..), fixedSlides, moveSlide, slideSpans)
 
@@ -63,6 +65,16 @@ spec = describe "SlideRows" $ do
                 .&&. fst (recut (nextOf source) Nothing (keysOf r) r) === r
 
   describe "fromLayout" $ do
+    -- WP5.108: the lines' starts found in one walk over the text, not by
+    -- looking each row's start up in it.
+    prop "takes the starts that looking each one up in the text took, from any starts" $
+      forAll anyDeck $ \source ->
+        let r = cut source
+            total = T.length source
+         in forAll (shiftedStarts total (zip (keysOf r) (rowStarts r))) $ \layout ->
+              forAll (vectorOf 4 ((,) <$> elements (map RowKey [200 .. 203]) <*> choose (0, total))) $ \loose ->
+                let given = layout <> loose
+                 in fromLayout source given === oldFromLayout source given
     prop "gives a fresh cut's rows back from their keys and starts" $
       forAll anyDeck $ \source ->
         let r = cut source in fromLayout source (zip (keysOf r) (rowStarts r)) === Just r
@@ -257,6 +269,20 @@ spec = describe "SlideRows" $ do
                 ]
 
   describe "reading rows" $ do
+    -- WP5.108: the editor's check and the rows read one parse.
+    -- Thirty decks: each parses its text five times, which on wasm costs
+    -- about a quarter of a second.
+    modifyMaxSuccess (const 30) . prop "find the openers the check finds in its one parse, and the rows taken in from them as from a parse of their own" $
+      forAll anyDeck $ \source ->
+        forAll (anEditOf (cut source)) $ \(_, edited, _) ->
+          let whole = assemble edited
+              checked = checkText Presentation whole
+           in conjoin
+                [ checked.openers === Just (openerStarts whole)
+                , swallowedFrom (fromMaybe [] checked.openers) edited === swallowed edited
+                , (checkText Document whole).openers === Nothing
+                ]
+
     it "reads a row's level and title from its opener alone" $ do
       map rowHeading (cut "Intro.\n\n# The *big* `idea`\n\nAlpha\n---\nText.\n").rows
         `shouldBe` [Nothing, Just (1, "The big idea"), Just (2, "Alpha")]
@@ -405,6 +431,26 @@ shiftedStarts total layout = do
     elements [[], [(RowKey k, s)]]
   -- The editor always holds the first row.
   pure (take 1 layout <> sortOn snd (concat (drop 1 shifted) <> concat extra))
+
+-- | 'fromLayout' as it was first written, looking each start's
+-- neighbours up by their index in the text: the oracle of the one walk.
+oldFromLayout :: Text -> [(RowKey, Int)] -> Maybe Rows
+oldFromLayout source = \case
+  [] -> Nothing
+  (key, _) : rest -> Just (rowsFromStarts ((key, 0) : valid 0 rest))
+  where
+    total = T.length source
+    valid previous = \case
+      [] -> []
+      (key, s) : rest
+        | s > previous && s <= total && followsLineBreak s -> (key, s) : valid s rest
+        | otherwise -> valid previous rest
+    followsLineBreak s = case T.index source (s - 1) of
+      '\n' -> True
+      '\r' -> s == total || T.index source s /= '\n'
+      _ -> False
+    -- The rows at valid starts: 'fromLayout' of starts it keeps all of.
+    rowsFromStarts starts = fromMaybe (panic "no rows") (fromLayout source starts)
 
 -- | A block left open: everything after it, to the end of the text, is in
 -- it. A bare @[[!spoiler]]@ is not a box (it takes nothing in); a named one

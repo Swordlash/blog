@@ -5,9 +5,10 @@ module Test.Slides (spec, aDeck, aMove) where
 
 import Data.Text qualified as T
 import Protolude
+import System.Mem (getAllocationCounter, setAllocationCounter)
 import Test.Hspec
-import Test.Hspec.QuickCheck (prop)
-import Test.QuickCheck (Gen, choose, conjoin, counterexample, elements, forAll, listOf, suchThat, (.&&.), (===), (==>))
+import Test.Hspec.QuickCheck (modifyMaxSuccess, prop)
+import Test.QuickCheck (Gen, choose, conjoin, counterexample, elements, forAll, listOf, suchThat, vectorOf, (.&&.), (===), (==>))
 import Wiki.Core.Markdown.Ast
 import Wiki.Core.Markdown.Folds qualified as Folds
 import Wiki.Core.Markdown.Problems (Checked (..), Problem (..), checkText, kindProblems)
@@ -314,6 +315,16 @@ spec = describe "Slides" $ do
         let (lead, chunks) = slideChunks source
          in lead <> T.concat chunks === source
 
+    modifyMaxSuccess (const 50) . prop "cuts the text where finding each slide's first character in the text's lines, slide by slide, cut it" $
+      forAll aDeckWithBreaks $ \source ->
+        let lineStart n = sum (map ((+ 1) . T.length) (take (n - 1) (T.splitOn "\n" source)))
+            oracle = case slideSpans source of
+              [] -> (source, [])
+              spans ->
+                let offsets = map (lineStart . (.from)) spans <> [T.length source]
+                 in (T.take (fromMaybe 0 (head offsets)) source, zipWith (\a b -> T.take (b - a) (T.drop a source)) offsets (drop 1 offsets))
+         in slideChunks source === oracle
+
   describe "moveSlide" $ do
     it "moves a slide's whole text, blank lines included" $
       moveSlide 1 0 "## A\n\nOne.\n\n## B\n\nTwo.\n" `shouldBe` "## B\n\nTwo.\n## A\n\nOne.\n\n"
@@ -413,6 +424,33 @@ spec = describe "Slides" $ do
 
     it "forgets the fits of the slides after one put before them" $
       now (T.replace "## A" "## New\n\n## A" measuredText) `shouldBe` [Fits, Unmeasured, Unmeasured, Unmeasured]
+
+    -- WP5.108: the text is split once, not once for each slide; the
+    -- fits are those the split for each slide gave.
+    -- Counted in bytes allocated, not timed: four times the slides, about
+    -- four times the work (4.0 when written). Splitting the whole text for
+    -- each slide, as before WP5.108, made it 11.4 times.
+    it "grows with the text's length and no faster: four times the slides, less than six times the bytes allocated" $ do
+      small <- deckToMeasure 20
+      large <- deckToMeasure 80
+      ratios <- for [measuresWork, fitsWork] $ \work -> do
+        a <- work small
+        b <- work large
+        pure (fromIntegral b / fromIntegral a :: Double)
+      ratios `shouldSatisfy` all (< 6)
+
+    -- Thirty decks: each parses its text five times, which on wasm costs
+    -- about a quarter of a second.
+    modifyMaxSuccess (const 30) . prop "says what splitting the text for each slide said, the measures made from the text's slides or found again" $
+      forAll ((,,) <$> aDeckWithBreaks <*> listOf (elements [Fits, Tight, Overflowing, Unmeasured]) <*> choose (0, length edits - 1)) $ \(source, fits, e) ->
+        let later = maybe source ($ source) (atMay edits e)
+            spansLater = slideSpans later
+            oracle = oldFitsNow (Just (oldMeasuresFor source fits)) later spansLater
+         in conjoin
+              [ fitsNow (Just (measuresFor source fits)) later spansLater === oracle
+              , fitsNow (Just (measuresWith source (slideSpans source) fits)) later spansLater === oracle
+              , measuresWith source (slideSpans source) fits === measuresFor source fits
+              ]
 
   describe "options" $ do
     it "are Beamer's look on a wide slide unless the page says otherwise" $
@@ -524,6 +562,70 @@ aDeck = do
   pieces <- listOf ((,) <$> piece <*> elements ["\n", "\n\n", "\n\n\n"])
   end <- elements ["", "\n", "\n```\nleft open", "\n[[!notes]]\nleft open"]
   pure (preamble <> title <> T.concat [t <> sep | ((t, _), sep) <- pieces] <> end)
+
+-- | The bytes allocated in forcing a value: what its work costs, counted
+-- rather than timed, so that a slow or a busy machine changes nothing.
+allocated :: Bool -> IO Int64
+allocated value = do
+  setAllocationCounter 0
+  _ <- evaluate value
+  negate <$> getAllocationCounter
+
+-- | A presentation of so many slides of thirty lines each.
+longDeck :: Int -> Text
+longDeck count = T.intercalate "\n" ("# Long" : "" : concat [["## Slide " <> show n, ""] <> ["Line " <> show k <> " of slide " <> show n <> ": the quick brown fox." | k <- [1 .. 27 :: Int]] <> [""] | n <- [1 .. count]])
+
+-- | The work of measuring a deck, and of finding its fits again.
+measuresWork, fitsWork :: (Text, [SlideSpan], [Fit]) -> IO Int64
+measuresWork (source, spans, fits) = allocated (let m = measuresWith source spans fits in m == m)
+fitsWork (source, spans, fits) = do
+  m <- evaluate (measuresWith source spans fits)
+  _ <- evaluate (m == m)
+  allocated (let f = fitsNow (Just m) source spans in f == f)
+
+deckToMeasure :: Int -> IO (Text, [SlideSpan], [Fit])
+deckToMeasure count = do
+  let source = longDeck count
+      spans = slideSpans source
+      fits = map (const Overflowing) spans
+  _ <- evaluate (T.length source + length spans + sum [sp.to | sp <- spans] + length fits)
+  pure (source, spans, fits)
+
+-- | 'aDeck', its line breaks line feeds, carriage returns or both.
+aDeckWithBreaks :: Gen Text
+aDeckWithBreaks = do
+  source <- aDeck
+  let ls = T.splitOn "\n" source
+  endings <- vectorOf (length ls - 1) (elements ["\n", "\n", "\r\n", "\r"])
+  pure (T.concat (zipWith (<>) ls (endings <> [""])))
+
+-- | Changes after which some slides' fits hold and others' do not.
+edits :: [Text -> Text]
+edits = [identity, T.replace "a" "b", ("[[!style]]{aspect=4:3}\n\n" <>), ("## New\n\n" <>), T.replace "\n\n" "\n\nMore.\n\n"]
+
+-- | The measures as they were first written ('measuresFor' and
+-- 'fitsNow' before WP5.108), splitting the whole text for each slide: the
+-- oracle the measures made from one split are held to.
+data OldMeasures = OldMeasures [Text] [([Text], Fit)]
+  deriving stock (Eq)
+
+oldMeasuresFor :: Text -> [Fit] -> OldMeasures
+oldMeasuresFor text fits = OldMeasures (oldLookLines text) (zip (map (oldSlideLines text) (slideSpans text)) (fits <> repeat Unmeasured))
+
+oldFitsNow :: Maybe OldMeasures -> Text -> [SlideSpan] -> [Fit]
+oldFitsNow measures text spans = case measures of
+  Just (OldMeasures look measured) | look == oldLookLines text -> [current (atMay measured i) sp | (i, sp) <- zip [0 ..] spans]
+  _ -> map (const Unmeasured) spans
+  where
+    current found sp = case found of
+      Just (written, f) | written == oldSlideLines text sp -> f
+      _ -> Unmeasured
+
+oldLookLines :: Text -> [Text]
+oldLookLines = filter ("[[!style]]" `T.isPrefixOf`) . map T.stripStart . T.splitOn "\n"
+
+oldSlideLines :: Text -> SlideSpan -> [Text]
+oldSlideLines text sp = take (sp.to - sp.from + 1) (drop (sp.from - 1) (T.splitOn "\n" text))
 
 -- | A move in a deck of 'aDeck' whose blocks are all closed: no fence or
 -- box left open at its end.
