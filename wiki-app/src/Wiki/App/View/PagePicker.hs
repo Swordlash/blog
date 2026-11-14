@@ -37,6 +37,7 @@ import Control.Monad.UUID (MonadUUID)
 import Data.Coerce (coerce)
 import Data.Row (Empty)
 import Data.Text qualified as T
+import Data.Time (NominalDiffTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -129,9 +130,10 @@ data Action
 
 -- | How long typing must pause before the text is searched for: long
 -- enough not to search for every letter of a word typed quickly, short
--- enough that the list seems to follow the typing.
-pause :: Int
-pause = 150_000
+-- enough that the list seems to follow the typing. A pause a test waits
+-- for: 'H.delayCounted'.
+pause :: NominalDiffTime
+pause = 0.15
 
 -- | How many hits the list shows; the results page shows the rest.
 shown :: Int
@@ -336,7 +338,7 @@ component =
         else
           if afterPause
             then do
-              fid <- H.fork (liftIO (threadDelay pause) >> handleAction Run)
+              fid <- H.fork (H.delayCounted pause >> handleAction Run)
               modify (\st -> st {pending = Just fid})
             else handleAction Run
 

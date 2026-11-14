@@ -35,11 +35,14 @@ import Test.Server qualified as Server
 import Test.Shell qualified as Shell
 import Test.Threads qualified as Threads
 import Test.Ticking qualified as Ticking
+import Test.Users qualified as Users
 
 main :: IO ()
 main = do
   -- Most components use detached documents and independent backends. The
   -- page-size and assistant examples need the process's native stores alone.
+  -- The views mounted in the process's document ("Test.Harness.MemDom")
+  -- take it one at a time, beside everything else.
   permits <- newQSemN maxBound
   let holding n = bracket_ (waitQSemN permits n) (signalQSemN permits n)
   hspecWith defaultConfig {configConcurrentJobs = Just 4} . parallel $ do
@@ -62,6 +65,8 @@ main = do
       Ticking.spec
       Bell.spec
       Threads.spec
+      BellDom.spec
+      Users.spec
       Latest.spec
       Shell.spec
       Server.spec
@@ -76,5 +81,4 @@ main = do
       Readme.spec
     around_ (holding maxBound) $ do
       Hydrate.storageSpec
-      BellDom.spec
       Assistant.spec

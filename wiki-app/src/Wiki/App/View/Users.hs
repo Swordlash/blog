@@ -42,6 +42,7 @@ import Control.Monad.UUID (MonadUUID)
 import Data.List (nub)
 import Data.Row (type (.==))
 import Data.Text qualified as T
+import Data.Time (NominalDiffTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -454,7 +455,7 @@ component =
       Typed t -> do
         gets (\st -> st.pending) >>= traverse_ H.kill
         waiting <- H.fork $ do
-          liftIO (threadDelay searchPause)
+          H.delayCounted searchPause
           modify (\st -> st {pending = Nothing})
           handleAction SearchNow
         modify (\st -> st {typed = t, pending = Just waiting})
@@ -621,9 +622,9 @@ filterLabel = \case
   OnlyDisabled -> "Disabled accounts"
 
 -- | How long a pause in typing writes the words into the address: 300
--- milliseconds.
-searchPause :: Int
-searchPause = 300_000
+-- milliseconds. A pause a test waits for: 'H.delayCounted'.
+searchPause :: NominalDiffTime
+searchPause = 0.3
 
 -- | The local storage key the page size is kept under.
 pageSizeKey :: Text

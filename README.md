@@ -3562,6 +3562,45 @@ for what the program does not know of: what the live channel or another tab
 pushes, a library's own drawing, the stand-in server's state. A failing read
 says what it found and what the program was doing.
 
+### A view's native tests
+
+A view whose logic is a machine (`View/<Name>/Machine.hs`) is tested
+natively in `wiki-app-test`, with no browser: the machine over generated
+runs, and the real component mounted on haskell-halogen's in-memory DOM to
+show it matches the machine. `Test.Harness.MemDom` mounts it and drives it;
+the bell's spec, `Test.BellDom`, is the example to copy.
+
+- `withView run component input $ \view -> …` mounts the component in a
+  container of the in-memory document, with `run` running its monad (the
+  in-memory backend over `MemDOM`), and disposes of it after the body.
+- Act as the reader does: `click view selector`, `typeInto view selector
+  text`, `keyDown "Escape" [] node`, `pressOutside view`. Each event
+  bubbles to the document and the window as in a page, and a disabled
+  button gets no click.
+- Read with CSS selectors: `find`, `findAll`, `textOf`, and
+  `N.attribute`, `N.textContent` on what they find.
+- Wait for the program, never on a clock: `settle view` once it is quiet;
+  `settleHolding view (heldCount gate)` once it waits only for the asks
+  the test holds.
+- Hold the backend's asks one of two ways. A `Gate`, for answers that are
+  the test's own values (the bell's come from a model of the server, which
+  handles an ask at one step and answers it at another). Or the library's
+  `withHeldWaits`, for the real backend's answer at a moment the test
+  chooses (`pending`, then `release` in any order).
+- The in-memory document is one for the process: a press on it reaches
+  every mounted view's listeners. So `withView` mounts one view at a time;
+  the rest of the suite runs beside it. The address is the process's one
+  too, and the prerender's router (`Wiki.App.Static`) writes it beside
+  them: read where a view went from its router's `Router.changes`.
+
+A pause a test waits for is `H.delayCounted`, in seconds: a debounce, an
+autosave, a look again later. It counts as the program waiting, so a wait
+for the program to be quiet waits for it, and `withTestClock` and
+`advance` move it with nothing slept (`Test.Users` advances the users'
+search past its 300 ms pause). A pause nothing waits for, a notice that
+goes away or a ticker, is `H.delay`. Not `liftIO (threadDelay n)`: it
+sleeps on the real clock, which no test moves.
+
 ### The smoke tests
 
 The smoke tests drive the page `npm run build-wasm` built, in headless
@@ -3644,7 +3683,7 @@ to it. A failure is raised through `expectationFailure` (or
 every compiler: base's `fail` carries a call stack only from GHC 9.14. In
 the application, a pause that only takes a notice off the screen or ticks
 is `H.delay`, which `waitQuiet` does not wait for; one followed by work a
-test waits for is `liftIO (threadDelay n)` (`Wiki.App.View.Common`).
+test waits for is `H.delayCounted` (`Wiki.App.View.Common`).
 
 What stays in node is what tests or serves JavaScript without a browser,
 and one tool: `toolchain/test-assistant.mjs` (the writing assistant's

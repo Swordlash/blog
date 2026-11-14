@@ -30,7 +30,7 @@ where
 
 import Data.Row (Empty)
 import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time (NominalDiffTime, UTCTime, defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML.Events qualified as HE
 import Halogen.TH (hh)
@@ -106,11 +106,11 @@ data Action
   | ClearConfig
 
 -- | How long to wait before fetching the backups' state again while one
--- is running, in microseconds.
-lookAgain :: Int
-lookAgain = 2_000_000
+-- is running. A pause a test waits for: 'H.delayCounted'.
+lookAgain :: NominalDiffTime
+lookAgain = 2
 
-component :: forall query m. (MonadAdmin m, MonadLoad m, MonadIO m) => H.Component query Input Void m
+component :: forall query m. (MonadAdmin m, MonadLoad m) => H.Component query Input Void m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -341,7 +341,7 @@ component =
     watch =
       unlessM (gets (\st -> st.watching)) $ do
         modify (\st -> st {watching = True})
-        void (H.fork (liftIO (threadDelay lookAgain) >> handleAction Look))
+        void (H.fork (H.delayCounted lookAgain >> handleAction Look))
 
     withBackups :: (Backups -> H.HalogenM State Action Empty Void m ()) -> H.HalogenM State Action Empty Void m ()
     withBackups f =

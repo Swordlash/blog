@@ -346,6 +346,7 @@ test-suite wiki-app-test
         Test.DecryptedExport
         Test.Export
         Test.Favicon
+        Test.Harness.MemDom
         Test.Hydrate
         Test.Import
         Test.Islands
@@ -365,6 +366,7 @@ test-suite wiki-app-test
         Test.Shell
         Test.Threads
         Test.Ticking
+        Test.Users
     build-depends:
         HUnit,
         QuickCheck,
@@ -500,45 +502,3 @@ test-suite wiki-app-browser-test
   -- Data.IORef, which Protolude does not export.
   if flag(interactive)
     cpp-options: -DINTERACTIVE
-
--- The bell tested over haskell-halogen-remote (WP5.118's spike): mounted
--- natively in this process over the in-memory backend with its asks held,
--- in remote's RemoteDOM, its DOM shown in headless Chromium over a
--- WebSocket and driven by haskell-halogen-playwright. No wasm build. It
--- needs node, the npm package playwright and Chromium, as the smoke suites
--- do, and reports its examples pending unless WIKI_REMOTE_REQUIRED=1, so
--- that a plain cabal test passes without a browser.
-test-suite wiki-app-remote-test
-  import:           shared
-  type:             exitcode-stdio-1.0
-  hs-source-dirs:   test
-  main-is:          RemoteTest.hs
-
-  if arch(wasm32) || arch(javascript)
-    buildable: False
-  else
-    ghc-options: -threaded
-    other-modules:
-        Test.Bell
-        Test.BellHarness
-        Test.Remote.Bell
-    build-depends:
-        QuickCheck,
-        base,
-        containers,
-        hspec >= 2,
-        primitive,
-        protolude,
-        row-types,
-        stm,
-        text,
-        time,
-        transformers,
-        unliftio-core,
-        haskell-halogen-core,
-        haskell-halogen-playwright,
-        haskell-halogen-remote,
-        haskell-halogen-router,
-        wiki-api,
-        wiki-app,
-        wiki-core

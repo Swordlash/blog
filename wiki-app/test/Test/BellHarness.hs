@@ -1,14 +1,17 @@
--- | What the bell's component tests share, on the in-memory DOM
--- ("Test.BellDom") and in a browser over haskell-halogen-remote
--- ("Test.Remote.Bell"): a backend that holds the bell's asks until the test
--- gives each its answer ('Gated'), a feed the test tells through, the bell
--- under a parent that gives it a revision, and a run of "Test.Bell"'s steps
--- carried out on the mounted bell and checked after each step ('runSteps').
--- Where the bell is mounted and how its page is read and clicked is each
--- module's own ('Ui').
+-- | The bell's component under test ("Test.BellDom"): a backend that holds
+-- the bell's asks in a gate until the test gives each its answer
+-- ('Gated'), a feed the test tells through, the bell under a parent that
+-- gives it a revision, and a run of "Test.Bell"'s steps carried out on the
+-- mounted bell and checked after each step ('runSteps'). How the bell's
+-- page is read and acted on is "Test.BellDom"'s ('Ui').
+--
+-- The asks are held in a "Test.Harness.MemDom" 'Gate', not by the
+-- library's held waits: the answers are the model's server's
+-- ("Test.Bell"), handled at one step and given back at another, not what
+-- the in-memory backend would answer.
 module Test.BellHarness
   ( -- * The backend
-    Held (..)
+    Ask
   , Gated (..)
   , runGated
 
@@ -26,7 +29,6 @@ module Test.BellHarness
   )
 where
 
-import Control.Concurrent.STM (TVar, modifyTVar', newTVarIO, readTVarIO, writeTVar)
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.Primitive (PrimMonad)
 import Control.Monad.Trans.Class (MonadTrans (..))
@@ -42,6 +44,7 @@ import Halogen.Subscription qualified as HS
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude hiding (State)
 import Test.Bell (Server (..), Step (..), World (..), emptyServer, forgotten, handleMark, handleRead, made, madeEarly, madeMany, play, start)
+import Test.Harness.MemDom (Gate, Held (..), answer, heldNow, hold, newGate)
 import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki, WikiError, anonymousIn)
 import Wiki.App.Backend.Mem (MemWiki, runMemWiki)
@@ -56,20 +59,13 @@ import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (NotificationId (..))
 import Wiki.Core.Notification (Notification (..))
 
--- | One ask held, in the gate in the order the asks were made: what it
--- asks, the answer the server gave once it handled it, and where the
--- answer goes when the test lets it go.
-data Held = Held
-  { asked :: Maybe ReadMark
-  -- ^ 'Nothing' for a read, the mark for a mark.
-  , handled :: Maybe Notifications
-  , answer :: MVar (Either WikiError Notifications)
-  }
+-- | One of the bell's asks: 'Nothing' for a read, the mark for a mark.
+type Ask = Maybe ReadMark
 
 -- | 'Gated' is the in-memory backend with the notifications' reads and
 -- marks held in a gate, in the order they were made, until the test gives
 -- each its answer. Everything else is the in-memory backend's.
-newtype Gated m a = Gated (ReaderT (TVar [Held]) m a)
+newtype Gated m a = Gated (ReaderT (Gate Ask (Either WikiError Notifications)) m a)
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadUnliftIO, PrimMonad)
 
 instance MonadTrans Gated where
@@ -97,16 +93,11 @@ instance (MonadNotifications m, MonadIO m) => MonadNotifications (Gated m) where
   markRead = held . Just
 
 -- | An ask put in the gate, and its answer once the test gives it.
-held :: (MonadIO m) => Maybe ReadMark -> Gated m (Either WikiError Notifications)
-held asked = Gated $ do
-  gate <- ask
-  liftIO $ do
-    answer <- newEmptyMVar
-    atomically (modifyTVar' gate (<> [Held {asked, handled = Nothing, answer}]))
-    takeMVar answer
+held :: (MonadIO m) => Ask -> Gated m (Either WikiError Notifications)
+held asked = Gated (ask >>= \gate -> liftIO (hold gate asked))
 
 -- | A program of the gated backend run over a wiki in memory.
-runGated :: TVar [Held] -> IORef MemState -> Gated (MemWiki n) a -> n a
+runGated :: Gate Ask (Either WikiError Notifications) -> IORef MemState -> Gated (MemWiki n) a -> n a
 runGated gate wiki (Gated p) = runMemWiki wiki (runReaderT p gate)
 
 data Query a = SetRevision Int a
@@ -132,7 +123,10 @@ parent feed router =
 -- channel, how many listen to the feed, the revision given, and how to
 -- give a new one and to take the bell away.
 data Rig = Rig
-  { gate :: TVar [Held]
+  { gate :: Gate Ask (Either WikiError Notifications)
+  , handled :: IORef (Map.Map Int Notifications)
+  -- ^ The answers the server gave to the asks it handled, by the ask's
+  -- number in the gate, until they are given back.
   , channel :: HS.Subscribe IO Heard
   , listening :: IORef Int
   -- ^ 'listen's less 'unlisten's of the feed.
@@ -145,7 +139,8 @@ data Rig = Rig
 -- for the bell's own 'revise' and 'dispose'.
 newRig :: IO (Feed, (Int -> IO ()) -> IO () -> Rig)
 newRig = do
-  gate <- newTVarIO []
+  gate <- newGate
+  handled <- newIORef mempty
   channel <- HS.create
   listening <- newIORef (0 :: Int)
   revision <- newIORef 0
@@ -162,7 +157,7 @@ newRig = do
           , listen = atomicModifyIORef' listening (\n -> (n + 1, ()))
           , unlisten = atomicModifyIORef' listening (\n -> (n - 1, ()))
           }
-  pure (feed, \revise dispose -> Rig {gate, channel, listening, revision, revise, dispose})
+  pure (feed, \revise dispose -> Rig {gate, handled, channel, listening, revision, revise, dispose})
 
 -- | What the bell shows: the count; whether the list is open; each
 -- notification listed, by its number, and whether it is unread; and
@@ -197,6 +192,7 @@ data Ui = Ui
   -- ^ "Mark read" on the unread notification at this place.
   , clickMarkAll :: IO ()
   , clickLink :: Int -> IO ()
+  , pressOutside :: IO ()
   , shown :: IO Shown
   , settle :: IO ()
   }
@@ -210,7 +206,7 @@ drive rig ui ref gone s = do
   case s of
     _ | gone && s `elem` [ClickBell, ClickMarkAll, Revise, Finish] -> pass
     ClickBell -> ui.clickBell
-    PressOutside -> pass
+    PressOutside -> unless gone ui.pressOutside
     ClickMark i -> unless gone (ui.clickMark i)
     ClickMarkAll -> ui.clickMarkAll
     ClickLink i -> unless gone (ui.clickLink i)
@@ -234,18 +230,18 @@ drive rig ui ref gone s = do
     HandleOut _ -> pass
     Handle -> do
       server <- readIORef ref
-      waiting <- readTVarIO rig.gate
-      case break (isNothing . (.handled)) waiting of
-        (earlier, h : later) -> do
-          let (server', a) = maybe (server, handleRead server) (`handleMark` server) h.asked
-          writeIORef ref server'
-          atomically (writeTVar rig.gate (earlier <> (h {handled = Just a} : later)))
-        _ -> pass
+      waiting <- heldNow rig.gate
+      done <- readIORef rig.handled
+      for_ (head [h | h <- waiting, not (Map.member h.number done)]) $ \h -> do
+        let (server', a) = maybe (server, handleRead server) (`handleMark` server) h.asked
+        writeIORef ref server'
+        modifyIORef' rig.handled (Map.insert h.number a)
     Deliver i -> do
-      waiting <- readTVarIO rig.gate
-      for_ (atMay [(h, a) | h <- waiting, Just a <- [h.handled]] i) $ \(h, a) -> do
-        atomically (modifyTVar' rig.gate (filter (\x -> x.answer /= h.answer)))
-        putMVar h.answer (Right a)
+      waiting <- heldNow rig.gate
+      done <- readIORef rig.handled
+      for_ (atMay [(h, a) | h <- waiting, Just a <- [Map.lookup h.number done]] i) $ \(h, a) -> do
+        modifyIORef' rig.handled (Map.delete h.number)
+        answer rig.gate h (Right a)
     Revise -> do
       r <- atomicModifyIORef' rig.revision (\r -> (r + 1, r + 1))
       rig.revise r
@@ -259,8 +255,7 @@ data Check = BesideMachine | RulesOnly
   deriving stock (Eq)
 
 -- | A run on a mounted bell: what went wrong first, with the steps up to
--- it, or nothing. Runs here have no 'PressOutside' (the module's Haddock
--- of "Test.BellDom" says why).
+-- it, or nothing.
 runSteps :: Check -> Rig -> Ui -> [Step] -> IO (Maybe Text)
 runSteps how rig ui run = do
   ref <- newIORef emptyServer
@@ -270,7 +265,7 @@ runSteps how rig ui run = do
         let w' = play w s
         page <- if w'.finished then pure (shownBy w') else ui.shown
         server <- readIORef ref
-        waiting <- readTVarIO rig.gate
+        waiting <- heldNow rig.gate
         listening <- readIORef rig.listening
         let expected = shownBy w'
             holding = length waiting
@@ -297,9 +292,9 @@ runSteps how rig ui run = do
         if null problems
           then go (done <> [s]) w' seen' rest
           else pure (Just (T.unlines (("after " <> show (done <> [s])) : problems)), w'.finished)
-  (outcome, gone) <- go [] start mempty (filter (/= PressOutside) run)
+  (outcome, gone) <- go [] start mempty run
   -- The asks still held are let go, so that no worker waits for ever.
-  readTVarIO rig.gate >>= traverse_ (\h -> tryPutMVar h.answer (Right Notifications {unread = 0, items = []}))
+  heldNow rig.gate >>= traverse_ (\h -> answer rig.gate h (Right Notifications {unread = 0, items = []}))
   -- A run that stopped at a fault before its Finish leaves the bell
   -- mounted: disposed of here, or its tree would count in the next run's
   -- activity.

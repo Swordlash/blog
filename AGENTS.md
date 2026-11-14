@@ -180,8 +180,23 @@ Those of haskell-halogen's `AGENTS.md` apply unchanged, in short:
   raised back as an event. No step waits, so no step can check, wait and write. Its rules
   are QuickCheck properties over generated orders of events and answers, against a model
   of the server (and of the HTTP backend's cache, for a view over it), in `wiki-app-test`;
-  one spec mounts the real component on the in-memory DOM with its asks held. A plain
+  one spec mounts the real component on the in-memory DOM with its asks held
+  (`Test.Harness.MemDom`; the README's "A view's native tests"). A machine infers nothing
+  about what an answer covers from a property of its items (how many there are, their
+  times, their numbers): what was heard since an ask is applied again by id, and where
+  that cannot be exact, a read asked afterwards follows. "The same one" is a number or a
+  ticket, never an equal value: two visits of a page, a view mounted again, the same text
+  quoted twice are told apart by identity. State that the machine's effects write lives
+  in the model, and the component's runner never waits between the effects of one step:
+  an effect is a write of state, a tell, or a fork. The model of the server takes from
+  the real code the answers' shape, limits, counts, order and atomicity, every way the
+  server deletes, and every bounded buffer between the server and the view. A plain
   handler may still `lift` where there is one ask and no change of input.
+- A pause in a view is `H.delay` when nothing waits for it (a notice taken off the
+  screen, a ticker) and `H.delayCounted` when a test waits for the work after it (a
+  debounce, the autosave, a re-look), never `liftIO (threadDelay n)`: only those two
+  follow a test's clock (`withTestClock`, `advance`), and only the second counts as work
+  for `waitQuiet`.
 - A test that fails by chance shows a fault of design, in the program or in the test (the
   owner, 2026-11-14): find what lets the race be written, or what the test cannot see, and
   fix that. A longer wait is the last resort, and is said to be one. A test waits on the

@@ -244,7 +244,7 @@ spec m = do
     eventually $ unsafeIOToPageM (foldedLines host) `shouldReturn` []
     inputsSeen ui `shouldReturn` 0
     -- Longer than the wait before a draft is saved: none is.
-    unsafeIOToPageM (threadDelay (draftDelay + 500_000))
+    unsafeIOToPageM (threadDelay (round ((draftDelay + 0.5) * 1_000_000)))
     hello <- readPage wiki ["blog"] ["hello-world"]
     draftOf wiki hello `shouldReturn` Nothing
     find ui ".editor-cancel" >>= click

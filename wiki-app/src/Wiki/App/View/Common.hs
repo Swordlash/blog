@@ -7,20 +7,25 @@
 -- = Pauses
 --
 -- A view pauses in one of two ways, and which one says whether a test
--- waits for the pause. The smoke tests drive the built page with
--- haskell-halogen-playwright, whose @waitQuiet@ waits for every fiber of
--- the program that waits in a @liftIO@, and not for one in @H.delay@.
+-- waits for the pause. A test waits for the program to be quiet
+-- (haskell-halogen-playwright's and hspec-halogen's @waitQuiet@, a native
+-- spec's 'Halogen.Activity.quiet'): for every fiber of the program that
+-- waits in a @liftIO@ or in @H.delayCounted@, and not for one in
+-- @H.delay@. Both pauses are in seconds (a @NominalDiffTime@), and both
+-- follow a native test's own clock ('Halogen.Activity.Control.withTestClock').
 --
--- * A pause followed by work a test waits for is
---   @liftIO (threadDelay n)@, in microseconds: the preview's and a search's
---   debounce, the editor's check and its draft, the backups' next look
---   while one runs. @waitQuiet@ after typing then returns once that work
---   is done and drawn.
+-- * A pause followed by work a test waits for is @H.delayCounted@: the
+--   preview's and a search's debounce, the editor's check and its draft,
+--   the backups' next look while one runs. @waitQuiet@ after typing then
+--   returns once that work is done and drawn.
 -- * A pause that only takes something off the screen, or ticks, is
---   @H.delay@, in seconds (a @NominalDiffTime@): the \"Saved\" and \"Copied\"
---   notices, the export's notice, the assistant's seconds counter.
---   @waitQuiet@ after a save then returns with \"Saved\" still shown, and a
---   ticker does not keep the page from ever being quiet.
+--   @H.delay@: the \"Saved\" and \"Copied\" notices, the export's notice,
+--   the assistant's seconds counter. @waitQuiet@ after a save then returns
+--   with \"Saved\" still shown, and a ticker does not keep the page from
+--   ever being quiet.
+--
+-- Not @liftIO (threadDelay n)@: it is counted as a wait too, but it sleeps
+-- on the real clock, which a test's clock does not move.
 --
 -- Work that reaches a view through an emitter, with no fiber waiting for
 -- it, is not counted by itself. The writing assistant's turn is such work:
