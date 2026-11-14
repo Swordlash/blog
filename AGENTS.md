@@ -195,7 +195,7 @@ Those of haskell-halogen's `AGENTS.md` apply unchanged, in short:
   around a library's call.
 - A smoke suite waits on the program, never on the clock: `visit` after a navigation,
   `waitQuiet` after an action that asks the server, a condition named in a comment only for
-  what is not the program's, `afterEvent` for an event the browser fires late; a failure
+  what is not the program's, `waitForEvent` for an event the driver's settle does not wait for; a failure
   goes through `expectationFailure` so that it names the suite's line on every GHC (the
   README's "The smoke tests").
 - The packages' `CHANGELOG.md` files are frozen as they stood on 2026-11-11 and are not
