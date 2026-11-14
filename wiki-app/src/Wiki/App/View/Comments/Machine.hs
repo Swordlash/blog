@@ -191,13 +191,16 @@ step event m
 -- those changes was made, and nothing in it says which. Applied again, an
 -- addition the answer holds is kept as the answer has it, a deletion is
 -- one again, and an edit or a resolution is as told, which a later one
--- still on its way corrects.
+-- still on its way corrects. A failure is shown only where no threads are:
+-- threads shown are kept, and the next read, or the channel, brings what
+-- they lack.
 taking :: Ask -> PageId -> Either WikiError [Thread] -> Model -> Model
 taking asked page answer m
   | m.page /= Just page = m'
-  | otherwise = case answer of
-      Right ts -> m' {threads = ThreadsReady (foldr applyEvent ts [e | (e, at) <- m.heard, not (asked `madeAfter` at)])}
-      Left e -> m' {threads = ThreadsFailed e}
+  | otherwise = case (answer, m.threads) of
+      (Right ts, _) -> m' {threads = ThreadsReady (foldr applyEvent ts [e | (e, at) <- m.heard, not (asked `madeAfter` at)])}
+      (Left _, ThreadsReady _) -> m'
+      (Left e, _) -> m' {threads = ThreadsFailed e}
   where
     m' = m {heard = stillWanted m.asks m.heard}
 
