@@ -5,9 +5,9 @@ title: The bell keeps your "Mark read" and every notification it has shown
 
 ## Bug fixes
 
-- "Mark read" under the bell no longer turns back to unread when an older
-  answer of the server arrives late, for example after you click "Mark
-  read" and open the bell again at once.
+- "Mark read" under the bell no longer turns back to unread when the list
+  the bell was still reading as you clicked it arrives after your mark,
+  for example when you open the bell and click "Mark read" at once.
 - A notification shown under the bell no longer disappears from the list
   when two reads of the list are answered in the other order, or when one
   arrives while a "Mark read" is under way.
