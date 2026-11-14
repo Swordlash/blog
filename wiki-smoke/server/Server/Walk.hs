@@ -750,13 +750,20 @@ fresh smoke loadsRef = do
         waitQuiet adaTab
         editorReady adaTab
       pushed samTab (withText editing (locator samTab "#app .page-actions .page-editors"))
-      -- Sam's editor, opened, names Ada and asks before starting.
+      -- Sam's editor, opened, names Ada and asks before starting. The
+      -- page's view stopped watching the page as it closed, and the tab
+      -- forgot who edits it; the editor watches it again once it has read
+      -- the page, and learns that Ada edits it from the server's answer to
+      -- that subscription, over the WebSocket: a push, which 'waitQuiet'
+      -- does not wait for, so a condition. The page's view, back, learns
+      -- it the same way.
       click (locator samTab "#app .page-actions a[href$='/first-page/edit/']")
       waitQuiet samTab
+      pushed samTab (withText "Open the editor anyway?" (locator samTab "#app .editor-presence-warning"))
       hasText (locator samTab "#app .editor-presence-warning") (editing <> " Open the editor anyway?")
       click (withText "Back to the page" (locator samTab "#app .editor-presence-warning button"))
       waitQuiet samTab
-      hasText (locator samTab "#app .page-actions .page-editors") editing
+      pushed samTab (withText editing (locator samTab "#app .page-actions .page-editors"))
       -- Ada closes her editor: the presence ends.
       withFailureContext adaTab $ do
         click (locator adaTab "#app .editor-cancel")
@@ -793,6 +800,9 @@ fresh smoke loadsRef = do
       click (locator samTab "#app .notifications-toggle")
       waitQuiet samTab
       hasText (locator samTab "#app .notification-list .notification-what") (adminName <> " mentioned you")
+      -- The comment itself reaches Sam's page in a push of its own, about
+      -- the page's threads, apart from the notification's: a condition.
+      pushed samTab (withText "@sam" (locator samTab "#app .page-comments a.mention"))
       hasText (locator samTab "#app .page-comments a.mention") "@sam"
       report "a comment that mentions a user is told under the bell in their tab, over the WebSocket, and links to them"
     nothingWrongOnServer w.page
