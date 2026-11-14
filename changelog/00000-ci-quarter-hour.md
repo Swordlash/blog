@@ -21,5 +21,5 @@ technical: true
   cases; the native run keeps the full count. The test of the cost of
   deeply nested HTML times smaller inputs.
 - Each CI run's summary lists every wasm and smoke test suite with its
-  time, its budget and its five slowest examples, and a suite over its
-  budget fails the run.
+  time, its budget and its five slowest examples, and warns of a suite
+  over its budget.

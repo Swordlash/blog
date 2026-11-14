@@ -12,19 +12,29 @@
 # several shards prints one list per shard; the five slowest of all are
 # taken.
 #
-# A suite that took longer than its budget on GitHub's hosted runners fails,
-# with the same five examples in the error. On another runner, such as the
+# A suite that took longer than its budget on GitHub's hosted runners is
+# named in a warning, with the same five examples, and, once the budgets
+# bind (budgets_fail below), fails. On another runner, such as the
 # owner's, the time is only reported: the owner's machine is slower while
 # sessions build on it, and its times are not the ones the budgets were
 # set from. The exit status is the command's when the command failed, 1
-# when it passed but over its budget, and 0 otherwise.
+# when it passed but over a binding budget, and 0 otherwise.
 #
 # The budgets are below, in one place, each with the measure it was set
 # from. A budget leaves room for the runners' spread: the same wasm suite
 # took 425 and 580 seconds on two runs of one day (2026-11-12 and 13).
 # WIKI_SUITE_BUDGET, in seconds, takes the place of the table's budget,
-# for this script's own test (toolchain/test-ci-suite-time.sh).
+# and WIKI_SUITE_BUDGETS_FAIL the place of budgets_fail, for this script's
+# own test (toolchain/test-ci-suite-time.sh).
 set -eu
+
+# Whether a suite over its budget on a hosted runner fails its job (true)
+# or is only named in a warning (false). False since 2026-11-14: the
+# budgets below are estimates until they are set from hosted runs, and a
+# budget the runners' spread can cross would make a failure of chance.
+# Turned to true once they are (WP5.110 of docs/PLAN.md).
+budgets_fail=false
+budgets_fail=${WIKI_SUITE_BUDGETS_FAIL:-$budgets_fail}
 
 suite=${1:?usage: ci-suite-time.sh <suite> <command> [args...]}
 shift
@@ -40,9 +50,9 @@ budget_of() {
     #
     # wiki-core-test on wasm, under Node, beside the browser suite: 790 s
     # on 2026-11-13 (run 43504709479) before WP5.110 cut its cases on wasm;
-    # after the cut, 326 s on a loaded 16-core machine where the same
-    # suite had taken 1070 s, so about 240 s expected on a hosted runner.
-    # The 265 s that one day added would cross the budget.
+    # after the cut and WP5.108 (#273), 111 s alone on a quiet machine, so
+    # about 120 to 200 s expected on a hosted runner beside the browser
+    # suite. The 265 s that one day added would cross the budget.
     wiki-core-test) echo 420 ;;
     # wiki-api-test on wasm: 2.3 to 2.8 s from 2026-11-11 to 13.
     wiki-api-test) echo 60 ;;
@@ -104,8 +114,10 @@ fi
 
 if [ "$status" -ne 0 ]; then
   verdict="failed (exit status $status)"
-elif [ "$over" = true ] && [ "$hosted" = true ]; then
+elif [ "$over" = true ] && [ "$hosted" = true ] && [ "$budgets_fail" = true ]; then
   verdict="over its budget"
+elif [ "$over" = true ] && [ "$hosted" = true ]; then
+  verdict="over its budget, which warns only until the budgets bind"
 elif [ "$over" = true ]; then
   verdict="over its budget, which binds on the hosted runners only"
 else
@@ -131,6 +143,9 @@ if [ "$status" -ne 0 ]; then
 fi
 if [ "$over" = true ] && [ "$hosted" = true ]; then
   list=$(printf '%s\n' "$slowest" | awk 'NF { printf "%s%s", sep, $0; sep = "; " }')
-  echo "::error title=$suite over its budget::$suite took $seconds s, over its budget of $budget s (toolchain/ci-suite-time.sh). The slowest examples: ${list:-none listed}"
-  exit 1
+  if [ "$budgets_fail" = true ]; then
+    echo "::error title=$suite over its budget::$suite took $seconds s, over its budget of $budget s (toolchain/ci-suite-time.sh). The slowest examples: ${list:-none listed}"
+    exit 1
+  fi
+  echo "::warning title=$suite over its budget::$suite took $seconds s, over its budget of $budget s (toolchain/ci-suite-time.sh; budgets warn only, for now). The slowest examples: ${list:-none listed}"
 fi

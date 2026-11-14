@@ -3,8 +3,9 @@
 # print what hspec prints: that the suite's output passes through and its
 # exit status is kept, that the five slowest examples are read from one
 # list or from a list per shard and written to the job's summary, that a
-# suite over its budget fails on a hosted runner and only says so on
-# another, and that a failing suite fails whatever its time.
+# suite over its budget warns on a hosted runner (fails there once the
+# budgets bind) and only says so on another, and that a failing suite
+# fails whatever its time.
 #
 #   sh toolchain/test-ci-suite-time.sh
 #
@@ -78,14 +79,23 @@ run RUNNER_ENVIRONMENT=github-hosted EXIT=3 WIKI_SUITE_BUDGET=60 sh "$script" fa
 [ "$status" -eq 3 ] || fail "a failing suite exited $status, not its own 3"
 grep -q 'failed (exit status 3)' "$work/summary" || fail "a failing suite was not reported as failed: $(cat "$work/summary")"
 
-# 3. Over its budget on a hosted runner: fails, with the slowest named.
-run RUNNER_ENVIRONMENT=github-hosted SLEEP=2 WIKI_SUITE_BUDGET=1 sh "$script" fake-suite "$work/suite"
+# 3. Over its budget on a hosted runner, once the budgets bind: fails,
+# with the slowest named.
+run RUNNER_ENVIRONMENT=github-hosted WIKI_SUITE_BUDGETS_FAIL=true SLEEP=2 WIKI_SUITE_BUDGET=1 sh "$script" fake-suite "$work/suite"
 [ "$status" -eq 1 ] || fail "a suite over its budget on a hosted runner exited $status"
 grep -q '^::error title=fake-suite over its budget::.*9.0 s /A/the slowest/' "$work/out" || fail "no error naming the slowest examples: $(cat "$work/out")"
 grep -q 'over its budget$' "$work/summary" || fail "the summary does not say over its budget: $(cat "$work/summary")"
 
+# 3b. Over its budget on a hosted runner while the budgets warn only (the
+# script's own setting): passes, with a warning naming the slowest.
+run RUNNER_ENVIRONMENT=github-hosted SLEEP=2 WIKI_SUITE_BUDGET=1 sh "$script" fake-suite "$work/suite"
+[ "$status" -eq 0 ] || fail "a suite over its budget, budgets warning only, exited $status"
+grep -q '^::warning title=fake-suite over its budget::.*9.0 s /A/the slowest/' "$work/out" || fail "no warning naming the slowest examples: $(cat "$work/out")"
+if grep -q '::error' "$work/out"; then fail "an error while the budgets warn only"; fi
+grep -q 'warns only until the budgets bind$' "$work/summary" || fail "the summary does not say the budget warns only: $(cat "$work/summary")"
+
 # 4. Over its budget on another runner: passes, and says so.
-run RUNNER_ENVIRONMENT=self-hosted SLEEP=2 WIKI_SUITE_BUDGET=1 sh "$script" fake-suite "$work/suite"
+run RUNNER_ENVIRONMENT=self-hosted WIKI_SUITE_BUDGETS_FAIL=true SLEEP=2 WIKI_SUITE_BUDGET=1 sh "$script" fake-suite "$work/suite"
 [ "$status" -eq 0 ] || fail "a suite over its budget on the owner's runner exited $status"
 grep -q 'which binds on the hosted runners only' "$work/summary" || fail "the summary does not say the budget binds on hosted runners only: $(cat "$work/summary")"
 if grep -q '::error' "$work/out"; then fail "an error on the owner's runner"; fi

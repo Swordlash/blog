@@ -3067,9 +3067,11 @@ machine one after the other.
 Each wasm suite and each smoke suite is timed against a budget
 (`toolchain/ci-suite-time.sh`): the run's summary lists each suite's wall time, its
 budget and its five slowest examples, from hspec's `--print-slow-items`, and a suite
-that takes longer than its budget on GitHub's hosted runners fails its job with that
-list. The budgets are in the script, each with the measure it was set from; one
-suite's time growing by half in a day is what they are there to catch. On the owner's
+that takes longer than its budget on GitHub's hosted runners is named in a warning
+with that list. The budgets are in the script, each with the measure it was set
+from; one suite's time growing by half in a day is what they are there to catch.
+Until they are set from hosted runs they warn only; the script's one switch,
+`budgets_fail`, then makes a suite over its budget fail its job. On the owner's
 machine the times are reported only. `wiki-core-test` runs a quarter of its
 properties' cases on wasm (`wiki-core/test/Test/Cases.hs`): the native jobs search
 the inputs at the full count, and the wasm run checks that the wasm build agrees.
