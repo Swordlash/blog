@@ -460,7 +460,12 @@ component =
         modify (\st -> st {typed = t, pending = Just waiting})
       -- The words typed, into the address, from the first page. The address
       -- is replaced rather than added to the history: each pause in typing
-      -- is not a place to go back to.
+      -- is not a place to go back to. Every write of the address here
+      -- (the words, the filter, the page size, a page back in range) is
+      -- made on the loop, in the step that decides it ('H.liftEffect'):
+      -- through 'liftIO' it came on a thread of its own, after whatever
+      -- ran meanwhile, and could take the reader back from a route
+      -- followed in that instant.
       SearchNow -> do
         gets (\st -> st.pending) >>= traverse_ H.kill
         st <- get
@@ -468,17 +473,17 @@ component =
         let listing = st.input.listing
             search = T.strip st.typed
         when (search /= listing.search) $
-          Router.redirect st.input.context.router (Admin (Users UserListing {search, page = 1, only = listing.only}))
+          H.liftEffect (Router.redirect st.input.context.router (Admin (Users UserListing {search, page = 1, only = listing.only})))
       ChoseFilter n -> do
         st <- get
         for_ (atMay [minBound .. maxBound] n) $ \only ->
-          Router.navigate st.input.context.router (Admin (Users UserListing {search = st.input.listing.search, page = 1, only}))
+          H.liftEffect (Router.navigate st.input.context.router (Admin (Users UserListing {search = st.input.listing.search, page = 1, only})))
       ChoseSize n -> for_ (atMay userPageSizes n) $ \size -> do
         H.liftEffect (writePageSize size)
         modify (\st -> st {kept = size})
         st <- get
         if st.input.listing.page /= 1
-          then Router.navigate st.input.context.router (Admin (Users UserListing {search = st.input.listing.search, page = 1, only = st.input.listing.only}))
+          then H.liftEffect (Router.navigate st.input.context.router (Admin (Users UserListing {search = st.input.listing.search, page = 1, only = st.input.listing.only})))
           else load
       Manage u -> modify (\st -> st {managing = Just u, told = Nothing, problem = Nothing})
       FromDialog UserDialog.Closed -> modify (\st -> st {managing = Nothing})
@@ -571,7 +576,7 @@ component =
       st <- get
       let listing = st.input.listing
           pages = max 1 ((p.total + st.size - 1) `div` st.size)
-          go page = Router.redirect st.input.context.router (Admin (Users UserListing {search = listing.search, page, only = listing.only}))
+          go page = H.liftEffect (Router.redirect st.input.context.router (Admin (Users UserListing {search = listing.search, page, only = listing.only})))
       if
         | listing.page < 1 -> go 1
         | null p.users && p.total > 0 && listing.page > pages -> go pages

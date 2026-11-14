@@ -160,7 +160,7 @@ import Wiki.Server.Storage.Backup (backupFiles, backupTime)
 import Wiki.Server.Storage.Layout (backupsDir, temporaryDir)
 import Wiki.Server.Storage.Rows (StoredPassword (..), countRows, legacyPasswordCount, loadPasswordByLogin, passwordOf)
 import Wiki.Server.Totp (otpauthUri, qrRows, secretText)
-import Wiki.Server.Vault (Ceremonies, Purpose (..), Site (..), assertPasskey, beginCeremony, beginSignIn, ownerOf, passkeysOf, registerPasskey, storedVault, takeCeremony, takeSignIn)
+import Wiki.Server.Vault (Ceremonies, Purpose (..), Site (..), Taking (..), assertPasskey, beginCeremony, beginSignIn, ownerOf, passkeysOf, registerPasskey, storedVault, takeCeremony, takeSignIn)
 import Wiki.Server.Vault qualified as Vault
 import Wiki.Server.WebAuthn (Answer (..), Expected (..), NewCredential (..), Signer (..), challengeOf, fromBase64Url, toBase64Url, verifyAssertion, verifyRegistration)
 
@@ -563,8 +563,8 @@ handlers env caller =
         now <- liftIO getCurrentTime
         (held, p) <- pendingHere s now
         limitedFor p.login.text s $ do
-          challenge <- challengeFor now (pendingKey held) p.user Confirming
           given <- answerOf answer
+          challenge <- challengeFor now (pendingKey held) p.user Confirming given.clientData
           liftIO (assertPasskey env.storage now p.user answer.id (\stored -> verifyAssertion (expectedOf s challenge) (Identified (handleOf p.user)) stored given)) >>= \case
             -- Refused as a wrong code is: the sign-in waits for another try.
             Left _ -> do
@@ -728,9 +728,9 @@ handlers env caller =
           , finishRegistration = \answer -> do
               (u, s, key) <- ceremonyCaller
               now <- liftIO getCurrentTime
-              challenge <- challengeFor now key u Registering
               clientData <- bytesOf answer.clientDataJSON
               attestation <- bytesOf answer.attestationObject
+              challenge <- challengeFor now key u Registering clientData
               new <- either (\why -> refuse (ApiError.Invalid ("The passkey was refused: " <> why <> "."))) pure (verifyRegistration (expectedOf s challenge) clientData attestation)
               unless (toBase64Url new.credentialId == answer.id.text) $
                 refuse (ApiError.Invalid "The passkey was refused: its id is not the one its authenticator data names.")
@@ -1022,8 +1022,8 @@ handlers env caller =
           , finishAssertion = \answer -> do
               (u, s, key) <- ceremonyCaller
               now <- liftIO getCurrentTime
-              challenge <- challengeFor now key u Asserting
               given <- answerOf answer
+              challenge <- challengeFor now key u Asserting given.clientData
               liftIO (assertPasskey env.storage now u answer.id (\stored -> verifyAssertion (expectedOf s challenge) (Identified (handleOf u)) stored given))
                 >>= either (throwError . wikiError) pure
           }
@@ -1037,10 +1037,14 @@ handlers env caller =
       s <- signingHere
       token <- maybe (refuse ApiError.Unauthenticated) pure s.token
       pure (u, s, tokenHash token.text)
-    -- The challenge given to this session for this, used up.
-    challengeFor now key u purpose =
-      liftIO (takeCeremony env.ceremonies now key u purpose)
-        >>= maybe (refuse (ApiError.Invalid "No passkey is being made or used in this session, or it took more than five minutes: start again.")) pure
+    -- The challenge given to this session for this, used up by the answer
+    -- that answers it (its client data names it); an answer to another
+    -- challenge is refused and leaves it for its own.
+    challengeFor now key u purpose clientData =
+      liftIO (takeCeremony env.ceremonies now key u purpose (challengeOf clientData)) >>= \case
+        Taken challenge -> pure challenge
+        AnotherChallenge -> refuse (ApiError.Invalid "The passkey was refused: it answers another challenge than the one the wiki gave.")
+        NoneWaiting -> refuse (ApiError.Invalid "No passkey is being made or used in this session, or it took more than five minutes: start again.")
     expectedOf s challenge = Expected {challenge, origins = s.site.origins, rpId = s.site.rpId}
     -- A user's handle at the wiki, as a passkey is made for them: the
     -- bytes of their user id.

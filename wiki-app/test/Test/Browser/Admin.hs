@@ -42,6 +42,7 @@ $( browserJS
      , ("js_go_to_fragment", "wiki_test_go_to_fragment", Safe, [t|JSText -> IO ()|])
      , ("js_click_itself", "wiki_test_click_itself", Safe, [t|JSText -> IO ()|])
      , ("js_drag_out", "wiki_test_drag_out", Safe, [t|JSText -> JSText -> IO ()|])
+     , ("js_location_after_choice", "wiki_test_location_after_choice", Safe, [t|JSText -> Int -> IO JSText|])
      ]
  )
 
@@ -105,6 +106,17 @@ spec m = do
       ui <- startChanged m (withUsers 60) (Just "user-admin") (Admin (Users UserListing {search = "", page = 9, only = Everyone}))
       eventually (locationHash `shouldReturn` "#/admin/users/?page=3")
       eventually (find ui ".users-count" >>= (`shouldHaveText` "51–63 of 63"))
+
+    -- The filter is put in the address in the step that takes the choice,
+    -- during the change's own dispatch. Written by a thread of its own, it
+    -- came after whatever ran meanwhile, and took the reader back from a
+    -- route followed in that instant.
+    it "puts a filter in the address in the choice's own dispatch" $ runPage $ do
+      ui <- start m (Just "user-admin") (Admin (Users allUsers))
+      _ <- find ui ".users-filter"
+      settle
+      unsafeIOToPageM (fromJSText <$> js_location_after_choice (toJSText ".users-filter") 1)
+        `shouldReturn` "#/admin/users/?show=administrators"
 
     it "keeps what is typed in the search box when a pause writes it into the address" $ runPage $ do
       ui <- start m (Just "user-admin") (Admin (Users allUsers))

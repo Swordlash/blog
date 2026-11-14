@@ -82,7 +82,9 @@ $( browserJS
      , ("js_exportablePromise", "wiki_test_exportable_keys_left", Safe, [t|IO (Promise Int)|])
      , ("js_keys_mark", "wiki_test_keys_mark", Safe, [t|IO ()|])
      , ("js_keys_checked", "wiki_test_keys_checked", Safe, [t|IO JSText|])
+     , ("js_password_keys", "wiki_test_password_keys", Safe, [t|IO Int|])
      , ("js_existing", "wiki_test_passkeys_existing", Safe, [t|IO JSText|])
+     , ("js_unregistered", "wiki_test_passkeys_unregistered", Safe, [t|IO JSText|])
      , ("js_offered", "wiki_test_passkeys_offered", Safe, [t|IO Bool|])
      , ("js_pick", "wiki_test_passkeys_pick", Safe, [t|IO ()|])
      , ("js_offers", "wiki_test_passkeys_offers", Safe, [t|IO Int|])
@@ -292,6 +294,74 @@ signing m = describe "signing in with a passkey" $ do
       [] -> panic "no Remove"
     eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 1
     find ui ".passkey-name" >>= (`shouldHaveText` "My phone")
+    closedSignedIn ui
+
+  -- A passkey is made on the authenticator first, then registered with the
+  -- server. The account's panel can close in between (the person closes it,
+  -- or signs out); the registration then still goes to the server, from
+  -- the panel's finalizer, so that the passkey the person made is the
+  -- account's rather than one on their authenticator that signs nobody in.
+  it "registers a passkey made as the account's panel closes" $ runOwn $ do
+    serverStarts
+    serveDemo
+    me <- signedInAs "user-editor"
+    answerWith "GET" "api/v1/session" 200 me
+    answerAccount
+    unsafeIOToPageM js_vault_server
+    unsafeIOToPageM (js_install True True)
+    _ <- unsafeIOToPageM js_existing
+    ui <- startServer m Home
+    find ui ".account-toggle" >>= click
+    eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 1
+    find ui ".passkey-add input[name=passkey-name]" >>= (`typeText` "My phone")
+    find ui ".passkey-add input[name=passkey-password]" >>= (`typeText` "editor's password")
+    let finishes = length . filter (\r -> r.method == "PUT" && r.url == "api/v1/account/passkeys/registration") <$> asked
+    holdAt "PUT" "api/v1/account/passkeys/registration"
+    find ui ".passkey-add button[type=submit]" >>= click
+    eventually $ finishes `shouldReturn` 1
+    find ui ".account-toggle" >>= click
+    eventually $ length <$> findAll ui ".passkey-add" `shouldReturn` 0
+    release
+    settle
+    eventually $ unsafeIOToPageM (fromJSText <$> js_unregistered) `shouldReturn` "[]"
+    closedSignedIn ui
+
+  -- The panel reopened, and another passkey begun, while the first one's
+  -- registration, sent again from the closed panel, waits: the server
+  -- refuses that late answer to a challenge the new one replaced, and
+  -- leaves the new one's challenge for its own answer. The new passkey is
+  -- the account's; the first stays on the authenticator unknown to the
+  -- wiki, as one did before the panel sent it again.
+  it "registers a passkey begun in the panel reopened while the closed panel's registration waits" $ runOwn $ do
+    serverStarts
+    serveDemo
+    me <- signedInAs "user-editor"
+    answerWith "GET" "api/v1/session" 200 me
+    answerAccount
+    unsafeIOToPageM js_vault_server
+    unsafeIOToPageM (js_install True True)
+    _ <- unsafeIOToPageM js_existing
+    ui <- startServer m Home
+    let finishes = length . filter (\r -> r.method == "PUT" && r.url == "api/v1/account/passkeys/registration") <$> asked
+        addPasskey name = do
+          find ui ".passkey-add input[name=passkey-name]" >>= (`typeText` name)
+          find ui ".passkey-add input[name=passkey-password]" >>= (`typeText` "editor's password")
+          find ui ".passkey-add button[type=submit]" >>= click
+    find ui ".account-toggle" >>= click
+    eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 1
+    holdAt "PUT" "api/v1/account/passkeys/registration"
+    addPasskey "My phone"
+    eventually $ finishes `shouldReturn` 1
+    -- Closed: its finalizer sends the registration again, held too.
+    find ui ".account-toggle" >>= click
+    eventually $ finishes `shouldReturn` 2
+    find ui ".account-toggle" >>= click
+    eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 1
+    addPasskey "My tablet"
+    eventually $ finishes `shouldReturn` 3
+    release
+    settle
+    eventually $ map T.strip <$> (findAll ui ".passkey-name" >>= traverse textContent) `shouldReturn` ["My laptop", "My tablet"]
     closedSignedIn ui
 
   it "offers no passkey on a page served over plain HTTP, and says why" $ runOwn $ do
@@ -887,6 +957,43 @@ userKeys m = describe "the user's keys" $ do
     _ <- find ui ".sign-in-toggle"
     eventually $ length <$> findAll ui ".keys-offer" `shouldReturn` 0
     closed ui
+
+  -- The sign-in's view can go while the keys are brought up to date after
+  -- a sign-in with the password: the shell takes it off the page when the
+  -- wiki cannot be read again just after (the network gone), and with the
+  -- whole page. The key the password gave is then held by no one but the
+  -- view's state: the view lets go of it as it closes, and the answer that
+  -- comes after offers nothing. Here the offer would be made (the vault
+  -- opens with a passkey alone), the vault's answer is held, and the view
+  -- goes meanwhile.
+  it "lets go of the password's key when the sign-in's view goes while the keys are brought up to date" $ runOwn $ do
+    ui <- signedOut "editor's password"
+    signIn ui "editor's password"
+    _ <- madeKeys
+    find ui ".account-toggle" >>= click
+    find ui ".account-keys input[name=keys-password]" >>= (`typeText` "editor's password")
+    find ui ".keys-passkey-add" >>= click
+    eventually $ length <$> findAll ui ".keys-unlock-passkey" `shouldReturn` 1
+    find ui ".keys-password-remove" >>= click
+    eventually $ length <$> findAll ui ".keys-unlock-password" `shouldReturn` 0
+    find ui ".account-toggle" >>= click
+    answerWith "DELETE" "api/v1/session" 200 nobody
+    find ui ".account .sign-out" >>= click
+    _ <- find ui ".sign-in-toggle"
+    settle
+    let passwordKeys = unsafeIOToPageM js_password_keys
+        vaultReads = length . filter (\r -> r.method == "GET" && r.url == "api/v1/assistant/vault") <$> asked
+    before <- passwordKeys
+    readsBefore <- vaultReads
+    holdAt "GET" "api/v1/assistant/vault"
+    signIn ui "editor's password"
+    eventually $ vaultReads >>= (`shouldSatisfy` (> readsBefore))
+    unmount ui
+    release
+    settle
+    eventuallyWithin 5000 $ passwordKeys `shouldReturn` before
+    unsafeIOToPageM js_uninstall
+    serverStops
 
   -- #213: signing out lets go of the vault key and the private
   -- key, in the page, in IndexedDB and in the wiki's other tabs. The

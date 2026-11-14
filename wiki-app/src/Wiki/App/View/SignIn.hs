@@ -95,7 +95,7 @@ import Wiki.Api.Auth (Purpose (..), startUrl)
 import Wiki.Api.Security (resetLifetime)
 import Wiki.App.Account (Accounts (..), SignInError (..), accountErrorText, codeErrorText, passkeyErrorText, passwordErrorText, signInErrorText)
 import Wiki.App.Assistant (KeyRef, MonadAssistant (..), PasskeyRefusal (..))
-import Wiki.App.Assistant.Sync (MonadVault)
+import Wiki.App.Assistant.Sync (MonadVault (takePasswordKey))
 import Wiki.App.Backend (MonadWiki, Session (..), WikiError (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser (focusElement)
@@ -198,6 +198,13 @@ data State m = State
   -- password gave, which the page forgets when it is answered.
   , keysProblem :: Maybe Text
   -- ^ Why the offer could not be taken.
+  , keysInUse :: [KeyRef]
+  -- ^ The keys a password gave that a step waiting on the vault holds
+  -- ('settleAfter', 'AcceptKeysOffer'): each named here in the step that
+  -- takes it, and let go of in the step that takes the answer, or when
+  -- the view closes before it ('Finalize'). The view's program is
+  -- cancelled when it closes, and a key only that program knew would
+  -- stay in the page's registry until the tab closed.
   }
 
 data Action
@@ -231,6 +238,7 @@ data Action
   | FromPersonal
   | AcceptKeysOffer
   | DeclineKeysOffer
+  | Finalize
 
 component :: forall m. (Typeable m, MonadUUID m, MonadIO m, MonadWiki m, MonadSecurity m, MonadNotifications m, MonadAssistant m, MonadVault m) => H.Component Query (Input m) Output m
 component =
@@ -274,6 +282,7 @@ component =
               , newField
               , keysOffer = Nothing
               , keysProblem = Nothing
+              , keysInUse = []
               }
       , render
       , eval =
@@ -282,6 +291,7 @@ component =
               { H.handleAction = handleAction
               , H.handleQuery = handleQuery
               , H.receive = \input -> Just (receive input)
+              , H.finalize = Just Finalize
               }
       }
   where
@@ -592,12 +602,22 @@ component =
                 if Just u /= signedIn
                   then dropKeysOffer
                   else do
-                    modify (\st -> st {keysOffer = Nothing, keysProblem = Nothing})
-                    lift (addPasswordUnlock u (Just key) Nothing) >>= \case
+                    modify (\st -> st {keysOffer = Nothing, keysProblem = Nothing, keysInUse = key : st.keysInUse})
+                    result <- lift (addPasswordUnlock u (Just key) Nothing)
+                    -- Let go of in any case: 'addPasswordUnlock' does once
+                    -- it has the vault, and a refusal before it does not.
+                    modify (\st -> st {keysInUse = filter (/= key) st.keysInUse})
+                    H.liftEffect (forgetKey key)
+                    case result of
                       Left why -> modify (\st -> st {keysProblem = Just why})
                       Right _ -> pass
             )
       DeclineKeysOffer -> dropKeysOffer
+      -- The keys the view still names: the offer's, and those of a step
+      -- that waits for the vault, whose answer will not be taken now.
+      Finalize -> do
+        held <- state (\st -> (map snd (toList st.keysOffer) <> st.keysInUse, st {keysOffer = Nothing, keysInUse = []}))
+        traverse_ (H.liftEffect . forgetKey) held
       Toggle ->
         gets (\st -> st.open) >>= \case
           True -> close
@@ -804,19 +824,34 @@ component =
       -- An earlier sign-in's offer is not this one's, even when bringing
       -- this one's keys up to date fails.
       dropKeysOffer
-      for_ s.user $ \u ->
-        lift (afterSignIn u.id) >>= \case
-          -- Nothing waits on the keys: the security panel shows them, and
-          -- why they could not be brought up to date, when it is opened.
-          Left _ -> pass
-          Right settled -> modify (\st -> st {keysOffer = (u.id,) <$> settled.offer, keysProblem = Nothing})
+      for_ s.user $ \u -> do
+        -- The key the password gave is taken from the backend and named
+        -- in the state in one step ('H.liftEffect': taking it does not
+        -- wait), so that the view lets go of it if it closes while the
+        -- vault is read.
+        key <- H.liftEffect takePasswordKey
+        modify (\st -> st {keysInUse = toList key <> st.keysInUse})
+        result <- lift (afterSignIn u.id key)
+        -- Nothing waits on the keys: the security panel shows them, and
+        -- why they could not be brought up to date, when it is opened.
+        -- The answer is taken in one step: the key is no longer the
+        -- step's, and the offer it makes replaces the one before, whose
+        -- key goes ('afterSignIn' let go of the key it does not offer).
+        replaced <- state $ \st ->
+          let st' = st {keysInUse = filter (`notElem` toList key) st.keysInUse}
+           in case result of
+                Left _ -> ([], st')
+                Right settled -> (map snd (toList st'.keysOffer), st' {keysOffer = (u.id,) <$> settled.offer, keysProblem = Nothing})
+        traverse_ (H.liftEffect . forgetKey) replaced
 
     -- Withdraw the offer to unlock the keys with the password, and forget
-    -- the key it holds.
+    -- the key it holds: taken out of the state and let go of in one step
+    -- ('forgetKey' does not wait). Forgotten through 'lift' and taken out
+    -- a step later, an offer made in between was taken out unforgotten.
     dropKeysOffer :: H.HalogenM (State m) Action Slots Output m ()
     dropKeysOffer = do
-      gets (\st -> st.keysOffer) >>= traverse_ (lift . forgetKey . snd)
-      modify (\st -> st {keysOffer = Nothing, keysProblem = Nothing})
+      withdrawn <- state (\st -> (st.keysOffer, st {keysOffer = Nothing, keysProblem = Nothing}))
+      traverse_ (H.liftEffect . forgetKey . snd) withdrawn
 
     handleQuery :: Query a -> H.HalogenM (State m) Action Slots Output m (Maybe a)
     handleQuery (Prompt why next) = openForm (Just why) $> Just next

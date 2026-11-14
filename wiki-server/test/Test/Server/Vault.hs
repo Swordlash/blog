@@ -76,6 +76,32 @@ vaultAndPasskeys backing = describe "the assistant's vault and passkeys, over HT
     other `shouldSatisfy` says "another challenge"
     (call r editor methodGet links.account.passkeys none >>= jsonAs 200) `shouldReturn` ([] :: [PasskeyInfo])
 
+  -- One ceremony waits for a session and a purpose, and a new one replaces
+  -- it. A late answer to the one replaced (a registration sent again after
+  -- its panel closed, another tab of the session) is refused and leaves the
+  -- new one for its own answer: taken before it was checked, it used up the
+  -- new one, whose answer was then refused too.
+  it "leaves a registration's challenge for its own answer when an answer to the one it replaced comes" $ withSignedIn backing $ \r editor _ -> do
+    earlier :: RegistrationOptions <- (proved r editor >> call r editor methodPost links.account.beginRegistration (Just editorsPassword)) >>= jsonAs 200
+    later :: RegistrationOptions <- (proved r editor >> call r editor methodPost links.account.beginRegistration (Just editorsPassword)) >>= jsonAs 200
+    late :: ApiError <- register r editor earlier (authenticator "the earlier passkey") r.public >>= jsonAs 400
+    late `shouldSatisfy` says "another challenge"
+    info :: PasskeyInfo <- register r editor later passkey r.public >>= jsonAs 200
+    (call r editor methodGet links.account.passkeys none >>= jsonAs 200) `shouldReturn` [info]
+
+  it "leaves a passkey's use's challenge for its own answer when an answer to the one it replaced comes" $ withSignedIn backing $ \r editor _ -> do
+    _ :: PasskeyInfo <- registerNew r editor passkey
+    earlier :: AssertionOptions <- call r editor methodPost links.assistant.beginAssertion none >>= jsonAs 200
+    later :: AssertionOptions <- call r editor methodPost links.assistant.beginAssertion none >>= jsonAs 200
+    let answer options counter = do
+          challenge <- maybe (panic "no challenge") pure (fromBase64Url options.challenge)
+          signed <- assertion passkey counter options.rpId r.public challenge
+          call r editor methodPut links.assistant.finishAssertion (Just (answered passkey signed Nothing))
+    late :: ApiError <- answer earlier 1 >>= jsonAs 400
+    late `shouldSatisfy` says "another challenge"
+    used :: PasskeyInfo <- answer later 2 >>= jsonAs 200
+    used.lastUsedAt `shouldSatisfy` isJust
+
   it "reports a passkey whose counter does not go up, and keeps its counter" $ withSignedIn backing $ \r editor _ -> do
     _ :: PasskeyInfo <- registerNew r editor passkey
     _ :: PasskeyInfo <- use r editor passkey 5 r.public >>= jsonAs 200
@@ -395,7 +421,14 @@ signing backing = describe "signing in with a passkey" $ do
     jsonAs 401 half `shouldReturn` SecondFactorRequired
     held <- maybe (panic "no pending cookie") pure (pendingOf half)
     let halfway = [("Cookie", "wiki_pending=" <> encodeUtf8 held)]
+    -- A challenge begun again: an answer to the one it replaced is refused,
+    -- and leaves the new one for its own answer.
+    replaced :: AssertionOptions <- send r methodPost (r.public <> "/" <> links.beginSecondFactorPasskey) halfway "" >>= jsonAs 200
     options :: AssertionOptions <- send r methodPost (r.public <> "/" <> links.beginSecondFactorPasskey) halfway "" >>= jsonAs 200
+    replacedChallenge <- maybe (panic "no challenge") pure (fromBase64Url replaced.challenge)
+    late <- assertion passkey 2 replaced.rpId r.public replacedChallenge
+    lateRefused :: ApiError <- send r methodPut (r.public <> "/" <> links.finishSecondFactorPasskey) (jsonHeader <> halfway) (encode (answered passkey late Nothing)) >>= jsonAs 400
+    lateRefused `shouldSatisfy` says "another challenge"
     options.allow `shouldBe` [CredentialId (toBase64Url passkey.credentialId)]
     challenge <- maybe (panic "no challenge") pure (fromBase64Url options.challenge)
     wrong <- assertion (authenticator "nobody's") 2 options.rpId r.public challenge

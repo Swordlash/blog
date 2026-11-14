@@ -147,6 +147,14 @@ data State = State
   , typedVaultPassword :: Text
   , vaultPasswordField :: H.RefLabel
   , vaultProblem :: Maybe Text
+  , unregistered :: Maybe RegistrationResponse
+  -- ^ A passkey the authenticator has made and the server has not yet
+  -- answered for: named here in the step that takes the passkey, and
+  -- cleared in the step that takes the server's answer. A panel closed
+  -- in between has its program cancelled and the registration's request
+  -- aborted; its finalizer sends the registration again ('Finalize'), so
+  -- that the passkey the person made is the account's, and not one on
+  -- their authenticator that signs nobody in.
   }
 
 -- | Which of the address's forms is open.
@@ -191,6 +199,7 @@ data Action
   | RemovePasswordUnlock
   | AddPasskeyUnlock
   | VaultAskEachTime Bool
+  | Finalize
 
 component :: forall query output m. (MonadSecurity m, MonadVault m, MonadAssistant m, MonadUUID m, MonadIO m) => H.Component query (Maybe UserId) output m
 component =
@@ -237,9 +246,10 @@ component =
               , typedVaultPassword = ""
               , vaultPasswordField
               , vaultProblem = Nothing
+              , unregistered = Nothing
               }
       , render
-      , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.initialize = Just Initialize}
+      , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.initialize = Just Initialize, H.finalize = Just Finalize}
       }
   where
     render :: State -> H.ComponentHTML Action Empty m
@@ -664,13 +674,40 @@ component =
                 name <- gets (\st -> T.strip st.typedKeyName)
                 let r = made.response
                     named = RegistrationResponse {id = r.id, clientDataJSON = r.clientDataJSON, attestationObject = r.attestationObject, name = if T.null name then Nothing else Just name}
-                lift (finishRegistration named) >>= \case
+                modify (\st -> st {unregistered = Just named})
+                result <- lift (finishRegistration named)
+                modify (\st -> st {unregistered = Nothing})
+                case result of
                   Left e -> do
                     lift (discardPasskey options.rpId made.response.id)
                     modify (\st -> st {keysProblem = Just (errorMessage e)})
                   Right _ -> do
                     keys <- lift listPasskeys
                     modify (\st -> st {keys = Just keys})
+      -- A passkey made and not answered for: registered from here, as the
+      -- step the close cancelled would have. The finalizer may wait; nothing
+      -- else of the panel runs. A refusal leaves the passkey on the
+      -- authenticator, and nothing more can be done: the close may have
+      -- cut off a request the server had already taken, which a refusal of
+      -- this one cannot be told from, and a browser cannot delete a
+      -- passkey. It can only tell the person's password manager that one is
+      -- unknown ('discardPasskey', PublicKeyCredential.signalUnknownCredential,
+      -- where the browser has it), which for a passkey the server did take
+      -- would hide one that works. A panel closed while the authenticator
+      -- makes the passkey does not learn it at all.
+      --
+      -- What the registration sent again meets at the server, which keeps
+      -- one registration's challenge for a session and takes it only for
+      -- an answer to it: the request the close cut off was taken (the
+      -- passkey is the account's, and this one is refused, saying nothing
+      -- here); it never arrived (this one registers the passkey, which is
+      -- what it is for); or the panel was opened again and another passkey
+      -- begun first (this one answers a challenge replaced since, and is
+      -- refused, leaving the new one's for its own answer: the first
+      -- passkey stays on the authenticator unknown to the wiki, as before
+      -- this was sent again).
+      Finalize ->
+        gets (\st -> st.unregistered) >>= traverse_ (\named -> void (lift (finishRegistration named)))
       RemoveKey i -> busily $ do
         modify (\st -> st {keysProblem = Nothing})
         lift (dropPasskey i) >>= \case
