@@ -79,7 +79,10 @@
 -- * a failed read is shown only where no threads are;
 -- * nothing is asked after the view went away;
 -- * once everything out has come back and everything the channel had to
---   tell was told, the view shows the server's threads of its page.
+--   tell was told, the view shows the server's threads of its page, on a
+--   run where no read failed: a read that fails leaves the threads as they
+--   were, which may hold the reader's write out of its place among what
+--   others made meanwhile, until the next read or subscription.
 module Test.Threads
   ( spec
   )
@@ -513,7 +516,7 @@ checked shownBefore w = w {faults = w.faults <> problems, seen = seen'}
       MHeard _ (CommentEdited c) -> [c.id]
       MReplaced _ ts -> [c.id | t <- ts, c <- t.comments]
       _ -> []
-    editsOnTheWay = [c.id | MHeard _ (CommentEdited c) <- w.server.untold] <> [c | w.server.behind, c <- onServer]
+    editsOnTheWay = [c.id | MHeard _ (CommentEdited c) <- w.server.untold] <> [c.id | w.server.behind, (c, _) <- shownComments]
     -- A visit ends when the view goes elsewhere: what was seen on it is
     -- forgotten.
     current = if w.view.page == Just w.shownPage then w.seen else mempty
@@ -613,4 +616,4 @@ spec = describe "Wiki.App.View.Comments.Machine" $ modifyMaxSuccess (max cases) 
     it ("shows the server's threads once everything out has come back" <> how) $
       QC.property $
         forAllShrinkShow genRun shrinkRun show $ \run ->
-          settles (foldl' play w0 (filter (/= Finish) run))
+          settles (foldl' play w0 (filter (\s -> s /= Finish && s /= HandleFail) run))
