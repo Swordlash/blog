@@ -1861,6 +1861,51 @@ this order: tests that fail by chance and faults of timing, then how
 long things take. The packages below marked for it come first; WP5.84,
 WP5.92 and WP5.93 wait.
 
+- **WP5.118 A view's asynchronous logic as a state machine, tested
+  natively by generated orders of events: a spike on one view (for the
+  order above; the owner, 2026-11-14: "Maszyna - super, o to chodzi",
+  after "chciałbym żeby jak najmniej było takich miejsc gdzie albo na
+  coś czekamy … jak najwięcej … 'property based' na podstawie DOM i
+  natywnie … martwi mnie że łatamy symptom a nie przyczynę").** Two
+  causes stand behind the two days of chance failures and of races
+  found one at a time. In the product, every `lift` in a component's
+  handler is a suspension point nobody sees, the code reads as if it
+  ran in one go, and only a convention guards it. In the tests, the
+  browser suite watches the program from outside by polling on a
+  two-second clock (677 examples, 1345 `eventually`), where the smoke
+  suites wait on the program's signal (237 `waitQuiet`, 13
+  `eventually`). The spike, on one small view that had real races and
+  has open ones (the bell and its notifications, or the page's
+  comments): (1) its logic as a pure step, an event and a state to a
+  state and effects, the backend's answers being events like any
+  other, so that no step can check, wait and write (`Ticking.step` and
+  `View.Latest` are this already, in the small); (2) native properties
+  over generated orders of events (asks answered in any order, pushes
+  between them, a close anywhere), which must find the view's known
+  open race before it is fixed; (3) the real component mounted
+  natively on the in-memory DOM (as `Test/Hydrate.hs` does) with a
+  backend whose answers the test releases in the order it chooses,
+  run to idle exactly, the DOM read with no wait; (4) the same cases
+  through `remote` and through the browser suite, compared by waits,
+  time, runs that fail under load, and what each cannot see; (5) what
+  the library lacks for (3), written for haskell-halogen's owner. Its
+  result is the rule for new views, the order in which the views that
+  raced move, and what stays in a browser (the islands, measuring,
+  real HTTP and WebSocket, the service worker). WP5.106 waits for it:
+  tests over `remote` still drive a browser.
+- **WP5.119 A measure of cmark-gfm on wasm (for the order above; the
+  owner, 2026-11-14: "możemy spróbować jeśli uważasz że jest to warte
+  sprawdzenia w kontekście szybkości testów i samej wiki").** After
+  WP5.115's measure the parser in C is the only way to a whole long
+  text parsed fast on wasm. Before anything is decided: the C library
+  linked into a wasm module by GHC's backend (the Hackage binding
+  carries the sources), the same three inputs parsed, the time with
+  the tree brought across to Haskell values, natively and on wasm; and
+  a list, by reading, of what the wiki's dialect needs that the
+  library has, can be given by its extension interface, or cannot be
+  given (source ranges of inlines, attributes, footnotes, math, the
+  wiki's own markers), with what part of wiki-core's tests would have
+  to be proved again. A measure and a list, no change to the wiki.
 - **WP5.117 The pin past haskell-halogen's pull requests 119 and 120,
   and the two workarounds gone (for the order above; the owner gave
   the library's answer on 2026-11-14).** The driver's `settle` now
