@@ -14,21 +14,32 @@
 module Test.BellDom (spec) where
 
 import Data.Aeson (object)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime (..), fromGregorian)
 import Halogen.Router qualified as Router
 import Halogen.VDom.DOM.Monad (MemDOM, runMemDOM)
 import Halogen.VDom.DOM.Monad.Native qualified as N
 import Protolude hiding (State, find)
 import Test.Bell (Step (..), genRun, shrinkRun)
 import Test.BellHarness (Check (..), Gated, Query (..), Rig (..), Shown (..), Ui (..), newRig, parent, runGated, runSteps)
-import Test.Harness.MemDom (View (..), answer, click, clickAt, find, findAll, heldCount, heldNow, keyDown, pressOutside, query, settleHolding, textOf, withView)
-import Test.Hspec
+import Test.Harness.MemDom (View (..), answer, click, clickAt, find, findAll, heldCount, heldNow, keyDown, pending, pressOutside, query, release, settle, settleHolding, textOf, withHeldWaits, withView)
+import Test.Hspec hiding (pending)
 import Test.QuickCheck (counterexample, forAllShrinkShow, ioProperty, withNumTests, (===))
 import Test.QuickCheck qualified as QC
 import Wiki.Api.Notifications (Notifications (..))
-import Wiki.App.Backend.Mem (MemWiki, newMemWiki)
+import Wiki.App.Backend (anonymousIn)
+import Wiki.App.Backend.Mem (MemWiki, newMemWiki, runMemWiki)
+import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route (Route (..), route)
+import Wiki.App.View.Bell qualified as Bell
+import Wiki.App.View.Common (Context (..), PageWidth (..))
+import Wiki.Core.Access (Access (..))
+import Wiki.Core.Id (NotificationId (..), PageId (..), UserId (..))
+import Wiki.Core.Notification (Kind (..), Notification (..))
+import Wiki.Core.Page qualified as P
+import Wiki.Core.Version (Author (..))
 
 -- | The bell mounted for the body, under the gated in-memory backend, with
 -- its page; disposed of after it.
@@ -159,3 +170,47 @@ spec = describe "Wiki.App.View.Bell, mounted on the in-memory DOM" $ do
       keyDown "Escape" [] view.container
       ui.settle
       isOpen view `shouldReturn` False
+
+  -- The library's held waits, over the in-memory backend's own answers:
+  -- each ask of the bell is held before it starts, and runs when let go.
+  it "keeps its buttons that mark disabled while a mark is held, and marks read once it is let go, over the in-memory backend" $
+    withHeldWaits $ \waits -> do
+      let rita = UserId "user-reader"
+          demo = demoState demoNow
+          -- The demo's blog post, which the reader may read.
+          hello = fromMaybe (PageId "") (head [p.id | p <- Map.elems demo.pages, p.title == "Hello, world"])
+          told =
+            Notification
+              { id = NotificationId "n1"
+              , kind = Replied
+              , page = hello
+              , thread = Nothing
+              , actor = Author {id = UserId "user-editor", name = "Ed Editor", avatar = Nothing}
+              , title = "Hello, world"
+              , excerpt = "Thanks."
+              , createdAt = UTCTime (fromGregorian 2026 10 26) 0
+              , read = False
+              , location = Nothing
+              }
+      wiki <- newMemWiki demo {current = Just rita, notices = Map.singleton rita [told]}
+      let run :: MemWiki MemDOM a -> IO a
+          run = runMemDOM . runMemWiki wiki
+      router <- run (Router.newRouter "/" Unknown route)
+      let ctx = Context {router, session = anonymousIn Open, spaces = [], icons = mempty, revision = 0, pageWidth = Compact}
+      withView run Bell.component Bell.Input {context = ctx, feed = Nothing} $ \view -> do
+        -- The in-memory backend answered the first read at once.
+        (length <$> pending waits) `shouldReturn` 0
+        textOf view ".notifications-count" `shouldReturn` Just "1"
+        -- Opening the list reads it again.
+        void (click view ".notifications-toggle")
+        pending waits >>= traverse_ release
+        settle view
+        void (click view ".notification-read")
+        [mark] <- pending waits
+        find view ".notification-read" >>= fmap join . traverse (N.attribute "disabled") >>= (`shouldBe` Just "")
+        find view ".notifications-read-all" >>= fmap join . traverse (N.attribute "disabled") >>= (`shouldBe` Just "")
+        release mark
+        settle view
+        textOf view ".notifications-count" `shouldReturn` Nothing
+        findAll view ".notification.unread" >>= (`shouldBe` 0) . length
+      Router.stop router
