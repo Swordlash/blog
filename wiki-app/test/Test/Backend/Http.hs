@@ -47,7 +47,7 @@ import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http
-import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), afterEvent, cachedPage, emptyCache, withBacklinks, withDraft, withPageAt, withPageLocation, withPages, withSearch, withSession, withSpaceAt, withSpaces)
+import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), Reading (..), Stored (..), afterEvent, afterWrite, cachedPage, changedBy, contentChangedBy, emptyCache, storedAnswer, storedOf, withBacklinks, withDraft, withPageAt, withPageLocation, withPages, withSearch, withSession, withSpaceAt, withSpaces)
 import Wiki.App.Backend.Http.Client (endpointUrl, fromSessionInfo)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -579,6 +579,16 @@ caching = describe "what it keeps" $ do
     wait early `shouldReturn` older
     runHttpWiki env listSpaces `shouldReturn` newer
     (\c -> c.spaces) <$> cacheOf env `shouldReturn` Just newer
+
+  it "stores an answer of page content only if no page was saved while it was read, and any other across a save" $ do
+    let sent = storedOf emptyCache
+        saved = contentChangedBy (afterEvent hello.id (PageChanged demoNow)) sent
+        written = changedBy afterWrite sent
+        spaces = withSpaces (Map.elems demo.spaces)
+    (storedAnswer ContentRead sent spaces saved).cache `shouldBe` saved.cache
+    (storedAnswer PlainRead sent spaces saved).cache `shouldBe` spaces saved.cache
+    (storedAnswer PlainRead sent spaces written).cache `shouldBe` written.cache
+    (storedAnswer ContentRead sent spaces sent).cache `shouldBe` spaces sent.cache
 
   it "keeps the rest after a draft's write, which puts the draft in its place" $ do
     (env, asked) <- backend answering

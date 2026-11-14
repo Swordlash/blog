@@ -186,7 +186,7 @@ import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..), ma
 data HttpEnv = HttpEnv
   { transport :: Transport
   , cache :: IORef Stored
-  -- ^ The cache, with the count of its changes ('storedAnswer').
+  -- ^ The cache, with the counts of its changes ('storedAnswer').
   , immediate :: Bool
   -- ^ Whether the transport answers at once (inside the same process), so
   -- that 'atOnce' may send requests to it.
@@ -259,7 +259,9 @@ newHttpEnvWith transport start = liftIO $ do
       -- A page saved anywhere may be a page of an encrypted space, which the
       -- search holds decrypted ('heldFound'): those are fetched again.
       heard page event = do
-        change (afterEvent page event)
+        case event of
+          PageChanged _ -> atomicModifyIORef' cache (\c -> (contentChangedBy (afterEvent page event) c, ()))
+          _ -> when (changesKept event) (change (afterEvent page event))
         case event of
           PageChanged _ -> atomicModifyIORef' held (\h -> (h {heldFound = mempty}, ()))
           _ -> pass
@@ -520,10 +522,11 @@ readStored = HttpWiki (ask >>= \env -> liftIO (readIORef env.cache))
 modifyCache :: (MonadIO m) => (Cache -> Cache) -> HttpWiki m ()
 modifyCache f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.cache (\c -> (changedBy f c, ()))))
 
--- | A read's answer stored in the cache, unless the cache changed since
--- the read was sent, when it counted this many changes ('storedAnswer').
-storeAnswer :: (MonadIO m) => Int -> (Cache -> Cache) -> HttpWiki m ()
-storeAnswer sent keep = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.cache (\c -> (storedAnswer sent keep c, ()))))
+-- | A read's answer stored in the cache, unless the cache changed, for
+-- what the read stores, since the read was sent, as it was then ('sent';
+-- 'storedAnswer').
+storeAnswer :: (MonadIO m) => Reading -> Stored -> (Cache -> Cache) -> HttpWiki m ()
+storeAnswer reading sent keep = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.cache (\c -> (storedAnswer reading sent keep c, ()))))
 
 -- | A read: from the cache, or sent to the server and then cached, if the
 -- response is one to cache ('kept').
@@ -533,13 +536,23 @@ cached
   -> HttpWiki IO a
   -> (Either WikiError a -> Cache -> Cache)
   -> HttpWiki m (Either WikiError a)
-cached look endpoint keep = do
+cached = cachedAs PlainRead
+
+-- | 'cached', for a read that stores what it reads ('Reading').
+cachedAs
+  :: (MonadIO m)
+  => Reading
+  -> (Cache -> Maybe (Either WikiError a))
+  -> HttpWiki IO a
+  -> (Either WikiError a -> Cache -> Cache)
+  -> HttpWiki m (Either WikiError a)
+cachedAs reading look endpoint keep = do
   before <- readStored
   case look before.cache of
     Just a -> pure a
     Nothing -> do
       result <- send endpoint
-      when (kept result) (storeAnswer before.changes (keep result))
+      when (kept result) (storeAnswer reading before (keep result))
       pure result
 
 -- | A read of page content (see "Wiki.App.Backend.Http.Cache"): cached
@@ -557,7 +570,7 @@ pageContent look endpoint keep = do
   env <- HttpWiki ask
   preloading <- liftIO (readIORef env.preloading)
   if preloading || env.immediate
-    then cached look endpoint keep
+    then cachedAs ContentRead look endpoint keep
     else send endpoint
 
 -- | A read of something that changes on the server by itself (the audit
@@ -580,7 +593,7 @@ once look forget endpoint keep = do
     Just a -> unless immediate (modifyCache forget) $> a
     Nothing -> do
       result <- send endpoint
-      when (immediate && kept result) (storeAnswer before.changes (keep result))
+      when (immediate && kept result) (storeAnswer PlainRead before (keep result))
       pure result
 
 -- | A read that cannot be refused: cached when it succeeds.
@@ -1077,11 +1090,11 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
       Nothing -> do
         result <- send (endpoints.notifications.people logins)
         case result of
-          Right found -> storeAnswer before.changes (withPeople logins found) $> found
+          Right found -> storeAnswer PlainRead before (withPeople logins found) $> found
           Left e@(Unreachable _) -> liftIO (throwIO e)
           -- Refused (by a server from before mentions existed): as far as
           -- this page can tell, no login belongs to anyone.
-          Left _ -> storeAnswer before.changes (withPeople logins mempty) $> mempty
+          Left _ -> storeAnswer PlainRead before (withPeople logins mempty) $> mempty
 
   -- Not cached here: the editor's completion keeps the answers it has
   -- had for as long as the editor is open (@web/src/editor.js@). Too few
@@ -1196,7 +1209,7 @@ fetchedNotices = do
             result <&> \ns ->
               let missing = [n | n <- during, all (\x -> x.id /= n.id) ns.items]
                in Notifications {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}
-      when (kept merged) (storeAnswer stored.changes (withNotices merged))
+      when (kept merged) (storeAnswer PlainRead stored (withNotices merged))
       pure merged
 
 -- | The notifications with the titles of pages of encrypted spaces
@@ -1418,7 +1431,7 @@ instance (MonadUnliftIO m) => MonadLoad (HttpWiki m) where
     env <- ask
     liftIO $ do
       atomicModifyIORef' env.preloading (const (False, ()))
-      atomicModifyIORef' env.cache (\c -> (changedBy forgetPageContent c, ()))
+      atomicModifyIORef' env.cache (\c -> (contentChangedBy forgetPageContent c, ()))
 
 -- | What importing an archive (a zip file in "Wiki.Core.Export"'s format)
 -- into the server would do: its plan, which changes nothing
@@ -1966,7 +1979,7 @@ fetchSpaces :: (MonadIO m) => HttpWiki m (Either WikiError [Space])
 fetchSpaces = do
   before <- readStored
   result <- send endpoints.spaces.list
-  for_ result $ \spaces -> storeAnswer before.changes (withSpaces spaces) >> learnListed spaces
+  for_ result $ \spaces -> storeAnswer PlainRead before (withSpaces spaces) >> learnListed spaces
   pure result
 
 -- | What the tab does with a list of spaces read from the server. It is

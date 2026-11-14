@@ -121,12 +121,17 @@
 -- answered after it may carry the older state, and stored then, it would
 -- answer the next read, as of the reload after a write, with that older
 -- state. Such an answer still goes to the view that asked; it is not
--- kept, and the next read asks the server.
+-- kept, and the next read asks the server. Two changes count only for
+-- page content ('ContentRead'): a page saved, which the live channel
+-- tells, and the first change of route. A read of anything else, the
+-- page's threads for one, stores its answer across them.
 module Wiki.App.Backend.Http.Cache
   ( Cache (..)
   , Stored (..)
+  , Reading (..)
   , storedOf
   , changedBy
+  , contentChangedBy
   , storedAnswer
   , CachedDraft (..)
   , draftAnswer
@@ -174,6 +179,7 @@ module Wiki.App.Backend.Http.Cache
   , cachedPeople
   , afterComment
   , afterEvent
+  , changesKept
   , forgetThreads
   , forgetPageContent
   , afterWrite
@@ -296,31 +302,47 @@ data Cache = Cache
   deriving stock (Eq, Show)
 
 -- | 'Stored' is the cache with the number of changes made to it other
--- than reads' answers stored. A read takes the number when it is sent,
--- and its answer is stored only if the number is the same when the
--- answer comes ('storedAnswer').
+-- than reads' answers stored. A read notes the numbers when it is sent,
+-- and its answer is stored only if they are the same when the answer
+-- comes ('storedAnswer').
 data Stored = Stored
   { changes :: Int
+  -- ^ The changes that may make any answer older than the cache.
+  , contentChanges :: Int
+  -- ^ The changes that drop page content alone: a page saved, the first
+  -- change of route ('forgetPageContent').
   , cache :: Cache
   }
   deriving stock (Eq, Show)
 
+-- | 'Reading' is what a read stores: page content, which 'contentChanges'
+-- makes old too ('ContentRead'), or anything else ('PlainRead').
+data Reading = PlainRead | ContentRead
+  deriving stock (Eq, Show)
+
 -- | A cache, with no changes counted yet.
 storedOf :: Cache -> Stored
-storedOf cache = Stored {changes = 0, cache}
+storedOf cache = Stored {changes = 0, contentChanges = 0, cache}
 
 -- | The cache after a change that is not a read's answer stored: a write,
 -- an event, an entry dropped or replaced. It is counted.
 changedBy :: (Cache -> Cache) -> Stored -> Stored
-changedBy f s = Stored {changes = s.changes + 1, cache = f s.cache}
+changedBy f s = s {changes = s.changes + 1, cache = f s.cache}
 
--- | The cache with a read's answer stored, if it has not changed since
--- the read was sent, when it counted this many changes; otherwise as it
--- is.
-storedAnswer :: Int -> (Cache -> Cache) -> Stored -> Stored
-storedAnswer sent keep s
-  | s.changes == sent = s {cache = keep s.cache}
-  | otherwise = s
+-- | The cache after a change that drops page content alone. It is
+-- counted for reads of page content only.
+contentChangedBy :: (Cache -> Cache) -> Stored -> Stored
+contentChangedBy f s = s {contentChanges = s.contentChanges + 1, cache = f s.cache}
+
+-- | The cache with a read's answer stored, if the cache has not changed,
+-- for what the read stores, since the read was sent ('sent'); otherwise
+-- as it is.
+storedAnswer :: Reading -> Stored -> (Cache -> Cache) -> Stored -> Stored
+storedAnswer reading sent keep now
+  | now.changes == sent.changes
+  , reading == PlainRead || now.contentChanges == sent.contentChanges =
+      now {cache = keep now.cache}
+  | otherwise = now
 
 -- | 'CachedDraft' is what the cache knows of the signed-in user's draft of
 -- one page. The cache has no entry for a page whose draft it does not
@@ -557,10 +579,26 @@ afterComment pid outcome c = case outcome of
 -- starred pages (they show titles too). The
 -- session, the spaces, the drafts (someone else's save does not change
 -- this user's draft) and the threads stay.
+--
+-- Who edits or reads the page changes nothing kept ('changesKept').
 afterEvent :: PageId -> PageEvent -> Cache -> Cache
 afterEvent pid = \case
   PageChanged _ -> \c -> c {pageAt = mempty, pages = mempty, searches = [], versionLists = mempty, stars = Nothing}
-  event -> afterComment pid (Right event)
+  event
+    | changesKept event -> afterComment pid (Right event)
+    | otherwise -> identity
+
+-- | Whether the live channel's event changes anything the cache keeps:
+-- not who edits or reads the page, which come often and are kept
+-- nowhere here, and not an event this program does not know. An event
+-- that changes nothing is no change to the cache, and a read out while
+-- it comes still stores its answer ('Stored').
+changesKept :: PageEvent -> Bool
+changesKept = \case
+  Editing _ -> False
+  Reading _ -> False
+  Unknown _ -> False
+  _ -> True
 
 -- | The cache without a page's threads: they have changed, or may have.
 forgetThreads :: PageId -> Cache -> Cache
