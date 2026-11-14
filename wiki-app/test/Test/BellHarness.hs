@@ -1,11 +1,9 @@
--- | What the bell's component tests share, on the in-memory DOM
--- ("Test.BellDom") and in a browser over haskell-halogen-remote
--- ("Test.Remote.Bell"): a backend that holds the bell's asks in a gate
--- until the test gives each its answer ('Gated'), a feed the test tells
--- through, the bell under a parent that gives it a revision, and a run of
--- "Test.Bell"'s steps carried out on the mounted bell and checked after
--- each step ('runSteps'). Where the bell is mounted and how its page is
--- read and clicked is each module's own ('Ui').
+-- | The bell's component under test ("Test.BellDom"): a backend that holds
+-- the bell's asks in a gate until the test gives each its answer
+-- ('Gated'), a feed the test tells through, the bell under a parent that
+-- gives it a revision, and a run of "Test.Bell"'s steps carried out on the
+-- mounted bell and checked after each step ('runSteps'). How the bell's
+-- page is read and acted on is "Test.BellDom"'s ('Ui').
 --
 -- The asks are held in a "Test.Harness.MemDom" 'Gate', not by the
 -- library's held waits: the answers are the model's server's
@@ -194,9 +192,7 @@ data Ui = Ui
   -- ^ "Mark read" on the unread notification at this place.
   , clickMarkAll :: IO ()
   , clickLink :: Int -> IO ()
-  , pressOutside :: Maybe (IO ())
-  -- ^ A press of the pointer outside the bell, where the page can make
-  -- one: runs on a page that cannot leave out their 'PressOutside' steps.
+  , pressOutside :: IO ()
   , shown :: IO Shown
   , settle :: IO ()
   }
@@ -210,7 +206,7 @@ drive rig ui ref gone s = do
   case s of
     _ | gone && s `elem` [ClickBell, ClickMarkAll, Revise, Finish] -> pass
     ClickBell -> ui.clickBell
-    PressOutside -> unless gone (sequence_ ui.pressOutside)
+    PressOutside -> unless gone ui.pressOutside
     ClickMark i -> unless gone (ui.clickMark i)
     ClickMarkAll -> ui.clickMarkAll
     ClickLink i -> unless gone (ui.clickLink i)
@@ -259,8 +255,7 @@ data Check = BesideMachine | RulesOnly
   deriving stock (Eq)
 
 -- | A run on a mounted bell: what went wrong first, with the steps up to
--- it, or nothing. On a page that cannot press outside the bell, the run's
--- 'PressOutside' steps are left out.
+-- it, or nothing.
 runSteps :: Check -> Rig -> Ui -> [Step] -> IO (Maybe Text)
 runSteps how rig ui run = do
   ref <- newIORef emptyServer
@@ -297,7 +292,7 @@ runSteps how rig ui run = do
         if null problems
           then go (done <> [s]) w' seen' rest
           else pure (Just (T.unlines (("after " <> show (done <> [s])) : problems)), w'.finished)
-  (outcome, gone) <- go [] start mempty (if isJust ui.pressOutside then run else filter (/= PressOutside) run)
+  (outcome, gone) <- go [] start mempty run
   -- The asks still held are let go, so that no worker waits for ever.
   heldNow rig.gate >>= traverse_ (\h -> answer rig.gate h (Right Notifications {unread = 0, items = []}))
   -- A run that stopped at a fault before its Finish leaves the bell

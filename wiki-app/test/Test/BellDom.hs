@@ -50,7 +50,7 @@ withBell body = do
                 for_ (atMay unread i) (N.querySelector ".notification-read" >=> traverse_ clickAt)
             , clickMarkAll = void (click view ".notifications-read-all")
             , clickLink = \i -> findAll view ".notification-link" >>= traverse_ clickAt . (`atMay` i)
-            , pressOutside = Just (pressOutside view)
+            , pressOutside = pressOutside view
             , shown = shownIn view
             , settle = settleHolding view (heldCount gate)
             }
@@ -117,6 +117,17 @@ spec = describe "Wiki.App.View.Bell, mounted on the in-memory DOM" $ do
   it "counts a notification the live channel tells of, lists it when opened, and marks it read, with no wait in the test" $ do
     outcome <- runOnDom BesideMachine [Handle, Deliver 0, Make, Tell, ClickBell, Handle, Deliver 0, ClickMark 0, Handle, Deliver 0]
     outcome `shouldBe` Nothing
+
+  -- Three orders the bell's suite over haskell-halogen-remote ran in
+  -- Chromium, kept here by name: that suite showed nothing more.
+  it "keeps a notification listed when an older read is answered last" $
+    runOnDom BesideMachine [Handle, Make, ClickBell, Handle, Deliver 1, Deliver 0] `shouldReturn` Nothing
+
+  it "keeps a notification read when a read asked before the mark is answered after it" $
+    runOnDom BesideMachine [Make, Handle, Deliver 0, ClickBell, ClickMark 0, Handle, Handle, Deliver 1, Deliver 0] `shouldReturn` Nothing
+
+  it "keeps the buttons that mark disabled until the last mark out comes back" $
+    runOnDom BesideMachine [ClickBell, Make, Handle, Handle, Deliver 0, ClickMarkAll, ClickLink 0, Handle, Deliver 1] `shouldReturn` Nothing
 
   it "closes its list on a press outside it, and not on one inside" $
     withBell $ \rig ui view -> do

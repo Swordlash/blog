@@ -53,9 +53,6 @@ package wiki-smoke
 -- Hackage, and the application needs the router, the hooks and the th quoters
 -- as well, and the smoke tests haskell-halogen-playwright (native only: no
 -- package of the wasm build depends on it, so that build never plans it).
--- haskell-halogen-remote is the native test-suite wiki-app-remote-test's
--- (WP5.118's spike): the bell mounted in the test's process, its DOM shown
--- in Chromium over a WebSocket.
 -- Every package it is used from is listed, jsbits included (the WASM
 -- FFI embeds its JavaScript at compile time), so all of them are at the same
 -- commit. Bump the tag deliberately, in its own commit, together with the
@@ -74,7 +71,6 @@ source-repository-package
     th-plugin
     hspec-halogen
     playwright
-    remote
 
 -- opaque-hs, OPAQUE (RFC 9807: password sign-in), comes from one pinned
 -- commit of its own repository, which runs the package's tests (the RFCs'
