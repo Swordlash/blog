@@ -25,6 +25,7 @@ import Servant.API.Generic (AsApi)
 import Servant.Client.Core (Response)
 import Servant.Multipart.API (Mem)
 import Test.Backend.Opaque (opaqueServer)
+import Test.Bell (noticeOf)
 import Test.Browser.Opaque (fakeChallenge, fakeRegistration)
 import Test.Hspec
 import Test.Opaque (fakeChallengeMade, fakeRegistrationMade)
@@ -37,6 +38,7 @@ import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), importEverything)
 import Wiki.Api.Links (searchUrl)
+import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
 import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Stars (StarredPage)
 import Wiki.Api.Types (SessionInfo (..))
@@ -58,8 +60,8 @@ import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..), vaultF
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Backlink (Backlink (..))
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId (..), SpaceId (..), UserId (..))
-import Wiki.Core.Notification (PageLocation (..))
+import Wiki.Core.Id (AttachmentId (..), BlobId (..), NotificationId (..), PageId (..), SpaceId (..), UserId (..))
+import Wiki.Core.Notification (Notification (..), PageLocation (..))
 import Wiki.Core.Page (Page (..), summaryOf)
 import Wiki.Core.Path (parsePath, pathOf)
 import Wiki.Core.Search (SearchHit, SearchQuery (..), searchQuery)
@@ -644,6 +646,58 @@ caching = describe "what it keeps" $ do
     wait early `shouldReturn` older
     runHttpWiki env listSpaces `shouldReturn` newer
     (\c -> c.spaces) <$> cacheOf env `shouldReturn` Just newer
+
+  it "keeps the notifications read last when one read before them answers after them" $ do
+    -- Two reads of the notifications cross: the first, from before n1 was
+    -- made, answers last. The bell's machine shows the second; the cache
+    -- must not answer the next read with the first.
+    gate <- newEmptyMVar
+    count <- newIORef (0 :: Int)
+    let older = Notifications {unread = 0, items = []}
+        newer = Notifications {unread = 1, items = [noticeOf 1]}
+        respond r
+          | methodOf r == "GET" && requestUrl r == "api/v1/notifications" =
+              atomicModifyIORef' count (\n -> (n + 1, n)) >>= \case
+                0 -> readMVar gate $> ok older
+                _ -> pure (ok newer)
+          | methodOf r == "GET" && requestUrl r == "api/v1/spaces" = pure (ok (Map.elems demo.spaces))
+          | otherwise = pure (status 404 "{\"error\":\"NotFound\"}")
+        out = readIORef count >>= \n -> unless (n > 0) (threadDelay 1000 >> out)
+    env <- newHttpEnv (Transport respond)
+    early <- async (runHttpWiki env notifications)
+    out
+    runHttpWiki env notifications `shouldReturn` Right newer
+    putMVar gate ()
+    wait early `shouldReturn` Right older
+    (\c -> c.notices) <$> cacheOf env `shouldReturn` Just (Right newer)
+
+  it "forgets the cached notifications when a read went out while a mark was out" $ do
+    -- The mark is handled before n2 is made; the read sent after it, after
+    -- n2 is made. The mark's answer comes first: put in the cache, it would
+    -- keep the read's newer list out of it, and the next read would lack n2.
+    marked <- newEmptyMVar
+    reading <- newEmptyMVar
+    asked <- newIORef ([] :: [Text])
+    let markAnswer = Notifications {unread = 0, items = [(noticeOf 1) {read = True}]}
+        readAnswer = Notifications {unread = 1, items = [noticeOf 2, (noticeOf 1) {read = True}]}
+        respond r = do
+          atomicModifyIORef' asked (\rs -> (requestUrl r : rs, ()))
+          case (methodOf r, requestUrl r) of
+            ("POST", "api/v1/notifications/read") -> readMVar marked $> ok markAnswer
+            ("GET", "api/v1/notifications") -> readMVar reading $> ok readAnswer
+            ("GET", "api/v1/spaces") -> pure (ok (Map.elems demo.spaces))
+            _ -> pure (status 404 "{\"error\":\"NotFound\"}")
+        sent url = readIORef asked >>= \rs -> unless (url `elem` rs) (threadDelay 1000 >> sent url)
+    env <- newHttpEnv (Transport respond)
+    marking <- async (runHttpWiki env (markRead ReadMark {ids = [NotificationId "n1"], everything = False}))
+    sent "api/v1/notifications/read"
+    readingOut <- async (runHttpWiki env notifications)
+    sent "api/v1/notifications"
+    putMVar marked ()
+    wait marking `shouldReturn` Right markAnswer
+    putMVar reading ()
+    wait readingOut `shouldReturn` Right readAnswer
+    (\c -> c.notices) <$> cacheOf env `shouldReturn` Nothing
 
   it "stores an answer of page content only if no page was saved while it was read, and any other across a save" $ do
     let sent = storedOf emptyCache
