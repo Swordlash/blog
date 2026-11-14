@@ -721,6 +721,7 @@ component =
               ThreadsLoading -> CommentsView.CommentsLoading
               ThreadsFailed e -> CommentsView.CommentsFailed e
               ThreadsReady ts -> CommentsView.CommentsReady (shownIn text placement ts)
+          , behind = st.discussion.behind
           , focused = st.focused
           , quoting = st.quoting
           , avatars = st.avatars

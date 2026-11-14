@@ -104,7 +104,7 @@ import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Http.Cache (Cache (threads), Reading (..), Stored (..), afterComment, afterEvent, changedBy, emptyCache, forgetThreads, storedAnswer, storedOf, withThreads)
 import Wiki.App.View.Comments.Machine
-import Wiki.App.View.Latest (Ask)
+import Wiki.App.View.Latest (Ask, takes)
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id (CommentId (..), CommentThreadId (..), PageId (..), UserId (..))
@@ -419,7 +419,7 @@ play w = \case
   ReaderDeletesThread i -> onShownThread i $ \t -> byReader (DeleteThread t.id)
   Tell -> case w.server.untold of
     MHeard p e : rest -> event ("told " <> show e) (Heard p e) (changing (afterEvent p e) w {server = w.server {untold = rest}})
-    MReplaced p ts : rest -> owing (\w' -> if p == w'.shownPage then False else w'.owed) (event ("subscription answered on " <> show p) (Replaced p ts) (changing (withThreads p (Right ts)) w {server = w.server {untold = rest}}))
+    MReplaced p ts : rest -> event ("subscription answered on " <> show p) (Replaced p ts) (changing (withThreads p (Right ts)) w {server = w.server {untold = rest}, owed = w.owed && p /= w.shownPage})
     []
       | w.server.fellBehind -> noted "the channel fell behind, is closed and opens again" (reconnected w)
       | otherwise -> w
@@ -486,12 +486,12 @@ deliver k w = case atMay w.outs k of
   Just Out {asked, answer = Just a, sent} ->
     let w' = w {outs = [x | (j, x) <- zip [0 ..] w.outs, j /= k]}
      in case (asked, a) of
-          (ARead t p, Left e) -> owing (\w'' -> if needed p w' w'' && isJust (readyThreadsOf w''.view) then True else w''.owed) (event "the read failed" (Loaded t p (Left e)) w')
+          (ARead t p, Left e) -> owing (\w'' -> if needed t p w' && isJust (readyThreadsOf w''.view) then True else w''.owed) (event "the read failed" (Loaded t p (Left e)) w')
           (ARead t p, Right (Left ts)) ->
             let stored = case (w'.tabCache, sent) of
                   (Just now', Just sentAt) -> Just (storedAnswer PlainRead sentAt (withThreads p (Right ts)) now')
                   _ -> w'.tabCache
-             in owing (\w'' -> if needed p w' w'' then False else w''.owed) (event ("the answer to the read of " <> show p) (Loaded t p (Right ts)) w' {tabCache = stored})
+             in event ("the answer to the read of " <> show p) (Loaded t p (Right ts)) w' {tabCache = stored, owed = w'.owed && not (needed t p w')}
           (ARead t p, Right (Right _)) -> event "a read" (Loaded t p (Right [])) w'
           -- The backend applies the write's answer to its cache, then the
           -- page view takes it.
@@ -503,11 +503,10 @@ deliver k w = case atMay w.outs k of
           (AWrite n p _, Left e) -> event ("write " <> show n <> " refused: " <> show e) (Wrote n (Left e)) (changing (afterComment p) w')
   _ -> w
 
--- | Whether the answer to a read of this page, taken from the first world
--- to the second, was the view's to take: its ticket was taken, on the page
--- shown.
-needed :: PageId -> World -> World -> Bool
-needed p was now = p == now.shownPage && now.view.page == Just p && now.view.asks /= was.view.asks
+-- | Whether the answer to this read of this page is the view's to take: on
+-- the page shown, and no answer to a later read taken.
+needed :: Ask -> PageId -> World -> Bool
+needed t p w = p == w.shownPage && w.view.page == Just p && isJust (takes t w.view.asks)
 
 -- | The world with whether a read the view needed is owed set, and checked.
 owing :: (World -> Bool) -> World -> World

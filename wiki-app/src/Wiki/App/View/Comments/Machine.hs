@@ -36,7 +36,8 @@
 --   ("Wiki.App.View.Latest"), and only for the page shown; what the
 --   channel told since the read was asked is applied to it again, in the
 --   order told ('taking'). A failed read is shown only where no threads
---   are;
+--   are; threads kept after it are marked behind ('behind'), and the
+--   comments view says so, with a button to read them again;
 -- * a write's answer is taken only on the visit of the page it was sent
 --   on. When the channel told of what it made or changed since it was
 --   sent, the threads have it already; otherwise it is applied only when
@@ -224,13 +225,13 @@ step event m
       Replaced page ts
         | m.page /= Just page -> (m, [])
         | m.encrypted -> reading m
-        | otherwise -> (unquiet m {threads = ThreadsReady ts, asks = supersede m.asks, heard = []}, [Changed])
+        | otherwise -> (unquiet m {threads = ThreadsReady ts, asks = supersede m.asks, heard = [], behind = False}, [Changed])
       Reload -> reading m
 
 -- | The model on another visit, or none: what was kept about the last
 -- one's reads and writes forgotten.
 elsewhere :: Model -> Model
-elsewhere m = m {writes = mempty, heard = [], following = Nothing, writtenSince = False}
+elsewhere m = m {writes = mempty, heard = [], following = Nothing, writtenSince = False, behind = False}
 
 -- | The writes out, with the threads shown changed since they were sent.
 unquiet :: Model -> Model
@@ -308,15 +309,15 @@ followed asked m
 -- addition the answer holds is kept as the answer has it, a deletion is
 -- one again, and an edit or a resolution is as told, which a later one
 -- still on its way corrects. A failure is shown only where no threads are:
--- threads shown are kept, and the next read, or the channel, brings what
--- they lack.
+-- threads shown are kept, and marked behind the server's ('behind'), until
+-- a read's or a subscription's answer is taken.
 taking :: Ask -> PageId -> Either WikiError [Thread] -> Model -> Model
 taking asked page answer m
   | m.page /= Just page = m'
   | otherwise = case (answer, m.threads) of
-      (Right ts, _) -> m' {threads = ThreadsReady (foldr applyEvent ts [e | (e, at) <- m.heard, not (asked `madeAfter` at)])}
-      (Left _, ThreadsReady _) -> m'
-      (Left e, _) -> m' {threads = ThreadsFailed e}
+      (Right ts, _) -> m' {behind = False, threads = ThreadsReady (foldr applyEvent ts [e | (e, at) <- m.heard, not (asked `madeAfter` at)])}
+      (Left _, ThreadsReady _) -> m' {behind = True}
+      (Left e, _) -> m' {behind = False, threads = ThreadsFailed e}
   where
     m' = m {heard = stillWanted m.asks m.heard}
 

@@ -94,6 +94,10 @@ data Input = Input
   , space :: SpaceId
   , placement :: Placement
   , comments :: Comments
+  , behind :: Bool
+  -- ^ Whether the comments shown are known to be behind the server's: a
+  -- read of them failed after they were shown
+  -- ("Wiki.App.View.Comments.Machine"'s @behind@).
   , focused :: Maybe CommentThreadId
   -- ^ The thread the reader has chosen, by clicking its quote in the page
   -- or the thread itself.
@@ -197,7 +201,20 @@ component =
         |]
 
     listed :: State -> [H.ComponentHTML Action Slots m]
-    listed st = case st.input.comments of
+    listed st = [behindLine | st.input.behind, CommentsReady _ <- [st.input.comments]] <> shownList st
+
+    -- The comments shown stay under this line when a read of them failed.
+    behindLine :: H.ComponentHTML Action Slots m
+    behindLine =
+      [hh|
+        <div class="error stale-reload comments-behind" role="alert">
+          <p>Comments could not be refreshed.</p>
+          <button type="button" class="retry" onClick={{ const TryAgain }}>Try again</button>
+        </div>
+      |]
+
+    shownList :: State -> [H.ComponentHTML Action Slots m]
+    shownList st = case st.input.comments of
       CommentsLoading -> [[hh|<p class="loading">Loading the comments…</p>|]]
       CommentsFailed e -> [failureView e TryAgain]
       CommentsReady [] -> case st.input.placement of
