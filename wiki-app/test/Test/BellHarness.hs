@@ -41,7 +41,7 @@ import Halogen.Router qualified as Router
 import Halogen.Subscription qualified as HS
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude hiding (State)
-import Test.Bell (Server (..), Step (..), World (..), emptyServer, forgotten, handleMark, handleRead, made, play, start)
+import Test.Bell (Server (..), Step (..), World (..), emptyServer, forgotten, handleMark, handleRead, made, madeEarly, play, start)
 import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki, WikiError, anonymousIn)
 import Wiki.App.Backend.Mem (MemWiki, runMemWiki)
@@ -215,6 +215,7 @@ drive rig ui ref gone s = do
     ClickMarkAll -> ui.clickMarkAll
     ClickLink i -> unless gone (ui.clickLink i)
     Make -> modifyIORef' ref made
+    MakeEarly -> modifyIORef' ref madeEarly
     Forget i -> modifyIORef' ref $ \server -> maybe server (\n -> forgotten n.id server) (atMay server.notes i)
     ReadElsewhere i -> modifyIORef' ref $ \server -> case atMay [n | n <- server.notes, not n.read] i of
       Just n -> fst (handleMark ReadMark {ids = [n.id], everything = False} server)

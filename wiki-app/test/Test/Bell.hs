@@ -68,6 +68,7 @@ module Test.Bell
   , genRun
   , shrinkRun
   , made
+  , madeEarly
   , handleRead
   , handleMark
   , forgotten
@@ -79,7 +80,7 @@ import Data.List (nub)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), fromGregorian)
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Protolude
 import Test.Hspec
 import Test.Hspec.QuickCheck (modifyMaxSuccess)
@@ -121,6 +122,17 @@ made :: Server -> Server
 made s = s {count = s.count + 1, notes = n : s.notes, untold = s.untold <> [n]}
   where
     n = noticeOf (s.count + 1)
+
+-- | The server after it made one more notification for the reader whose
+-- time is earlier than its newest one's: the real server orders its
+-- notifications by the order it commits them (@seq@), and a notification's
+-- time can be taken before its transaction waits for the writer (a
+-- password reset's notice that a key must be renewed takes it so). Newer in
+-- the server's order, older by its time.
+madeEarly :: Server -> Server
+madeEarly s = s {count = s.count + 1, notes = n : s.notes, untold = s.untold <> [n]}
+  where
+    n = (noticeOf (s.count + 1)) {createdAt = maybe (noticeOf (s.count + 1)).createdAt (\x -> addUTCTime (-0.5) x.createdAt) (head s.notes)}
 
 -- | The notification numbered so.
 noticeOf :: Int -> Notification
@@ -172,6 +184,9 @@ data Step
     ClickLink Int
   | -- | The server makes a notification for the reader.
     Make
+  | -- | The server makes a notification whose time is earlier than its
+    -- newest one's ('madeEarly').
+    MakeEarly
   | -- | The reader marks the unread notification at this place read in
     -- another tab: the server changes, and nothing tells this tab.
     ReadElsewhere Int
@@ -215,6 +230,7 @@ genStep more =
          , (1, pure ClickMarkAll)
          , (1, ClickLink <$> chooseInt (0, 3))
          , (4, pure Make)
+         , (1, pure MakeEarly)
          , (2, ReadElsewhere <$> chooseInt (0, 3))
          , (1, Forget <$> chooseInt (0, 3))
          , (4, pure Tell)
@@ -326,6 +342,7 @@ play w = \case
     | w.bell.open, Just n <- atMay (listed w.bell) i -> afterEvent ("follows " <> idText n) (Followed n.id ()) w
     | otherwise -> w
   Make -> noted ("the server makes n" <> show (w.server.count + 1)) w {server = made w.server}
+  MakeEarly -> noted ("the server makes n" <> show (w.server.count + 1) <> ", timed before its newest") w {server = madeEarly w.server}
   ReadElsewhere i -> case atMay [n | n <- w.server.notes, not n.read] i of
     Just n -> noted ("another tab marks " <> idText n <> " read") w {server = fst (handleMark ReadMark {ids = [n.id], everything = False} w.server)}
     Nothing -> w
