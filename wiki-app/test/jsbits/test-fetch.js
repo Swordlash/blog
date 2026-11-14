@@ -13,12 +13,22 @@
 // to read; an aborted request is rejected with an AbortError, as fetch
 // rejects it, held or not.
 
-const wikiTestServer = { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), heldNext: new Set(), held: null, release: null, fetch: null, WebSocket: null, sockets: [], said: [] };
+const wikiTestServer = { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), heldNext: new Set(), held: null, release: null, fetch: null, WebSocket: null, sockets: [], said: [], presence: new Map(), pending: new Set() };
 
 // The server's live channel (Wiki.App.Live), in the place of the page's
 // WebSocket: a socket opens as soon as it is made, keeps what the page
 // sends on it, and is told what the test has the server say
 // (wiki_test_server_tell) or closed by the server (wiki_test_server_hang_up).
+//
+// The server answers each subscription with who edits and who reads the
+// page then (wiki-server's Subscribed, its editors and readers). So does
+// this one, with what the test last had it say of them ('presence'):
+// each later subscription of the page is told it again, as the events
+// that said it. A tab that subscribes again on a new socket (a sign-in
+// restarts its channel) then learns it, though what was said on the
+// socket it closed was lost, as from the real server. The page's threads
+// are not told again: a test that needs them answers the subscription
+// itself.
 class WikiTestSocket extends EventTarget {
   constructor(url) {
     super();
@@ -37,6 +47,20 @@ class WikiTestSocket extends EventTarget {
   send(data) {
     if (this.readyState !== 1) throw new DOMException("Still in CONNECTING state.", "InvalidStateError");
     wikiTestServer.said.push(String(data));
+    let page = null;
+    try {
+      page = JSON.parse(String(data)).subscribe ?? null;
+    } catch {}
+    const known = page === null ? null : wikiTestServer.presence.get(page);
+    if (known) {
+      // Answered after the page's own handling of what it sent, as a
+      // server's answer comes.
+      setTimeout(() => {
+        for (const message of [known.editing, known.reading]) {
+          if (message !== null && this.readyState === 1) this.dispatchEvent(new MessageEvent("message", { data: message }));
+        }
+      }, 0);
+    }
   }
 
   close() {
@@ -55,9 +79,9 @@ function wiki_test_server_start() {
   if (wikiTestServer.WebSocket === null) wikiTestServer.WebSocket = globalThis.WebSocket;
   for (const socket of wikiTestServer.sockets) socket.hangUp(1001);
   globalThis.wikiTestHandlers = [];
-  Object.assign(wikiTestServer, { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), heldNext: new Set(), held: null, release: null, sockets: [], said: [] });
+  Object.assign(wikiTestServer, { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), heldNext: new Set(), held: null, release: null, sockets: [], said: [], presence: new Map(), pending: new Set() });
   globalThis.WebSocket = WikiTestSocket;
-  globalThis.fetch = async (url, init = {}) => {
+  globalThis.fetch = wikiTestServerCounted(async (url, init = {}) => {
     const method = init.method ?? "GET";
     // Headers as fetch takes them: pairs (as Halogen.Net.Fetch passes them)
     // or an object, kept as an object with their names as written.
@@ -98,6 +122,21 @@ function wiki_test_server_start() {
     const answer = early ?? (await wikiTestAnswer(request));
     const empty = answer.status === 204 || answer.status === 304;
     return new Response(empty ? null : answer.body, { status: answer.status, headers: { "Content-Type": "application/json", ...(answer.headers ?? {}) } });
+  });
+}
+
+// The server's fetch, counting the requests it has not answered yet
+// ('pending'): a test that let a held request go waits for its answer to
+// have been given before it looks at what the page did with it.
+function wikiTestServerCounted(serve) {
+  return async (url, init) => {
+    const request = {};
+    wikiTestServer.pending.add(request);
+    try {
+      return await serve(url, init);
+    } finally {
+      wikiTestServer.pending.delete(request);
+    }
   };
 }
 
@@ -115,6 +154,17 @@ async function wikiTestAnswer(request) {
   return answer ?? wikiTestServer.answers.get(`${request.method} ${request.url}`) ?? { status: 404, body: '{"error":"NotFound"}' };
 }
 
+// How many requests the server has not answered yet.
+function wiki_test_server_pending() {
+  return wikiTestServer.pending.size;
+}
+
+// How many of the page's sockets are open now: what the server says
+// reaches the page only on one of them.
+function wiki_test_server_open_sockets() {
+  return wikiTestServer.sockets.filter((socket) => socket.readyState === 1).length;
+}
+
 function wiki_test_server_stop() {
   if (wikiTestServer.fetch !== null) globalThis.fetch = wikiTestServer.fetch;
   if (wikiTestServer.WebSocket !== null) globalThis.WebSocket = wikiTestServer.WebSocket;
@@ -124,9 +174,32 @@ function wiki_test_server_stop() {
 
 // The server says this (JSON) on every open socket.
 function wiki_test_server_tell(message) {
+  wikiTestServerKeep(message);
   for (const socket of wikiTestServer.sockets) {
     if (socket.readyState === 1) socket.dispatchEvent(new MessageEvent("message", { data: message }));
   }
+}
+
+// What the server keeps of a page's presence from a message it says: who
+// edits it and who reads it, from an event or a subscription's answer.
+// A refusal ends it: the server answers the next subscription with a
+// refusal, not with who edits.
+function wikiTestServerKeep(message) {
+  const said = JSON.parse(message);
+  const page = said.page ?? said.subscribed ?? said.refused ?? null;
+  if (page === null) return;
+  if (said.refused !== undefined) {
+    wikiTestServer.presence.delete(page);
+    return;
+  }
+  const known = wikiTestServer.presence.get(page) ?? { editing: null, reading: null };
+  const event = (e) => JSON.stringify({ page, event: e });
+  if (said.subscribed !== undefined) {
+    if (said.editing !== undefined) known.editing = event({ type: "editing", editors: said.editing });
+    if (said.readers !== undefined) known.reading = event({ type: "readers", readers: said.readers });
+  } else if (said.event?.type === "editing") known.editing = message;
+  else if (said.event?.type === "readers") known.reading = message;
+  wikiTestServer.presence.set(page, known);
 }
 
 // The server's connections cut, as when it goes away.

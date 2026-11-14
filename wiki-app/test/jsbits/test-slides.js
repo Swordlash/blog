@@ -140,6 +140,11 @@ function wiki_test_slide_invariants() {
   return found.join("; ");
 }
 
+// How many rows the list shows.
+function wiki_test_row_count() {
+  return document.querySelectorAll(".editor-slides > li").length;
+}
+
 // The open rows' indices in the list, as JSON.
 function wiki_test_open_rows() {
   return JSON.stringify([...document.querySelectorAll(".editor-slides > li")].flatMap((item, i) => (item.querySelector(".slide-row.open") ? [i] : [])));

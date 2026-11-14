@@ -33,10 +33,13 @@ module Test.Browser.Http
   , startServerOver
   , startServerThrough
   , tellServer
+  , said
   , holdAt
   , holdNext
   , release
   , releaseHolding
+  , listening
+  , answersTaken
   , hangUp
   )
 where
@@ -48,6 +51,7 @@ import Data.NT (type (~>) (..))
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Halogen qualified as H
+import Halogen.Activity qualified as Activity
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.Router (Router)
 import Halogen.Router qualified as Router
@@ -124,6 +128,8 @@ $( browserJS
      , ("js_server_release_holding", "wiki_test_server_release_holding", Safe, [t|JSText -> JSText -> IO ()|])
      , ("js_network_event", "wiki_test_network_event", Safe, [t|Bool -> IO ()|])
      , ("js_server_release", "wiki_test_server_release", Safe, [t|IO ()|])
+     , ("js_server_pending", "wiki_test_server_pending", Safe, [t|IO Int|])
+     , ("js_server_open_sockets", "wiki_test_server_open_sockets", Safe, [t|IO Int|])
      , ("js_server_asked", "wiki_test_server_asked", Safe, [t|IO JSText|])
      , ("js_markup", "wiki_test_markup", Safe, [t|IO JSText|])
      , ("js_embed", "wiki_test_embed", Safe, [t|JSText -> JSText -> IO ()|])
@@ -166,6 +172,34 @@ holdNext method url = unsafeIOToPageM (js_server_hold_next (toJSText method) (to
 -- this address from now on, until the next 'release'.
 releaseHolding :: Text -> Text -> PageM s ()
 releaseHolding method url = unsafeIOToPageM (js_server_release_holding (toJSText method) (toJSText url))
+
+-- | Wait until the page has a socket open to the server: what the server
+-- says before that reaches nothing, as a real server's message to a tab
+-- that is not connected. Within the given milliseconds.
+listening :: Int -> PageM s ()
+listening within = eventuallyWithin within (unsafeIOToPageM js_server_open_sockets >>= (`shouldSatisfy` (> 0)))
+
+-- | Wait until the server has answered every request it was given and the
+-- program has taken the answers: no request pending, and the program quiet
+-- ("Halogen.Activity": no tree has work running or queued, and no fiber
+-- waits on a worker, the reading of an answer and what follows it
+-- included). The server's answer alone is not that: the program decodes
+-- it and acts on it later, and a check made in between finds the state
+-- from before the answer, whatever the answer then does. After a
+-- 'release', a check that something is still as it was is then a check of
+-- what the answers did.
+--
+-- Quiet is the signal for a view that reads and shows (the bell, a page,
+-- a list). Not for an editor after typing: its draft's autosave keeps a
+-- fiber waiting for seconds. Nor for what the live channel pushes, which
+-- no fiber waits for. The milliseconds given only guard against a hang.
+answersTaken :: Int -> PageM s ()
+answersTaken within =
+  eventuallyWithin within $ do
+    unsafeIOToPageM js_server_pending `shouldReturn` 0
+    settle
+    a <- unsafeIOToPageM Activity.activity
+    unless (Activity.quiet a) (expectationFailure ("the program has not taken the answers yet: " <> show a))
 
 -- | Answer the requests held.
 release :: PageM s ()
@@ -1235,14 +1269,24 @@ presence m = describe "who is editing and reading" $ do
     said `shouldReturn` []
     signIn ui
     eventually $ (Subscribe home.id `elem`) <$> said `shouldReturn` True
+    -- The sign-in restarts the tab's channel, so the socket that said
+    -- this subscription may be closed by now: who edits the page is then
+    -- told again with the answer to the subscription on the new one, as
+    -- the server tells it (test-fetch.js's presence).
     tell (Event home.id (Editing [edgar]))
     find ui ".page-editors" >>= (`shouldHaveText` "Edgar Editor is editing this page.")
     let later = addUTCTime 60 home.updatedAt
         saved = home {P.body = "Home saved in another tab.", P.updatedAt = later}
     answerWith "GET" (endpointUrl (\e -> e.homeDocument)) 200 (space, saved)
     answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt space.id [])) 200 saved
-    tell (Event home.id (PageChanged later))
-    find ui ".page-body p" >>= (`shouldHaveText` "Home saved in another tab.")
+    -- A save is told once, and no subscription's answer says it again: told
+    -- on a socket the restart closed, it is lost. The server tells it
+    -- again until the tab shows the version saved; once it does, the same
+    -- save told again changes nothing.
+    eventuallyWithin 10000 $ do
+      tell (Event home.id (PageChanged later))
+      settle
+      (traverse textContent =<< findAll ui ".page-body p") >>= (`shouldSatisfy` elem "Home saved in another tab.")
     length <$> findAll ui ".comments-toggle, .page-comments" `shouldReturn` 0
     find ui ".account .sign-out" >>= click
     _ <- find ui ".sign-in-toggle"
@@ -1545,9 +1589,8 @@ overtaken m space page at url change shown = do
     readsAt >>= (`shouldSatisfy` (> before + 1))
   eventually (shown ui)
   release
-  -- Nothing on the page says the first answer was dropped: a while for it
-  -- to come.
-  unsafeIOToPageM (threadDelay 2000000)
-  settle
+  -- Nothing on the page says the first answer was dropped: the check is
+  -- made once the program has taken it.
+  answersTaken 20000
   shown ui
   unmount ui

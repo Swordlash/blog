@@ -64,13 +64,13 @@ import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
 import System.Timeout (timeout)
-import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, offline, release, serveDemo, serverStarts, startServer, startServerOver, startServerThrough, tellServer)
+import Test.Browser.Http (Asked (..), answerWith, answersTaken, asked, holdAt, offline, release, said, serveDemo, serverStarts, startServer, startServerOver, startServerThrough, tellServer)
 import Test.Browser.Mount (clickButton)
 import Test.Browser.Text (editorText)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (EncryptedApi (..), SpacesApi (..), WikiApi (..))
-import Wiki.Api.Events (PageEvent (..), ServerMessage (..))
+import Wiki.Api.Events (ClientMessage (Subscribe), PageEvent (..), ServerMessage (..))
 import Wiki.Api.Notifications (Notifications (..))
 import Wiki.Api.ServerSettings (defaultHomePage)
 import Wiki.Api.Stars (StarredPage (..))
@@ -453,8 +453,9 @@ spec m = do
     go ui "Two"
     eventually (find ui ".page-view .page-title-row" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Two"))
     twoAgain <- imageOf ui
+    -- The third page's answer, taken: the second stays.
     release
-    unsafeIOToPageM (threadDelay 500_000)
+    answersTaken 20000
     find ui ".page-view .page-title-row" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Two")
     unsafeIOToPageM (js_image_width (toJSText twoAgain)) `shouldReturn` 4
     -- Its links, the file's and the attachments list's, still lead to its
@@ -655,6 +656,9 @@ spec m = do
     void (ok =<< run other (openThread made.id Nothing "Written in another tab."))
     let event = Event made.id ThreadsChanged
     decodeUtf8 (toS (encode event)) `shouldSatisfy` (not . T.isInfixOf "Written")
+    -- Told once the page has subscribed: before, its socket may not be
+    -- open, and the event would reach nothing.
+    eventually ((Subscribe made.id `elem`) <$> said `shouldReturn` True)
     tellServer event
     eventually (find ui ".page-comments" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Written in another tab."))
     unmount ui
@@ -1313,7 +1317,10 @@ spec m = do
       typeText text " Plain unsaved."
       offline True
       unsafeIOToPageM (js_tell_dropped (toJSText ("vault:user-admin" :: Text)))
-      unsafeIOToPageM (threadDelay 500_000)
+      -- Heard: the tab reloads the wiki, which fails offline, and keeps
+      -- what is shown because it has unsaved changes, saying so. Only then
+      -- is the text's presence a sign that it was kept.
+      eventuallyWithin 10000 $ find ui ".stale-reload" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "What is shown stays")
       find ui ".wiki" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Plain unsaved.")
       length <$> findAll ui ".dropped-unsaved" `shouldReturn` 0
       unmount ui
