@@ -149,10 +149,10 @@ data World = World
   -- ^ How many 'Rendered' the viewer has still to be told.
   , watchesRunning :: Map Int (Int, Context)
   -- ^ The browser's watches running, by the model's number, with the
-  -- generation each tells and the reading it was started for.
+  -- number each tells and the reading it was started for.
   , nears :: [(Int, Int, Context)]
   -- ^ The watches' tellings not yet taken by the viewer: the watch, its
-  -- generation, its reading.
+  -- number it tells, its reading.
   , outs :: [Out]
   , owners :: Map Int Bool
   -- ^ Every read's owner made, and whether it was let go.
@@ -257,7 +257,7 @@ event what e w0 = checked (noted (what <> named) w2)
 -- | One effect carried out, as the component does.
 effect :: Effect Int () -> World -> World
 effect e w = case e of
-  Watch n g -> w {watchesRunning = Map.insert n (g, w.given) w.watchesRunning}
+  Watch n -> w {watchesRunning = Map.insert n (n, w.given) w.watchesRunning}
   Unwatch n -> w {watchesRunning = Map.delete n w.watchesRunning}
   Fetch f _ () -> w {outs = w.outs <> [Out {fetch = f, madeFor = w.given, sentIn = w.context.sessionNo, pageRead = Nothing, answer = Nothing}], owners = Map.insert f False w.owners, readsMade = Map.insert f w.given w.readsMade}
   Release f -> w {owners = Map.insert f True w.owners}

@@ -218,7 +218,7 @@ component =
     perform :: M.Effect PageLink Place -> H.HalogenM State Action Slots Void m ()
     perform = \case
       -- The link watched until it comes near the window, in a browser.
-      M.Watch w generation
+      M.Watch w
         | inBrowser ->
             gets (\st -> st.root)
               >>= H.getRef
@@ -227,7 +227,7 @@ component =
                     channel <- H.liftEffect (liftIO HS.create)
                     void (H.subscribe channel.emitter)
                     (callback, i) <- H.liftEffect . liftIO $ do
-                      callback <- mkSyncCallback (const (HS.notify channel.listener (Happen (M.Near generation))))
+                      callback <- mkSyncCallback (const (HS.notify channel.listener (Happen (M.Near w))))
                       (callback,) <$> js_when_near element callback
                     modify (\s -> s {nearIds = Map.insert w i s.nearIds, callbacks = callback : s.callbacks})
                 )

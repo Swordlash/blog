@@ -105,8 +105,8 @@ data Event s l h x
     Received (Target s l h x)
   | -- | The link is rendered after a change of reading: it can be watched.
     Rendered
-  | -- | A watch told that the link came near the window, with the
-    -- generation it was started in.
+  | -- | The watch under this number told that the link came near the
+    -- window.
     Near Int
   | -- | The answer to the read under this number: a presentation the
     -- reader may read, or 'Nothing' for the link.
@@ -117,8 +117,8 @@ data Event s l h x
 
 -- | 'Effect' is what a step asks the component to do. None of them waits.
 data Effect l h
-  = -- | Watch the link under this number, telling the generation given.
-    Watch Int Int
+  = -- | Watch the link under this number, telling the number.
+    Watch Int
   | -- | Stop the watch under this number.
     Unwatch Int
   | -- | Read the page named, under this number, with an owner of its own
@@ -156,18 +156,22 @@ step event m
               (m'', release) = released m'
            in (m'' {target, loaded = Link, current = 1, shownStep = 1, generation = m.generation + 1}, unwatch <> release <> [WhenRendered])
       Rendered -> watched m
-      Near _ -> case m.target of
-        Linked reading host ->
-          let f = m.fetched + 1
-           in (m {watching = Nothing, fetched = f, fetches = Map.insert f m.generation m.fetches, pendingOwners = f : m.pendingOwners}, [Fetch f reading.link host])
-        Shown _ -> (m {watching = Nothing}, [])
+      -- Only the watch running is heard: one stopped since may have told
+      -- before it was stopped, for an earlier reading.
+      Near w
+        | m.watching /= Just w -> (m, [])
+        | otherwise -> case m.target of
+            Linked reading host ->
+              let f = m.fetched + 1
+               in (m {watching = Nothing, fetched = f, fetches = Map.insert f m.generation m.fetches, pendingOwners = f : m.pendingOwners}, [Fetch f reading.link host])
+            Shown _ -> (m {watching = Nothing}, [])
       Fetched f answer -> settled f True m {fetches = Map.delete f m.fetches, loaded = maybe Link (uncurry Ready) answer}
       Go move -> (moved move m, [])
 
 -- | The link watched, for an embedded page.
 watched :: Model s l h x -> (Model s l h x, [Effect l h])
 watched m = case (m.target, m.watching) of
-  (Linked _ _, Nothing) -> let w = m.watches + 1 in (m {watching = Just w, watches = w}, [Watch w m.generation])
+  (Linked _ _, Nothing) -> let w = m.watches + 1 in (m {watching = Just w, watches = w}, [Watch w])
   _ -> (m, [])
 
 -- | The watch running stopped.
