@@ -1316,7 +1316,10 @@ spec m = do
       typeText text " Plain unsaved."
       offline True
       unsafeIOToPageM (js_tell_dropped (toJSText ("vault:user-admin" :: Text)))
-      unsafeIOToPageM (threadDelay 500_000)
+      -- Heard: the tab reloads the wiki, which fails offline, and keeps
+      -- what is shown because it has unsaved changes, saying so. Only then
+      -- is the text's presence a sign that it was kept.
+      eventuallyWithin 10000 $ find ui ".stale-reload" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "What is shown stays")
       find ui ".wiki" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Plain unsaved.")
       length <$> findAll ui ".dropped-unsaved" `shouldReturn` 0
       unmount ui
