@@ -151,6 +151,22 @@ Those of haskell-halogen's `AGENTS.md` apply unchanged, in short:
 - Components, specs and helpers are polymorphic in the monad with class constraints
   (`MonadWiki m`, `MonadBrowserTest m`); only an entry point picks one.
 - `RefLabel`s come from `H.newRefLabel` in `initialState`, never a literal.
+- A component's program waits wherever it goes through `lift` or `liftIO`.
+  The pinned haskell-halogen runs that work on a worker thread, and the
+  rest of the program runs later, on the component's loop. In between, the
+  view may close (its program is cancelled), and other programs run. Two
+  rules follow. A resource that `Finalize` releases (a callback, an
+  observer, a watch, an owner of addresses, a key) is made through
+  `H.liftEffect`, and the `modify` directly after it keeps it in the state:
+  a close then comes before both or after both. A write that cannot be
+  taken back (CodeMirror, the DOM, the address, storage, a request sent) is
+  decided in the step that makes it: the condition is read in that step
+  (`state`, `gets`), and the write goes through `H.liftEffect`, or is one
+  JavaScript call that checks and acts. Work that has to wait (a fetch, a
+  module, a key from IndexedDB) cannot be one step: what it makes is named
+  in the state before the wait, so that `Finalize` releases it, or its late
+  answer checks that it is still wanted (a token, the element's
+  `isConnected`).
 - The browser's own objects are read and called through haskell-halogen's Web types and
   their fields (`w.history.go`, `event.key`; decision 30 in `docs/PLAN.md`), and the
   wiki's own objects through wiki newtypes with `jsFields`. JavaScript of the wiki's own
