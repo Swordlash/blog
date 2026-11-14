@@ -1959,12 +1959,19 @@ WP5.92 and WP5.93 wait.
   the owner on 2026-11-14 for the cost of the dialect, the source
   ranges and the tests, and not measured on wasm: a small measure
   would say what it buys.
-- **WP5.116 The browser suite's own time (for the order above).** It
-  sets the `wasm` job's length (two shards of five to seven minutes)
-  and doubled in two days. A third shard if the runner's four cores
-  carry it; the dearest examples made cheaper (the long deck's 66
-  seconds, the three random walks, the search's table); and what
-  WP5.106 moves out of it.
+- **WP5.116 The browser suite's own time, and its first wait (for the
+  order above).** It sets the `wasm` job's length (two shards of five
+  to seven minutes) and doubled in two days. First, from #281's
+  measures (designed, waits for a builder's turn; branch
+  `browser-fixture-once`): the fixture built once for a page (the
+  stand-in keeps the demo's answers, each example copies them), which
+  should take about a hundred seconds of work out of the suite; and
+  after a mount a wait on the program's quiet with a plain read after
+  it, in place of `find`'s two seconds, in the groups already worked
+  in. Then: a third shard if the runner's four cores carry it; the
+  dearest examples made cheaper (the long deck's 66 seconds, the three
+  random walks, the search's table); and what WP5.118's result moves
+  out of the browser.
 - **WP5.106 Components without JavaScript tested natively, over
   haskell-halogen's `remote` (the owner, 2026-11-13: "jeśli będzie to
   szybsze. Wszystkie pure halogen testy").** The spike (branch
@@ -3103,6 +3110,30 @@ needs. Each was true when its package merged; check before relying on one.
   (38 pairs of an action and a read that does not wait, 3 fixed, #268)
   and the server's, the passkeys' and the shared modules (218
   actions, 7 such pairs, 1 fixed, #270).
+- **The browser suite's waits, after #281.** Four examples that failed
+  by chance under load (27, 6, 3 and 2 runs of 30) were faults of the
+  tests, each raced for its own reason: a notification told before the
+  bell's socket was open; the slides' walk reading the rows before the
+  re-cut; the server's stand-in not answering a subscription with who
+  edits, as the server does. The stand-in (`test/jsbits/test-fetch.js`)
+  now answers a subscription as wiki-server does and counts its open
+  sockets and unanswered requests; `listening`, `answersTaken` (the
+  stand-in answered and the program quiet) and `rowsSettled` are the
+  conditions. A check that something is still as it was is shown able
+  to fail by a fault made by hand before it is trusted. Measured, for
+  the packages after: the suite holds about four thousand reads on a
+  clock (1343 `eventually`, 2696 `find`, each up to two seconds, 79
+  longer, 28 fixed pauses) for 677 examples; `serveDemo`, the fixture,
+  is built again in each of its 127 uses (0.8 to 2.1 s each unloaded),
+  which is most of what an example waits for before its page shows;
+  and `Halogen.Activity`'s quiet is always reached after a mount and
+  always after the page shows, except in an editor after typing (the
+  draft's autosave), while a request is held, and for what the live
+  channel, another tab or an island's library brings. Left: eleven
+  checks of the shape "a pause, then something is absent" (listed in
+  #281's description); "names who edits the page shown…", which fails
+  2 runs of 30 under full load at its first `find`; a click on a task's
+  box that timed out once under load.
 - **The pin of haskell-halogen at 522e423 (#280, WP5.111).** Its pull
   requests 111 to 118; the toolchain's pins did not move. Only
   `wiki-smoke` broke, by names the driver now exports (`Asked`,
