@@ -1889,18 +1889,31 @@ WP5.92 and WP5.93 wait.
   hspec-halogen can; otherwise more pages side by side than cores),
   and reports every example that failed with its seed; a failure there
   is a finding with a package of its own, not a re-run.
-- **WP5.115 Why the Markdown parser is 10 to 28 times slower on wasm
-  than natively without optimisation (for the order above; a measure
-  first).** It allocates about 54 KB a line, and its time on wasm
-  grows a little faster than linearly, which looks like the collector.
-  Measure a parse on wasm with the RTS's allocation area enlarged and
-  with the collector's statistics; if the collector is the cost, set
-  the flags in the build. Then, if a long deck's pause is still felt:
-  parse only the slides that changed (the editor cuts the deck into
-  rows already). A parser in C (cmark-gfm, linked by GHC's wasm
-  backend) was weighed with the owner and is not taken: the wiki's
-  dialect, its source ranges and 1400 tests stand on commonmark-hs's
-  extension points.
+- **WP5.115 The Markdown parser parses less (for the order above; the
+  measure is done, 2026-11-14).** Measured: the parser is 6 to 7.5
+  times slower on wasm than natively (a deck of 318,000 characters:
+  1.4 s against 0.2 s), and no flag changes it. The collector is 2 to
+  5% of the time whatever the allocation area; `-O2` for the parser's
+  packages gives 0 to 15% for 7% more size, `wasm-opt -O3` about 10%
+  for 75% more. The cause is the backend's: GHC's wasm code returns
+  each tail call to a loop in the RTS and calls the next function
+  through the table, with the STG registers in wasm globals, and
+  parser combinators are the worst case for it; every piece has a
+  floor of 4 to 6 times (commonmark's tokenizer 4.8, its core 5). The
+  wiki's extensions triple the core's time on wasm (0.5 s to 1.46 s),
+  the bare links' scan alone a quarter. So a whole long text cannot be
+  parsed unfelt in commonmark-hs on wasm (two parses in a pause: 2.8 to
+  3.4 s today, 2.2 with every flag, about 1 s with no extension at
+  all; about 4.4 ms a kilobyte, so a page of 20 KB is 90 ms a parse).
+  What can: **parse once for a pause** (the check and the preview each
+  parse the same text today: one parse, shared), for every page; and
+  for a presentation **parse only the slides that changed** (35 ms for
+  a slide of 100 lines on wasm; the editor cuts the deck into rows
+  already). A parser in C (cmark-gfm linked by GHC's wasm backend) is
+  the only way to a whole long document parsed fast; set aside with
+  the owner on 2026-11-14 for the cost of the dialect, the source
+  ranges and the tests, and not measured on wasm: a small measure
+  would say what it buys.
 - **WP5.116 The browser suite's own time (for the order above).** It
   sets the `wasm` job's length (two shards of five to seven minutes)
   and doubled in two days. A third shard if the runner's four cores
