@@ -1923,19 +1923,6 @@ WP5.92 and WP5.93 wait.
   activity, a native dispatch with bubbling and a target,
   `isConnected`, reads of the in-memory DOM, a hook on the program's
   waits, time the test controls, and two about `remote`).
-- **WP5.119 A measure of cmark-gfm on wasm (for the order above; the
-  owner, 2026-11-14: "możemy spróbować jeśli uważasz że jest to warte
-  sprawdzenia w kontekście szybkości testów i samej wiki").** After
-  WP5.115's measure the parser in C is the only way to a whole long
-  text parsed fast on wasm. Before anything is decided: the C library
-  linked into a wasm module by GHC's backend (the Hackage binding
-  carries the sources), the same three inputs parsed, the time with
-  the tree brought across to Haskell values, natively and on wasm; and
-  a list, by reading, of what the wiki's dialect needs that the
-  library has, can be given by its extension interface, or cannot be
-  given (source ranges of inlines, attributes, footnotes, math, the
-  wiki's own markers), with what part of wiki-core's tests would have
-  to be proved again. A measure and a list, no change to the wiki.
 - **WP5.120 The pin past haskell-halogen's pull requests 121 to 124:
   the browser suite's harness waits for the program (for the order
   above; the owner gave the library's notes on 2026-11-14; after
@@ -2006,11 +1993,26 @@ WP5.92 and WP5.93 wait.
   parse the same text today: one parse, shared), for every page; and
   for a presentation **parse only the slides that changed** (35 ms for
   a slide of 100 lines on wasm; the editor cuts the deck into rows
-  already). A parser in C (cmark-gfm linked by GHC's wasm backend) is
-  the only way to a whole long document parsed fast; set aside with
-  the owner on 2026-11-14 for the cost of the dialect, the source
-  ranges and the tests, and not measured on wasm: a small measure
-  would say what it buys.
+  already). **A parser in C was measured (WP5.119, 2026-11-14) and
+  stays set aside.** cmark-gfm builds with GHC's wasm backend as it
+  is, and its parse is nearly free there (the deck in 2 to 4 ms; a
+  page of 20 KB in about 1 ms); what costs is the tree brought across
+  to Haskell (95 to 158 ms for the deck through the Hackage binding,
+  which makes about eight calls a node; one written for the wiki
+  would be cheaper, unmeasured), and the wiki's own passes would come
+  on top. The switch is six to ten weeks: five extensions in C (math,
+  hidden text, wikilinks, the block markers, which are the hardest,
+  the attribute line), a crossing of the wiki's own, byte columns
+  turned to code points for the tasks, the export and the problems,
+  the tree builder of `Ast.hs` written again, and about 314 examples
+  that pin a tree or a position proved again; and the binding has a
+  fault that makes every extension trap on wasm (an FFI import
+  declared `IO ()` for a C function returning `int`: one line
+  upstream). Against it, parsing once for a pause and only the slides
+  that changed is one to two weeks and puts a deck's pause at about
+  70 ms. To take up again only if whole long texts must parse fast
+  (the wiki-core suite on wasm, a guess of 50 to 100 s in place of 139
+  to 248), and then the binding's fix and the crossing first.
 - **WP5.116 The browser suite's own time, and its first wait (for the
   order above).** It sets the `wasm` job's length (two shards of five
   to seven minutes) and doubled in two days. First, from #281's
