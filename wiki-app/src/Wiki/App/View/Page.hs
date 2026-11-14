@@ -1069,6 +1069,8 @@ component =
                 -- The Save button that had the focus is gone with the
                 -- ticks: the focus goes back to the box set last.
                 focusLastBox
+                -- A newer version shown meanwhile stays ('takesPage'),
+                -- as the staging keeps it.
                 modify $ \s ->
                   s
                     { loaded = case s.loaded of
@@ -1076,7 +1078,7 @@ component =
                         other -> other
                     , changed = False
                     }
-                H.raise (Showing saved)
+                gets (\now -> pageOf now.loaded) >>= traverse_ (H.raise . Showing)
                 H.raise (Changed Nothing)
               -- Saved elsewhere meanwhile: the page as it is now, with the
               -- ticks on it if it has the same tasks; otherwise the ticks
