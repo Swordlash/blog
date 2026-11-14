@@ -366,6 +366,7 @@ test-suite wiki-app-test
         Test.Server
         Test.Shell
         Test.Threads
+        Test.Deck
         Test.Ticking
         Test.Users
     build-depends:

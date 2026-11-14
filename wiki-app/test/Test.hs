@@ -34,6 +34,7 @@ import Test.Route qualified as Route
 import Test.Server qualified as Server
 import Test.Shell qualified as Shell
 import Test.Threads qualified as Threads
+import Test.Deck qualified as Deck
 import Test.Ticking qualified as Ticking
 import Test.Users qualified as Users
 
@@ -67,6 +68,7 @@ main = do
       Threads.spec
       BellDom.spec
       Users.spec
+      Deck.spec
       Latest.spec
       Shell.spec
       Server.spec
