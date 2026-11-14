@@ -40,7 +40,7 @@ spec = describe "Wiki.App.View.Users, mounted on the in-memory DOM" $
       router <- run (Router.newRouter "/" Unknown route)
       went <- newIORef []
       _ <- HS.subscribe (Router.changes router) (\r -> modifyIORef' went (<> [r]))
-      let ctx = Context {router, session = anonymousIn Open, spaces = [], icons = mempty, revision = 0, pageWidth = Compact}
+      let ctx = Context {router, session = anonymousIn Open, sessionNumber = 0, spaces = [], icons = mempty, revision = 0, pageWidth = Compact}
       withView run Users.component Users.Input {context = ctx, listing = listing ""} $ \view -> do
         settle view
         -- Typed, and typed again before the pause is over: the pause

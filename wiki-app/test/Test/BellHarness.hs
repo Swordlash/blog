@@ -117,7 +117,7 @@ parent feed router =
   where
     render :: Int -> H.ComponentHTML () Slots (Gated (MemWiki n))
     render revision = HH.div_ [HH.slot_ "bell" () Bell.component Bell.Input {context = contextAt revision, feed = Just feed}]
-    contextAt revision = Context {router, session = anonymousIn Open, spaces = [], icons = mempty, revision, pageWidth = Compact}
+    contextAt revision = Context {router, session = anonymousIn Open, sessionNumber = 0, spaces = [], icons = mempty, revision, pageWidth = Compact}
 
 -- | What drives a mounted bell besides its page: the gate, the feed's
 -- channel, how many listen to the feed, the revision given, and how to

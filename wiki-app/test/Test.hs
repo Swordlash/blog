@@ -8,6 +8,7 @@ import Test.Backend.Persist qualified as Persist
 import Test.Bell qualified as Bell
 import Test.BellDom qualified as BellDom
 import Test.Blog qualified as Blog
+import Test.Deck qualified as Deck
 import Test.DecryptedExport qualified as DecryptedExport
 import Test.Demo qualified as Demo
 import Test.Entries qualified as Entries
@@ -67,6 +68,7 @@ main = do
       Threads.spec
       BellDom.spec
       Users.spec
+      Deck.spec
       Latest.spec
       Shell.spec
       Server.spec
