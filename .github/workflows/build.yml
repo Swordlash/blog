@@ -1239,6 +1239,20 @@ jobs:
   # suites only here (github.job is smoke). It restores the caches the wasm
   # job saves and saves none. On the owner's machine, one runner, it runs
   # before or after the wasm job, in the same workspace.
+  #
+  # What it restores is the copy an earlier run saved, never this run's:
+  # whatever this change makes compile, both jobs compile at once, each as
+  # long as wasm alone. On a pull request's first run that is the change's
+  # own modules (a change to wiki-core rebuilds everything above it: the
+  # page at -O1, the prerender, wiki-server and the smoke programs at -O0,
+  # up to the four to five minutes the wasm job's Build step took at worst
+  # on 2026-11-13); the next runs of the pull request restore wasm's copy
+  # with them in it. After a bump of a dependency or of the compilers, or
+  # with the store's cache gone, both build the store from empty: about
+  # 25 minutes for the dependencies on 2026-11-13, three quarters of an
+  # hour from nothing (the weekly run above). That run is that much
+  # longer once, and its minutes are paid twice; the store wasm saves then
+  # serves the next.
   smoke:
     needs: plan
     if: needs.plan.outputs.tested != 'true'
