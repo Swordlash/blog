@@ -37,6 +37,7 @@ module Wiki.App.View.DeckViewer
 where
 
 import Control.Monad.UUID (MonadUUID)
+import Data.Map.Strict qualified as Map
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -51,7 +52,6 @@ import Web.DOM.Internal.Types (Element (..))
 import Web.Event.Event (EventType (..))
 import Web.Event.Event qualified as Web
 import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
-import Data.Map.Strict qualified as Map
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), UrlOwner)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)

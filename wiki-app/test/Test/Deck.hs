@@ -371,8 +371,8 @@ checked w = w {faults = w.faults <> problems}
         <> [ (LiveAddresses, "the deck shown has the addresses of read " <> show f <> ", let go")
            | not w.finished
            , -- Given an older context, the viewer drops the deck when it is
-             -- given the new one.
-             w.given == w.context
+           -- given the new one.
+           w.given == w.context
            , Ready _ _ <- [m.loaded]
            , Just f <- [m.shownOwner]
            , Map.lookup f w.owners == Just True
@@ -402,9 +402,9 @@ settled w0 = go (40 :: Int) (play w0 Give)
 -- reading: the server's page as read then, or the link.
 settles :: World -> Property
 settles w0 =
-  counterexample (toS (T.unlines (reverse w.trace))) $
-    counterexample (toS ("shows: " <> summary w.view <> "; the last read for the reading: " <> show lastFor)) $
-      isJust lastFor && fmap fst lastFor == Just shown
+  counterexample (toS (T.unlines (reverse w.trace)))
+    $ counterexample (toS ("shows: " <> summary w.view <> "; the last read for the reading: " <> show lastFor))
+    $ isJust lastFor && fmap fst lastFor == Just shown
   where
     w = settled w0
     shown = case w.view.loaded of
@@ -442,6 +442,22 @@ spec = describe "Wiki.App.View.DeckViewer.Machine" $ modifyMaxSuccess (max cases
       QC.property $
         forAllShrinkShow genRun shrinkRun show $ \run ->
           verdict rule (foldl' play start (run <> [Finish | rule == Owners]))
+  it "shows a slide and a step within the page view's own deck, however it changes" $
+    -- The page view's presentation, given anew when the page is read
+    -- again (a save): the slide shown stays within the deck.
+    QC.property $
+      forAllShrinkShow (listOf genShownStep) (shrinkList (const [])) show $ \run ->
+        let decks = [[1], [2, 3], [1, 1, 1, 4]]
+            shownIn k = Shown (Ready (0, k, 0) (deckOfSteps (fromMaybe [1] (atMay decks k))))
+            go (m, bad) = \case
+              Left k -> let (m', _) = step (Received (shownIn k)) m in (m', bad || outside m')
+              Right mv -> let (m', _) = step (Go mv) m in (m', bad || outside m')
+            outside m = case m.loaded of
+              Ready _ deck -> m.current < 1 || m.current > length deck.slides || m.shownStep < 1 || m.shownStep > stepsAt deck m.current
+              Link -> False
+            begin = initial (shownIn 1) :: M
+         in not (snd (foldl' go (begin, False) run))
+
   it "drops a deck when the reader signs out and in again before it is given its input" $
     -- The same user's sign-out and sign-in, given to the viewer in one
     -- input: equal sessions, but the backend let go of the deck's
@@ -452,3 +468,8 @@ spec = describe "Wiki.App.View.DeckViewer.Machine" $ modifyMaxSuccess (max cases
     QC.property $
       forAllShrinkShow genRun shrinkRun show $ \run ->
         settles (foldl' play start (filter (/= Finish) run))
+
+-- | A step of the page view's own deck: given anew (one of three decks),
+-- or a move.
+genShownStep :: Gen (Either Int Move)
+genShownStep = frequency [(1, Left <$> chooseInt (0, 2)), (3, Right <$> elements [minBound .. maxBound])]

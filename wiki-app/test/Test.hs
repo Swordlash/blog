@@ -8,6 +8,7 @@ import Test.Backend.Persist qualified as Persist
 import Test.Bell qualified as Bell
 import Test.BellDom qualified as BellDom
 import Test.Blog qualified as Blog
+import Test.Deck qualified as Deck
 import Test.DecryptedExport qualified as DecryptedExport
 import Test.Demo qualified as Demo
 import Test.Entries qualified as Entries
@@ -34,7 +35,6 @@ import Test.Route qualified as Route
 import Test.Server qualified as Server
 import Test.Shell qualified as Shell
 import Test.Threads qualified as Threads
-import Test.Deck qualified as Deck
 import Test.Ticking qualified as Ticking
 import Test.Users qualified as Users
 
