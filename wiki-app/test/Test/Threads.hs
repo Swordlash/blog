@@ -503,15 +503,17 @@ checked shownBefore w = w {faults = w.faults <> problems, seen = seen'}
     -- The comments a message the channel has still to deliver brings: a
     -- comment gone only until the next message is not lost (the
     -- subscription's answer is the threads as they were when the page was
-    -- subscribed to, and every change after it comes after it).
-    onTheWay = concatMap brings w.server.untold
+    -- subscribed to, and every change after it comes after it). A tab that
+    -- fell behind subscribes again once it has read what fit: every
+    -- comment of its page, as it is then, is on its way.
+    onTheWay = concatMap brings w.server.untold <> [c | w.server.behind, c <- onServer]
     brings = \case
       MHeard _ (ThreadOpened t) -> map (\c -> c.id) t.comments
       MHeard _ (CommentAdded c) -> [c.id]
       MHeard _ (CommentEdited c) -> [c.id]
       MReplaced _ ts -> [c.id | t <- ts, c <- t.comments]
       _ -> []
-    editsOnTheWay = [c.id | MHeard _ (CommentEdited c) <- w.server.untold]
+    editsOnTheWay = [c.id | MHeard _ (CommentEdited c) <- w.server.untold] <> [c | w.server.behind, c <- onServer]
     -- A visit ends when the view goes elsewhere: what was seen on it is
     -- forgotten.
     current = if w.view.page == Just w.shownPage then w.seen else mempty
