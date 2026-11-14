@@ -3605,10 +3605,12 @@ service worker, a push over the WebSocket in another tab, something the
 server does by itself, an image decoded. An event the browser fires later
 than the action's settle (a modal dialog's `close` after Escape, a `popstate`
 after the page's own `history.back()`) is waited for with `afterEvent`
-(`Wiki.Smoke.Browser`), which listens for it before the action. The
-server's pages refuse the driver's `waitForFunction` (their Content Security
-Policy allows no `unsafe-eval`): a condition in the page is asked with
-`holdsInPage`. A failure is raised through `expectationFailure` (or
+(`Wiki.Smoke.Browser`), which listens for it before the action. A
+condition in the server's pages is asked with `holdsInPage`. It was written
+when the driver's `waitForFunction` failed under those pages' Content
+Security Policy, which allows no `unsafe-eval`. Since haskell-halogen's pull
+request 118 `waitForFunction` works there, and the suites have yet to move
+to it. A failure is raised through `expectationFailure` (or
 `Wiki.Smoke.Api.failure`), never `fail`, so that it names the suite's line on
 every compiler: base's `fail` carries a call stack only from GHC 9.14. In
 the application, a pause that only takes a notice off the screen or ticks
