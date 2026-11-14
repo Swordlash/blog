@@ -363,6 +363,7 @@ test-suite wiki-app-test
         Test.Scripted
         Test.Server
         Test.Shell
+        Test.Threads
         Test.Ticking
     build-depends:
         HUnit,
