@@ -406,13 +406,19 @@ function wiki_editor_title_line(host) {
 }
 
 // The page's problems (WP5.65), as JSON: [{from, to, kind, message}], from
-// and to in characters of the text (Wiki.App.Editor.Problems). They are
-// kept on the host, so that a CodeMirror that loads later marks them too
-// (web/src/editor.js), and given to the CodeMirror there is, which turns
-// the characters into its positions.
-function wiki_editor_problems(host, problems) {
+// and to in characters of `text`, the text they were found in
+// (Wiki.App.Editor.Problems). They are kept on the host, so that a
+// CodeMirror that loads later marks them too (web/src/editor.js), and
+// given to the CodeMirror there is, which turns the characters into its
+// positions. Taken only while CodeMirror holds that text: marks for a text
+// typed over since would land in the wrong places, where CodeMirror keeps
+// the marks it has mapped through the typing. Whether they were taken.
+function wiki_editor_problems(host, text, problems) {
+  const editor = host.wikiEditor;
+  if (editor && editor.text() !== text) return false;
   host.wikiProblems = JSON.parse(problems);
-  host.wikiEditor?.problems(host.wikiProblems);
+  editor?.problems(host.wikiProblems);
+  return true;
 }
 
 // The cursor to the next problem, its message shown.

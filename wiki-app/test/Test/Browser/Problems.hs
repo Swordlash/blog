@@ -23,9 +23,11 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, startWith)
-import Test.Browser.Text (editorSelection, editorText, insertText, markdown, problemsMarked, setMarkdown)
+import Test.Browser.Text (editorHost, editorSelection, editorText, insertText, markdown, problemsMarked, setMarkdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Editor.Browser (showProblems)
+import Wiki.App.Editor.Problems (ProblemRange (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
@@ -64,6 +66,33 @@ spec m = do
     eventuallyWithin 15000 $ problemsMarked ui `shouldReturn` []
     eventually $ length <$> findAll ui ".editor-problems" `shouldReturn` 0
     length <$> findAll ui ".editor-cm .cm-lintRange-error" `shouldReturn` 0
+
+  -- WP5.108: a publication of the problems computes on the page's thread
+  -- in slices, and the author may type meanwhile; its marks are of the
+  -- text it read. Given to the editor after a keystroke, they are not
+  -- taken, and the marks CodeMirror mapped through the typing stay.
+  it "takes problems' marks only for the text it holds, keeping its own mapped through the typing for any other" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    let broken = "# Hello, world\n\n[[!nothing]]\n\nAfter."
+    setMarkdown ui broken
+    marked <- eventuallyWithin 15000 $ do
+      found <- problemsMarked ui
+      length found `shouldBe` 1
+      pure found
+    -- Two characters typed before the marker: the mark moves with it.
+    insertText ui (T.length "# Hello, world\n\n") "ab"
+    let moved = [(a + 2, b + 2, message) | (a, b, message) <- marked]
+    problemsMarked ui `shouldReturn` moved
+    host <- editorHost ui
+    let range = ProblemRange {from = 0, to = 3, kind = "marker", severity = "error", message = "Of the text before."}
+    -- Ranges of the text before the keystroke: not taken.
+    unsafeIOToPageM (showProblems host broken [range]) `shouldReturn` False
+    problemsMarked ui `shouldReturn` moved
+    -- Ranges of the text the editor holds: taken. (What is marked then
+    -- is not compared: the check after the keystroke's pause marks the
+    -- text again.)
+    now <- markdown ui
+    unsafeIOToPageM (showProblems host now [range]) `shouldReturn` True
 
   it "marks a formula KaTeX cannot parse on its line, with KaTeX's message, and the preview still shows it in red" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor

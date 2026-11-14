@@ -2418,18 +2418,16 @@ component =
       -- catches up with the typing first) they wait for it ('measuredNow'),
       -- which publishes; for another text the text is parsed for its
       -- slides.
+      -- Decided and written in one step ('state'), from the state as it is
+      -- then.
       FromPreview (Preview.SlidesMeasured text fits) -> do
-        st <- get
-        case st.checked.openers of
+        publishing <- state $ \s -> case s.checked.openers of
           Just _
-            | text == st.checkedText -> do
-                modify (\s -> s {measures = Just (Slides.measuresWith text st.checked.slides fits), measuredLater = Nothing})
-                publishProblems
+            | text == s.checkedText -> (True, s {measures = Just (Slides.measuresWith text s.checked.slides fits), measuredLater = Nothing})
           _
-            | isJust st.checkWait -> modify (\s -> s {measuredLater = Just (text, fits)})
-            | otherwise -> do
-                modify (\s -> s {measures = Just (Slides.measuresFor text fits)})
-                publishProblems
+            | isJust s.checkWait -> (False, s {measuredLater = Just (text, fits)})
+            | otherwise -> (True, s {measures = Just (Slides.measuresFor text fits)})
+        when publishing publishProblems
       FromPreview (Preview.IslandDrawn key out) -> do
         before <- gets (\st -> st.failedIslands)
         let after = case out of
@@ -3133,12 +3131,26 @@ component =
     -- through the changes, and the next check marks them again.
     --
     -- On a long presentation this is seconds of work, and other handlers
-    -- run while it computes: what it read (the rows, the check, the
-    -- measures, the failed islands) may change meanwhile, and each such
-    -- change publishes again. So each publication is numbered as it
-    -- begins, and writes the marks, the count and the headers only while
-    -- it is the last begun: a later one read a state at least as new, and
-    -- no list of the inputs read has to be kept up to date.
+    -- run while it computes, and the author may type: what it read (the
+    -- rows, the check, the measures, the failed islands) may change
+    -- meanwhile, and each such change publishes again; typing publishes
+    -- nothing until the check after its pause. So each publication is
+    -- numbered as it begins, and each of its writes is made with its
+    -- condition read in the same step, with no wait between:
+    --
+    -- \* the marks, only while CodeMirror holds the text they were found in
+    --   ('showProblems' compares it as it marks): otherwise CodeMirror
+    --   keeps the marks it mapped through the typing;
+    -- \* the count, only while no later publication has begun and the
+    --   editor holds the text checked;
+    -- \* the headers, only while no later publication has begun and the
+    --   rows are the rows read. Typing in a row leaves the rows as they
+    --   were until the re-cut after its pause, so headers written after a
+    --   keystroke show the text as last checked, as they did before it;
+    --   the check after the pause publishes them again.
+    --
+    -- A later publication read a state at least as new, so no list of the
+    -- inputs read has to be kept up to date.
     publishProblems :: H.HalogenM State Action Slots ViewOutput m ()
     publishProblems = do
       modify (\s -> s {publication = s.publication + 1})
@@ -3150,18 +3162,22 @@ component =
             Ready w -> w.body == st.checkedText
             _ -> False
           current s = s.publication == st.publication
+          holdsText s = case s.loaded of
+            Ready w -> w.body == st.checkedText
+            _ -> False
       when holdsChecked $ do
         let ranges = problemRanges st.checkedText problems
         _ <- liftIO (evaluate (length ranges))
-        whenM (gets current) $ do
-          traverse_ (\host -> H.liftEffect (showProblems host ranges)) st.hostElement
-          when (length problems /= st.problemCount) $ modify (\s -> s {problemCount = length problems})
+        whenM (gets current) $
+          traverse_ (\host -> void (H.liftEffect (showProblems host st.checkedText ranges))) st.hostElement
+        when (length problems /= st.problemCount) $
+          modify (\s -> if current s && holdsText s then s {problemCount = length problems} else s)
       for_ ((,,) <$> st.rows <*> text <*> taken) $ \(rows, whole, swallowed) -> do
         let headings = [fromMaybe (SlideRows.rowHeading r) (Map.lookup r.text st.rowHeadings) | r <- rows.rows]
             found = headsOf st problems whole rows swallowed headings
         _ <- liftIO (evaluate (sum [T.length h.title | h <- found]))
         modify $ \s ->
-          if current s
+          if current s && s.rows == Just rows
             then s {rowHeads = found, rowHeadings = Map.fromList (zip (map (.text) rows.rows) headings)}
             else s
 
