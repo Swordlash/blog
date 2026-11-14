@@ -14,7 +14,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Http (Asked (..), answerWith, asked, hangUp, holdAt, release, serveDemo, serverStarts, serverStops, startServer, tellServer)
+import Test.Browser.Http (Asked (..), allAnswered, answerWith, asked, hangUp, holdAt, listening, release, serveDemo, serverStarts, serverStops, startServer, tellServer)
 import Test.Browser.Mount (clickButton, slugs, start, startChanged)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
@@ -177,9 +177,11 @@ live m = describe "over the backend over HTTP" $ do
               , location = Just PageLocation {space = slugs ["blog"], page = slugs ["hello-world"]}
               }
           fetches = length . filter (\r -> r.method == "GET" && "api/v1/notifications" `T.isSuffixOf` r.url) <$> asked
-      eventually $ do
-        tellServer (Notified (told "n1" "Lost since"))
-        find ui ".notifications-count" >>= (`shouldHaveText` "1")
+      -- Told once the bell's socket is open: what the server says before
+      -- reaches nothing ('listening').
+      listening socketOpens
+      tellServer (Notified (told "n1" "Lost since"))
+      find ui ".notifications-count" >>= (`shouldHaveText` "1")
       -- The channel opens again; the list is fetched again, without it.
       before <- fetches
       hangUp
@@ -190,11 +192,12 @@ live m = describe "over the backend over HTTP" $ do
       again <- fetches
       hangUp
       eventuallyWithin 5000 (fetches >>= (`shouldSatisfy` (> again)))
-      eventually $ do
-        tellServer (Notified (told "n2" "Told meanwhile"))
-        find ui ".notifications-count" >>= (`shouldHaveText` "1")
+      listening socketOpens
+      tellServer (Notified (told "n2" "Told meanwhile"))
+      find ui ".notifications-count" >>= (`shouldHaveText` "1")
+      -- The list's answer taken, it still counts the one told meanwhile.
       release
-      unsafeIOToPageM (threadDelay 300_000)
+      allAnswered 2000
       (traverse textContent =<< findAll ui ".notifications-count") `shouldReturn` ["1"]
       -- The server has it now: opened, the list holds it once.
       answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 1, items = [told "n2" "Told meanwhile"]}
@@ -223,10 +226,19 @@ live m = describe "over the backend over HTTP" $ do
               , read = False
               , location = Just PageLocation {space = slugs ["blog"], page = slugs ["hello-world"]}
               }
-      eventually $ do
-        tellServer (Notified told)
-        find ui ".notifications-count" >>= (`shouldHaveText` "1")
+      listening socketOpens
+      tellServer (Notified told)
+      find ui ".notifications-count" >>= (`shouldHaveText` "1")
       find ui ".notifications-toggle" >>= click
       find ui ".notification-list .notification-what" >>= (`shouldHaveText` "Rita Reader replied in a thread of yours")
       unmount ui
       serverStops
+
+-- | How long the bell's socket may take to open once the bell is shown, in
+-- milliseconds. Measured under a load of a busy loop on every core, two
+-- pages side by side: at most 0.87 s in 30 runs (0.22 s on average). The
+-- example told its notification before it opened, and lost it (27
+-- failures in 30 runs on the same load); 'find' then spent the outer
+-- wait's two seconds on a count that could not come.
+socketOpens :: Int
+socketOpens = 3000

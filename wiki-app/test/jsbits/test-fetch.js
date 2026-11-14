@@ -13,7 +13,7 @@
 // to read; an aborted request is rejected with an AbortError, as fetch
 // rejects it, held or not.
 
-const wikiTestServer = { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), heldNext: new Set(), held: null, release: null, fetch: null, WebSocket: null, sockets: [], said: [], presence: new Map() };
+const wikiTestServer = { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), heldNext: new Set(), held: null, release: null, fetch: null, WebSocket: null, sockets: [], said: [], presence: new Map(), pending: new Set() };
 
 // The server's live channel (Wiki.App.Live), in the place of the page's
 // WebSocket: a socket opens as soon as it is made, keeps what the page
@@ -79,9 +79,9 @@ function wiki_test_server_start() {
   if (wikiTestServer.WebSocket === null) wikiTestServer.WebSocket = globalThis.WebSocket;
   for (const socket of wikiTestServer.sockets) socket.hangUp(1001);
   globalThis.wikiTestHandlers = [];
-  Object.assign(wikiTestServer, { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), heldNext: new Set(), held: null, release: null, sockets: [], said: [], presence: new Map() });
+  Object.assign(wikiTestServer, { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), heldNext: new Set(), held: null, release: null, sockets: [], said: [], presence: new Map(), pending: new Set() });
   globalThis.WebSocket = WikiTestSocket;
-  globalThis.fetch = async (url, init = {}) => {
+  globalThis.fetch = wikiTestServerCounted(async (url, init = {}) => {
     const method = init.method ?? "GET";
     // Headers as fetch takes them: pairs (as Halogen.Net.Fetch passes them)
     // or an object, kept as an object with their names as written.
@@ -122,6 +122,21 @@ function wiki_test_server_start() {
     const answer = early ?? (await wikiTestAnswer(request));
     const empty = answer.status === 204 || answer.status === 304;
     return new Response(empty ? null : answer.body, { status: answer.status, headers: { "Content-Type": "application/json", ...(answer.headers ?? {}) } });
+  });
+}
+
+// The server's fetch, counting the requests it has not answered yet
+// ('pending'): a test that let a held request go waits for its answer to
+// have been given before it looks at what the page did with it.
+function wikiTestServerCounted(serve) {
+  return async (url, init) => {
+    const request = {};
+    wikiTestServer.pending.add(request);
+    try {
+      return await serve(url, init);
+    } finally {
+      wikiTestServer.pending.delete(request);
+    }
   };
 }
 
@@ -137,6 +152,17 @@ async function wikiTestAnswer(request) {
     if (answer) break;
   }
   return answer ?? wikiTestServer.answers.get(`${request.method} ${request.url}`) ?? { status: 404, body: '{"error":"NotFound"}' };
+}
+
+// How many requests the server has not answered yet.
+function wiki_test_server_pending() {
+  return wikiTestServer.pending.size;
+}
+
+// How many of the page's sockets are open now: what the server says
+// reaches the page only on one of them.
+function wiki_test_server_open_sockets() {
+  return wikiTestServer.sockets.filter((socket) => socket.readyState === 1).length;
 }
 
 function wiki_test_server_stop() {
