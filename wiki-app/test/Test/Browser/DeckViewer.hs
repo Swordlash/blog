@@ -118,7 +118,9 @@ spec m = do
     let refused = endpointUrl (\e -> e.spaces.pageAt docsId (slugs ["markdown-guide", "presentations"]))
     answerRaw "GET" refused 403 "{\"error\":\"forbidden\",\"message\":\"Forbidden\"}"
     ui <- startServer m (Page docs guide)
-    _ <- find ui "article.page-body h1"
+    -- The guide's first render over HTTP takes longer than 'find' waits on
+    -- a loaded machine.
+    _ <- eventuallyWithin 30000 $ find ui "article.page-body h1"
     bringNear ui
     -- The request starts when the browser's IntersectionObserver says the
     -- link has come near the window, which takes the browser its own time
@@ -245,7 +247,9 @@ spec m = do
     serveDemo
     before <- deckWatches
     ui <- startServer m (Page docs guide)
-    _ <- find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child"
+    -- The guide is long, and over HTTP on a loaded machine its first render
+    -- takes longer than 'find' waits.
+    _ <- eventuallyWithin 30000 $ find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child"
     settle
     docsId <- unsafeIOToPageM $ do
       demo <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
