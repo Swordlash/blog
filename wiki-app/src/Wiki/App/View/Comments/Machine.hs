@@ -100,6 +100,11 @@ data Model = Model
   , writtenSince :: Bool
   -- ^ Whether another write was answered after that read was asked: one
   -- more read follows when its answer comes.
+  , behind :: Bool
+  -- ^ Whether the threads shown are known to be behind the server's: a
+  -- read whose answer was needed failed, and no read's or subscription's
+  -- answer was taken since. The comments view says so, with a button to
+  -- read them again.
   , closed :: Bool
   -- ^ Whether the page view has gone away: after that nothing changes and
   -- nothing is asked.
@@ -181,7 +186,7 @@ data Effect a
 -- read at once if the backend could.
 initial :: Maybe PageId -> Bool -> Bool -> Maybe (Either WikiError [Thread]) -> Model
 initial page comments encrypted read' =
-  Model {page, comments, encrypted, threads = maybe ThreadsLoading (either ThreadsFailed ThreadsReady) (read' >>= \r -> r <$ guard comments), asks = noAsks, written = 0, writes = mempty, heard = [], following = Nothing, writtenSince = False, closed = False}
+  Model {page, comments, encrypted, threads = maybe ThreadsLoading (either ThreadsFailed ThreadsReady) (read' >>= \r -> r <$ guard comments), asks = noAsks, written = 0, writes = mempty, heard = [], following = Nothing, writtenSince = False, behind = False, closed = False}
 
 -- | The threads after an event, and what the page view is asked to do.
 step :: Event a -> Model -> (Model, [Effect a])

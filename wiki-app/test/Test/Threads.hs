@@ -80,11 +80,13 @@
 --   still to deliver removes it;
 -- * a failed read is shown only where no threads are;
 -- * nothing is asked after the view went away;
+-- * after a read whose answer the view needed failed, with threads shown,
+--   the view says its threads are behind, until a read's or a
+--   subscription's answer is taken;
 -- * once everything out has come back and everything the channel had to
---   tell was told, the view shows the server's threads of its page, on a
---   run where no read failed: a read that fails leaves the threads as they
---   were, which may hold the reader's write out of its place among what
---   others made meanwhile, until the next read or subscription.
+--   tell was told, the view shows the server's threads of its page, the
+--   reader's writes in their places, or says its threads are behind: a
+--   read that fails leaves the threads as they were.
 module Test.Threads
   ( spec
   )
@@ -146,7 +148,7 @@ data Server = Server
   , pages :: Map PageId [Thread]
   , untold :: [Message]
   -- ^ The messages in the tab's outbox, the oldest first.
-  , behind :: Bool
+  , fellBehind :: Bool
   -- ^ Whether the outbox was full when a message came: the tab is closed
   -- once it has read what fit, and subscribes again.
   , watched :: Maybe PageId
@@ -160,7 +162,7 @@ outbox :: Int
 outbox = 4
 
 emptyServer :: Server
-emptyServer = Server {count = 0, pages = Map.fromList [(pageA, []), (pageB, [])], untold = [], behind = False, watched = Nothing}
+emptyServer = Server {count = 0, pages = Map.fromList [(pageA, []), (pageB, [])], untold = [], fellBehind = False, watched = Nothing}
 
 threadsOn :: PageId -> Server -> [Thread]
 threadsOn p s = Map.findWithDefault [] p s.pages
@@ -170,7 +172,7 @@ threadsOn p s = Map.findWithDefault [] p s.pages
 committed :: PageId -> PageEvent -> Server -> Server
 committed p e s
   | s.watched /= Just p = s'
-  | length s.untold >= outbox = s' {behind = True}
+  | length s.untold >= outbox = s' {fellBehind = True}
   | otherwise = s' {untold = s.untold <> [MHeard p e]}
   where
     s' = s {pages = Map.adjust (applyEvent e) p s.pages}
@@ -330,6 +332,10 @@ data World = World
   , trace :: [Text]
   , faults :: [(Rule, Text)]
   , seen :: Map CommentId (Text, PageId)
+  , owed :: Bool
+  -- ^ Whether a read of the threads shown whose answer the view needed
+  -- failed, with no read's or subscription's answer taken since: the view
+  -- must say its threads are behind.
   -- ^ Every comment shown on this visit of its page, with the newest text
   -- shown.
   }
@@ -340,7 +346,7 @@ startOver :: Maybe Stored -> World
 startOver cache =
   checked Nothing . fromTheCache $
     let (view, fx) = step (Fetched pageA True False) (initial (Just pageA) True False Nothing)
-        w0 = World {view, server = emptyServer {watched = Just pageA, untold = [MReplaced pageA []]}, outs = [], shownPage = pageA, finished = False, tabCache = cache, trace = [], faults = [], seen = mempty}
+        w0 = World {view, server = emptyServer {watched = Just pageA, untold = [MReplaced pageA []]}, outs = [], shownPage = pageA, finished = False, tabCache = cache, trace = [], faults = [], seen = mempty, owed = False}
      in effected "mounted on page A" fx w0
 
 start, startCached :: World
@@ -413,9 +419,9 @@ play w = \case
   ReaderDeletesThread i -> onShownThread i $ \t -> byReader (DeleteThread t.id)
   Tell -> case w.server.untold of
     MHeard p e : rest -> event ("told " <> show e) (Heard p e) (changing (afterEvent p e) w {server = w.server {untold = rest}})
-    MReplaced p ts : rest -> event ("subscription answered on " <> show p) (Replaced p ts) (changing (withThreads p (Right ts)) w {server = w.server {untold = rest}})
+    MReplaced p ts : rest -> owing (\w' -> if p == w'.shownPage then False else w'.owed) (event ("subscription answered on " <> show p) (Replaced p ts) (changing (withThreads p (Right ts)) w {server = w.server {untold = rest}}))
     []
-      | w.server.behind -> noted "the channel fell behind, is closed and opens again" (reconnected w)
+      | w.server.fellBehind -> noted "the channel fell behind, is closed and opens again" (reconnected w)
       | otherwise -> w
   Reconnect -> noted "the channel is lost and opens again" (reconnected w)
   Handle -> handleAt 0 w
@@ -433,7 +439,7 @@ play w = \case
             -- The page view stops watching the old page and watches the new
             -- one: the server answers the new subscription after what it
             -- had queued.
-            w' = event "goes to the other page" Left' (changing (forgetThreads w.shownPage) w {shownPage = next})
+            w' = event "goes to the other page" Left' (changing (forgetThreads w.shownPage) w {shownPage = next, owed = False})
             w'' = w' {server = w'.server {watched = Just next, untold = w'.server.untold <> [MReplaced next (threadsOn next w'.server)]}}
          in event ("shows " <> show next) (Fetched next True False) w''
   PageAgain
@@ -460,7 +466,7 @@ play w = \case
 -- | The channel closed and open again: what it had to tell is lost, the
 -- page is subscribed to again, and the backend drops its threads.
 reconnected :: World -> World
-reconnected w = changing (forgetThreads w.shownPage) w {server = w.server {untold = [MReplaced p (threadsOn p w.server) | Just p <- [w.server.watched]], behind = False}}
+reconnected w = changing (forgetThreads w.shownPage) w {server = w.server {untold = [MReplaced p (threadsOn p w.server) | Just p <- [w.server.watched]], fellBehind = False}}
 
 -- | The world after the server handled the ask at this place among those
 -- it has not handled.
@@ -480,12 +486,12 @@ deliver k w = case atMay w.outs k of
   Just Out {asked, answer = Just a, sent} ->
     let w' = w {outs = [x | (j, x) <- zip [0 ..] w.outs, j /= k]}
      in case (asked, a) of
-          (ARead t p, Left e) -> event "the read failed" (Loaded t p (Left e)) w'
+          (ARead t p, Left e) -> owing (\w'' -> if needed p w' w'' && isJust (readyThreadsOf w''.view) then True else w''.owed) (event "the read failed" (Loaded t p (Left e)) w')
           (ARead t p, Right (Left ts)) ->
             let stored = case (w'.tabCache, sent) of
                   (Just now', Just sentAt) -> Just (storedAnswer PlainRead sentAt (withThreads p (Right ts)) now')
                   _ -> w'.tabCache
-             in event ("the answer to the read of " <> show p) (Loaded t p (Right ts)) w' {tabCache = stored}
+             in owing (\w'' -> if needed p w' w'' then False else w''.owed) (event ("the answer to the read of " <> show p) (Loaded t p (Right ts)) w' {tabCache = stored})
           (ARead t p, Right (Right _)) -> event "a read" (Loaded t p (Right [])) w'
           -- The backend applies the write's answer to its cache, then the
           -- page view takes it.
@@ -496,6 +502,21 @@ deliver k w = case atMay w.outs k of
           (AWrite _ _ _, Right (Left _)) -> w'
           (AWrite n p _, Left e) -> event ("write " <> show n <> " refused: " <> show e) (Wrote n (Left e)) (changing (afterComment p) w')
   _ -> w
+
+-- | Whether the answer to a read of this page, taken from the first world
+-- to the second, was the view's to take: its ticket was taken, on the page
+-- shown.
+needed :: PageId -> World -> World -> Bool
+needed p was now = p == now.shownPage && now.view.page == Just p && now.view.asks /= was.view.asks
+
+-- | The world with whether a read the view needed is owed set, and checked.
+owing :: (World -> Bool) -> World -> World
+owing f w = said w {owed = f w}
+
+-- | The world checked against the rule that a view owed a read says its
+-- threads are behind.
+said :: World -> World
+said w = w {faults = w.faults <> [(Unsaid, "a read the view needed failed, and it does not say its threads are behind") | w.owed, not w.finished, not w.view.behind]}
 
 -- | The world with what the view shows checked against the rules, given
 -- what it showed before the step, if the step was the view's.
@@ -511,20 +532,21 @@ checked shownBefore w = w {faults = w.faults <> problems, seen = seen'}
     -- subscribed to, and every change after it comes after it). A tab that
     -- fell behind subscribes again once it has read what fit: every
     -- comment of its page, as it is then, is on its way.
-    onTheWay = concatMap brings w.server.untold <> [c | w.server.behind, c <- onServer]
+    onTheWay = concatMap brings w.server.untold <> [c | w.server.fellBehind, c <- onServer]
     brings = \case
       MHeard _ (ThreadOpened t) -> map (\c -> c.id) t.comments
       MHeard _ (CommentAdded c) -> [c.id]
       MHeard _ (CommentEdited c) -> [c.id]
       MReplaced _ ts -> [c.id | t <- ts, c <- t.comments]
       _ -> []
-    editsOnTheWay = [c.id | MHeard _ (CommentEdited c) <- w.server.untold] <> [c.id | w.server.behind, (c, _) <- shownComments]
+    editsOnTheWay = [c.id | MHeard _ (CommentEdited c) <- w.server.untold] <> [c.id | w.server.fellBehind, (c, _) <- shownComments]
     -- A visit ends when the view goes elsewhere: what was seen on it is
     -- forgotten.
     current = if w.view.page == Just w.shownPage then w.seen else mempty
     seen' = Map.union (Map.fromList [(c.id, (c.body, p)) | (c, p) <- shownComments]) current
     problems
       | w.finished = []
+      | w.owed && not w.view.behind = [(Unsaid, "a read the view needed failed, and it does not say its threads are behind")]
       | otherwise =
           [(OtherPage, "a thread of another page is shown: " <> show t.id) | t <- shown, Just t.page /= w.view.page || t.page /= w.shownPage]
             <> [ (Lost, "a comment shown before is gone while the server has it: " <> show cid)
@@ -547,7 +569,7 @@ checked shownBefore w = w {faults = w.faults <> problems, seen = seen'}
                ]
             <> [ (Ghost, "a comment the server deleted is shown: " <> show c.id)
                | w.view.page == Just w.shownPage
-               , not w.server.behind
+               , not w.server.fellBehind
                , null [() | MReplaced p _ <- w.server.untold, p == w.shownPage]
                , (c, _) <- shownComments
                , c.id `notElem` onServer
@@ -570,7 +592,7 @@ editsOf = T.count ", edited"
 settled :: World -> World
 settled w0 = drained (tellAll w0)
   where
-    tellAll w = if null w.server.untold && not w.server.behind then w else tellAll (play w Tell)
+    tellAll w = if null w.server.untold && not w.server.fellBehind then w else tellAll (play w Tell)
 
 drained :: World -> World
 drained w
@@ -582,14 +604,14 @@ drained w
 settles :: World -> Property
 settles w0 =
   counterexample (toS (T.unlines (reverse w.trace))) $
-    shape (readyThreadsOf w.view) === shape (Just (threadsOn w.shownPage w.server))
+    w.view.behind QC..||. shape (readyThreadsOf w.view) === shape (Just (threadsOn w.shownPage w.server))
   where
     w = settled w0
     shape = fmap (map (\t -> (t.id, t.resolved, [(c.id, c.body) | c <- t.comments])))
 
 -- | 'Rule' is each rule a run is checked against, as the module's Haddock
 -- lists them.
-data Rule = OtherPage | Lost | Older | Ghost | FailureOverThreads | AfterClose
+data Rule = OtherPage | Lost | Older | Ghost | FailureOverThreads | Unsaid | AfterClose
   deriving stock (Eq, Show, Enum, Bounded)
 
 ruleText :: Rule -> [Char]
@@ -598,6 +620,7 @@ ruleText = \case
   Lost -> "loses no comment the server still has, on any run"
   Older -> "shows no comment's text older than one it showed, on any run"
   Ghost -> "shows no comment the server deleted, on any run"
+  Unsaid -> "says its threads are behind after a read it needed failed, until it takes another, on any run"
   FailureOverThreads -> "shows a failed read only where it shows no threads, on any run"
   AfterClose -> "asks nothing once it has gone away"
 
@@ -628,4 +651,4 @@ spec = describe "Wiki.App.View.Comments.Machine" $ modifyMaxSuccess (max cases) 
     it ("shows the server's threads once everything out has come back" <> how) $
       QC.property $
         forAllShrinkShow genRun shrinkRun show $ \run ->
-          settles (foldl' play w0 (filter (\s -> s /= Finish && s /= HandleFail) run))
+          settles (foldl' play w0 (filter (/= Finish) run))
