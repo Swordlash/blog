@@ -196,7 +196,7 @@ spec = describe "Wiki.App.View.Bell, mounted on the in-memory DOM" $ do
       let run :: MemWiki MemDOM a -> IO a
           run = runMemDOM . runMemWiki wiki
       router <- run (Router.newRouter "/" Unknown route)
-      let ctx = Context {router, session = anonymousIn Open, spaces = [], icons = mempty, revision = 0, pageWidth = Compact}
+      let ctx = Context {router, session = anonymousIn Open, sessionNumber = 0, spaces = [], icons = mempty, revision = 0, pageWidth = Compact}
       withView run Bell.component Bell.Input {context = ctx, feed = Nothing} $ \view -> do
         -- The in-memory backend answered the first read at once.
         (length <$> pending waits) `shouldReturn` 0
