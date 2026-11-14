@@ -278,7 +278,10 @@ step event m
         Just w
           | m.page == Just w.page ->
               let (m', fx) = wrote w answer (opened w answer m {writes = Map.delete n m.writes})
-               in (m', fx <> [Answered place request (leftToMaybe answer)])
+                  -- A thread of a session of quoting ended since: its form
+                  -- is the newer session's now, and stays as it is.
+                  formGone = isRight answer && isJust w.session && w.session /= ((\q -> q.session) <$> m.quoting)
+               in (m', fx <> [Answered place request (leftToMaybe answer) | not formGone])
         _ -> (m {writes = Map.delete n m.writes}, [])
       Heard page e
         | m.page /= Just page -> (m, [])
