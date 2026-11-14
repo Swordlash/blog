@@ -197,7 +197,7 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (Directory, Invitations, ServerStatus, TexEngine, UserPage, UserQuery, WikiSettings)
 import Wiki.Api.Backups (Backups)
 import Wiki.Api.Events (PageEvent (..), applyEvent)
-import Wiki.Api.Notifications (Notifications (..))
+import Wiki.Api.Notifications (Notifications (..), withTold)
 import Wiki.Api.ServerSettings (ServerSettings)
 import Wiki.Api.Stars (StarredPage)
 import Wiki.Api.WhatsNew (WhatsNew)
@@ -580,11 +580,12 @@ storedNotices asked sent keep now
   | otherwise = now
 
 -- | Add a notification received over the live channel at the front of the
--- cached notifications, unless they have it: the server sends the message
--- after the notification is made, so a read it answered in between
--- brought it already.
+-- cached notifications, unless they count it already
+-- ('Wiki.Api.Notifications.counts'): the server sends the message after
+-- the notification is made, so a read it answered in between counted it,
+-- and listed it if it was among the newest.
 withNotice :: Notification -> Cache -> Cache
-withNotice n c = c {notices = fmap (\ns -> if any (\x -> x.id == n.id) ns.items then ns else Notifications {unread = ns.unread + 1, items = n : ns.items}) <$> c.notices}
+withNotice n c = c {notices = fmap (withTold [n]) <$> c.notices}
 
 -- | Remove the cached notifications, because some may have been missed.
 forgetNotices :: Cache -> Cache

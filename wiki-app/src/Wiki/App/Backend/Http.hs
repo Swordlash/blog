@@ -129,7 +129,7 @@ import Wiki.Api.Export (dispositionFileName, formatExtension, formatMediaType)
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (searchParameters)
 import Wiki.Api.Links qualified as Links
-import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..), Watching (..), searchable)
+import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..), Watching (..), searchable, withTold)
 import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), OldPasswordProof (..), PasswordRecord (..), PasswordRecordChange (..), PasswordWrapChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
@@ -1208,10 +1208,7 @@ fetchedNotices = do
       before <- liftIO (map (\n -> n.id) <$> readIORef toldRef)
       result <- send endpoints.notifications.list
       during <- liftIO (filter (\n -> n.id `notElem` before) <$> readIORef toldRef)
-      let merged =
-            result <&> \ns ->
-              let missing = [n | n <- during, all (\x -> x.id /= n.id) ns.items]
-               in Notifications {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}
+      let merged = withTold during <$> result
       when (kept merged) (HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.cache (\c -> (storedNotices asked stored (withNotices merged) c, ())))))
       pure merged
 

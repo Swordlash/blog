@@ -19,6 +19,8 @@
 module Wiki.Api.Notifications
   ( NotificationsApi (..)
   , Notifications (..)
+  , counts
+  , withTold
   , ReadMark (..)
   , NotificationSettings (..)
   , NotificationSettingsChange (..)
@@ -37,7 +39,7 @@ import Data.Text qualified as T
 import Protolude
 import Servant.API
 import Wiki.Core.Id
-import Wiki.Core.Notification (MailMode, Notification, Watch)
+import Wiki.Core.Notification (MailMode, Notification (..), Watch)
 import Wiki.Core.User (User)
 import Wiki.Core.Version (Author)
 
@@ -130,6 +132,22 @@ data Notifications = Notifications
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
+-- | Whether a list of notifications counts this one already: it lists it,
+-- or lists a newer one, so the server answered after this one was made.
+-- The server lists only its newest ('Wiki.Core.Notification.maxListed')
+-- and counts every unread one beside them, so a notification older than
+-- the newest listed is counted, listed or not; one the list does not count
+-- was made after the server answered (told over the live channel since).
+counts :: Notifications -> Notification -> Bool
+counts ns n = any (\x -> x.id == n.id || x.createdAt > n.createdAt) ns.items
+
+-- | The list with the notifications the live channel told of that it does
+-- not count ('counts') put first, the unread among them counted.
+withTold :: [Notification] -> Notifications -> Notifications
+withTold told ns = Notifications {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}
+  where
+    missing = filter (not . counts ns) told
 
 -- | 'ReadMark': which notifications to mark as read: these, or all ('everything').
 data ReadMark = ReadMark

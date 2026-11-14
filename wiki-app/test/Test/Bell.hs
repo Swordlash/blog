@@ -64,7 +64,7 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (modifyMaxSuccess)
 import Test.QuickCheck (Gen, Property, chooseInt, counterexample, forAllShrinkShow, frequency, listOf, shrinkList, (.&&.), (===))
 import Test.QuickCheck qualified as QC
-import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
+import Wiki.Api.Notifications (Notifications (..), ReadMark (..), withTold)
 import Wiki.App.Backend.Http.Cache (Cache (notices), Stored (..), askingNotices, changedBy, emptyCache, forgetNotices, markedAnswer, storedNotices, storedOf, withNotice, withNotices)
 import Wiki.App.View.Bell.Machine
 import Wiki.App.View.Latest (madeAfter)
@@ -307,8 +307,7 @@ play w = \case
               -- with what the channel told meanwhile, stored if the cache
               -- did not change since it was sent.
               (Just t, Just (asked, sentAt, toldBefore)) ->
-                let missing = [n | n <- t.told, n.id `notElem` toldBefore, all (\x -> x.id /= n.id) a.items]
-                    merged = Notifications {unread = a.unread + length (filter (\n -> not n.read) missing), items = missing <> a.items}
+                let merged = withTold [n | n <- t.told, n.id `notElem` toldBefore] a
                     t' = t {stored = storedNotices asked sentAt (withNotices (Right merged)) t.stored}
                  in afterEvent ("answer to " <> askText o.ask <> ": " <> listText merged) (Loaded f (Right merged)) w' {tab = Just t'}
               _ -> afterEvent ("answer to " <> askText o.ask) (Loaded f (Right a)) w'

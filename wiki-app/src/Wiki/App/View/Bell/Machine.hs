@@ -62,7 +62,7 @@ where
 import Data.Set qualified as Set
 import Protolude hiding (State)
 import Text.Show (Show (showsPrec))
-import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
+import Wiki.Api.Notifications (Notifications (..), ReadMark (..), counts, withTold)
 import Wiki.App.Backend (WikiError)
 import Wiki.App.View.Latest (Ask, Asks, madeAfter, newAsk, noAsks, supersede, takes)
 import Wiki.Core.Id (NotificationId)
@@ -182,7 +182,7 @@ step event m
       Dismissed -> close m
       Told n ->
         ( m
-            { notices = fmap (\ns -> if any (\x -> x.id == n.id) ns.items then ns else withRead m.known ns {unread = ns.unread + 1, items = n : ns.items}) <$> m.notices
+            { notices = fmap (\ns -> if counts ns n then ns else withRead m.known (withTold [n] ns)) <$> m.notices
             , heard = (n, m.asks) : filter (\(x, _) -> x.id /= n.id) m.heard
             }
         , []
@@ -213,8 +213,7 @@ taking asked answer m = case takes asked m.asks of
   Just after -> case answer of
     Right ns ->
       let kept = [(n, at) | (n, at) <- m.heard, not (asked `madeAfter` at)]
-          missing = [n | (n, _) <- kept, all (\x -> x.id /= n.id) ns.items]
-       in m {asks = after, notices = Just (Right (withRead m.known ns {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items})), heard = kept}
+       in m {asks = after, notices = Just (Right (withRead m.known (withTold (map fst kept) ns))), heard = kept}
     Left _ -> m {asks = after, notices = Just answer}
 
 -- | What an answer says was read learnt, and shown on the list as it is,
