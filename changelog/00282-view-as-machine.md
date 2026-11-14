@@ -18,6 +18,9 @@ title: The bell keeps your "Mark read" and every notification it has shown
   bell again before the mark has gone through.
 - With more notifications than the bell lists, one told to your tab no
   longer counts twice.
+- A notice that a space's key must be renewed, made by a password reset
+  while other notifications arrive, now always shows under the bell and
+  in its count.
 - The "Mark read" buttons stay disabled until every mark you started has
   come back, also when you follow a notification's link while "Mark all
   read" is still under way.
