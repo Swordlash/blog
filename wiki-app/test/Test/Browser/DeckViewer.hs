@@ -19,7 +19,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
 import Halogen.Router.Duplex qualified as Duplex
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Http (Asked (..), answerRaw, asked, serveDemo, serverStarts, startServer)
+import Test.Browser.Http (Asked (..), answerRaw, asked, guideLoaded, pressNow, serveDemo, serverStarts, startServer)
 import Test.Browser.Mount (slugs, start, startOn, startWith)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
@@ -119,19 +119,19 @@ spec m = do
     answerRaw "GET" refused 403 "{\"error\":\"forbidden\",\"message\":\"Forbidden\"}"
     ui <- startServer m (Page docs guide)
     -- The guide's first render over HTTP takes longer than 'find' waits on
-    -- a loaded machine.
+    -- a loaded machine, and the rest of its load keeps the program busy
+    -- for longer than an action waits ('guideLoaded').
     _ <- eventuallyWithin 30000 $ find ui "article.page-body h1"
+    waitQuietWithin guideLoaded
     bringNear ui
     -- The request starts when the browser's IntersectionObserver says the
     -- link has come near the window, which takes the browser its own time
     -- on a loaded machine: a long deadline, not the two seconds of
     -- 'eventually' (seen to run out in CI on 2026-11-12).
     eventuallyWithin 30000 $ ((\r -> r.url) <$>) <$> asked >>= (`shouldSatisfy` elem refused)
-    -- The test's fetch answers at once, in promises; settle lets the tasks
-    -- queued by then run (the program's handling of the answer among them,
-    -- as a task of the wasm runtime) before anything is read. hspec-halogen
-    -- has no wait for the program to be quiet; this is the nearest.
-    settle
+    -- The test's fetch answers at once; the program's handling of the
+    -- answer is done once it is quiet.
+    waitQuiet
     -- Refused: the link, as without the class, and no banner.
     eventually $ find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child" >>= (`shouldHaveText` "Presentations")
     length <$> findAll ui ".deck-embed" `shouldReturn` 0
@@ -208,10 +208,13 @@ spec m = do
       n <- deckWatches
       n `shouldSatisfy` (> before)
       pure n
+    -- The four changes close together: each pressed as soon as its
+    -- button is there, none waited for ('pressNow'), then the program
+    -- waited for once.
     for_ (["reader", "admin", "editor", "admin"] :: [Text]) $ \login -> do
-      find ui ".user-switcher-toggle" >>= click
-      find ui (".user-menu button[data-login=" <> login <> "]") >>= click
-    settle
+      pressNow ui ".user-switcher-toggle"
+      pressNow ui (".user-menu button[data-login=" <> login <> "]")
+    waitQuietWithin readersChanged
     eventually $ deckWatches `shouldReturn` watching
     -- The one watch is heard: near the window, the presentation is read
     -- for the reader now, and the watch, having told, is gone.
@@ -233,8 +236,8 @@ spec m = do
     ui <- start m (Just "user-admin") (Page docs guide)
     _ <- find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child"
     find ui ".user-switcher-toggle" >>= click
-    find ui ".user-menu button[data-login=editor]" >>= click
-    settle
+    pressNow ui ".user-menu button[data-login=editor]"
+    waitQuietWithin readerChanged
     bringNear ui
     eventuallyWithin 30000 $ position ui `shouldReturn` "1 / 9"
     deckWatches `shouldReturn` before
@@ -248,9 +251,10 @@ spec m = do
     before <- deckWatches
     ui <- startServer m (Page docs guide)
     -- The guide is long, and over HTTP on a loaded machine its first render
-    -- takes longer than 'find' waits.
+    -- takes longer than 'find' waits, and the rest of its load longer than
+    -- an action waits ('guideLoaded').
     _ <- eventuallyWithin 30000 $ find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child"
-    settle
+    waitQuietWithin guideLoaded
     docsId <- unsafeIOToPageM $ do
       demo <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
       runMemWiki demo ((\sp -> sp.id) . either (panic . show) identity <$> getSpace (slugs ["docs"]))
@@ -353,3 +357,17 @@ report :: PageM s Report
 report = do
   json <- unsafeIOToPageM (fromJSText <$> js_ids_report)
   maybe (expectationFailure ("no report: " <> json)) pure (decodeStrict (encodeUtf8 json))
+
+-- | How long one change of reader on the guide may keep the program busy,
+-- in milliseconds. Measured from the press to the program quiet
+-- (2026-11-14, 16 cores): 4.9 to 10.7 s with nothing else running, 6.3 to
+-- 24.5 s over 16 runs with a busy loop on every core and two pages side by
+-- side. The deadline is twice the longest.
+readerChanged :: Int
+readerChanged = 50000
+
+-- | How long four changes of reader close together on the guide may keep
+-- the program busy, in milliseconds. Measured as for 'readerChanged',
+-- loaded: 23.0 to 58.2 s over 16 runs. The deadline is twice the longest.
+readersChanged :: Int
+readersChanged = 120000

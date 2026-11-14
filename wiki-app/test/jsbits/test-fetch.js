@@ -287,3 +287,9 @@ function wiki_test_embed(id, json) {
 function wiki_test_unembed(id) {
   document.getElementById(id)?.remove();
 }
+
+// Click the element a selector finds with its own click(), as a script of
+// the page would: the test waits for the program itself afterwards.
+function wiki_test_click_now(selector) {
+  document.querySelector(selector)?.click();
+}

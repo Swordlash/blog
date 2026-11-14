@@ -41,6 +41,8 @@ module Test.Browser.Http
   , listening
   , answersTaken
   , hangUp
+  , pressNow
+  , guideLoaded
   )
 where
 
@@ -51,7 +53,6 @@ import Data.NT (type (~>) (..))
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Halogen qualified as H
-import Halogen.Activity qualified as Activity
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.Router (Router)
 import Halogen.Router qualified as Router
@@ -138,6 +139,7 @@ $( browserJS
      , ("js_server_hang_up", "wiki_test_server_hang_up", Safe, [t|IO ()|])
      , ("js_server_said", "wiki_test_server_said", Safe, [t|IO JSText|])
      , ("js_hide_clipboard", "wiki_test_hide_clipboard", Safe, [t|Bool -> IO ()|])
+     , ("js_click_now", "wiki_test_click_now", Safe, [t|JSText -> IO ()|])
      ]
  )
 
@@ -180,26 +182,23 @@ listening :: Int -> PageM s ()
 listening within = eventuallyWithin within (unsafeIOToPageM js_server_open_sockets >>= (`shouldSatisfy` (> 0)))
 
 -- | Wait until the server has answered every request it was given and the
--- program has taken the answers: no request pending, and the program quiet
--- ("Halogen.Activity": no tree has work running or queued, and no fiber
--- waits on a worker, the reading of an answer and what follows it
--- included). The server's answer alone is not that: the program decodes
--- it and acts on it later, and a check made in between finds the state
--- from before the answer, whatever the answer then does. After a
--- 'release', a check that something is still as it was is then a check of
--- what the answers did.
+-- program has taken the answers: no request pending, and then the program
+-- quiet (hspec-halogen's 'waitQuietWithin': no tree has work running or
+-- queued, and no fiber waits in a @liftIO@, the reading of an answer and
+-- what follows it included). The server's answer alone is not that: the
+-- program decodes it and acts on it later, and a check made in between
+-- finds the state from before the answer, whatever the answer then does.
+-- After a 'release', a check that something is still as it was is then a
+-- check of what the answers did.
 --
 -- Quiet is the signal for a view that reads and shows (the bell, a page,
 -- a list). Not for an editor after typing: its draft's autosave keeps a
 -- fiber waiting for seconds. Nor for what the live channel pushes, which
 -- no fiber waits for. The milliseconds given only guard against a hang.
 answersTaken :: Int -> PageM s ()
-answersTaken within =
-  eventuallyWithin within $ do
-    unsafeIOToPageM js_server_pending `shouldReturn` 0
-    settle
-    a <- unsafeIOToPageM Activity.activity
-    unless (Activity.quiet a) (expectationFailure ("the program has not taken the answers yet: " <> show a))
+answersTaken within = do
+  eventuallyWithin within (unsafeIOToPageM js_server_pending `shouldReturn` 0)
+  waitQuietWithin within
 
 -- | Answer the requests held.
 release :: PageM s ()
@@ -855,9 +854,12 @@ views m = describe "the application over it" $ do
         listsAsked = length . filter (\r -> "/pages" `T.isSuffixOf` r.url) <$> asked
     fetchesOf tourAt `shouldReturn` 1
     lists <- listsAsked
-    -- Another page of the space: fetched, the space's list kept.
-    find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/markdown-guide/']" >>= click
-    find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
+    -- Another page of the space: fetched, the space's list kept. It is the
+    -- Markdown guide, whose load keeps the program busy for longer than an
+    -- action waits ('pressNow', 'guideLoaded').
+    pressNow ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/markdown-guide/']"
+    eventuallyWithin guideLoaded $ find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
+    waitQuietWithin guideLoaded
     -- Someone else saves the tour meanwhile, in another session. Nothing
     -- tells this tab: it no longer shows the tour.
     answerWith "GET" tourAt 200 tourPage {P.body = "# Tour\n\nSaved by someone else."}
@@ -1594,3 +1596,28 @@ overtaken m space page at url change shown = do
   answersTaken 20000
   shown ui
   unmount ui
+
+-- | Press an element with the page's own @click()@, once it is there, and
+-- wait for nothing after it: an action of the harness waits for the
+-- program, and fails when the program is still busy five seconds after
+-- it. The Markdown guide is long: its load over HTTP, and a change of
+-- reader on it ("Test.Browser.DeckViewer"), which renders it again for
+-- each step of its load, keep the program busy for longer than that. The
+-- example then waits for the program itself, with the deadline it
+-- measured ('guideLoaded').
+pressNow :: Mounted s q o m -> Text -> PageM s ()
+pressNow ui selector = do
+  _ <- find ui selector
+  unsafeIOToPageM (js_click_now (toJSText selector))
+
+-- | How long the guide's load over HTTP may keep the program busy once its
+-- first text is shown, in milliseconds. Measured from the start of the
+-- load to the program quiet (2026-11-14, 16 cores, a busy loop on every
+-- core, two pages side by side): 3.7 to 12.7 s over 10 runs for the
+-- embedded presentation's example after the first render, 7.9 to 16.3 s
+-- over 10 runs for its example refused over HTTP
+-- ("Test.Browser.DeckViewer"), and 5.8 to 15.4 s over 7 runs for the
+-- guide opened from the sidebar here (in 3 runs more, that example
+-- failed before it). The deadline is twice the longest.
+guideLoaded :: Int
+guideLoaded = 33000

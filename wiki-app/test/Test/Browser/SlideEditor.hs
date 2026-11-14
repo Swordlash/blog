@@ -23,7 +23,6 @@ import Data.Aeson.Types (Parser, parseMaybe)
 import Data.IORef (IORef)
 import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
-import Halogen.Activity (activity, idle)
 import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
@@ -2198,10 +2197,10 @@ cardTitles ui = findAll ui ".editor-preview .slides-preview .slide-frame:not(.sl
 lineStart :: Text -> Int -> Int
 lineStart text n = sum (map ((+ 1) . T.length) (take (n - 1) (T.splitOn "\n" text)))
 
--- | Wait until the slides' rows are settled: the program idle
--- ("Halogen.Activity": no tree has work running or queued), the master's
--- layout one that a re-cut of every row leaves as it is
--- ("Wiki.Core.SlideRows.recut"), and the list showing as many rows. A step
+-- | Wait until the slides' rows are settled: the page settled with the
+-- program idle (hspec-halogen's 'settle': no tree has work running or
+-- queued), the master's layout one that a re-cut of every row leaves as it
+-- is ("Wiki.Core.SlideRows.recut"), and the list showing as many rows. A step
 -- that changed a row's text leaves the rows as they were until the re-cut
 -- after the check's pause (Editor's 'recutRows'); a walk that reads the
 -- layout and the rows' list before it reads two different cuts. It waited
@@ -2214,8 +2213,7 @@ lineStart text n = sum (map ((+ 1) . T.length) (take (n - 1) (T.splitOn "\n" tex
 rowsSettled :: Int -> PageM s ()
 rowsSettled within =
   eventuallyWithin within $ do
-    busy <- (\a -> not (idle a)) <$> unsafeIOToPageM activity
-    when busy (expectationFailure "the program is not idle")
+    settle
     lay <- walkLayout
     shown <- unsafeIOToPageM js_row_count
     case SlideRows.fromLayout lay.text lay.starts of
