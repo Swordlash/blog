@@ -21,11 +21,12 @@ import Data.Time (addUTCTime)
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Http (Asked (..), answerRaw, answerWith, asked, holdAt, release, serveDemo, serverStarts, serverStops, startServer)
+import Test.Browser.Http (Asked (..), answerRaw, answerWith, asked, holdAt, release, releaseHolding, serveDemo, serverStarts, serverStops, startServer, tellServer)
 import Test.Browser.Mount (adopt, clickButton, slugs, start, startChangedWith)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AccountApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Events (PageEvent (PageChanged), ServerMessage (Event))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (postDetails))
 import Wiki.App.Backend.Http.Client (endpointUrl)
@@ -456,6 +457,45 @@ spec m = describe "tasks ticked in a page" $ do
     eventually $ length <$> findAll ui ".page-body input[data-task]" `shouldReturn` 2
     boxes ui `shouldReturn` ["true", "false"]
     length <$> findAll ui ".page-ticks-count, .page-ticks-note" `shouldReturn` 0
+    serverStops
+
+  it "keeps the newer version the reader asked for when the save of the ticks answers after it" $ runPage $ do
+    serverStarts
+    serveDemo
+    let guide = demoPage "markdown-guide"
+        short = (guide {Core.body = "# Markdown guide\n\n- [ ] a\n- [ ] b\n"}) :: Core.Page
+        saved = (short :: Core.Page) {body = "# Markdown guide\n\n- [x] a\n- [ ] b\n", updatedAt = addUTCTime 60 short.updatedAt}
+        -- Another editor's save, made on the reader's.
+        newer = (saved :: Core.Page) {Core.title = "Markdown guide, newer", body = "# Markdown guide, newer\n\n- [x] a\n- [ ] b\n\nAdded by another editor.\n", updatedAt = addUTCTime 120 short.updatedAt}
+        guideAt = endpointUrl (\e -> e.spaces.pageAt guide.space (slugs ["markdown-guide"]))
+        pageAt = "api/v1/pages/" <> guide.id.text
+    answerWith "GET" guideAt 200 short
+    answerWith "PUT" pageAt 200 saved
+    ui <- startServer m (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
+    eventually $ length <$> findAll ui ".page-body input[data-task]" `shouldReturn` 2
+    find ui ".page-body input[data-task='0']" >>= click
+    eventually $ find ui ".page-ticks-count" >>= (`shouldHaveText` "1 box changed, not saved yet.")
+    -- The save is slow; meanwhile the other editor saves, and the reader
+    -- asks to see that version.
+    holdAt "PUT" pageAt
+    find ui ".page-ticks-save" >>= click
+    eventually $ length . filter (\a -> a.method == "PUT" && a.url == pageAt) <$> asked >>= (`shouldSatisfy` (>= 1))
+    answerWith "GET" guideAt 200 newer
+    tellServer (Event guide.id (PageChanged newer.updatedAt))
+    clickButton ui ".page-actions .page-live button" "Changed since: show the new version"
+    eventually $ (find ui ".page-body" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Added by another editor.")
+    -- The save answers now, with the version it made, older than the one
+    -- shown; the shell's reload of the page after it is slow. The newer
+    -- text stays, under its title, before the reload as after it.
+    releaseHolding "GET" guideAt
+    eventually $ length <$> findAll ui ".page-ticks-count" `shouldReturn` 0
+    settle
+    (find ui ".page-body" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Added by another editor.")
+    find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide, newer")
+    release
+    unsafeIOToPageM (threadDelay 1000000)
+    settle
+    (find ui ".page-body" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Added by another editor.")
     serverStops
 
   it "shows a mention the newer version brings, after a conflict" $ runPage $ do

@@ -13,7 +13,7 @@
 // to read; an aborted request is rejected with an AbortError, as fetch
 // rejects it, held or not.
 
-const wikiTestServer = { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), held: null, release: null, fetch: null, WebSocket: null, sockets: [], said: [] };
+const wikiTestServer = { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), heldNext: new Set(), held: null, release: null, fetch: null, WebSocket: null, sockets: [], said: [] };
 
 // The server's live channel (Wiki.App.Live), in the place of the page's
 // WebSocket: a socket opens as soon as it is made, keeps what the page
@@ -55,7 +55,7 @@ function wiki_test_server_start() {
   if (wikiTestServer.WebSocket === null) wikiTestServer.WebSocket = globalThis.WebSocket;
   for (const socket of wikiTestServer.sockets) socket.hangUp(1001);
   globalThis.wikiTestHandlers = [];
-  Object.assign(wikiTestServer, { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), held: null, release: null, sockets: [], said: [] });
+  Object.assign(wikiTestServer, { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), heldNext: new Set(), held: null, release: null, sockets: [], said: [] });
   globalThis.WebSocket = WikiTestSocket;
   globalThis.fetch = async (url, init = {}) => {
     const method = init.method ?? "GET";
@@ -82,24 +82,37 @@ function wiki_test_server_start() {
     });
     aborted.catch(() => {});
     const key = `${method} ${url}`;
-    if (wikiTestServer.held !== null && (wikiTestServer.holdAll || wikiTestServer.heldAt.has(key))) {
+    // The next request to an address held with its answer as the server
+    // has it now: answered when released, with what was true when it was
+    // asked, though the server has changed since.
+    let early = null;
+    if (wikiTestServer.held !== null && wikiTestServer.heldNext.has(key)) {
+      wikiTestServer.heldNext.delete(key);
+      early = await wikiTestAnswer(request);
+      await Promise.race([wikiTestServer.held, aborted]);
+    } else if (wikiTestServer.held !== null && (wikiTestServer.holdAll || wikiTestServer.heldAt.has(key))) {
       await Promise.race([wikiTestServer.held, aborted]);
     }
     if (signal?.aborted) throw abortError();
     if (wikiTestServer.offline) throw new TypeError("Failed to fetch");
-    // A handler a test installed answers first, if it answers at all, at
-    // once or with a promise (the
-    // vault's server, test-passkeys.js, which is in another file's scope,
-    // so the handlers are a global); then the table.
-    let answer = null;
-    for (const handle of globalThis.wikiTestHandlers ?? []) {
-      answer = await handle(request);
-      if (answer) break;
-    }
-    if (answer === null) answer = wikiTestServer.answers.get(`${method} ${url}`) ?? { status: 404, body: '{"error":"NotFound"}' };
+    const answer = early ?? (await wikiTestAnswer(request));
     const empty = answer.status === 204 || answer.status === 304;
     return new Response(empty ? null : answer.body, { status: answer.status, headers: { "Content-Type": "application/json", ...(answer.headers ?? {}) } });
   };
+}
+
+// What the server answers a request now.
+async function wikiTestAnswer(request) {
+  // A handler a test installed answers first, if it answers at all, at
+  // once or with a promise (the
+  // vault's server, test-passkeys.js, which is in another file's scope,
+  // so the handlers are a global); then the table.
+  let answer = null;
+  for (const handle of globalThis.wikiTestHandlers ?? []) {
+    answer = await handle(request);
+    if (answer) break;
+  }
+  return answer ?? wikiTestServer.answers.get(`${request.method} ${request.url}`) ?? { status: 404, body: '{"error":"NotFound"}' };
 }
 
 function wiki_test_server_stop() {
@@ -150,13 +163,29 @@ function wiki_test_server_hold_at(method, url) {
   wikiTestServerGate();
 }
 
+// Hold the next request to one address, with the answer the server has
+// for it when it is asked, until released.
+function wiki_test_server_hold_next(method, url) {
+  wikiTestServer.heldNext.add(`${method} ${url}`);
+  wikiTestServerGate();
+}
+
 function wikiTestServerGate() {
   if (wikiTestServer.held === null) wikiTestServer.held = new Promise((go) => (wikiTestServer.release = go));
 }
 
+// Answer the requests held, and hold every request to one address from
+// now on, until released: the gate for those is up before the answers go.
+function wiki_test_server_release_holding(method, url) {
+  const go = wikiTestServer.release;
+  Object.assign(wikiTestServer, { holdAll: false, heldAt: new Set([`${method} ${url}`]), heldNext: new Set(), held: null, release: null });
+  wikiTestServerGate();
+  go?.();
+}
+
 function wiki_test_server_release() {
   wikiTestServer.release?.();
-  Object.assign(wikiTestServer, { holdAll: false, heldAt: new Set(), held: null, release: null });
+  Object.assign(wikiTestServer, { holdAll: false, heldAt: new Set(), heldNext: new Set(), held: null, release: null });
 }
 
 // The window's online or offline event, as the browser dispatches it when

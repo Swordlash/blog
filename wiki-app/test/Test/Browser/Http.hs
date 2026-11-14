@@ -34,7 +34,9 @@ module Test.Browser.Http
   , startServerThrough
   , tellServer
   , holdAt
+  , holdNext
   , release
+  , releaseHolding
   , hangUp
   )
 where
@@ -92,12 +94,14 @@ import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
 import Wiki.Core.Access (Access (Closed))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
+import Wiki.Core.Backlink qualified as Backlink
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), UserId (..))
 import Wiki.Core.Notification (MailMode (..), Watch (..), WatchReason (..), WatchTarget (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Permission qualified as Permission
+import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space qualified as S
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Standing (..))
@@ -116,6 +120,8 @@ $( browserJS
      , ("js_server_offline", "wiki_test_server_offline", Safe, [t|Bool -> IO ()|])
      , ("js_server_hold", "wiki_test_server_hold", Safe, [t|IO ()|])
      , ("js_server_hold_at", "wiki_test_server_hold_at", Safe, [t|JSText -> JSText -> IO ()|])
+     , ("js_server_hold_next", "wiki_test_server_hold_next", Safe, [t|JSText -> JSText -> IO ()|])
+     , ("js_server_release_holding", "wiki_test_server_release_holding", Safe, [t|JSText -> JSText -> IO ()|])
      , ("js_network_event", "wiki_test_network_event", Safe, [t|Bool -> IO ()|])
      , ("js_server_release", "wiki_test_server_release", Safe, [t|IO ()|])
      , ("js_server_asked", "wiki_test_server_asked", Safe, [t|IO JSText|])
@@ -149,6 +155,17 @@ instance FromJSON Asked where
 -- 'release'.
 holdAt :: Text -> Text -> PageM s ()
 holdAt method url = unsafeIOToPageM (js_server_hold_at (toJSText method) (toJSText url))
+
+-- | Hold the next request of this method to this address until
+-- 'release', with the answer the server has for it when it is asked: an
+-- answer that comes late with what was true before the server changed.
+holdNext :: Text -> Text -> PageM s ()
+holdNext method url = unsafeIOToPageM (js_server_hold_next (toJSText method) (toJSText url))
+
+-- | Answer the requests held, and hold every request of this method to
+-- this address from now on, until the next 'release'.
+releaseHolding :: Text -> Text -> PageM s ()
+releaseHolding method url = unsafeIOToPageM (js_server_release_holding (toJSText method) (toJSText url))
 
 -- | Answer the requests held.
 release :: PageM s ()
@@ -412,6 +429,7 @@ spec m = do
   notificationFeed m
   comments m
   presence m
+  lateAnswers m
 
 -- | Who is asking, as the server says: someone of the demo's signed in,
 -- or nobody.
@@ -1421,3 +1439,115 @@ presence m = describe "who is editing and reading" $ do
     unmount ui
     eventually $ (StopEditing hello.id `elem`) <$> said `shouldReturn` True
     serverStops
+
+-- | Answers that come late (WP5.95 of docs/PLAN.md): two reloads of the
+-- wiki out at once, the first one's answer coming last with the state
+-- from before the second. The shell and the page view show the second
+-- one's answer, and keep it: the page's threads, the space's pages in the
+-- sidebar, the pages that link to the page, and the list of spaces.
+lateAnswers :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+lateAnswers m = describe "answers that come late" $ do
+  let blog = slugs ["blog"]
+      helloAt = slugs ["hello-world"]
+      notesAt = slugs ["notes-on-haskell"]
+      demo' = unsafeIOToPageM $ do
+        wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
+        runMemWiki wiki $ do
+          s <- either (panic . show) identity <$> getSpace blog
+          hello <- either (panic . show) identity <$> getPage s.id helloAt
+          notes <- either (panic . show) identity <$> getPage s.id notesAt
+          ps <- either (panic . show) identity <$> listPages s.id
+          linking <- either (panic . show) identity <$> pageBacklinks notes.id
+          spaces <- listSpaces
+          pure (hello, notes, ps, linking, spaces)
+  it "keeps a page's threads read last when the threads read first answer after them" $ runPage $ do
+    serverStarts
+    serveDemo
+    (hello, _, _, _, _) <- demo'
+    let threadsAt = endpointUrl (\e -> (e.comments hello.id).list)
+        ada = Author {id = UserId "user-admin", name = "Ada Admin", avatar = Nothing}
+        made = Thread {id = CommentThreadId "thread-new", page = hello.id, anchor = Nothing, resolved = False, createdAt = demoNow, comments = [Comment {id = CommentId "comment-new", thread = CommentThreadId "thread-new", author = ada, body = "Made meanwhile.", createdAt = demoNow, editedAt = Nothing}]}
+    overtaken m blog hello helloAt threadsAt (answerWith "GET" threadsAt 200 [made]) $ \ui -> do
+      find ui ".page-comments #comment-thread-thread-new .comment-body" >>= (`shouldHaveText` "Made meanwhile.")
+      length <$> findAll ui "#comment-thread-thread-hello-3" `shouldReturn` 0
+      length <$> findAll ui "mark.comment-mark" `shouldReturn` 0
+    serverStops
+
+  it "keeps the space's pages read last in the sidebar when the pages read first answer after them" $ runPage $ do
+    serverStarts
+    serveDemo
+    (hello, notes, ps, _, _) <- demo'
+    -- The notes are deleted meanwhile.
+    let pagesAt = endpointUrl (\e -> e.spaces.listPages hello.space)
+        left = [p | p <- ps, p.id /= notes.id]
+        notesLink = ".wiki-sidebar .page-tree a[href$='#/s/blog/p/notes-on-haskell/']"
+    overtaken m blog hello helloAt pagesAt (answerWith "GET" pagesAt 200 left) $ \ui -> do
+      _ <- find ui ".wiki-sidebar .page-tree a[href$='#/s/blog/p/hello-world/']"
+      length <$> findAll ui notesLink `shouldReturn` 0
+    serverStops
+
+  it "keeps the pages that link to the page read last when those read first answer after them" $ runPage $ do
+    serverStarts
+    serveDemo
+    (_, notes, _, linking, _) <- demo'
+    let linksAt = endpointUrl (\e -> e.pages.backlinks notes.id)
+        renamed = [b {Backlink.title = b.title <> ", renamed"} | b <- linking]
+    linking `shouldNotBe` []
+    overtaken m blog notes notesAt linksAt (answerWith "GET" linksAt 200 renamed) $ \ui ->
+      (traverse textContent =<< findAll ui ".wiki-sidebar .sidebar-backlinks a") `shouldReturn` map (\b -> b.title) renamed
+    serverStops
+
+  it "keeps the spaces read last when the spaces read first answer after them" $ runPage $ do
+    serverStarts
+    serveDemo
+    (hello, _, _, _, spaces) <- demo'
+    let renamed = [if s.slug == teamSlug then s {S.name = "Team, renamed"} else s | s <- spaces]
+        teamSlug = fromMaybe (panic "no team") (head (slugs ["team"]))
+    overtaken m blog hello helloAt "api/v1/spaces" (answerWith "GET" "api/v1/spaces" 200 renamed) $ \ui -> do
+      whenM ((== Just "false") <$> (find ui ".space-switcher-toggle" >>= (`getAttribute` "aria-expanded"))) $
+        find ui ".space-switcher-toggle" >>= click
+      options <- traverse textContent =<< findAll ui ".space-switcher-option"
+      options `shouldSatisfy` any (T.isInfixOf "Team, renamed")
+    serverStops
+
+-- | 'lateAnswers'' example: the page at this path is made a template
+-- twice. Each is a write, after which the shell reloads the wiki and the
+-- page. The first reload's read at the address is held, with the answer
+-- the server had then; the server changes ('change'), and the second
+-- reload reads the new answer, which the view shows ('shown'). The first
+-- reload's answer then comes: the view keeps the second's.
+overtaken
+  :: forall m
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
+  => [Slug]
+  -> P.Page
+  -> [Slug]
+  -> Text
+  -> PageM s ()
+  -> (Mounted s Shell.Query Void m -> PageM s ())
+  -> PageM s ()
+overtaken m space page at url change shown = do
+  answerWith "PUT" ("api/v1/pages/" <> page.id.text <> "/template") 200 page
+  ui <- startServer m (Page space at)
+  _ <- find ui ".page-view .page-body"
+  let templateAt = "api/v1/pages/" <> page.id.text <> "/template"
+      readsAt = length . filter (\r -> r.method == "GET" && r.url == url) <$> asked
+      writes = length . filter (\r -> r.method == "PUT" && r.url == templateAt) <$> asked
+  before <- readsAt
+  holdNext "GET" url
+  find ui ".use-as-template" >>= click
+  eventually $ readsAt >>= (`shouldSatisfy` (> before))
+  change
+  -- The switch takes a click again once the first write is answered,
+  -- which the page view says when its answer comes.
+  eventually $ do
+    whenM ((< 2) <$> writes) (find ui ".use-as-template" >>= click)
+    readsAt >>= (`shouldSatisfy` (> before + 1))
+  eventually (shown ui)
+  release
+  -- Nothing on the page says the first answer was dropped: a while for it
+  -- to come.
+  unsafeIOToPageM (threadDelay 2000000)
+  settle
+  shown ui
+  unmount ui
