@@ -818,3 +818,11 @@ function wiki_test_password_keys() {
   if (!registry) return 0;
   return [...registry.keys.values()].filter((key) => key?.algorithm?.name === "HKDF").length;
 }
+
+// The passkeys the stub's authenticator holds that the vault's server does
+// not list for the account, as JSON: one made and never registered, which
+// the person would find among their passkeys and could not sign in with.
+function wiki_test_passkeys_unregistered() {
+  const known = new Set(wikiTestVault.passkeys.map((p) => p.id));
+  return JSON.stringify(wikiTestPasskeys.credentials.filter((id) => !known.has(id)));
+}

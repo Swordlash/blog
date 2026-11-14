@@ -84,6 +84,7 @@ $( browserJS
      , ("js_keys_checked", "wiki_test_keys_checked", Safe, [t|IO JSText|])
      , ("js_password_keys", "wiki_test_password_keys", Safe, [t|IO Int|])
      , ("js_existing", "wiki_test_passkeys_existing", Safe, [t|IO JSText|])
+     , ("js_unregistered", "wiki_test_passkeys_unregistered", Safe, [t|IO JSText|])
      , ("js_offered", "wiki_test_passkeys_offered", Safe, [t|IO Bool|])
      , ("js_pick", "wiki_test_passkeys_pick", Safe, [t|IO ()|])
      , ("js_offers", "wiki_test_passkeys_offers", Safe, [t|IO Int|])
@@ -293,6 +294,36 @@ signing m = describe "signing in with a passkey" $ do
       [] -> panic "no Remove"
     eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 1
     find ui ".passkey-name" >>= (`shouldHaveText` "My phone")
+    closedSignedIn ui
+
+  -- A passkey is made on the authenticator first, then registered with the
+  -- server. The account's panel can close in between (the person closes it,
+  -- or signs out); the registration then still goes to the server, from
+  -- the panel's finalizer, so that the passkey the person made is the
+  -- account's rather than one on their authenticator that signs nobody in.
+  it "registers a passkey made as the account's panel closes" $ runOwn $ do
+    serverStarts
+    serveDemo
+    me <- signedInAs "user-editor"
+    answerWith "GET" "api/v1/session" 200 me
+    answerAccount
+    unsafeIOToPageM js_vault_server
+    unsafeIOToPageM (js_install True True)
+    _ <- unsafeIOToPageM js_existing
+    ui <- startServer m Home
+    find ui ".account-toggle" >>= click
+    eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 1
+    find ui ".passkey-add input[name=passkey-name]" >>= (`typeText` "My phone")
+    find ui ".passkey-add input[name=passkey-password]" >>= (`typeText` "editor's password")
+    let finishes = length . filter (\r -> r.method == "PUT" && r.url == "api/v1/account/passkeys/registration") <$> asked
+    holdAt "PUT" "api/v1/account/passkeys/registration"
+    find ui ".passkey-add button[type=submit]" >>= click
+    eventually $ finishes `shouldReturn` 1
+    find ui ".account-toggle" >>= click
+    eventually $ length <$> findAll ui ".passkey-add" `shouldReturn` 0
+    release
+    settle
+    eventually $ unsafeIOToPageM (fromJSText <$> js_unregistered) `shouldReturn` "[]"
     closedSignedIn ui
 
   it "offers no passkey on a page served over plain HTTP, and says why" $ runOwn $ do
