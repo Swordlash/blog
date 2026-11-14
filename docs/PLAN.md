@@ -1906,6 +1906,28 @@ WP5.92 and WP5.93 wait.
   given (source ranges of inlines, attributes, footnotes, math, the
   wiki's own markers), with what part of wiki-core's tests would have
   to be proved again. A measure and a list, no change to the wiki.
+- **WP5.120 The pin past haskell-halogen's pull requests 121 to 124:
+  the browser suite's harness waits for the program (for the order
+  above; the owner gave the library's notes on 2026-11-14; after
+  WP5.117, on which it is stacked).** hspec-halogen's actions and
+  `settle` now wait for the program to be idle, for a history step a
+  handler asked for, and for the page's next frame; `waitQuiet` and
+  `waitQuietWithin` are the library's, in place of reading
+  `Halogen.Activity` by hand; a failing read says what it found and
+  what the program was doing. This changes every browser example, so
+  the whole browser suite is run before and after, and three things
+  are settled by measure: the cost (a frame, about 17 ms, for each
+  action: the suite has some 2,100 action sites in its source, more
+  when its loops run; its shards' times against the 650 s budget);
+  the new deadline (a program still busy five seconds after an action
+  fails the example: the long deck's examples and anything that
+  computes for seconds after a click must say their own deadline);
+  and what `eventually` around a read after an action can now go, by
+  group, with the counts before and after. `answersTaken`,
+  `rowsSettled` and the fixture's first wait (WP5.116) take the
+  library's `waitQuiet`. Not in it: the declared matches for delegated
+  clicks and for what an event carries (its pull request 121), which
+  are WP5.106's.
 - **WP5.117 The pin past haskell-halogen's pull requests 119 and 120,
   and the two workarounds gone (for the order above; the owner gave
   the library's answer on 2026-11-14).** The driver's `settle` now
