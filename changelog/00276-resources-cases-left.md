@@ -13,7 +13,13 @@ title: No password key or half-added passkey left behind, and no late jump back
 - Adding a passkey in the account's panel and closing the panel before
   the server had answered left the new passkey on your device, unknown to
   the wiki: it was offered at sign-in and signed nobody in. The passkey is
-  now registered all the same.
+  now registered all the same, unless you have begun another one in the
+  panel opened again meanwhile: that one is registered, and the first
+  stays on your device as before.
+- Two tabs making or using a passkey at the same moment (adding one,
+  unlocking your keys, confirming a sign-in) could both be refused: the
+  answer in the tab that began first used up the other tab's request.
+  The one begun last now goes through.
 - Choosing a filter or a page size in the administration's list of users,
   a pause in typing its search, a link followed from the help dialog, and
   the page shown after "Save and close" could each put their address in
