@@ -1954,9 +1954,9 @@ WP5.92 and WP5.93 wait.
   (threadDelay n)` (the preview's and the users' search's debounce,
   the draft's autosave, the backups' re-look), so that
   `withTestClock` and `advance` move it; one spec shows a debounce
-  advanced by the test's clock with no real sleep. AGENTS.md and the
-  README say both (the owner's word for AGENTS.md's machine rule
-  covers its tools). To settle in it: whether `wiki-app-remote-test`
+  advanced by the test's clock with no real sleep. The README says
+  both; AGENTS.md's sentences on it are put to the owner with the
+  pull request. To settle in it: whether `wiki-app-remote-test`
   is kept (then a native CI job runs it) or dropped (WP5.122's fourth
   point); what the ambient document being one for the process means
   for specs run side by side (two bells both hear a press on the
