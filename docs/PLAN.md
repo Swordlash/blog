@@ -1736,6 +1736,34 @@ confirms it against reality and the plan is amended if it does not hold.
     the same way: by a condition or a count, not a clock (#271: bytes
     allocated for a cost, client backends for a database's sessions,
     each example's own keys).
+82. **A view with concurrent asks is a machine, tested natively over
+    generated orders of events (WP5.118, #282; the owner, 2026-11-14:
+    "Maszyna - super, o to chodzi", and for the rule in AGENTS.md:
+    "Możesz wpisać zmiany do agents").** Two causes stood behind the
+    races found one at a time and the tests that failed by chance: in
+    a component's handler every `lift` is a suspension point nobody
+    sees, guarded only by a convention; and the browser suite watches
+    the program from outside by polling on a clock. So: a view whose
+    state takes more than one ask, a push, or a change of input has
+    its logic as a pure step (an event and a model to a model and
+    effects, in `View/<Name>/Machine.hs`, importing nothing of
+    Halogen); the component runs the step in one `state` and carries
+    out the effects, each ask forked and its answer raised back as an
+    event. Its rules are properties over generated orders of events
+    and answers against a model of the server, **and of the HTTP
+    backend's cache for a view over it**: over a cache a later ask can
+    bring an older answer, so the ticket rule of `View.Latest` alone
+    is not enough there, and what only goes one way (a read mark) is
+    kept from any answer. The real component is mounted on the
+    in-memory DOM with its asks held, to show the shell matches the
+    machine. A browser test is for what needs a browser (the islands,
+    layout, focus, real HTTP and WebSocket, the service worker) and
+    waits on the program's signal. A plain handler may still `lift`
+    where there is one ask and no change of input. A property's case
+    count is set by what it missed: 2,000 cases let a real fault of
+    the bell through in 2 runs of 30; 20,000 is the ordinary run, a
+    million the nightly. The bell is the first; the views that raced
+    follow in the order under "Open work".
 
 ## Repository layout
 
@@ -1861,38 +1889,40 @@ this order: tests that fail by chance and faults of timing, then how
 long things take. The packages below marked for it come first; WP5.84,
 WP5.92 and WP5.93 wait.
 
-- **WP5.118 A view's asynchronous logic as a state machine, tested
-  natively by generated orders of events: a spike on one view (for the
-  order above; the owner, 2026-11-14: "Maszyna - super, o to chodzi",
-  after "chciałbym żeby jak najmniej było takich miejsc gdzie albo na
-  coś czekamy … jak najwięcej … 'property based' na podstawie DOM i
-  natywnie … martwi mnie że łatamy symptom a nie przyczynę").** Two
-  causes stand behind the two days of chance failures and of races
-  found one at a time. In the product, every `lift` in a component's
-  handler is a suspension point nobody sees, the code reads as if it
-  ran in one go, and only a convention guards it. In the tests, the
-  browser suite watches the program from outside by polling on a
-  two-second clock (677 examples, 1345 `eventually`), where the smoke
-  suites wait on the program's signal (237 `waitQuiet`, 13
-  `eventually`). The spike, on one small view that had real races and
-  has open ones (the bell and its notifications, or the page's
-  comments): (1) its logic as a pure step, an event and a state to a
-  state and effects, the backend's answers being events like any
-  other, so that no step can check, wait and write (`Ticking.step` and
-  `View.Latest` are this already, in the small); (2) native properties
-  over generated orders of events (asks answered in any order, pushes
-  between them, a close anywhere), which must find the view's known
-  open race before it is fixed; (3) the real component mounted
-  natively on the in-memory DOM (as `Test/Hydrate.hs` does) with a
-  backend whose answers the test releases in the order it chooses,
-  run to idle exactly, the DOM read with no wait; (4) the same cases
-  through `remote` and through the browser suite, compared by waits,
-  time, runs that fail under load, and what each cannot see; (5) what
-  the library lacks for (3), written for haskell-halogen's owner. Its
-  result is the rule for new views, the order in which the views that
-  raced move, and what stays in a browser (the islands, measuring,
-  real HTTP and WebSocket, the service worker). WP5.106 waits for it:
-  tests over `remote` still drive a browser.
+- **WP5.121 The views that raced, as machines (decision 82; for the
+  order above), one pull request each, in this order.** (1) The
+  page's comments (`Comments.hs` and their part of `Page.hs`), with
+  the open race a property must find first: a comment's event applied
+  while a list of the threads is out is overwritten by that list's
+  answer; about a day and a half. (2) The embedded deck
+  (`DeckViewer.hs`: the watch, the generation, the fetch); a day. (3)
+  The sign-in's keys (`SignIn.hs`); two days. (4) The assistant's
+  panel; two days. (5) The shell's world (the session, the spaces, the
+  tree, the backlinks); three days. (6) The editor's publication and
+  rows; four days or more, and it needs time the test controls, which
+  the library does not have yet. Each: main's logic translated
+  faithfully first, the properties shown failing on it where a race is
+  known, then the fix; the cache in the model for a view over HTTP;
+  the component on the in-memory DOM; the view's browser examples cut
+  to what needs a browser, with the counts before and after. The
+  about forty asks WP5.95 left are taken with the view each belongs
+  to; the ones in views with a single ask keep `View.Latest`.
+- **WP5.122 Checks in place of conventions (decision 82; for the
+  order above).** (1) A script in CI with stored ceilings for the
+  browser suite's `eventually`, `eventuallyWithin`, `find` and
+  `threadDelay` (about 1,340, 80, 2,700 and 28 today): a pull request
+  may lower a ceiling and never pass one. (2) The machines in a
+  package, or a part of one, that does not depend on
+  haskell-halogen-core, so that the compiler refuses a step that
+  waits. (3) A nightly job that runs the native properties with a
+  million cases each and reports a failure with its seed as a finding.
+  (4) `wiki-app-remote-test` (four examples of the bell today) run by
+  a native job, or dropped if the in-memory DOM route covers what it
+  shows: decide from what the library gives after its answer to the
+  nine items of 2026-11-14 (a blocking run-until-idle, one tree's
+  activity, a native dispatch with bubbling and a target,
+  `isConnected`, reads of the in-memory DOM, a hook on the program's
+  waits, time the test controls, and two about `remote`).
 - **WP5.119 A measure of cmark-gfm on wasm (for the order above; the
   owner, 2026-11-14: "możemy spróbować jeśli uważasz że jest to warte
   sprawdzenia w kontekście szybkości testów i samej wiki").** After
@@ -1992,8 +2022,8 @@ WP5.92 and WP5.93 wait.
   it, in place of `find`'s two seconds, in the groups already worked
   in. Then: a third shard if the runner's four cores carry it; the
   dearest examples made cheaper (the long deck's 66 seconds, the three
-  random walks, the search's table); and what WP5.118's result moves
-  out of the browser.
+  random walks, the search's table); and what WP5.121 moves out of the
+  browser.
 - **WP5.106 Components without JavaScript tested natively, over
   haskell-halogen's `remote` (the owner, 2026-11-13: "jeśli będzie to
   szybsze. Wszystkie pure halogen testy").** The spike (branch
