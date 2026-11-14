@@ -82,7 +82,9 @@
 -- * a write's answer empties the form it came from (or shows why it
 --   failed), and, for a thread opened about a quote, stops the quoting and
 --   chooses the thread, once, on the visit of the page it was sent on, and
---   does none of these on another visit, of the same page or another;
+--   does none of these on another visit, of the same page or another; it
+--   empties no form of a comments view mounted after the write was sent
+--   (the panel closed and opened again);
 -- * nothing is asked after the view went away;
 -- * after a read whose answer the view needed failed, with threads shown,
 --   the view says its threads are behind, until a read's or a
@@ -262,6 +264,9 @@ data Step
     Navigate
   | -- | The page shown is read again (a save, a reload of the wiki).
     PageAgain
+  | -- | The reader closes the panel of comments and opens it again: a new
+    -- comments view, with empty forms.
+    Reopen
   | -- | The page view goes away.
     Finish
   deriving stock (Eq, Show)
@@ -290,6 +295,7 @@ genRun =
       , (6, Deliver <$> chooseInt (0, 3))
       , (1, pure Navigate)
       , (1, pure PageAgain)
+      , (1, pure Reopen)
       , (1, pure Finish)
       ]
 
@@ -309,8 +315,8 @@ shrinkRun = shrinkList $ \case
   _ -> []
 
 -- | An ask the view made: a read under its ticket, or a write under its
--- number, with the visit it was sent on.
-data Asked = ARead Ask PageId | AWrite Int PageId Request Int
+-- number, with the visit it was sent on and the comments view that sent it.
+data Asked = ARead Ask PageId | AWrite Int PageId Request Int Int
   deriving stock (Show)
 
 -- | An ask out, and its answer once handled.
@@ -338,6 +344,9 @@ data World = World
   , seen :: Map CommentId (Text, PageId)
   , owed :: Bool
   , visit :: Int
+  , mounted :: Int
+  -- ^ The comments view mounted now: a view mounted anew (the panel closed
+  -- and opened again) is another.
   -- ^ How many times the view went to another page: the visit shown.
   , asksOfView :: [ViewAsk]
   -- ^ What the page view was asked to do on the comments' view and its
@@ -355,7 +364,7 @@ startOver :: Maybe Stored -> World
 startOver cache =
   checked Nothing . fromTheCache $
     let (view, fx) = step (Fetched pageA True False) (initial (Just pageA) True False Nothing)
-        w0 = World {view, server = emptyServer {watched = Just pageA, untold = [MReplaced pageA []]}, outs = [], shownPage = pageA, finished = False, tabCache = cache, trace = [], faults = [], seen = mempty, owed = False, visit = 0, asksOfView = []}
+        w0 = World {view, server = emptyServer {watched = Just pageA, untold = [MReplaced pageA []]}, outs = [], shownPage = pageA, finished = False, tabCache = cache, trace = [], faults = [], seen = mempty, owed = False, visit = 0, mounted = 0, asksOfView = []}
      in effected "mounted on page A" fx w0
 
 start, startCached :: World
@@ -382,7 +391,7 @@ effected what fx w =
     outsMade = mapMaybe outOf fx
     outOf = \case
       Load t p -> Just (show (t, p), readOut t p)
-      Send () n p r -> Just ("write " <> show n, Out {asked = AWrite n p r w.visit, answer = Nothing, sent = Nothing})
+      Send () n p r -> Just ("write " <> show n, Out {asked = AWrite n p r w.visit w.mounted, answer = Nothing, sent = Nothing})
       Answered {} -> Nothing
       Opened _ -> Nothing
       Changed -> Nothing
@@ -457,6 +466,9 @@ play w = \case
   PageAgain
     | w.finished -> w
     | otherwise -> event "the page read again" (Fetched w.shownPage True False) w
+  Reopen
+    | w.finished -> w
+    | otherwise -> noted "the panel closed and opened again" w {mounted = w.mounted + 1}
   Finish -> event "goes away" Finished w {finished = True}
   where
     other wr = noted ("someone else: " <> show wr) w {server = fst (handleWrite "other" w.shownPage wr w.server)}
@@ -488,7 +500,7 @@ handleAt i w = case atMay [k | (k, o) <- zip [0 :: Int ..] w.outs, isNothing o.a
     | Just o <- atMay w.outs k ->
         let (server, answer) = case o.asked of
               ARead _ p -> (w.server, Right (Left (threadsOn p w.server)))
-              AWrite _ p r _ -> second (fmap Right) (handleWrite "reader" p r w.server)
+              AWrite _ p r _ _ -> second (fmap Right) (handleWrite "reader" p r w.server)
          in noted ("the server handles " <> show o.asked) w {server, outs = [if j == k then x {answer = Just answer} else x | (j, x) <- zip [0 ..] w.outs]}
   _ -> w
 
@@ -507,12 +519,12 @@ deliver k w = case atMay w.outs k of
           (ARead t p, Right (Right _)) -> event "a read" (Loaded t p (Right [])) w'
           -- The backend applies the write's answer to its cache, then the
           -- page view takes it.
-          (AWrite n p r v, Right (Right e)) ->
+          (AWrite n p r v sender, Right (Right e)) ->
             let e' = answerOf r e
-             in answeredOnce v (Right e') w' (event ("the answer to write " <> show n <> ": " <> show e') (Wrote () n r (Right e')) (changing (afterComment p) w'))
+             in answeredOnce v sender (Right e') w' (event ("the answer to write " <> show n <> ": " <> show e') (Wrote () n r (Right e')) (changing (afterComment p) w'))
           -- A write is never answered with a list.
           (AWrite {}, Right (Left _)) -> w'
-          (AWrite n p r v, Left e) -> answeredOnce v (Left e) w' (event ("write " <> show n <> " refused: " <> show e) (Wrote () n r (Left e)) (changing (afterComment p) w'))
+          (AWrite n p r v sender, Left e) -> answeredOnce v sender (Left e) w' (event ("write " <> show n <> " refused: " <> show e) (Wrote () n r (Left e)) (changing (afterComment p) w'))
   _ -> w
 
 -- | 'ViewAsk' is what a write's answer asks of the page view beside its
@@ -529,15 +541,16 @@ opensInline = \case
 
 -- | The world checked against the rule that a write's answer asks the
 -- view for its effects once on the visit it was sent on, and for none on
--- another.
-answeredOnce :: Int -> Either WikiError PageEvent -> World -> World -> World
-answeredOnce sentOn answer was now
+-- another; and that it empties a form only of the comments view that sent
+-- it, not of one mounted since.
+answeredOnce :: Int -> Int -> Either WikiError PageEvent -> World -> World -> World
+answeredOnce sentOn sentFrom answer was now
   | now.finished = now
   | sort made == sort wanted = now
-  | otherwise = now {faults = now.faults <> [(AnsweredOnce, "the answer to a write sent on visit " <> show sentOn <> ", taken on visit " <> show now.visit <> ", asked the view for " <> show made <> ", not " <> show wanted)]}
+  | otherwise = now {faults = now.faults <> [(AnsweredOnce, "the answer to a write sent on visit " <> show sentOn <> " by comments view " <> show sentFrom <> ", taken on visit " <> show now.visit <> " with comments view " <> show now.mounted <> ", asked the view for " <> show made <> ", not " <> show wanted)]}
   where
     made = drop (length was.asksOfView) now.asksOfView
-    wanted = if sentOn == now.visit then TellForm : [ChooseOpened | opensInline answer] else []
+    wanted = if sentOn == now.visit then [TellForm | sentFrom == now.mounted] <> [ChooseOpened | opensInline answer] else []
 
 -- | Whether the answer to this read of this page is the view's to take: on
 -- the page shown, and no answer to a later read taken.
