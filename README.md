@@ -3542,6 +3542,26 @@ Browser specs mark the whole tree `parallel`, and CI sets
 `HSPEC_HALOGEN_JOBS=2` to use isolated Chromium contexts. The Content Security
 Policy check runs after each context's examples.
 
+The browser suite waits on the program as the smoke suites do (since
+haskell-halogen's pull request 123). Every action of hspec-halogen (`click`,
+`typeText`, `press`, `focus`, `blur`, `clear`, `dragTo`) and `settle` wait
+for the program to be idle, for a move through the history a handler asked
+for, and for the page's next frame, so what the program renders at once, a
+dialog's `close` and a Back included, is read once after the action. After
+an action that makes the program ask the stand-in server or IndexedDB,
+`waitQuiet` waits until no fiber of the program waits in a `liftIO`;
+`waitQuietWithin ms` gives that wait another deadline. A program still busy
+five seconds after an action fails the example, saying what it was doing.
+An example whose action keeps the program busy longer (a change of reader
+on the Markdown guide, the guide's load over HTTP) presses through the page
+itself (`pressNow` in `Test.Browser.Http`) and waits with
+`waitQuietWithin`, its deadline named with what was measured. The suite's own waits are built on
+these: `answersTaken` (the stand-in has answered every request and the
+program is quiet) and the slides' walk's `rowsSettled`. `eventually` stays
+for what the program does not know of: what the live channel or another tab
+pushes, a library's own drawing, the stand-in server's state. A failing read
+says what it found and what the program was doing.
+
 ### The smoke tests
 
 The smoke tests drive the page `npm run build-wasm` built, in headless
