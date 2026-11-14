@@ -1,15 +1,16 @@
 -- | The page's threads as a machine ("Wiki.App.View.Comments.Machine"),
 -- run on generated runs: other people's comments and the reader's own
 -- writes, the live channel's messages, the answers to the reads and the
--- writes in any order, the page view going to another page and back, the
--- page read again, the channel lost, and the view going away, anywhere.
+-- writes in any order, a read that fails, the page view going to another
+-- page and back, the page read again, the channel lost, and the view going
+-- away, anywhere.
 --
 -- = The model's server
 --
 -- Read from @wiki-server@'s handlers (@listThreadsTx@, @openThreadTx@,
 -- @replyTx@, @editCommentTx@, @deleteCommentTx@, @deleteThreadTx@,
--- @setResolvedTx@) and its live channel (@Events.publish@, the
--- subscription's answer):
+-- @setResolvedTx@), its tables (migration 0001) and its live channel
+-- (@Events.publish@, @enqueue@, the subscription's answer):
 --
 -- * a read lists every thread of the page, with no limit and no paging,
 --   in the order they were opened, each with its comments in the order
@@ -17,10 +18,25 @@
 -- * a write is one transaction on the one writer; it is told to every tab
 --   watching the page after it commits, the writer's own included, in the
 --   order of the commits;
--- * deleting the only comment of a thread deletes the thread; the first
---   comment of a thread with replies is not deleted (the write is
---   refused); a write on a thread or a comment that is no longer there is
---   refused;
+-- * every way the server deletes: a comment; a thread, with its comments
+--   (the delete cascades); the only comment of a thread, which deletes the
+--   thread; the first comment of a thread with replies is not deleted (the
+--   write is refused); a write on a thread or a comment that is no longer
+--   there is refused. A page deleted deletes its threads too (the
+--   cascade), and the page view then leaves the page: not modelled. A
+--   user removed keeps their comments (a comment's author is no foreign
+--   key);
+-- * the ids of threads and comments are random (@newId@) and never given
+--   again. The tables' @seq@, a thread's place among its page's and a
+--   comment's among its thread's, is one more than the greatest left, so
+--   it is given again after a delete; the client never sees it, and
+--   nothing on the client reads a comment's time or an id for an order;
+-- * every bounded buffer between the server and the view: a read has no
+--   limit, and the HTTP backend's cache keeps whole lists; a connection's
+--   outbox holds 256 messages, and a tab that falls behind loses what did
+--   not fit and is closed, and subscribes again (the model's outbox holds
+--   'outbox', then the tab reconnects once it has read what fit;
+--   'Reconnect' loses the rest too);
 -- * the answer to a subscription is the threads as they are then, read on
 --   the writer, so that every change after it is told after it; a tab
 --   whose channel is lost subscribes again and is answered again;
@@ -29,22 +45,26 @@
 --   handles the asks out in the order they were sent ('Handle'), or in
 --   any order ('HandleOut'): reads run on the readers beside the writer,
 --   so a read sent after a write may be handled before the write commits.
+--   A read may fail ('HandleFail', the network);
+-- * a write's answer is what the page view makes of it
+--   ("Wiki.App.View.Page"'s @sendWrite@): the server's thread or comment,
+--   and for a deletion, which answers with nothing, the comment deleted.
 --
 -- What the model leaves out: the pages of an encrypted space, whose
 -- threads the server tells of only as "changed" and answers a
--- subscription to with none (the machine then reads them again); a failed
--- read (the network): a read's failure shows as a failure, a choice of
--- the view's. Comments' authors' names (the server names them as they are
--- now) and quotes (an anchor's text) are fixed.
+-- subscription to with none (the machine then reads them again); a write
+-- that fails without the server seeing it (its outcome is told by the
+-- channel, if it was made). Comments' authors' names (the server names
+-- them as they are now) and quotes (an anchor's text) are fixed, and the
+-- server checks no author.
 --
 -- Over the HTTP backend the threads go through its cache
 -- ("Wiki.App.Backend.Http.Cache"), and the model's tab does the same with
 -- the cache's own functions: a read the cache can answer is answered at
 -- once from it; one sent is stored if the cache did not change since; a
--- write's answer is applied to the cached threads ('afterComment'); the
--- live channel's events too ('afterEvent'), its subscription's answer
--- replaces them ('withThreads'), and a lost channel drops them
--- ('forgetThreads').
+-- write's answer goes through 'afterComment'; the live channel's events
+-- through 'afterEvent', its subscription's answer replaces them
+-- ('withThreads'), and a lost channel drops them ('forgetThreads').
 --
 -- = The rules
 --
@@ -56,6 +76,7 @@
 --   deliver brings it back;
 -- * a comment's text shown is never older than a text shown before, unless
 --   a message the channel has still to deliver brings the newer one;
+-- * a failed read is shown only where no threads are;
 -- * nothing is asked after the view went away;
 -- * once everything out has come back and everything the channel had to
 --   tell was told, the view shows the server's threads of its page.
@@ -102,6 +123,10 @@ commentOf k tid who =
 at :: Int -> UTCTime
 at k = addUTCTime (fromIntegral k) (UTCTime (fromGregorian 2026 11 14) 0)
 
+-- | A quote of the page, for a thread about it.
+quote :: Anchor
+quote = Anchor {exact = "quote", prefix = "", suffix = ""}
+
 -- | A message on the tab's live channel.
 data Message
   = MHeard PageId PageEvent
@@ -115,61 +140,70 @@ data Server = Server
   -- ^ How many ids the server has given: the next one's number.
   , pages :: Map PageId [Thread]
   , untold :: [Message]
-  -- ^ The messages the tab's channel has yet to deliver, the oldest
-  -- first.
+  -- ^ The messages in the tab's outbox, the oldest first.
+  , behind :: Bool
+  -- ^ Whether the outbox was full when a message came: the tab is closed
+  -- once it has read what fit, and subscribes again.
   , watched :: Maybe PageId
   -- ^ The page the tab watches: the server tells its events.
   }
   deriving stock (Show)
 
+-- | How many messages the model's outbox holds (the server's holds 256,
+-- @outboxSize@).
+outbox :: Int
+outbox = 4
+
 emptyServer :: Server
-emptyServer = Server {count = 0, pages = Map.fromList [(pageA, []), (pageB, [])], untold = [], watched = Nothing}
+emptyServer = Server {count = 0, pages = Map.fromList [(pageA, []), (pageB, [])], untold = [], behind = False, watched = Nothing}
 
 threadsOn :: PageId -> Server -> [Thread]
 threadsOn p s = Map.findWithDefault [] p s.pages
 
 -- | A write committed: the threads changed by its event, and the event told
--- to the tab if it watches the page.
+-- to the tab if it watches the page and its outbox has room.
 committed :: PageId -> PageEvent -> Server -> Server
-committed p e s = s {pages = Map.adjust (applyEvent e) p s.pages, untold = s.untold <> [MHeard p e | s.watched == Just p]}
-
--- | 'Write' is a write to a page's threads, as the comments view sends it
--- or someone else does.
-data Write
-  = -- | A thread opened; inline (about a quote) or about the whole page.
-    OpenW PageId Bool
-  | ReplyW PageId CommentThreadId
-  | EditW PageId CommentThreadId CommentId
-  | ResolveW PageId CommentThreadId Bool
-  | DeleteCommentW PageId CommentThreadId CommentId
-  | DeleteThreadW PageId CommentThreadId
-  deriving stock (Eq, Show)
+committed p e s
+  | s.watched /= Just p = s'
+  | length s.untold >= outbox = s' {behind = True}
+  | otherwise = s' {untold = s.untold <> [MHeard p e]}
+  where
+    s' = s {pages = Map.adjust (applyEvent e) p s.pages}
 
 -- | A write handled by the server, by someone: the server after it, and
 -- its event, or why it was refused.
-handleWrite :: Text -> Write -> Server -> (Server, Either WikiError PageEvent)
-handleWrite who w s = case w of
-  OpenW p inline ->
+handleWrite :: Text -> PageId -> Request -> Server -> (Server, Either WikiError PageEvent)
+handleWrite who p w s = case w of
+  OpenThread anchor _ ->
     let k = s.count + 1
         tid = CommentThreadId ("t" <> show k)
-        t = Thread {id = tid, page = p, anchor = if inline then Just Anchor {exact = "quote", prefix = "", suffix = ""} else Nothing, resolved = False, createdAt = at k, comments = [commentOf k tid who]}
-     in done p (ThreadOpened t) s {count = k}
-  ReplyW p tid -> withThreadOf p tid $ \_ ->
-    let k = s.count + 1 in done p (CommentAdded (commentOf k tid who)) s {count = k}
-  EditW p tid cid -> withThreadOf p tid $ \t -> case find (\c -> c.id == cid) t.comments of
-    Just c -> let k = s.count + 1 in done p (CommentEdited c {body = c.body <> ", edited " <> show k, editedAt = Just (at k)}) s {count = k}
+        t = Thread {id = tid, page = p, anchor, resolved = False, createdAt = at k, comments = [commentOf k tid who]}
+     in done (ThreadOpened t) s {count = k}
+  Reply tid _ -> withThreadOf tid $ \_ ->
+    let k = s.count + 1 in done (CommentAdded (commentOf k tid who)) s {count = k}
+  EditComment tid cid _ -> withThreadOf tid $ \t -> case find (\c -> c.id == cid) t.comments of
+    Just c -> let k = s.count + 1 in done (CommentEdited c {body = c.body <> ", edited " <> show k, editedAt = Just (at k)}) s {count = k}
     Nothing -> (s, Left NotFound)
-  ResolveW p tid r -> withThreadOf p tid $ \t ->
-    if isJust t.anchor then done p (ThreadResolved tid r) s else (s, Left (Invalid "A thread about the whole page is not resolved."))
-  DeleteCommentW p tid cid -> withThreadOf p tid $ \t -> case t.comments of
+  Resolve tid r -> withThreadOf tid $ \t ->
+    if isJust t.anchor then done (ThreadResolved tid r) s else (s, Left (Invalid "A thread about the whole page is not resolved."))
+  DeleteComment tid cid -> withThreadOf tid $ \t -> case t.comments of
     opening : _ : _ | opening.id == cid -> (s, Left (Invalid "The first comment of a thread with replies cannot be deleted."))
-    [only] | only.id == cid -> done p (ThreadDeleted tid) s
-    cs | any (\c -> c.id == cid) cs -> done p (CommentDeleted tid cid) s
+    [only] | only.id == cid -> done (ThreadDeleted tid) s
+    cs | any (\c -> c.id == cid) cs -> done (CommentDeleted tid cid) s
     _ -> (s, Left NotFound)
-  DeleteThreadW p tid -> withThreadOf p tid $ \_ -> done p (ThreadDeleted tid) s
+  DeleteThread tid -> withThreadOf tid $ \_ -> done (ThreadDeleted tid) s
   where
-    withThreadOf p tid f = maybe (s, Left NotFound) f (find (\t -> t.id == tid) (threadsOn p s))
-    done p e s' = (committed p e s', Right e)
+    withThreadOf tid f = maybe (s, Left NotFound) f (find (\t -> t.id == tid) (threadsOn p s))
+    done e s' = (committed p e s', Right e)
+
+-- | The answer the page view makes of a write's: the server's event, but
+-- for a deletion, which answers with nothing ("Wiki.App.View.Page"'s
+-- @sendWrite@).
+answerOf :: Request -> PageEvent -> PageEvent
+answerOf request e = case request of
+  DeleteComment tid cid -> CommentDeleted tid cid
+  DeleteThread tid -> ThreadDeleted tid
+  _ -> e
 
 -- | 'Step' is one thing that happens in a run. A step that cannot happen
 -- in the state it comes to is skipped, so that a run shrinks to any of its
@@ -187,14 +221,18 @@ data Step
     OtherDeletesComment Int
   | -- | Someone else deletes the thread at this place.
     OtherDeletesThread Int
-  | -- | The reader opens a thread (the comments view sends it).
+  | -- | The reader opens a thread (the comments view asks for it).
     ReaderOpens Bool
   | -- | The reader replies in the thread shown at this place.
     ReaderReplies Int
+  | -- | The reader edits the comment shown at this place.
+    ReaderEdits Int
   | -- | The reader resolves or reopens the thread shown at this place.
     ReaderResolves Int
   | -- | The reader deletes the comment shown at this place.
     ReaderDeletes Int
+  | -- | The reader deletes the thread shown at this place.
+    ReaderDeletesThread Int
   | -- | The live channel delivers its oldest message.
     Tell
   | -- | The live channel is lost and opens again: what it had to tell is
@@ -205,6 +243,8 @@ data Step
   | -- | The server handles the ask at this place among those it has not
     -- handled.
     HandleOut Int
+  | -- | The oldest read the server has not handled fails.
+    HandleFail
   | -- | The answer at this place among those handled comes back.
     Deliver Int
   | -- | The page view goes to the other page.
@@ -227,12 +267,15 @@ genRun =
       , (1, OtherDeletesThread <$> chooseInt (0, 2))
       , (2, ReaderOpens <$> QC.arbitrary)
       , (2, ReaderReplies <$> chooseInt (0, 2))
+      , (1, ReaderEdits <$> chooseInt (0, 3))
       , (1, ReaderResolves <$> chooseInt (0, 2))
       , (1, ReaderDeletes <$> chooseInt (0, 3))
+      , (1, ReaderDeletesThread <$> chooseInt (0, 2))
       , (6, pure Tell)
       , (1, pure Reconnect)
       , (5, pure Handle)
       , (2, HandleOut <$> chooseInt (0, 3))
+      , (1, pure HandleFail)
       , (6, Deliver <$> chooseInt (0, 3))
       , (1, pure Navigate)
       , (1, pure PageAgain)
@@ -242,18 +285,21 @@ genRun =
 shrinkRun :: [Step] -> [[Step]]
 shrinkRun = shrinkList $ \case
   HandleOut i -> Handle : (HandleOut <$> [0 .. i - 1])
+  HandleFail -> [Handle]
   Deliver i -> Deliver <$> [0 .. i - 1]
   OtherReplies i -> OtherReplies <$> [0 .. i - 1]
   OtherEdits i -> OtherEdits <$> [0 .. i - 1]
   OtherDeletesComment i -> OtherDeletesComment <$> [0 .. i - 1]
   OtherDeletesThread i -> OtherDeletesThread <$> [0 .. i - 1]
   ReaderReplies i -> ReaderReplies <$> [0 .. i - 1]
+  ReaderEdits i -> ReaderEdits <$> [0 .. i - 1]
   ReaderDeletes i -> ReaderDeletes <$> [0 .. i - 1]
+  ReaderDeletesThread i -> ReaderDeletesThread <$> [0 .. i - 1]
   _ -> []
 
--- | An ask the view made, or the comments view: a read under its ticket,
--- or a write.
-data Asked = ARead Ask PageId | AWrite Write
+-- | An ask the view made: a read under its ticket, or a write under its
+-- number.
+data Asked = ARead Ask PageId | AWrite Int PageId Request
   deriving stock (Show)
 
 -- | An ask out, and its answer once handled.
@@ -287,7 +333,7 @@ data World = World
 -- answers nothing at once.
 startOver :: Maybe Stored -> World
 startOver cache =
-  checked . fromTheCache $
+  checked Nothing . fromTheCache $
     let (view, fx) = step (Fetched pageA True False) (initial (Just pageA) True False Nothing)
         w0 = World {view, server = emptyServer {watched = Just pageA, untold = [MReplaced pageA []]}, outs = [], shownPage = pageA, finished = False, tabCache = cache, trace = [], faults = [], seen = mempty}
      in effected "mounted on page A" fx w0
@@ -297,23 +343,27 @@ start = startOver Nothing
 startCached = startOver (Just (storedOf emptyCache))
 
 -- | The world after the view took an event.
-event :: Text -> Event -> World -> World
-event what e w = checked . fromTheCache $ effected what fx w {view}
+event :: Text -> Event () -> World -> World
+event what e w = checked (Just w.view.threads) . fromTheCache $ effected what fx w {view}
   where
     (view, fx) = step e w.view
 
--- | The view's effects carried out: a read is an ask out (answered at once
--- by the cache when it can be).
-effected :: Text -> [Effect] -> World -> World
+-- | The view's effects carried out: a read or a write is an ask out (a
+-- read answered at once by the cache when it can be).
+effected :: Text -> [Effect ()] -> World -> World
 effected what fx w =
-  noted (what <> (if null loads then "" else " -> " <> T.intercalate ", " (map show loads))) $
+  noted (what <> (if null outsMade then "" else " -> " <> T.intercalate ", " (map fst outsMade))) $
     w
-      { outs = w.outs <> [outOf a | a <- loads]
-      , faults = w.faults <> [(AfterClose, "asked after the view went away: " <> what) | w.finished, not (null loads)]
+      { outs = w.outs <> map snd outsMade
+      , faults = w.faults <> [(AfterClose, "asked after the view went away: " <> what) | w.finished, not (null outsMade)]
       }
   where
-    loads = [(t, p) | Load t p <- fx]
-    outOf (t, p) = case w.tabCache of
+    outsMade = mapMaybe outOf fx
+    outOf = \case
+      Load t p -> Just (show (t, p), readOut t p)
+      Send () n p r -> Just ("write " <> show n, Out {asked = AWrite n p r, answer = Nothing, sent = Nothing})
+      Changed -> Nothing
+    readOut t p = case w.tabCache of
       Just c | Just cached <- Map.lookup p c.cache.threads -> Out {asked = ARead t p, answer = Just (Left <$> cached), sent = Nothing}
       _ -> Out {asked = ARead t p, answer = Nothing, sent = w.tabCache}
 
@@ -344,27 +394,30 @@ summary m = case m.threads of
 -- | The world after a step.
 play :: World -> Step -> World
 play w = \case
-  OtherOpens inline -> other (OpenW w.shownPage inline)
-  OtherReplies i -> onServerThread i $ \t -> other (ReplyW w.shownPage t.id)
-  OtherEdits i -> onServerComment i $ \t c -> other (EditW w.shownPage t.id c.id)
-  OtherResolves i -> onServerThread i $ \t -> other (ResolveW w.shownPage t.id (not t.resolved))
-  OtherDeletesComment i -> onServerComment i $ \t c -> other (DeleteCommentW w.shownPage t.id c.id)
-  OtherDeletesThread i -> onServerThread i $ \t -> other (DeleteThreadW w.shownPage t.id)
-  ReaderOpens inline -> byReader (OpenW w.shownPage inline)
-  ReaderReplies i -> onShownThread i $ \t -> byReader (ReplyW w.shownPage t.id)
-  ReaderResolves i -> onShownThread i $ \t -> if isJust t.anchor then byReader (ResolveW w.shownPage t.id (not t.resolved)) else w
-  ReaderDeletes i -> case atMay [(t, c) | t <- readyThreads w.view, c <- t.comments] i of
-    Just (t, c) -> byReader (DeleteCommentW w.shownPage t.id c.id)
-    Nothing -> w
+  OtherOpens inline -> other (OpenThread (if inline then Just quote else Nothing) "")
+  OtherReplies i -> onServerThread i $ \t -> other (Reply t.id "")
+  OtherEdits i -> onServerComment i $ \t c -> other (EditComment t.id c.id "")
+  OtherResolves i -> onServerThread i $ \t -> other (Resolve t.id (not t.resolved))
+  OtherDeletesComment i -> onServerComment i $ \t c -> other (DeleteComment t.id c.id)
+  OtherDeletesThread i -> onServerThread i $ \t -> other (DeleteThread t.id)
+  ReaderOpens inline -> byReader (OpenThread (if inline then Just quote else Nothing) "")
+  ReaderReplies i -> onShownThread i $ \t -> byReader (Reply t.id "")
+  ReaderEdits i -> onShownComment i $ \t c -> byReader (EditComment t.id c.id "")
+  ReaderResolves i -> onShownThread i $ \t -> if isJust t.anchor then byReader (Resolve t.id (not t.resolved)) else w
+  ReaderDeletes i -> onShownComment i $ \t c -> byReader (DeleteComment t.id c.id)
+  ReaderDeletesThread i -> onShownThread i $ \t -> byReader (DeleteThread t.id)
   Tell -> case w.server.untold of
     MHeard p e : rest -> event ("told " <> show e) (Heard p e) (changing (afterEvent p e) w {server = w.server {untold = rest}})
     MReplaced p ts : rest -> event ("subscription answered on " <> show p) (Replaced p ts) (changing (withThreads p (Right ts)) w {server = w.server {untold = rest}})
-    [] -> w
-  Reconnect ->
-    noted "the channel is lost and opens again" $
-      changing (forgetThreads w.shownPage) w {server = w.server {untold = [MReplaced p (threadsOn p w.server) | Just p <- [w.server.watched]]}}
+    []
+      | w.server.behind -> noted "the channel fell behind, is closed and opens again" (reconnected w)
+      | otherwise -> w
+  Reconnect -> noted "the channel is lost and opens again" (reconnected w)
   Handle -> handleAt 0 w
   HandleOut i -> handleAt i w
+  HandleFail -> case [k | (k, o) <- zip [0 :: Int ..] w.outs, isNothing o.answer, ARead _ _ <- [o.asked]] of
+    k : _ -> noted "a read fails" w {outs = [if j == k then x {answer = Just (Left (Unreachable "the network"))} else x | (j, x) <- zip [0 ..] w.outs]}
+    [] -> w
   Deliver i -> case atMay [k | (k, o) <- zip [0 :: Int ..] w.outs, isJust o.answer] i of
     Just k -> deliver k w
     Nothing -> w
@@ -383,18 +436,26 @@ play w = \case
     | otherwise -> event "the page read again" (Fetched w.shownPage True False) w
   Finish -> event "goes away" Finished w {finished = True}
   where
-    other wr = noted ("someone else: " <> show wr) w {server = fst (handleWrite "other" wr w.server)}
+    other wr = noted ("someone else: " <> show wr) w {server = fst (handleWrite "other" w.shownPage wr w.server)}
     byReader wr
       | w.finished || not (isReady w.view) = w
-      | otherwise = noted ("the reader sends " <> show wr) w {outs = w.outs <> [Out {asked = AWrite wr, answer = Nothing, sent = Nothing}]}
+      | otherwise = event ("the reader asks for " <> show wr) (Write () w.shownPage wr) w
     onServerThread i f = maybe w f (atMay (threadsOn w.shownPage w.server) i)
     onServerComment i f = maybe w (uncurry f) (atMay [(t, c) | t <- threadsOn w.shownPage w.server, c <- t.comments] i)
     onShownThread i f
       | w.finished = w
       | otherwise = maybe w f (atMay (readyThreads w.view) i)
+    onShownComment i f
+      | w.finished = w
+      | otherwise = maybe w (uncurry f) (atMay [(t, c) | t <- readyThreads w.view, c <- t.comments] i)
     isReady m = case m.threads of
       ThreadsReady _ -> True
       _ -> False
+
+-- | The channel closed and open again: what it had to tell is lost, the
+-- page is subscribed to again, and the backend drops its threads.
+reconnected :: World -> World
+reconnected w = changing (forgetThreads w.shownPage) w {server = w.server {untold = [MReplaced p (threadsOn p w.server) | Just p <- [w.server.watched]], behind = False}}
 
 -- | The world after the server handled the ask at this place among those
 -- it has not handled.
@@ -404,7 +465,7 @@ handleAt i w = case atMay [k | (k, o) <- zip [0 :: Int ..] w.outs, isNothing o.a
     | Just o <- atMay w.outs k ->
         let (server, answer) = case o.asked of
               ARead _ p -> (w.server, Right (Left (threadsOn p w.server)))
-              AWrite wr -> second (fmap Right) (handleWrite "reader" wr w.server)
+              AWrite _ p r -> second (fmap Right) (handleWrite "reader" p r w.server)
          in noted ("the server handles " <> show o.asked) w {server, outs = [if j == k then x {answer = Just answer} else x | (j, x) <- zip [0 ..] w.outs]}
   _ -> w
 
@@ -414,33 +475,27 @@ deliver k w = case atMay w.outs k of
   Just Out {asked, answer = Just a, sent} ->
     let w' = w {outs = [x | (j, x) <- zip [0 ..] w.outs, j /= k]}
      in case (asked, a) of
-          (ARead t p, Left e) -> event "a read fails" (Loaded t p (Left e)) w'
+          (ARead t p, Left e) -> event "the read failed" (Loaded t p (Left e)) w'
           (ARead t p, Right (Left ts)) ->
             let stored = case (w'.tabCache, sent) of
                   (Just now', Just sentAt) -> Just (storedAnswer PlainRead sentAt (withThreads p (Right ts)) now')
                   _ -> w'.tabCache
              in event ("the answer to the read of " <> show p) (Loaded t p (Right ts)) w' {tabCache = stored}
           (ARead t p, Right (Right _)) -> event "a read" (Loaded t p (Right [])) w'
-          (AWrite wr, Right (Right e)) ->
-            -- The comments view reports the write's result to the page
-            -- view, after the backend applied it to the cached threads.
-            event ("the reader's write answered: " <> show e) (Did e) (changing (afterComment (pageOfWrite wr) (Right e)) w')
-          (AWrite _, Right (Left _)) -> noted "a write" w'
-          (AWrite wr, Left e) -> noted ("the reader's write refused: " <> show e) (changing (afterComment (pageOfWrite wr) (Left e)) w')
+          -- The backend applies the write's answer to its cache, then the
+          -- page view takes it.
+          (AWrite n p r, Right (Right e)) ->
+            let e' = answerOf r e
+             in event ("the answer to write " <> show n <> ": " <> show e') (Wrote n (Right e')) (changing (afterComment p (Right e')) w')
+          -- A write is never answered with a list.
+          (AWrite _ _ _, Right (Left _)) -> w'
+          (AWrite n p _, Left e) -> event ("write " <> show n <> " refused: " <> show e) (Wrote n (Left e)) (changing (afterComment p (Left e)) w')
   _ -> w
 
-pageOfWrite :: Write -> PageId
-pageOfWrite = \case
-  OpenW p _ -> p
-  ReplyW p _ -> p
-  EditW p _ _ -> p
-  ResolveW p _ _ -> p
-  DeleteCommentW p _ _ -> p
-  DeleteThreadW p _ -> p
-
--- | The world with what the view shows checked against the rules.
-checked :: World -> World
-checked w = w {faults = w.faults <> problems, seen = seen'}
+-- | The world with what the view shows checked against the rules, given
+-- what it showed before the step, if the step was the view's.
+checked :: Maybe Threads -> World -> World
+checked shownBefore w = w {faults = w.faults <> problems, seen = seen'}
   where
     shown = readyThreads w.view
     shownComments = [(c, t.page) | t <- shown, c <- t.comments]
@@ -479,6 +534,10 @@ checked w = w {faults = w.faults <> problems, seen = seen'}
                , editsOf c.body < editsOf earlier
                , c.id `notElem` editsOnTheWay
                ]
+            <> [ (FailureOverThreads, "a failed read is shown in place of the threads")
+               | Just (ThreadsReady _) <- [shownBefore]
+               , ThreadsFailed _ <- [w.view.threads]
+               ]
 
 readyThreadsOf :: Model -> Maybe [Thread]
 readyThreadsOf m = case m.threads of
@@ -495,13 +554,13 @@ editsOf = T.count ", edited"
 settled :: World -> World
 settled w0 = drained (tellAll w0)
   where
-    tellAll w = if null w.server.untold then w else tellAll (play w Tell)
+    tellAll w = if null w.server.untold && not w.server.behind then w else tellAll (play w Tell)
 
 drained :: World -> World
 drained w
   | null w.outs = w
   | any (isNothing . (.answer)) w.outs = drained (handleAt 0 w)
-  | otherwise = drained (deliver 0 w)
+  | otherwise = settled (deliver 0 w)
 
 -- | Whether a run, settled, shows the server's threads of its page.
 settles :: World -> Property
@@ -514,7 +573,7 @@ settles w0 =
 
 -- | 'Rule' is each rule a run is checked against, as the module's Haddock
 -- lists them.
-data Rule = OtherPage | Lost | Older | AfterClose
+data Rule = OtherPage | Lost | Older | FailureOverThreads | AfterClose
   deriving stock (Eq, Show, Enum, Bounded)
 
 ruleText :: Rule -> [Char]
@@ -522,6 +581,7 @@ ruleText = \case
   OtherPage -> "shows no thread of another page, on any run"
   Lost -> "loses no comment the server still has, on any run"
   Older -> "shows no comment's text older than one it showed, on any run"
+  FailureOverThreads -> "shows a failed read only where it shows no threads, on any run"
   AfterClose -> "asks nothing once it has gone away"
 
 verdict :: Rule -> World -> Property

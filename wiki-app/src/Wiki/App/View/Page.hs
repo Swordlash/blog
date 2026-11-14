@@ -209,7 +209,7 @@ data Input = Input
   -- ^ The tab's live channel, on a backend that has one.
   }
 
-type Slots = Body.IslandSlots .+ ("deck" .== H.Slot (Const Void) Void Md.IslandKey) .+ ("deckView" .== H.Slot (Const Void) Void ()) .+ ("comments" .== H.Slot (Const Void) CommentsView.Output CommentsView.Placement) .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("star" .== H.Slot (Const Void) Void ()) .+ ("export" .== H.Slot (Const Void) Void ())
+type Slots = Body.IslandSlots .+ ("deck" .== H.Slot (Const Void) Void Md.IslandKey) .+ ("deckView" .== H.Slot (Const Void) Void ()) .+ ("comments" .== H.Slot CommentsView.Query CommentsView.Output CommentsView.Placement) .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("star" .== H.Slot (Const Void) Void ()) .+ ("export" .== H.Slot (Const Void) Void ())
 
 data Loaded
   = Loading
@@ -327,9 +327,11 @@ data Action
   | Delete
   | Retry
   | Finalize
-  | FromComments CommentsView.Output
+  | FromComments CommentsView.Placement CommentsView.Output
   | -- | An answer to a read of the threads, as the threads' machine takes it.
-    ThreadsHappened Threads.Event
+    ThreadsHappened (Threads.Event CommentsView.Placement)
+  | -- | The answer to a write the comments view in this place asked for.
+    Written CommentsView.Placement PageId Threads.Request Int (Either WikiError PageEvent)
   | Heard Heard
   | Selecting
   | CommentOnSelection
@@ -721,7 +723,7 @@ component =
           , quoting = st.quoting
           , avatars = st.avatars
           }
-        FromComments
+        (FromComments placement)
 
     -- What the live channel reports about the page, at the end of the
     -- action bar, when there is something to report: who is editing it,
@@ -965,12 +967,8 @@ component =
                     >> movePage page.id target.id parent
                     >>= done visit (\moved -> Just (Page (spacePathOf ctx.spaces target.id) (maybe [] (fromMaybe [] . pagePathOf target ps) parent <> [moved.slug])))
             _ -> pass
-      FromComments out -> case out of
-        CommentsView.Did event -> do
-          threadsStep (Threads.Did event)
-          case event of
-            ThreadOpened t | isInline t -> modify (\st -> st {quoting = Nothing, focused = Just t.id})
-            _ -> pass
+      FromComments placement out -> case out of
+        CommentsView.Write page request -> threadsStep (Threads.Write placement page request)
         -- The scrolls to a thread or its mark ('reveal') run on the loop, in
         -- the step of the render that shows them ('H.liftEffect'), not on
         -- a thread of their own after whatever ran meanwhile.
@@ -981,6 +979,14 @@ component =
         CommentsView.Close -> modify (\st -> st {panelOpen = False, quoting = Nothing})
         CommentsView.Reload -> threadsStep Threads.Reload
       ThreadsHappened event -> threadsStep event
+      -- The machine takes the answer, then the comments view that asked is
+      -- told it; a thread opened about a quote is chosen.
+      Written placement page request n answer -> do
+        threadsStep (Threads.Wrote n answer)
+        void (H.tell "comments" placement (CommentsView.Answered page request (leftToMaybe answer)))
+        case answer of
+          Right (ThreadOpened t) | isInline t -> modify (\st -> st {quoting = Nothing, focused = Just t.id})
+          _ -> pass
       Heard heard -> do
         here <- gets (\st -> st.watching)
         encrypted <- gets (\st -> isJust st.input.space.encryption)
@@ -1139,11 +1145,12 @@ component =
     -- One step of the threads' machine, in one step of the program, and
     -- then its effects. A read is forked and its answer comes back as an
     -- event ('ThreadsHappened'), so that nothing after it waits for it.
-    threadsStep :: Threads.Event -> H.HalogenM State Action Slots ViewOutput m ()
+    threadsStep :: Threads.Event CommentsView.Placement -> H.HalogenM State Action Slots ViewOutput m ()
     threadsStep event = do
       effects <- state (\st -> let (discussion, fx) = Threads.step event st.discussion in (fx, st {discussion}))
       for_ effects $ \case
         Threads.Load ticket page -> void . H.fork $ listThreads page >>= handleAction . ThreadsHappened . Threads.Loaded ticket page
+        Threads.Send placement n page request -> void . H.fork $ sendWrite page request >>= handleAction . Written placement page request n
         Threads.Changed -> resolvePeople
 
     -- Look up the people the page and its comments mention, for the
@@ -1679,3 +1686,15 @@ shownIn text placement ts = case placement of
     position = \case
       Found r -> (0 :: Int, r.start)
       Orphaned -> (1, 0)
+
+-- | A write the reader asked for sent, and its answer as the event the
+-- write made. A deletion answers with nothing: its event is the comment
+-- deleted, which removes the thread too when it was the thread's only one.
+sendWrite :: (MonadComments m) => PageId -> Threads.Request -> m (Either WikiError PageEvent)
+sendWrite page = \case
+  Threads.OpenThread anchor body -> fmap ThreadOpened <$> openThread page anchor body
+  Threads.Reply tid body -> fmap CommentAdded <$> reply page tid body
+  Threads.EditComment tid cid body -> fmap CommentEdited <$> editComment page tid cid body
+  Threads.DeleteComment tid cid -> (CommentDeleted tid cid <$) <$> deleteComment page tid cid
+  Threads.DeleteThread tid -> (ThreadDeleted tid <$) <$> deleteThread page tid
+  Threads.Resolve tid resolved -> fmap (\t -> ThreadResolved t.id t.resolved) <$> setResolved page tid resolved
