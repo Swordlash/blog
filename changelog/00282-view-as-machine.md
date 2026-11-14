@@ -13,6 +13,11 @@ title: The bell keeps your "Mark read" and every notification it has shown
   arrives while a "Mark read" is under way.
 - A notification is no longer counted and listed twice when the server
   tells your tab of it just after the bell has read it.
+- The bell's count no longer stays above zero after "Mark all read" when
+  you have more unread notifications than the bell lists and open the
+  bell again before the mark has gone through.
+- With more notifications than the bell lists, one told to your tab no
+  longer counts twice.
 - The "Mark read" buttons stay disabled until every mark you started has
   come back, also when you follow a notification's link while "Mark all
   read" is still under way.
