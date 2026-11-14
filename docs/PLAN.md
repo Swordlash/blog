@@ -1911,8 +1911,8 @@ WP5.92 and WP5.93 wait.
   The sign-in's keys (`SignIn.hs`); two days. (4) The assistant's
   panel; two days. (5) The shell's world (the session, the spaces, the
   tree, the backlinks); three days. (6) The editor's publication and
-  rows; four days or more, and it needs time the test controls, which
-  the library does not have yet. Each: main's logic translated
+  rows; four days or more, with time the test controls (the library's
+  `withTestClock`, WP5.123). Each: main's logic translated
   faithfully first, the properties shown failing on it where a race is
   known, then the fix; the cache in the model for a view over HTTP;
   the component on the in-memory DOM; the view's browser examples cut
@@ -1930,11 +1930,37 @@ WP5.92 and WP5.93 wait.
   million cases each and reports a failure with its seed as a finding.
   (4) `wiki-app-remote-test` (four examples of the bell today) run by
   a native job, or dropped if the in-memory DOM route covers what it
-  shows: decide from what the library gives after its answer to the
-  nine items of 2026-11-14 (a blocking run-until-idle, one tree's
-  activity, a native dispatch with bubbling and a target,
-  `isConnected`, reads of the in-memory DOM, a hook on the program's
-  waits, time the test controls, and two about `remote`).
+  shows: decide in WP5.123, with the library's tools in hand.
+- **WP5.123 The pin at 1f68320 and the native harness on the library's
+  tools (decision 82; for the order above; after WP5.120, stacked on
+  it; the owner gave the library's answer to the nine items on
+  2026-11-14: its pull requests 125 to 128).** The bump is its own
+  commit. Then the bell's in-memory DOM spec is rewritten on what the
+  library now has, as one shared harness the other views' specs use:
+  the component mounted into `N.newContainer` (connected, in the
+  ambient document); `N.dispatch` for events that bubble with a real
+  `target` (so "press outside closes the list" and Escape are tested
+  natively, and their browser examples go); `N.querySelector`,
+  `N.querySelectorAll`, `N.textContent`, `N.attribute` in place of
+  the spec's own forty lines; `socket.waitActivity` in place of
+  polling `activity` each millisecond, so the spec runs beside others
+  and the exclusive semaphore goes; `withHeldWaits` where the real
+  action should run when the test lets it go (the backend wrapper
+  whose methods block on an `MVar` stays only where the test answers
+  with values of its own: say which is used where and why);
+  `waitSession` over `remote`, and the millisecond wait on the feed's
+  count after `Session.dispose` goes. Then the rule for pauses: a
+  pause a test waits for is `H.delayCounted`, not `liftIO
+  (threadDelay n)` (the preview's and the users' search's debounce,
+  the draft's autosave, the backups' re-look), so that
+  `withTestClock` and `advance` move it; one spec shows a debounce
+  advanced by the test's clock with no real sleep. AGENTS.md and the
+  README say both (the owner's word for AGENTS.md's machine rule
+  covers its tools). To settle in it: whether `wiki-app-remote-test`
+  is kept (then a native CI job runs it) or dropped (WP5.122's fourth
+  point); what the ambient document being one for the process means
+  for specs run side by side (two bells both hear a press on the
+  document).
 - **WP5.120 The pin past haskell-halogen's pull requests 121 to 124:
   the browser suite's harness waits for the program (for the order
   above; the owner gave the library's notes on 2026-11-14; WP5.117
