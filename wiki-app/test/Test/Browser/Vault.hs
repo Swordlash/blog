@@ -82,6 +82,7 @@ $( browserJS
      , ("js_exportablePromise", "wiki_test_exportable_keys_left", Safe, [t|IO (Promise Int)|])
      , ("js_keys_mark", "wiki_test_keys_mark", Safe, [t|IO ()|])
      , ("js_keys_checked", "wiki_test_keys_checked", Safe, [t|IO JSText|])
+     , ("js_password_keys", "wiki_test_password_keys", Safe, [t|IO Int|])
      , ("js_existing", "wiki_test_passkeys_existing", Safe, [t|IO JSText|])
      , ("js_offered", "wiki_test_passkeys_offered", Safe, [t|IO Bool|])
      , ("js_pick", "wiki_test_passkeys_pick", Safe, [t|IO ()|])
@@ -887,6 +888,43 @@ userKeys m = describe "the user's keys" $ do
     _ <- find ui ".sign-in-toggle"
     eventually $ length <$> findAll ui ".keys-offer" `shouldReturn` 0
     closed ui
+
+  -- The sign-in's view can go while the keys are brought up to date after
+  -- a sign-in with the password: the shell takes it off the page when the
+  -- wiki cannot be read again just after (the network gone), and with the
+  -- whole page. The key the password gave is then held by no one but the
+  -- view's state: the view lets go of it as it closes, and the answer that
+  -- comes after offers nothing. Here the offer would be made (the vault
+  -- opens with a passkey alone), the vault's answer is held, and the view
+  -- goes meanwhile.
+  it "lets go of the password's key when the sign-in's view goes while the keys are brought up to date" $ runOwn $ do
+    ui <- signedOut "editor's password"
+    signIn ui "editor's password"
+    _ <- madeKeys
+    find ui ".account-toggle" >>= click
+    find ui ".account-keys input[name=keys-password]" >>= (`typeText` "editor's password")
+    find ui ".keys-passkey-add" >>= click
+    eventually $ length <$> findAll ui ".keys-unlock-passkey" `shouldReturn` 1
+    find ui ".keys-password-remove" >>= click
+    eventually $ length <$> findAll ui ".keys-unlock-password" `shouldReturn` 0
+    find ui ".account-toggle" >>= click
+    answerWith "DELETE" "api/v1/session" 200 nobody
+    find ui ".account .sign-out" >>= click
+    _ <- find ui ".sign-in-toggle"
+    settle
+    let passwordKeys = unsafeIOToPageM js_password_keys
+        vaultReads = length . filter (\r -> r.method == "GET" && r.url == "api/v1/assistant/vault") <$> asked
+    before <- passwordKeys
+    readsBefore <- vaultReads
+    holdAt "GET" "api/v1/assistant/vault"
+    signIn ui "editor's password"
+    eventually $ vaultReads >>= (`shouldSatisfy` (> readsBefore))
+    unmount ui
+    release
+    settle
+    eventuallyWithin 5000 $ passwordKeys `shouldReturn` before
+    unsafeIOToPageM js_uninstall
+    serverStops
 
   -- #213: signing out lets go of the vault key and the private
   -- key, in the page, in IndexedDB and in the wiki's other tabs. The

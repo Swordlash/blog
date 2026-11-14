@@ -808,3 +808,13 @@ function wiki_test_export_key_traces() {
   }
   return JSON.stringify(found);
 }
+
+// How many keys the page's registry of keys (wiki-app/jsbits/vault.js)
+// holds that a password gave: the HKDF keys that OPAQUE's export key is
+// held as (wiki_vault_hold_key), which a sign-in with the password hands
+// to the vault and which can unwrap the vault for the password.
+function wiki_test_password_keys() {
+  const registry = globalThis.wikiKeyRegistry;
+  if (!registry) return 0;
+  return [...registry.keys.values()].filter((key) => key?.algorithm?.name === "HKDF").length;
+}
