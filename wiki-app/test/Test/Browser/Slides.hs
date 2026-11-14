@@ -22,6 +22,7 @@ $( browserJS
      ["jsbits/test-location.js", "jsbits/test-keys.js"]
      [ ("js_location_hash", "wiki_test_location_hash", Safe, [t|IO JSText|])
      , ("js_dispatch_key", "wiki_test_dispatch_key", Safe, [t|JSText -> IO Bool|])
+     , ("js_location_after_key", "wiki_test_location_after_key", Safe, [t|JSText -> IO JSText|])
      ]
  )
 
@@ -88,6 +89,19 @@ spec m = do
     find ui ".slides-view button.slides-previous" >>= click
     find ui ".slides-position" >>= (`shouldHaveText` "1 / 9")
     find ui ".slides-progress" >>= (\p -> getAttribute p "aria-valuenow") >>= (`shouldBe` Just "1")
+
+  -- The slide is put in the address in the step that moves to it, during
+  -- the key's own dispatch. Written by a thread of its own, the address
+  -- came after whatever ran meanwhile: a reader who went Back at once was
+  -- taken back to the slides, the router hearing the late write as a
+  -- route to go to.
+  it "puts the slide in the address in the key's own dispatch, before anything else runs" $ runPage $ do
+    ui <- start m Nothing (PageSlides docs presentations 1 1)
+    _ <- find ui ".slides-view"
+    settle
+    unsafeIOToPageM (fromJSText <$> js_location_after_key (toJSText "ArrowRight"))
+      `shouldReturn` "#/s/docs/p/markdown-guide/presentations/slides/?slide=2"
+    find ui ".slides-position" >>= (`shouldHaveText` "2 / 9")
 
   it "hears its keys anywhere on the page, keeps them from scrolling it, and stops when it goes" $ runPage $ do
     ui <- start m Nothing (PageSlides docs presentations 1 1)
