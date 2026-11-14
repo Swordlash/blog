@@ -29,6 +29,11 @@
 -- made, the list is the truth, and may leave one out (a page the reader
 -- may no longer read).
 --
+-- What any answer says was read stays shown read ('known'), whichever list
+-- is taken: the server never marks a notification unread, and a list taken
+-- may be older than an answer dropped (a read the HTTP backend's cache
+-- answered at once while the reader's mark was out).
+--
 -- The buttons that mark are disabled while any mark is out ('busy'), and
 -- enabled again only when the last one has come back.
 module Wiki.App.View.Bell.Machine
@@ -44,6 +49,7 @@ module Wiki.App.View.Bell.Machine
   )
 where
 
+import Data.Set qualified as Set
 import Protolude hiding (State)
 import Text.Show (Show (showsPrec))
 import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
@@ -64,6 +70,10 @@ data Model = Model
   -- ^ The reads and marks made, and which one's answer is shown.
   , marking :: Int
   -- ^ How many marks of notifications read are out.
+  , known :: Set NotificationId
+  -- ^ The notifications some answer said were read, taken or not. The
+  -- server never marks one unread again, so they are shown read whatever
+  -- list is taken.
   , heard :: [(Notification, Asks)]
   -- ^ The notifications the live channel told of that no answer to an ask
   -- made after them has been taken for, each with the asks as they were
@@ -141,7 +151,7 @@ data Effect a
 -- | The bell before it is mounted, with the notifications read at once if
 -- the backend could ('Nothing' otherwise), under a revision of the wiki.
 initial :: Maybe (Either WikiError Notifications) -> Int -> Model
-initial notices revision = Model {notices, open = False, asks = noAsks, marking = 0, heard = [], revision, closed = False}
+initial notices revision = Model {notices, open = False, asks = noAsks, marking = 0, known = mempty, heard = [], revision, closed = False}
 
 -- | The bell after an event, and what it asks to be done.
 step :: Event a -> Model -> (Model, [Effect a])
@@ -162,18 +172,18 @@ step event m
       Dismissed -> close m
       Told n ->
         ( m
-            { notices = fmap (\ns -> if any (\x -> x.id == n.id) ns.items then ns else ns {unread = ns.unread + 1, items = n : ns.items}) <$> m.notices
+            { notices = fmap (\ns -> if any (\x -> x.id == n.id) ns.items then ns else withRead m.known ns {unread = ns.unread + 1, items = n : ns.items}) <$> m.notices
             , heard = (n, m.asks) : filter (\(x, _) -> x.id /= n.id) m.heard
             }
         , []
         )
       Reopened -> reading m
-      Loaded asked answer -> (taking asked answer m, [])
+      Loaded asked answer -> (taking asked answer (learning answer m), [])
       MarkClicked i -> marking ReadMark {ids = [i], everything = False} m
       MarkAllClicked -> marking ReadMark {ids = [], everything = True} m
       Marked asked answer ->
         let m' = m {marking = max 0 (m.marking - 1)}
-         in (either (const m') (\_ -> taking asked answer m') answer, [])
+         in (either (const m') (\_ -> taking asked answer (learning answer m')) answer, [])
       Followed i target ->
         let (closedList, unwatched) = close m
             unread = any (\n -> n.id == i && not n.read) (listed m)
@@ -194,8 +204,27 @@ taking asked answer m = case takes asked m.asks of
     Right ns ->
       let kept = [(n, at) | (n, at) <- m.heard, not (asked `madeAfter` at)]
           missing = [n | (n, _) <- kept, all (\x -> x.id /= n.id) ns.items]
-       in m {asks = after, notices = Just (Right ns {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}), heard = kept}
+       in m {asks = after, notices = Just (Right (withRead m.known ns {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items})), heard = kept}
     Left _ -> m {asks = after, notices = Just answer}
+
+-- | What an answer says was read learnt, and shown on the list as it is,
+-- whether the answer is taken or not: an answer dropped as older may be
+-- the only one that has the reader's own mark (a read the backend's cache
+-- answered at once, after the mark went out, is a later ask with an older
+-- list).
+learning :: Either WikiError Notifications -> Model -> Model
+learning answer m = case answer of
+  Right ns ->
+    let known = m.known <> Set.fromList [n.id | n <- ns.items, n.read]
+     in m {known, notices = fmap (withRead known) <$> m.notices}
+  Left _ -> m
+
+-- | The notifications with those known to be read shown read, and the
+-- count lower by those that were shown unread.
+withRead :: Set NotificationId -> Notifications -> Notifications
+withRead known ns = ns {unread = max 0 (ns.unread - length flipped), items = map (\n -> if n.id `Set.member` known then n {read = True} else n) ns.items}
+  where
+    flipped = [() | n <- ns.items, not n.read, n.id `Set.member` known]
 
 -- | The list closed, and the watch for a press outside ended.
 close :: Model -> (Model, [Effect a])
