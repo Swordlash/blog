@@ -51,22 +51,22 @@ spec site paths visitorGate = do
         expect (("<base href=\"" <> base <> "\">") `Text.isInfixOf` html) (Text.unpack path <> ": no <base href=\"" <> Text.unpack base <> "\">")
         expect ("<div id=\"app\"><div class=\"wiki\">" `Text.isInfixOf` html) (Text.unpack path <> ": not prerendered")
         expect (footerHtml `Text.isInfixOf` html) (Text.unpack path <> ": no footer prerendered")
-        -- What this page asks is counted from here, on a page the examples
-        -- share. The page before it may still be asking for something: a
-        -- TikZ picture's worker fetches TeX's format after the picture's
-        -- script, and the example that loaded it ends without waiting for
-        -- the drawing. Its document, and its workers with it, end at a
-        -- navigation; the driver hands over the context's requests in the
-        -- order Chromium reported them, before its answer to that
-        -- navigation. So the page is taken to a blank document first, and
-        -- every request of the one before is in the log before the count
-        -- starts. Counted without it, a picture's format asked for by the
-        -- page before was once this page's (CI, the history of the
-        -- diagrams' page).
+        -- What this page asked for is what its own documents asked for
+        -- ('requestsOf'), on a page the examples share. The page before it
+        -- may still be asking for something: a TikZ picture's worker
+        -- fetches TeX's format after the picture's script, and the example
+        -- that loaded it ends without waiting for the drawing. The driver
+        -- gives a dedicated worker's request the document its frame shows
+        -- when the request is reported, so one reported as this page's
+        -- navigation lands would be this page's (once, on CI: the format,
+        -- counted against the history of the diagrams' page). So the page
+        -- is taken to a blank document first: the worker ends with the
+        -- document before, its requests are reported before the driver's
+        -- answer to that navigation, and a late one is the blank
+        -- document's, which this page does not show.
         goto page "about:blank"
-        before <- length <$> requests (pageContext page)
         adopted <- load site gate page path
-        asked <- map (\r -> r.url) . drop before <$> requests (pageContext page)
+        asked <- map (\r -> r.url) <$> requestsOf page
         -- TikZJax is fetched by a page with a picture, and by no other.
         unless (hasTikz html) $
           [a | a <- asked, "/islands/tikz.js" `Text.isInfixOf` a || "/tikzjax/" `Text.isInfixOf` a] `shouldBe` []

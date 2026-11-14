@@ -16,7 +16,6 @@ import Demo.Site
 import Halogen.Playwright
 import Halogen.Playwright.Hspec
 import Wiki.Smoke.Adoption
-import Wiki.Smoke.Browser (afterEvent)
 import Wiki.Smoke.Demo
 
 spec :: Site -> SpecWith Playwright
@@ -67,8 +66,9 @@ spec site = do
     isVisible (editorText page) `shouldReturn` False
     fits "the editor's preview is wider than a phone"
     -- Back goes back in the session history, and the browser's popstate
-    -- shows the text.
-    afterEvent page "window" "popstate" (tap (locator page "#app .editor-back"))
+    -- shows the text: the tap settles once the page's own step back has
+    -- landed and the program has handled its popstate.
+    tap (locator page "#app .editor-back")
     isVisible (editorText page) `shouldReturn` True
     isVisible (locator page "#app .editor-preview") `shouldReturn` False
     -- A page's source wraps its long lines rather than widening the page.
@@ -93,8 +93,9 @@ spec site = do
       Just b -> expect (b.x >= 0 && b.x + b.width <= fromIntegral width && b.height <= fromIntegral height) ("the dialog of a user does not fit a phone's screen: " <> show b)
       Nothing -> expectationFailure "the dialog of a user is not drawn"
     -- Escape closes the dialog in the browser, which tells the program by
-    -- the dialog's close event.
-    afterEvent page "document.querySelector('#app .user-dialog')" "close" (press page "Escape")
+    -- the dialog's close event, with the next frame: the press settles
+    -- after that frame and the program's handling of the event.
+    press page "Escape"
     count (locator page "#app .user-dialog") `shouldReturn` 0
     -- The server's form, in its own section.
     _ <- load site gate page "/admin/server/"

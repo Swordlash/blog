@@ -57,7 +57,7 @@ module Server.Site
   )
 where
 
-import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVar, readTVarIO, writeTVar)
+import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVar, writeTVar)
 import Control.Concurrent.STM qualified as STM
 import Control.Monad (unless, when)
 import Data.Aeson (Value)
@@ -203,12 +203,12 @@ here page = do
 -- the program's own requests to the API (a fetch) and lets the page's
 -- pass (a space's icon, an attached image, an interactive SVG's frame:
 -- what the page shows from the API's addresses is the page's). Each is one
--- for the page, made with it and never taken away while it loads. The
--- API's also keeps what the program asked it since the last load.
+-- for the page, made with it and never taken away while it loads. What the
+-- program asked the API is read from the driver's log of the page's own
+-- documents ('askedSince').
 data Loads = Loads
   { program :: Gate
   , apiOpen :: TVar Bool
-  , asked :: TVar [Text]
   }
 
 -- | Make a page's gates, released.
@@ -217,13 +217,11 @@ holdLoads page = do
   program <- hold page serverAdoptionOptions.program
   release program
   apiOpen <- newTVarIO True
-  asked <- newTVarIO []
   _ <- route page "**/api/v1/**" $ \request -> do
-    when (request.resourceType == "fetch") $ do
-      atomically (modifyTVar' asked (<> [request.url]))
+    when (request.resourceType == "fetch") $
       atomically (readTVar apiOpen >>= STM.check)
     pure Continue
-  pure Loads {program, apiOpen, asked}
+  pure Loads {program, apiOpen}
 
 -- | A page as its program adopted it: the status the server sent it with,
 -- the text of its content before the program ran, the repairs adopting it
@@ -246,16 +244,8 @@ data Loaded = Loaded
 -- ('framesFitted': the frame's document loading, not the program).
 loadAdopted :: Smoke -> Loads -> Page -> Text -> IO Loaded
 loadAdopted smoke loads page path = do
-  -- What the program asks is kept from here. The document before may
-  -- still be asking (what its program does after the API opened, a viewer
-  -- reading a presentation): it ends at a navigation, and its requests
-  -- reach their route before the driver's answer to it. So the page is
-  -- taken to a blank document first, before what is asked is cleared.
-  goto page "about:blank"
   rearm loads.program
-  atomically $ do
-    writeTVar loads.apiOpen False
-    writeTVar loads.asked []
+  atomically (writeTVar loads.apiOpen False)
   status <- gotoStatus page (address smoke path)
   waitHeld loads.program
   shown' <- textContent (locator page "#app .wiki-content")
@@ -265,13 +255,16 @@ loadAdopted smoke loads page path = do
   framesFitted page
   settle page
   (repairs, objectUrls) <- repairsSinceMarked page >>= sortRepairs page
-  asked' <- readTVarIO loads.asked
+  asked' <- askedSince page
   atomically (writeTVar loads.apiOpen True)
   pure Loaded {status, shown = shown', repairs = repairs <> objectUrls, asked = asked'}
 
--- | What the program has asked the API since the last load.
-askedSince :: Loads -> IO [Text]
-askedSince loads = readTVarIO loads.asked
+-- | What the program has asked the API since the page's last load: the
+-- fetches of the API's addresses in the driver's log that the documents
+-- the page shows now made ('requestsOf'). A request the document before
+-- made, however late it is reported, is that document's and not counted.
+askedSince :: Page -> IO [Text]
+askedSince page = map (.url) . filter (\r -> r.resourceType == "fetch" && "/api/v1/" `Text.isInfixOf` r.url) <$> requestsOf page
 
 -- | Fail unless the load was the status given, showed a text before the
 -- program ran, and was adopted with nothing to repair and nothing asked

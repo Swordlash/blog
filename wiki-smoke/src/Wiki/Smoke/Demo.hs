@@ -205,12 +205,26 @@ nothingWrongExcept :: (HasCallStack) => (ConsoleMessage -> Bool) -> (Text -> Boo
 nothingWrongExcept expectedMessage expectedThrow page = do
   thrown <- filter (not . expectedThrow) <$> pageErrors page
   unless (null thrown) $ expectationFailure ("the page threw: " <> show thrown)
-  errors <- filter (\m -> m.kind == "error" && not (expectedMessage m)) <$> consoleMessages page
+  errors <- filter (\m -> m.kind == "error" && not (expectedMessage m || driversBlockedScript m)) <$> consoleMessages page
   unless (null errors) $
     expectationFailure
       ( "the page wrote errors on its console:\n"
           <> unlines [Text.unpack (m.text <> maybe "" (" at " <>) m.url <> maybe "" (\l -> ":" <> Text.pack (show l)) m.line) | m <- errors]
       )
+
+-- | The error Chromium writes when the Playwright driver's own script is
+-- refused in a frame sandboxed without @allow-scripts@ (an html fence's
+-- frame, an empty sandboxed frame). It is the driver's, not the wiki's:
+-- since haskell-halogen's pull request 119 the driver writes it for such a
+-- frame made by a page's script, which it did not before. Written where the
+-- frame was made (the program's script) or at @about:blank@; a script of
+-- the frame's own document that its sandbox refuses is written at
+-- @about:srcdoc@, and is still counted.
+driversBlockedScript :: ConsoleMessage -> Bool
+driversBlockedScript m =
+  "Blocked script execution in 'about:" `Text.isPrefixOf` m.text
+    && "because the document's frame is sandboxed and the 'allow-scripts' permission is not set" `Text.isInfixOf` m.text
+    && m.url /= Just "about:srcdoc"
 
 -- | A 32 by 32 PNG, standing in for the demo's photograph.
 standIn :: ByteString

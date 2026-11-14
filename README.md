@@ -3602,10 +3602,19 @@ program waits in a `liftIO`, and the page is read once. What is not the
 program's is a condition, named in a comment, and the page is settled after
 it: what an island's library draws, a frame's own script or document, the
 service worker, a push over the WebSocket in another tab, something the
-server does by itself, an image decoded. An event the browser fires later
-than the action's settle (a modal dialog's `close` after Escape, a `popstate`
-after the page's own `history.back()`) is waited for with `afterEvent`
-(`Wiki.Smoke.Browser`), which listens for it before the action. A
+server does by itself, an image decoded. An event the browser fires with
+the next frame (a modal dialog's `close` after Escape) or once a step
+through the history the page asked for has landed (the `popstate` after the
+page's own `history.back()`) needs nothing more: the driver's settle waits
+for both, so the action is followed by a plain read. An event that is
+neither would be waited for with the driver's `waitForEvent`, which listens
+for it before the action; no suite has one. What a page asked for is the
+driver's `requestsOf page`, the requests of the documents it shows now, not
+of the document before it. A dedicated worker's request is given the
+document its frame shows when the request is reported, so the demo's
+adoption check first takes its shared page to `about:blank`: a picture's
+worker on the page before then ends with that page, and a late request of
+it is the blank document's. A
 condition in the server's pages is asked with `holdsInPage`. It was written
 when the driver's `waitForFunction` failed under those pages' Content
 Security Policy, which allows no `unsafe-eval`. Since haskell-halogen's pull

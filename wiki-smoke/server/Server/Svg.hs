@@ -25,12 +25,15 @@
 -- Back returns to the text). When the frame had navigated before Back,
 -- Back took the frame back, not the page: no navigation of the page came,
 -- and the wait for its load ran out; when it had not yet, Back went to the
--- text. The driver's @goBack@ waits for a load too. So the suite first
--- waits for the frame's document at the API's address (the frame's own
--- navigation, a condition), checks that the history has the two entries,
--- the preview's and the frame's, and goes back over both
--- (@history.go(-2)@), then waits for the program's text to show again,
--- which the page's @popstate@ brings.
+-- text. So the suite first waits for the frame's document at the API's
+-- address (the frame's own navigation, a condition), checks that the
+-- history has the two entries, the preview's and the frame's, and goes
+-- back over both in one step (@history.go(-2)@); the driver's settle
+-- waits for that step to land and for the program to handle the page's
+-- @popstate@, which brings the text back. The driver's @goBack@ now
+-- returns for a frame's own navigation, but goes one entry at a time:
+-- back over the frame's entry alone, the frame loads the wandering SVG
+-- again, which navigates again.
 module Server.Svg (spec) where
 
 import Control.Concurrent (forkIO, killThread)
@@ -205,10 +208,15 @@ svgs smoke pw elsewhere stun = do
     entriesNow :: Int <- evaluate page "history.length"
     entriesNow - entriesBefore `shouldBe` 2
     report "the preview's history: its own entry, and the wandering frame's navigation after it"
-    -- The page's popstate, which the history's traversal fires once it
-    -- has gone through, brings the text back: the program's, once the
-    -- event has come.
-    afterEvent page "window" "popstate" (evaluate page "(() => { history.go(-2); return null; })()" >>= \(_ :: Value) -> pure ())
+    -- One traversal over both entries: the driver's goBack goes one entry
+    -- at a time, and a step back over the frame's navigation alone loads
+    -- the wandering SVG in its frame once more (a fourth load, which the
+    -- count below would see), which then navigates again. The page's own
+    -- history.go, which the driver notes, and the settle after it, which
+    -- waits until that step has landed and the program has handled the
+    -- page's popstate that brings the text back.
+    _ :: Value <- evaluate page "(() => { history.go(-2); return null; })()"
+    settle page
     isVisible (editorText page) `shouldReturn` True
     count (locator page "#app .editor-preview iframe.wiki-svg") >>= \n -> expect (n == 0 || n == 3) "the preview's frames"
     click (locator page "#app .editor-cancel")
