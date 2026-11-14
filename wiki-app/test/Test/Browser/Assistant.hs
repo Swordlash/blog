@@ -84,6 +84,7 @@ $( browserJS
      , ("js_check", "wiki_test_assistant_check", Safe, [t|JSText -> IO Bool|])
      , ("js_checks", "wiki_test_assistant_checks", Safe, [t|IO JSText|])
      , ("js_check_wait", "wiki_test_assistant_check_wait", Safe, [t|Int -> IO Bool|])
+     , ("js_click_twice", "wiki_test_click_twice", Safe, [t|JSText -> IO Bool|])
      ]
  )
 
@@ -268,6 +269,23 @@ spec m = do
     fieldBool "ok" answered `shouldBe` Just False
     markdown ui `shouldReturn` original
     length <$> findAll ui ".cm-wiki-inserted" `shouldReturn` 0
+
+  -- Send clicked twice before anything else runs, as a double click does:
+  -- the panel decides that a turn has begun in the click's own step, so
+  -- the second click finds the box empty and the model at work. Deciding
+  -- it after reading the clock on a thread of its own, both clicks found
+  -- the panel idle, and each opened a conversation and sent the message.
+  it "sends the message once for Send clicked twice at once" $ runPage $ do
+    script [[text "Once."], [text "Twice."]]
+    ui <- openAssistant m
+    find ui ".assistant-input" >>= (`typeText` "Hello.")
+    settle
+    unsafeIOToPageM (js_click_twice (toJSText ".assistant-send")) `shouldReturn` True
+    eventually $ length <$> requests >>= (`shouldSatisfy` (> 0))
+    settle
+    length <$> requests `shouldReturn` 1
+    length <$> findAll ui ".assistant-message.from-user" `shouldReturn` 1
+    eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "Once.")
 
   it "stops a turn with Stop, and keeps the change made by then" $ runPage $ do
     script [[replace "## Why a wiki" "## Why", text "Working", hold, text "never"]]
