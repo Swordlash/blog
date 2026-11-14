@@ -82,7 +82,9 @@ spec = describe "Events" $ do
     map (\c -> c.body) (concatMap (\t -> t.comments) replied) `shouldBe` ["First.", "Reply."]
     applyEvent (CommentAdded reply) replied `shouldBe` replied
     applyEvent (ThreadOpened thread) [thread] `shouldBe` [thread]
-    applyEvent (CommentEdited reply {body = "Edited."}) replied `shouldBe` applyEvent (CommentAdded reply {body = "Edited."}) replied
+    map (\c -> c.body) (concatMap (\t -> t.comments) (applyEvent (CommentEdited reply {body = "Edited."}) replied)) `shouldBe` ["First.", "Edited."]
+    -- A reply or a thread the threads hold is kept as they hold it.
+    applyEvent (CommentAdded reply {body = "Older."}) replied `shouldBe` replied
     applyEvent (CommentDeleted (CommentThreadId "t") (CommentId "c2")) replied `shouldBe` [thread]
     map (\t -> t.resolved) (applyEvent (ThreadResolved (CommentThreadId "t") True) [thread]) `shouldBe` [True]
     applyEvent (ThreadDeleted (CommentThreadId "t")) replied `shouldBe` []

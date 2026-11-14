@@ -52,6 +52,7 @@ module Wiki.Core.Comment
 
     -- * Keeping a page's threads up to date
   , withThread
+  , withReply
   , withComment
   , withoutComment
   , withoutThread
@@ -167,14 +168,23 @@ checkCommentBody body
   | T.length body > maxCommentLength = Left ("A comment can be at most " <> show maxCommentLength <> " characters long.")
   | otherwise = Right (T.dropWhileEnd isSpace (T.intercalate "\n" (dropWhile (T.all isSpace) (T.splitOn "\n" body))))
 
--- | A page's threads with this thread added: in place of the thread with
--- the same id, or at the end for a new thread. Adding the same thread twice
--- changes nothing, so that a client that created a thread and then
--- receives it from the server keeps one copy.
+-- | A page's threads with this thread added at the end, if no thread has
+-- its id. A thread the list has already is kept as the list has it: the
+-- list may have been read after the thread was opened, with its replies,
+-- edits and resolution, which the thread as opened has not.
 withThread :: Thread -> [Thread] -> [Thread]
 withThread t ts
-  | any (\x -> x.id == t.id) ts = map (\x -> if x.id == t.id then t else x) ts
+  | any (\x -> x.id == t.id) ts = ts
   | otherwise = ts <> [t]
+
+-- | A page's threads with this reply added at the end of its thread, if
+-- the thread has no comment with its id. A comment the thread has already
+-- is kept as the thread has it, for the same reason as in 'withThread'.
+withReply :: Comment -> [Thread] -> [Thread]
+withReply c = map $ \t ->
+  if t.id /= c.thread || any (\x -> x.id == c.id) t.comments
+    then t
+    else t {comments = t.comments <> [c]}
 
 -- | A page's threads with this comment added to its thread: in place of
 -- the comment with the same id, or at the end for a reply. A comment whose

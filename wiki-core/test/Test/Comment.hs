@@ -105,10 +105,16 @@ spec = describe "Comment" $ do
   describe "keeping threads up to date" $ do
     let opened = thread "one" [comment "a" rita "First."]
         two = thread "two" [comment "b" eve "Second."]
-    it "adds a new thread last, and replaces one it has" $ do
+    it "adds a new thread last, and keeps one it has as it has it" $ do
       withThread two [opened] `shouldBe` [opened, two]
-      withThread opened {resolved = True} [opened, two] `shouldBe` [opened {resolved = True}, two]
+      withThread opened [opened {resolved = True}, two] `shouldBe` [opened {resolved = True}, two]
       withThread opened [opened] `shouldBe` [opened]
+
+    it "adds a new reply last in its thread, and keeps one it has as it has it" $ do
+      let reply = (comment "r" eve "Reply.") {thread = CommentThreadId "one"}
+          added = withReply reply [opened, two]
+      map (map (\c -> c.body) . (\t -> t.comments)) added `shouldBe` [["First.", "Reply."], ["Second."]]
+      withReply reply {body = "Older."} added `shouldBe` added
 
     it "adds a reply to its thread, and replaces a comment edited" $ do
       let reply = (comment "r" eve "Reply.") {thread = CommentThreadId "one"}
