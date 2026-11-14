@@ -5,6 +5,10 @@
 const wikiDeckNear = new Map();
 let wikiDeckNext = 0;
 
+// For the browser tests: how many watches run, started and neither stopped
+// nor told (wiki_deck_when_near, wiki_deck_stop).
+globalThis.wikiDeckWatching = () => wikiDeckNear.size;
+
 function wiki_deck_when_near(element, callback) {
   const id = ++wikiDeckNext;
   const observer = new IntersectionObserver(

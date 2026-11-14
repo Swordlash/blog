@@ -44,8 +44,13 @@ import Wiki.Core.Space (Space (id))
 $( browserJS
      ["jsbits/test-slides.js"]
      [ ("js_ids_report", "wiki_test_ids_report", Safe, [t|IO JSText|])
+     , ("js_deck_watches", "wiki_test_deck_watches", Safe, [t|IO Int|])
      ]
  )
+
+-- | How many watches of an embed's link coming near the window run.
+deckWatches :: PageM s Int
+deckWatches = unsafeIOToPageM js_deck_watches
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
@@ -186,6 +191,29 @@ spec m = do
     find ui ".user-menu button[data-login=admin]" >>= click
     find ui theLink >>= focus
     eventually $ find ui "article.page-body .deck-embed" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The merger closes on Friday.")
+
+  -- A change of reader starts the watch of the link again, after the
+  -- viewer has dropped what it showed. Changes that come close together
+  -- (a sign-in changes the session, then the wiki read again for the new
+  -- reader) each start one: the viewer keeps one watch, the one it stops
+  -- when it closes, and a second would watch on with nothing to stop it.
+  it "keeps one watch of its link however the reader changes, and none once the page closes" $ runPage $ do
+    before <- deckWatches
+    ui <- start m (Just "user-admin") (Page docs guide)
+    -- Far down the page: its link is watched.
+    _ <- find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child"
+    watching <- eventually $ do
+      n <- deckWatches
+      n `shouldSatisfy` (> before)
+      pure n
+    for_ (["reader", "admin", "editor", "admin"] :: [Text]) $ \login -> do
+      find ui ".user-switcher-toggle" >>= click
+      find ui (".user-menu button[data-login=" <> login <> "]") >>= click
+    settle
+    eventually $ deckWatches `shouldReturn` watching
+    unmount ui
+    settle
+    deckWatches `shouldReturn` before
 
   it "keeps its ids apart from the page's and from another viewer's, its footnotes' links in itself, and the contents' links in the page" $ runPage $ do
     (opener, wiki) <- startWith m (Just "user-admin") (Page (slugs ["blog"]) (slugs ["hello-world"]))
