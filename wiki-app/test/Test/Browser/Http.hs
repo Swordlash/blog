@@ -36,6 +36,8 @@ module Test.Browser.Http
   , said
   , holdAt
   , release
+  , listening
+  , allAnswered
   , hangUp
   )
 where
@@ -119,6 +121,8 @@ $( browserJS
      , ("js_server_hold_at", "wiki_test_server_hold_at", Safe, [t|JSText -> JSText -> IO ()|])
      , ("js_network_event", "wiki_test_network_event", Safe, [t|Bool -> IO ()|])
      , ("js_server_release", "wiki_test_server_release", Safe, [t|IO ()|])
+     , ("js_server_pending", "wiki_test_server_pending", Safe, [t|IO Int|])
+     , ("js_server_open_sockets", "wiki_test_server_open_sockets", Safe, [t|IO Int|])
      , ("js_server_asked", "wiki_test_server_asked", Safe, [t|IO JSText|])
      , ("js_markup", "wiki_test_markup", Safe, [t|IO JSText|])
      , ("js_embed", "wiki_test_embed", Safe, [t|JSText -> JSText -> IO ()|])
@@ -150,6 +154,18 @@ instance FromJSON Asked where
 -- 'release'.
 holdAt :: Text -> Text -> PageM s ()
 holdAt method url = unsafeIOToPageM (js_server_hold_at (toJSText method) (toJSText url))
+
+-- | Wait until the page has a socket open to the server: what the server
+-- says before that reaches nothing, as a real server's message to a tab
+-- that is not connected. Within the given milliseconds.
+listening :: Int -> PageM s ()
+listening within = eventuallyWithin within (unsafeIOToPageM js_server_open_sockets >>= (`shouldSatisfy` (> 0)))
+
+-- | Wait until the server has answered every request it was given, within
+-- the given milliseconds, and let the page take the answers ('settle'):
+-- after a 'release', what the page did with the answers held is then done.
+allAnswered :: Int -> PageM s ()
+allAnswered within = eventuallyWithin within (unsafeIOToPageM js_server_pending `shouldReturn` 0) >> settle
 
 -- | Answer the requests held.
 release :: PageM s ()
