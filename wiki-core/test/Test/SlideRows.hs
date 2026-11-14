@@ -4,8 +4,8 @@
 module Test.SlideRows (spec) where
 
 import Data.Text qualified as T
-import Data.Time (diffUTCTime, getCurrentTime)
 import Protolude
+import System.Mem (getAllocationCounter, setAllocationCounter)
 import Test.Cases (coverage)
 import Test.Hspec
 import Test.Hspec.QuickCheck (modifyMaxSuccess, prop)
@@ -324,15 +324,32 @@ spec = describe "SlideRows" $ do
           | row <- (cut source).rows <> [Row (RowKey 0) (t <> earlier <> "\n\n" <> block <> "\nmore\n\n## Not a slide") | Row _ t <- take 2 (cut source).rows]
           ]
 
-    -- A fence left open with 4000 lines after it: read line by line, each
-    -- line's prefix parsed again, this took minutes; read once, it takes a
-    -- few hundredths of a second. The bound leaves room for a slow machine.
-    it "finds the line of a fence left open with thousands of lines after it in time linear in the row" $ do
-      let row = Row (RowKey 0) (T.intercalate "\n" (["## Code", "", "Text.", "", "```haskell"] <> ["x = " <> show k | k <- [1 .. 4000 :: Int]]))
-      started <- getCurrentTime
-      leftOpenAt row `shouldBe` Just 16
-      done <- getCurrentTime
-      diffUTCTime done started `shouldSatisfy` (< 3)
+    -- A fence left open with thousands of lines after it. Read line by
+    -- line, each line's prefix parsed again ('lineByLine'), the work grows
+    -- with the square of the row: 4000 lines took minutes. Read once, it
+    -- grows in proportion to the row. The cost is counted, not timed: the
+    -- bytes the work allocates ('allocatedBy'), the same on a busy
+    -- machine; timed against three seconds, the example failed on CI's
+    -- wasm job beside two browser pages (3.01 s, 2026-11-14). Four times
+    -- the lines allocate about four times as much read once, and sixteen
+    -- times as much read line by line, which the same count of the
+    -- oracle shows on shorter rows (25 and 100 lines: its 400 lines
+    -- allocate 2 GB on wasm); the limit is between, at eight.
+    it "finds the line of a fence left open with thousands of lines after it at a cost in proportion to the row" $ do
+      let costs work sizes = do
+            measured <- for sizes (allocatedBy work . fenceRow)
+            let bytes = map snd measured
+                ratio = fromIntegral (fromMaybe 0 (lastMay bytes)) / fromIntegral (max 1 (fromMaybe 0 (head bytes))) :: Double
+            pure (map fst measured, bytes, ratio)
+          said how sizes bytes ratio = putStrLn (how <> ", " <> T.intercalate ", " (map show sizes) <> " lines: " <> T.intercalate ", " [show (b `div` 1024) <> " KiB" | b <- bytes] <> " allocated, " <> show ratio <> " times from the first to the last" :: Text)
+      (answers, bytes, ratio) <- costs leftOpenAt [1000, 2000, 4000]
+      said "read once" [1000, 2000, 4000 :: Int] bytes ratio
+      answers `shouldBe` replicate 3 (Just 16)
+      ratio `shouldSatisfy` (< 8)
+      (answers', bytes', ratio') <- costs lineByLine [25, 100]
+      said "line by line" [25, 100 :: Int] bytes' ratio'
+      answers' `shouldBe` replicate 2 (Just 16)
+      ratio' `shouldSatisfy` (> 8)
 
     prop "says no row is taken in exactly when the rows are where a fresh cut puts them" $
       coverage $
@@ -372,6 +389,23 @@ lineByLine row = case reverse run of
     ends = [s + T.length l | (s, l) <- zip starts lines']
     lines' = T.splitOn "\n" row.text
     swallows prefix = let probe = prefix <> "\n\n## Probe\n" in (T.length prefix + 2) `notElem` openerStarts probe
+
+-- | A row whose fence, opened on its fifth line, is left open with so
+-- many lines after it.
+fenceRow :: Int -> Row
+fenceRow n = Row (RowKey 0) (T.intercalate "\n" (["## Code", "", "Text.", "", "```haskell"] <> ["x = " <> show k | k <- [1 .. n]]))
+
+-- | What a reading of a row answers, and the bytes it allocates to answer
+-- it: its cost, counted rather than timed. The row is made before the
+-- count starts.
+allocatedBy :: (Row -> Maybe Int) -> Row -> IO (Maybe Int, Int64)
+allocatedBy work row = do
+  _ <- evaluate (T.length row.text)
+  setAllocationCounter 0
+  answer <- evaluate (work row)
+  _ <- evaluate (fromMaybe (-1) answer)
+  left <- getAllocationCounter
+  pure (answer, negate left)
 
 -- | The counter after a fresh cut's keys.
 nextOf :: Text -> RowKey
