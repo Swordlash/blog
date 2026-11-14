@@ -9,10 +9,11 @@ title: A view closed at once leaves nothing running, and Back no longer bounces 
   after Edit, say) could leave its preview's measuring of the slides
   running until the tab closed, with the slides it measured kept in
   memory.
-- A presentation embedded in a page, after the reader signed in or out
-  twice in quick succession, could be read from the server twice when it
-  came into view, and kept a watch of its link running after the page
-  closed.
+- A presentation embedded in a page started a new watch of its link
+  each time the reader signed in, out or as someone else, and kept only
+  the last: four changes of user left nine watches on one page, each of
+  which read the presentation from the server when it came into view,
+  and which ran on after the page closed.
 - Choosing a picture for your avatar and closing the account's panel
   before the cropper had loaded kept the picture in memory until the tab
   closed.
