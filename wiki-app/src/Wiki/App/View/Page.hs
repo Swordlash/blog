@@ -161,7 +161,8 @@ import Wiki.App.View.Comments qualified as CommentsView
 import Wiki.App.View.Common
 import Wiki.App.View.DeckViewer qualified as DeckViewer
 import Wiki.App.View.Export qualified as ExportView
-import Wiki.App.View.Latest (takesPage)
+import Wiki.App.View.Latest (Asks, noAsks, takesPage)
+import Wiki.App.View.Latest qualified as Latest
 import Wiki.App.View.Star qualified as StarView
 import Wiki.App.View.Ticking (Clearing (..), Staging (..), TickNote (..))
 import Wiki.App.View.Ticking qualified as Ticking
@@ -236,6 +237,9 @@ data State = State
   , mode :: Mode
   , problem :: Maybe WikiError
   , threads :: Threads
+  , threadAsks :: Asks
+  -- ^ The reads of the page's threads ('loadThreads'): an answer is taken
+  -- only if no newer one was ("Wiki.App.View.Latest").
   , panelOpen :: Bool
   -- ^ Whether the panel of inline threads is shown.
   , focused :: Maybe CommentThreadId
@@ -368,6 +372,7 @@ component =
               , mode = Viewing
               , problem = Nothing
               , threads
+              , threadAsks = noAsks
               , panelOpen = False
               , focused = Nothing
               , selected = Nothing
@@ -864,7 +869,8 @@ component =
           -- ticks ('HasUnsaved'), and the reader chose Leave.
           stage (Ticking.Clear LeftConfirmed)
           modify (\st -> st {lastBox = Nothing, writing = False})
-          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
+          -- The threads of the page left are not taken after this.
+          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, threadAsks = Latest.supersede st.threadAsks, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
           -- The people mentioned are looked up again: the current user may
           -- be someone else now.
@@ -1000,10 +1006,13 @@ component =
           -- A page of an encrypted space: the server's answer has none of
           -- its threads, which are read and decrypted.
           Live.Replaced page _ | Just page == here, encrypted -> loadThreads
+          -- They are newer than the answer to any read of them still out,
+          -- which is not taken after them.
           Live.Replaced page threads | Just page == here -> do
             modify $ \st ->
               st
                 { threads = ThreadsReady threads
+                , threadAsks = Latest.supersede st.threadAsks
                 , focused = st.focused >>= \f -> f <$ find (\t -> t.id == f) threads
                 }
             resolvePeople
@@ -1136,11 +1145,18 @@ component =
 
     -- Fetch the page's comments (again).
     loadThreads :: H.HalogenM State Action Slots ViewOutput m ()
+    --
+    -- Two reads can be out at once (two reloads, the live channel saying
+    -- the threads changed twice), and their answers can come in the other
+    -- order: an answer is taken only if no newer one was
+    -- ("Wiki.App.View.Latest"), and only if it is still the page shown.
     loadThreads = withPage $ \page -> do
       input <- gets (\st -> st.input)
+      ticket <- Latest.asking (\st -> st.threadAsks) (\a st -> st {threadAsks = a})
       threads <- if commentsHere input then threadsOf <$> listThreads page.id else pure (ThreadsReady [])
-      -- Only if it is still the page shown.
-      withPage $ \now -> when (now.id == page.id) (modify (\st -> st {threads}))
+      void . Latest.answered (\st -> st.threadAsks) (\a st -> st {threadAsks = a}) ticket $ \st -> case st.loaded of
+        Ready now _ _ _ | now.id == page.id -> st {threads}
+        _ -> st
       resolvePeople
 
     -- Look up the people the page and its comments mention, for the
