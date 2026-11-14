@@ -123,6 +123,7 @@ library
       Wiki.App.View.Backups
       Wiki.App.View.Invite
       Wiki.App.View.Bell
+      Wiki.App.View.Bell.Machine
       Wiki.App.View.Blog
       Wiki.App.View.Body
       Wiki.App.View.BoxKindForm

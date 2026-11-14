@@ -44,14 +44,16 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
-import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
-import Wiki.App.Backend (MonadLoad (..), WikiError)
+import Wiki.Api.Notifications (Notifications (..))
+import Wiki.App.Backend (MonadLoad (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Live (Feed (..))
 import Wiki.App.Live qualified as Live
 import Wiki.App.Route (Route (..), pageRoute)
+import Wiki.App.View.Bell.Machine (Effect (Listen, Load, Unlisten, Unwatch, Watch), Event (..), Model (..), Sealer (..), initial, step, unreadCount)
+import Wiki.App.View.Bell.Machine qualified as M
 import Wiki.App.View.Comments (threadElementId)
-import Wiki.App.View.Common
+import Wiki.App.View.Common hiding (Loaded)
 import Wiki.App.View.Popup (watchPopup)
 import Wiki.Core.Encrypted (encryptedPageTitle)
 import Wiki.Core.Id (NotificationId)
@@ -65,20 +67,14 @@ data Input = Input
 
 data State = State
   { input :: Input
-  , notices :: Maybe (Either WikiError Notifications)
-  , open :: Bool
-  , busy :: Bool
+  , model :: Model
+  -- ^ What the bell knows ("Wiki.App.View.Bell.Machine"): every change to
+  -- it is a 'step'.
   , holder :: H.RefLabel
   -- ^ The element that holds the bell and the list: a press outside it
   -- closes the list.
   , listWatch :: Maybe H.SubscriptionId
   -- ^ The watch for a press outside or Escape, while the list is open.
-  , heard :: [Notification]
-  -- ^ The notifications the live channel told of since the list was last
-  -- fetched. Of these, a fetch keeps those told of while it was under way
-  -- and not in the server's answer yet; the server's answer is the truth
-  -- for those told of before it was asked, which it may leave out (a page
-  -- the reader may no longer read).
   }
 
 data Action
@@ -91,6 +87,8 @@ data Action
   | MarkRead NotificationId
   | MarkAllRead
   | Follow NotificationId (Follow Route)
+  | -- | An answer of the backend, or anything else the machine takes.
+    Happened (Event (Follow Route))
 
 component :: forall query output m. (MonadLoad m, MonadNotifications m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m) => H.Component query Input output m
 component =
@@ -99,7 +97,7 @@ component =
       { initialState = \input -> do
           notices <- atOnce notifications
           holder <- H.newRefLabel "notifications"
-          pure State {input, notices, open = False, busy = False, holder, listWatch = Nothing, heard = []}
+          pure State {input, model = initial notices input.context.revision, holder, listWatch = Nothing}
       , render
       , eval =
           H.mkEval
@@ -112,9 +110,9 @@ component =
       }
   where
     render :: State -> H.ComponentHTML Action Empty m
-    render st =
+    render State {model = st, input, holder} =
       [hh|
-        <div class="notifications" {{ HP.ref st.holder }}>
+        <div class="notifications" {{ HP.ref holder }}>
           <button
             type="button"
             class="notifications-toggle{% if unread > 0 %} has-unread{% end %}"
@@ -132,23 +130,21 @@ component =
                 <h2>Notifications</h2>
                 <button type="button" class="notifications-read-all" disabled={{ st.busy || unread == 0 }} onClick={{ const MarkAllRead }}>Mark all read</button>
               </div>
-              {{ listView st }}
+              {{ listView input st }}
             </section>
           {% end %}
         </div>
       |]
       where
-        unread = case st.notices of
-          Just (Right ns) -> ns.unread
-          _ -> 0
+        unread = unreadCount st
         label :: Text
         label = case unread of
           0 -> "Notifications"
           1 -> "Notifications: 1 unread"
           n -> "Notifications: " <> show n <> " unread"
 
-    listView :: State -> H.ComponentHTML Action Empty m
-    listView st = case st.notices of
+    listView :: Input -> Model -> H.ComponentHTML Action Empty m
+    listView input st = case st.notices of
       Nothing -> [hh|<p class="loading">Loading…</p>|]
       Just (Left e) -> [hh|<p class="error" role="alert">{{ errorMessage e }}</p>|]
       Just (Right ns)
@@ -159,7 +155,7 @@ component =
               <ul class="notification-list">
                 {% for n in ns.items %}
                   <li class="notification{% if not n.read %} unread{% end %}" data-kind={{ kindClass n }}>
-                    {{ noticeLink st n }}
+                    {{ noticeLink input n }}
                     {% if not n.read %}
                       <button type="button" class="notification-read" disabled={{ st.busy }} onClick={{ const (MarkRead n.id) }}>Mark read</button>
                     {% end %}
@@ -170,8 +166,8 @@ component =
 
     -- What a notification says, as a link to its page (to its thread, for
     -- a comment) if the page is still there to go to.
-    noticeLink :: State -> Notification -> H.ComponentHTML Action Empty m
-    noticeLink st n = case n.location of
+    noticeLink :: Input -> Notification -> H.ComponentHTML Action Empty m
+    noticeLink input n = case n.location of
       Just l ->
         [hh|
           <a class="notification-link" {{ props l }}>
@@ -182,7 +178,7 @@ component =
       where
         -- The router's link, except for its address, which also names the
         -- thread, for a link opened in a new tab.
-        props l = HP.href (Router.href st.input.context.router (pageRoute l.space l.page) <> maybe "" (\t -> "#" <> threadElementId t) n.thread) : drop 1 (Router.linkProps st.input.context.router (Follow n.id) (pageRoute l.space l.page))
+        props l = HP.href (Router.href input.context.router (pageRoute l.space l.page) <> maybe "" (\t -> "#" <> threadElementId t) n.thread) : drop 1 (Router.linkProps input.context.router (Follow n.id) (pageRoute l.space l.page))
         inner =
           [hhs|
             <span class="notification-what">{{ notificationText n }}</span>
@@ -193,82 +189,56 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()
     handleAction = \case
-      Initialize -> do
+      Initialize -> happen Started
+      Finalize -> happen Finished
+      -- Another reload of the wiki (a write, someone signed in): fetch
+      -- again, as what is shown may have changed. The titles of pages of
+      -- encrypted spaces go at once, as the server names them, before the
+      -- list is read again: the reader may have left a space that asks
+      -- each time it is opened.
+      Receive input -> do
+        modify (\st -> st {input})
+        happen (Revised input.context.revision (Sealer (sealedAgain input.context)))
+      Toggle -> happen Toggled
+      Close -> happen Dismissed
+      Heard heard -> case heard of
+        Live.Notice n -> happen (Told n)
+        Live.Reopened -> happen Reopened
+        _ -> pass
+      MarkRead i -> happen (MarkClicked i)
+      MarkAllRead -> happen MarkAllClicked
+      Follow i f -> happen (Followed i f)
+      Happened event -> happen event
+
+    -- One step of the machine, in one step of the program, and then its
+    -- effects. An ask is forked and comes back as an event, so that
+    -- nothing after it in this program waits for it.
+    happen :: Event (Follow Route) -> H.HalogenM State Action Empty output m ()
+    happen event = do
+      effects <- state (\st -> let (model, fx) = step event st.model in (fx, st {model}))
+      traverse_ perform effects
+
+    perform :: Effect (Follow Route) -> H.HalogenM State Action Empty output m ()
+    perform = \case
+      Listen ->
         gets (\st -> st.input.feed)
           >>= traverse_
             ( \f -> do
                 H.liftEffect (liftIO f.listen)
                 void (H.subscribe (Heard <$> f.heard))
             )
-        whenM (gets (\st -> isNothing st.notices)) reload
-      Finalize -> gets (\st -> st.input.feed) >>= traverse_ (\f -> H.liftEffect (liftIO f.unlisten))
-      -- Another reload of the wiki (a write, someone signed in): fetch
-      -- again, as what is shown may have changed.
-      Receive input -> do
-        old <- gets (\st -> st.input)
-        modify (\st -> st {input})
-        -- The titles of pages of encrypted spaces go at once, as the server
-        -- names them, before the list is read again: the reader may have
-        -- left a space that asks each time it is opened.
-        when (old.context.revision /= input.context.revision) $ do
-          modify (\st -> st {notices = fmap (\ns -> ns {items = map (sealedAgain input.context) ns.items}) <$> st.notices})
-          reload
-      Toggle -> do
-        isOpen <- gets (\st -> st.open)
-        if isOpen
-          then close
-          else do
-            modify (\st -> st {open = True})
-            watch <- gets (\st -> st.holder) >>= (`watchPopup` Close)
-            modify (\st -> st {listWatch = watch})
-            reload
-      Close -> close
-      Heard heard -> case heard of
-        -- A notification received twice (a tab that received it, then
-        -- fetched it) counts once.
-        Live.Notice n -> modify $ \st ->
-          st {notices = fmap (\ns -> if any (\x -> x.id == n.id) ns.items then ns else ns {unread = ns.unread + 1, items = n : ns.items}) <$> st.notices, heard = n : filter (\x -> x.id /= n.id) st.heard}
-        Live.Reopened -> reload
-        _ -> pass
-      MarkRead i -> marking ReadMark {ids = [i], everything = False}
-      MarkAllRead -> marking ReadMark {ids = [], everything = True}
-      Follow i f -> do
-        close
+      Unlisten -> gets (\st -> st.input.feed) >>= traverse_ (\f -> H.liftEffect (liftIO f.unlisten))
+      Watch -> do
+        watch <- gets (\st -> st.holder) >>= (`watchPopup` Close)
+        modify (\st -> st {listWatch = watch})
+      Unwatch -> do
+        gets (\st -> st.listWatch) >>= traverse_ H.unsubscribe
+        modify (\st -> st {listWatch = Nothing})
+      Load asked -> void . H.fork $ lift notifications >>= handleAction . Happened . M.Loaded asked
+      M.MarkRead asked r -> void . H.fork $ lift (markRead r) >>= handleAction . Happened . Marked asked
+      M.Follow f -> do
         router <- gets (\st -> st.input.context.router)
         Router.follow router f
-        unread <- gets (\st -> any (\n -> n.id == i && not n.read) (foldMap (foldMap (\ns -> ns.items)) st.notices))
-        when unread (marking ReadMark {ids = [i], everything = False})
-
-    close :: H.HalogenM State Action Empty output m ()
-    close = do
-      st <- get
-      traverse_ H.unsubscribe st.listWatch
-      when st.open $ modify (\s -> s {open = False, listWatch = Nothing})
-
-    -- A list read under another revision of the wiki than the one now (the
-    -- reader left a space that asks each time it is opened while titles
-    -- were decrypted for it) is dropped: the reload the new revision
-    -- started gives the list.
-    reload :: H.HalogenM State Action Empty output m ()
-    reload = do
-      asked <- gets (\st -> st.input.context.revision)
-      before <- gets (\st -> map (\n -> n.id) st.heard)
-      notices <- lift notifications
-      modify $ \st ->
-        if st.input.context.revision /= asked
-          then st
-          else case notices of
-            Right ns ->
-              let missing = [n | n <- st.heard, n.id `notElem` before, all (\x -> x.id /= n.id) ns.items]
-               in st {notices = Just (Right ns {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}), heard = missing}
-            Left _ -> st {notices = Just notices}
-
-    marking :: ReadMark -> H.HalogenM State Action Empty output m ()
-    marking m = do
-      modify (\st -> st {busy = True})
-      asked <- gets (\st -> st.input.context.revision)
-      result <- lift (markRead m)
-      modify (\st -> st {busy = False, notices = if st.input.context.revision /= asked then st.notices else either (const st.notices) (Just . Right) result})
 
 -- | A notification's kind, as a class the stylesheet and the tests use.
 kindClass :: Notification -> Text
