@@ -51,7 +51,6 @@ import Data.NT (type (~>) (..))
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Halogen qualified as H
-import Halogen.Activity qualified as Activity
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.Router (Router)
 import Halogen.Router qualified as Router
@@ -180,26 +179,23 @@ listening :: Int -> PageM s ()
 listening within = eventuallyWithin within (unsafeIOToPageM js_server_open_sockets >>= (`shouldSatisfy` (> 0)))
 
 -- | Wait until the server has answered every request it was given and the
--- program has taken the answers: no request pending, and the program quiet
--- ("Halogen.Activity": no tree has work running or queued, and no fiber
--- waits on a worker, the reading of an answer and what follows it
--- included). The server's answer alone is not that: the program decodes
--- it and acts on it later, and a check made in between finds the state
--- from before the answer, whatever the answer then does. After a
--- 'release', a check that something is still as it was is then a check of
--- what the answers did.
+-- program has taken the answers: no request pending, and then the program
+-- quiet (hspec-halogen's 'waitQuietWithin': no tree has work running or
+-- queued, and no fiber waits in a @liftIO@, the reading of an answer and
+-- what follows it included). The server's answer alone is not that: the
+-- program decodes it and acts on it later, and a check made in between
+-- finds the state from before the answer, whatever the answer then does.
+-- After a 'release', a check that something is still as it was is then a
+-- check of what the answers did.
 --
 -- Quiet is the signal for a view that reads and shows (the bell, a page,
 -- a list). Not for an editor after typing: its draft's autosave keeps a
 -- fiber waiting for seconds. Nor for what the live channel pushes, which
 -- no fiber waits for. The milliseconds given only guard against a hang.
 answersTaken :: Int -> PageM s ()
-answersTaken within =
-  eventuallyWithin within $ do
-    unsafeIOToPageM js_server_pending `shouldReturn` 0
-    settle
-    a <- unsafeIOToPageM Activity.activity
-    unless (Activity.quiet a) (expectationFailure ("the program has not taken the answers yet: " <> show a))
+answersTaken within = do
+  eventuallyWithin within (unsafeIOToPageM js_server_pending `shouldReturn` 0)
+  waitQuietWithin within
 
 -- | Answer the requests held.
 release :: PageM s ()
