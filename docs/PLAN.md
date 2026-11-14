@@ -1932,8 +1932,8 @@ WP5.92 and WP5.93 wait.
   a native job, or dropped if the in-memory DOM route covers what it
   shows: decide in WP5.123, with the library's tools in hand.
 - **WP5.123 The pin at 1f68320 and the native harness on the library's
-  tools (decision 82; for the order above; after WP5.120, stacked on
-  it; the owner gave the library's answer to the nine items on
+  tools (decision 82; for the order above; WP5.120 is merged, #285;
+  the owner gave the library's answer to the nine items on
   2026-11-14: its pull requests 125 to 128).** The bump is its own
   commit. Then the bell's in-memory DOM spec is rewritten on what the
   library now has, as one shared harness the other views' specs use:
@@ -1965,28 +1965,6 @@ WP5.92 and WP5.93 wait.
   point); what the ambient document being one for the process means
   for specs run side by side (two bells both hear a press on the
   document).
-- **WP5.120 The pin past haskell-halogen's pull requests 121 to 124:
-  the browser suite's harness waits for the program (for the order
-  above; the owner gave the library's notes on 2026-11-14; WP5.117
-  is merged, #283).** hspec-halogen's actions and
-  `settle` now wait for the program to be idle, for a history step a
-  handler asked for, and for the page's next frame; `waitQuiet` and
-  `waitQuietWithin` are the library's, in place of reading
-  `Halogen.Activity` by hand; a failing read says what it found and
-  what the program was doing. This changes every browser example, so
-  the whole browser suite is run before and after, and three things
-  are settled by measure: the cost (a frame, about 17 ms, for each
-  action: the suite has some 2,100 action sites in its source, more
-  when its loops run; its shards' times against the 650 s budget);
-  the new deadline (a program still busy five seconds after an action
-  fails the example: the long deck's examples and anything that
-  computes for seconds after a click must say their own deadline);
-  and what `eventually` around a read after an action can now go, by
-  group, with the counts before and after. `answersTaken`,
-  `rowsSettled` and the fixture's first wait (WP5.116) take the
-  library's `waitQuiet`. Not in it: the declared matches for delegated
-  clicks and for what an event carries (its pull request 121), which
-  are WP5.106's.
 - **WP5.114 The browser suite searched for races on purpose (for the
   order above).** The smoke suites have a throttled job that finds a
   race again once it has found it; the browser suite has none, and its
@@ -3218,6 +3196,31 @@ needs. Each was true when its package merged; check before relying on one.
   `pages`). Nothing changed for the wiki's behaviour on wasm. The two
   things asked of the library on 2026-11-14 are on its master (its
   pull requests 119 and 120): WP5.117.
+- **The pin at 68c0a79 and the browser suite on the harness's waits
+  (#285, WP5.120).** hspec-halogen's actions and `settle` wait for the
+  program, a history step and the next frame; `answersTaken` and
+  `rowsSettled` use the library's `waitQuietWithin` and `settle`; the
+  smoke suites count a blocked script in a sandboxed frame again.
+  Measured: a frame for each action costs the browser suite 12 and
+  31 s by shard at equal load (2,112 action sites in the source); on
+  a hosted runner the suite took 430 s of its 650 s budget on a
+  runner that ran wiki-core's suite 43% slower than the run beside
+  it, so no cost shows above the runners' spread. Five examples say a
+  deadline of their own, all for one cause that is the product's and
+  not the tests': the long Markdown guide renders again for each step
+  of its load, and one change of reader on it keeps the program busy
+  for 4.9 to 10.7 s with nothing else running (WP5.115). Left: no
+  `eventually` was removed (1,342, with 79 `eventuallyWithin`, 2,692
+  `find`, 24 `threadDelay`; 702 `eventually` and 699 `find` directly
+  follow an action and are sound as plain reads now); 22 actions sit
+  inside `eventually` blocks, where each can block for five seconds
+  inside a two-second retry (Tasks 5, Vault 5, Personal 4, Encrypted
+  2, six files 1 each); under a busy loop on every core the HTTP
+  group still fails at both pins in two ways ("no attempt finished
+  within 2000 ms" in the late-answer examples; the first load's
+  `find` at two seconds); an `eventually` around an action whose
+  attempt never finishes still says only "no attempt finished" (for
+  the library's owner).
 - **The bell as a machine (#282, WP5.118).** `View/Bell/Machine.hs`
   with `Bell.hs` as its shell; the properties, the in-memory DOM spec
   and four examples over `remote` (`wiki-app-remote-test`, which no CI
