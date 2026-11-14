@@ -555,6 +555,71 @@ caching = describe "what it keeps" $ do
     runHttpWiki env (atOnce listSpaces) `shouldReturn` Nothing
     (\c -> Map.null c.pages) <$> cacheOf env `shouldReturn` True
 
+  it "routes a search by the list of spaces a refresh read, though a star changed the cache while it was out" $ do
+    -- The list is read plain; a save asks for it again, and that read
+    -- answers, once a star has changed the cache, that the blog is
+    -- encrypted now.
+    gate <- newEmptyMVar
+    count <- newIORef (0 :: Int)
+    let blogId = hello.space
+        older = Map.elems demo.spaces
+        newer = [if s.id == blogId then s {encryption = Just (KeyId "key-1")} else s | s <- older]
+        respond r
+          | methodOf r == "GET" && requestUrl r == "api/v1/spaces" =
+              atomicModifyIORef' count (\n -> (n + 1, n)) >>= \case
+                0 -> pure (ok older)
+                1 -> readMVar gate $> ok newer
+                _ -> pure (ok newer)
+          | methodOf r == "GET" && "/pages/at/" `T.isInfixOf` requestUrl r = pure (ok hello)
+          | "api/v1/stars" `T.isPrefixOf` requestUrl r = pure (ok ([] :: [StarredPage]))
+          | "api/v1/search" `T.isPrefixOf` requestUrl r = pure (ok ([] :: [SearchHit]))
+          | otherwise = pure (status 404 "{\"error\":\"NotFound\"}")
+        refresh = readIORef count >>= \n -> unless (n > 1) (threadDelay 1000 >> refresh)
+    asked <- newIORef []
+    env <- newHttpEnv (Transport (\r -> atomicModifyIORef' asked (\rs -> (r : rs, ())) >> respond r))
+    runHttpWiki env listSpaces `shouldReturn` older
+    runHttpWiki env (getPage blogId (slugs "hello-world")) `shouldReturn` Right hello
+    saving <- async (runHttpWiki env (savePage hello.id hello.updatedAt hello.title "Secret."))
+    refresh
+    _ <- runHttpWiki env (setStarred (PageId "page-x") True)
+    putMVar gate ()
+    -- The save is refused, and the search limited to the blog sends its
+    -- words nowhere: both from the list read last.
+    wait saving >>= (`shouldSatisfy` isLeft)
+    _ <- runHttpWiki env (searchPages SearchQuery {text = "secret", space = Just blogId, includeSubspaces = True, limit = 50, templates = False})
+    sent <- readIORef asked
+    [requestUrl r | r <- sent, "api/v1/search" `T.isPrefixOf` requestUrl r] `shouldBe` []
+    [requestUrl r | r <- sent, methodOf r == "PUT", requestUrl r == "api/v1/pages/" <> hello.id.text] `shouldBe` []
+
+  it "keeps the list of spaces asked for last when one asked for before answers after it" $ do
+    -- Two reads of the list cross: the first, from before the blog was
+    -- encrypted, answers last.
+    gate <- newEmptyMVar
+    count <- newIORef (0 :: Int)
+    let blogId = hello.space
+        older = Map.elems demo.spaces
+        newer = [if s.id == blogId then s {encryption = Just (KeyId "key-1")} else s | s <- older]
+        respond r
+          | methodOf r == "GET" && requestUrl r == "api/v1/spaces" =
+              atomicModifyIORef' count (\n -> (n + 1, n)) >>= \case
+                0 -> readMVar gate $> ok older
+                _ -> pure (ok newer)
+          | "api/v1/search" `T.isPrefixOf` requestUrl r = pure (ok ([] :: [SearchHit]))
+          | otherwise = pure (status 404 "{\"error\":\"NotFound\"}")
+        out = readIORef count >>= \n -> unless (n > 0) (threadDelay 1000 >> out)
+    asked <- newIORef []
+    env <- newHttpEnv (Transport (\r -> atomicModifyIORef' asked (\rs -> (r : rs, ())) >> respond r))
+    early <- async (runHttpWiki env listSpaces)
+    out
+    runHttpWiki env listSpaces `shouldReturn` newer
+    putMVar gate ()
+    -- The first read gets the list known: the later one's.
+    wait early `shouldReturn` newer
+    runHttpWiki env (atOnce listSpaces) `shouldReturn` Just newer
+    _ <- runHttpWiki env (searchPages SearchQuery {text = "secret", space = Just blogId, includeSubspaces = True, limit = 50, templates = False})
+    sent <- readIORef asked
+    [requestUrl r | r <- sent, "api/v1/search" `T.isPrefixOf` requestUrl r] `shouldBe` []
+
   it "keeps no answer read before a write that came while the read was out" $ do
     -- The first read of the spaces is answered with the list as it was,
     -- and only once a write has come; every read after it, with the list
