@@ -35,6 +35,7 @@ import Test.Server qualified as Server
 import Test.Shell qualified as Shell
 import Test.Threads qualified as Threads
 import Test.Ticking qualified as Ticking
+import Test.Users qualified as Users
 
 main :: IO ()
 main = do
@@ -65,6 +66,7 @@ main = do
       Bell.spec
       Threads.spec
       BellDom.spec
+      Users.spec
       Latest.spec
       Shell.spec
       Server.spec

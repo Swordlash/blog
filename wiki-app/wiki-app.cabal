@@ -366,6 +366,7 @@ test-suite wiki-app-test
         Test.Shell
         Test.Threads
         Test.Ticking
+        Test.Users
     build-depends:
         HUnit,
         QuickCheck,
