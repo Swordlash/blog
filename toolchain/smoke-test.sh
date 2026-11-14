@@ -34,14 +34,25 @@
 #
 # The suites need wiki-server and wiki-app-prerender built natively, which
 # this builds first at -O0 in dist-newstyle/native-fast, with every suite's
-# test program, in one run of cabal. Then the suites run side by side, each
-# its built program (WIKI_SMOKE_PROGRAM of toolchain/smoke-suite.sh),
-# without cabal: cabal must not run twice at once in one build directory.
-# Each suite picks free ports and a temporary directory of its own, and
-# its output goes to a log of its own, printed when it ends, in the order
-# of the list. WIKI_SMOKE_EXTRA names more suites to run beside them (CI
-# gives "waits screenshots"). Every part runs whatever the others'
-# outcome, and the command fails if any did, or if one gave no status.
+# test program, in one run of cabal. Then each suite runs its built program
+# (WIKI_SMOKE_PROGRAM of toolchain/smoke-suite.sh), without cabal, one
+# after another, its output as it comes. WIKI_SMOKE_EXTRA names more suites
+# to run with them (CI gives "waits screenshots").
+#
+# WIKI_SMOKE_JOBS=<n> runs up to n suites side by side instead, each its
+# output in a log of its own, printed when it ends, in the order of the
+# list: cabal is not run then, since it must not run twice at once in one
+# build directory, and each suite picks free ports and a temporary
+# directory of its own. It is faster on a machine with cores to spare, but
+# each suite then runs slower, as on a slowed-down processor nobody asked
+# for: on four cores each took about twice as long, the whole 26% less than
+# in a row, and two races a suite did not wait for failed CI's runs by
+# chance (2026-11-14). So one at a time is the default, and CI's: races are
+# looked for on purpose, by the weekly run with the processor throttled
+# (decision 81 of docs/PLAN.md).
+#
+# Every part runs whatever the others' outcome, and the command fails if
+# any did, or if one gave no status.
 #
 # Paths given here relative to the directory this is run from (the [dir],
 # WIKI_SERVER, WIKI_PRERENDER) are read from there (toolchain/caller-paths.sh).
@@ -106,42 +117,89 @@ if [ "$#" -gt 0 ]; then
   export WIKI_DEMO_DIR
 fi
 
-# Each suite in the background, its output and its status in files of its
-# own; the node programs beside them.
-logs=$(mktemp -d)
-trap 'rm -rf "$logs"' EXIT HUP INT TERM
-for suite in $suites node-programs; do
-  case $suite in
-    node-programs)
-      ( status=0; node toolchain/run-smoke-tests.mjs > "$logs/$suite.log" 2>&1 || status=$?; echo "$status" > "$logs/$suite.status" ) &
-      ;;
+# How many suites run at once: 1, one after another, unless asked.
+jobs=${WIKI_SMOKE_JOBS:-1}
+case $jobs in
+  '' | *[!0-9]* | 0)
+    printf 'WIKI_SMOKE_JOBS must be a positive number, not %s\n' "$jobs" >&2
+    exit 2
+    ;;
+esac
+
+# One part of the smoke test: a suite's built program, or the node
+# programs.
+run_part() {
+  case $1 in
+    node-programs) node toolchain/run-smoke-tests.mjs ;;
     *)
-      eval "program=\$program_$(var_of "$suite")"
-      ( status=0; WIKI_SMOKE_PROGRAM=$program sh toolchain/smoke-suite.sh "$suite" > "$logs/$suite.log" 2>&1 || status=$?; echo "$status" > "$logs/$suite.status" ) &
+      eval "program=\$program_$(var_of "$1")"
+      WIKI_SMOKE_PROGRAM=$program sh toolchain/smoke-suite.sh "$1"
       ;;
   esac
-  eval "pid_$(var_of "$suite")=\$!"
-done
+}
 
-# Each log once its suite has ended, in the order of the list: in a group
-# of its own in GitHub's log when it passed, open when it failed.
+# A part's outcome, said once it has ended; $3, when given, is its log,
+# printed first: in a group of its own in GitHub's log when the part
+# passed, open when it failed.
 failed=
-for suite in $suites node-programs; do
-  eval "pid=\$pid_$(var_of "$suite")"
-  wait "$pid" || true
-  status=$(cat "$logs/$suite.status" 2>/dev/null || echo "no status")
-  if [ "$status" = 0 ]; then
-    [ -z "${GITHUB_ACTIONS:-}" ] || echo "::group::The smoke suite $suite: passed"
-    cat "$logs/$suite.log"
-    [ -z "${GITHUB_ACTIONS:-}" ] || echo "::endgroup::"
-    printf 'The smoke suite %s: passed.\n' "$suite"
+report() {
+  if [ "$2" = 0 ]; then
+    if [ -n "${3:-}" ]; then
+      [ -z "${GITHUB_ACTIONS:-}" ] || echo "::group::The smoke suite $1: passed"
+      cat "$3"
+      [ -z "${GITHUB_ACTIONS:-}" ] || echo "::endgroup::"
+    fi
+    printf 'The smoke suite %s: passed.\n' "$1"
   else
-    cat "$logs/$suite.log"
-    [ -z "${GITHUB_ACTIONS:-}" ] || echo "::error title=The smoke suite $suite failed::exit status $status; its log is above"
-    printf 'The smoke suite %s: failed (exit status %s).\n' "$suite" "$status" >&2
-    failed="$failed $suite"
+    [ -z "${3:-}" ] || cat "$3"
+    [ -z "${GITHUB_ACTIONS:-}" ] || echo "::error title=The smoke suite $1 failed::exit status $2; its output is above"
+    printf 'The smoke suite %s: failed (exit status %s).\n' "$1" "$2" >&2
+    failed="$failed $1"
   fi
-done
+}
+
+if [ "$jobs" -eq 1 ]; then
+  for suite in $suites node-programs; do
+    printf '\nThe smoke suite %s:\n' "$suite"
+    status=0
+    run_part "$suite" || status=$?
+    report "$suite" "$status"
+  done
+else
+  # Up to $jobs parts in the background, each its output and its status
+  # in files of its own; when as many run as allowed, the oldest is waited
+  # for and reported before the next starts, so the logs come in the
+  # order of the list.
+  logs=$(mktemp -d)
+  trap 'rm -rf "$logs"' EXIT HUP INT TERM
+  running=
+  finish_oldest() {
+    oldest=${running%% *}
+    running=${running#"$oldest"}
+    running=${running# }
+    eval "pid=\$pid_$(var_of "$oldest")"
+    wait "$pid" || true
+    report "$oldest" "$(cat "$logs/$oldest.status" 2>/dev/null || echo "no status")" "$logs/$oldest.log"
+  }
+  count=0
+  for suite in $suites node-programs; do
+    if [ "$count" -ge "$jobs" ]; then
+      finish_oldest
+      count=$((count - 1))
+    fi
+    (
+      status=0
+      run_part "$suite" > "$logs/$suite.log" 2>&1 || status=$?
+      echo "$status" > "$logs/$suite.status"
+    ) &
+    eval "pid_$(var_of "$suite")=\$!"
+    running="${running:+$running }$suite"
+    count=$((count + 1))
+  done
+  while [ -n "$running" ]; do
+    finish_oldest
+  done
+fi
 if [ -n "$failed" ]; then
   printf 'The smoke test failed:%s.\n' "$failed" >&2
   exit 1
