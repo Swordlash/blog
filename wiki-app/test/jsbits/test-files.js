@@ -66,3 +66,18 @@ function wiki_test_downloads() {
   }
   return globalThis.wikiTestDownloads.join("\n");
 }
+
+// The avatar's cropper (web/src/avatar.js, through the page's islands.js)
+// put in an element that is not in the page, as the account's dialog is
+// once its panel has closed while the cropper's module loaded: 0 when the
+// element holds no cropper afterwards, 1 when it holds one, -1 without
+// the page's cropper.
+async function wiki_test_crop_detached(base64) {
+  const crop = globalThis.wikiIslands?.cropAvatar;
+  if (typeof crop !== "function") return -1;
+  const host = document.createElement("div");
+  await crop(host, wikiTestFile("me.png", "image/png", base64).files[0]);
+  const held = host.wikiAvatar !== undefined || host.childElementCount > 0;
+  host.wikiAvatar?.destroy();
+  return held ? 1 : 0;
+}
