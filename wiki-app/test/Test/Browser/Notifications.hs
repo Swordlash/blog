@@ -229,6 +229,12 @@ live m = describe "over the backend over HTTP" $ do
       listening socketOpens
       tellServer (Notified told)
       find ui ".notifications-count" >>= (`shouldHaveText` "1")
+      -- The server's list holds it now. Opened, the bell reads the list
+      -- again: from the backend's cache, which added the notification to
+      -- the list it kept, or from the server when the cache kept no list
+      -- (the notification came while the first list was read, so that
+      -- list was not stored).
+      answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 1, items = [told]}
       find ui ".notifications-toggle" >>= click
       find ui ".notification-list .notification-what" >>= (`shouldHaveText` "Rita Reader replied in a thread of yours")
       unmount ui
