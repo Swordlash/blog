@@ -9,7 +9,9 @@
 #
 #   sh toolchain/test-ci-suite-time.sh
 #
-# A few seconds: the fake suites sleep for one or two seconds at most.
+# A second or so. The suite's time is not measured here: a fake date on
+# PATH gives the script the start and end it reads (FAKE_TIMES), so that a
+# case over or within its budget is so whatever the machine's speed.
 set -eu
 cd "$(dirname "$0")/.."
 script=$(pwd)/toolchain/ci-suite-time.sh
@@ -24,7 +26,7 @@ fail() {
 }
 
 # A fake suite: prints an example, then the slow items of one shard (or of
-# two, with "two"), sleeps $SLEEP seconds, and exits with $EXIT.
+# two, with "two"), and exits with $EXIT.
 cat >"$work/suite" <<'EOF'
 #!/bin/sh
 echo "Slug"
@@ -46,18 +48,33 @@ if [ "${1:-}" = two ]; then
   echo "  /E/the sixth/ (100ms)"
 fi
 echo "to standard error" >&2
-sleep "${SLEEP:-0}"
 exit "${EXIT:-0}"
 EOF
 chmod +x "$work/suite"
 
+# A fake date: +%s gives the next of FAKE_TIMES (seconds) each time it is
+# asked, through a counter in $FAKE_CLOCK; the times are the start and the
+# end the script reads.
+mkdir -p "$work/bin"
+cat >"$work/bin/date" <<'EOF'
+#!/bin/sh
+n=$(cat "$FAKE_CLOCK" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" >"$FAKE_CLOCK"
+set -- $FAKE_TIMES
+eval "echo \${$n}"
+EOF
+chmod +x "$work/bin/date"
+
 # Runs the script with the given environment words and arguments; its
 # output in $work/out, its summary in $work/summary, its status in $status.
+# FAKE_TIMES is "100 100", no time at all, unless a case gives others.
 run() {
-  rm -f "$work/summary"
+  rm -f "$work/summary" "$work/clock"
   : >"$work/summary"
   status=0
-  env GITHUB_STEP_SUMMARY="$work/summary" "$@" >"$work/out" 2>&1 || status=$?
+  env PATH="$work/bin:$PATH" FAKE_CLOCK="$work/clock" FAKE_TIMES="100 100" \
+    GITHUB_STEP_SUMMARY="$work/summary" "$@" >"$work/out" 2>&1 || status=$?
 }
 
 # 1. A passing suite within its budget: output through, status 0, the five
@@ -66,7 +83,7 @@ run RUNNER_ENVIRONMENT=github-hosted WIKI_SUITE_BUDGET=60 sh "$script" fake-suit
 [ "$status" -eq 0 ] || fail "a passing suite within its budget exited $status"
 grep -q 'mkSlug accepts a' "$work/out" || fail "the suite's output did not pass through"
 grep -q 'to standard error' "$work/out" || fail "the suite's standard error did not pass through"
-grep -q '^- `fake-suite`: [0-9]* s, budget 60 s, passed$' "$work/summary" || fail "no line for the suite in the summary: $(cat "$work/summary")"
+grep -q '^- `fake-suite`: 0 s, budget 60 s, passed$' "$work/summary" || fail "no line for the suite in the summary: $(cat "$work/summary")"
 expected='  - 9.0 s /A/the slowest/
   - 4.0 s /C/coloured in the second shard/
   - 2.5 s /B/third/
@@ -81,21 +98,21 @@ grep -q 'failed (exit status 3)' "$work/summary" || fail "a failing suite was no
 
 # 3. Over its budget on a hosted runner, once the budgets bind: fails,
 # with the slowest named.
-run RUNNER_ENVIRONMENT=github-hosted WIKI_SUITE_BUDGETS_FAIL=true SLEEP=2 WIKI_SUITE_BUDGET=1 sh "$script" fake-suite "$work/suite"
+run RUNNER_ENVIRONMENT=github-hosted WIKI_SUITE_BUDGETS_FAIL=true FAKE_TIMES="100 105" WIKI_SUITE_BUDGET=1 sh "$script" fake-suite "$work/suite"
 [ "$status" -eq 1 ] || fail "a suite over its budget on a hosted runner exited $status"
-grep -q '^::error title=fake-suite over its budget::.*9.0 s /A/the slowest/' "$work/out" || fail "no error naming the slowest examples: $(cat "$work/out")"
+grep -q '^::error title=fake-suite over its budget::fake-suite took 5 s, over its budget of 1 s.*9.0 s /A/the slowest/' "$work/out" || fail "no error naming the time and the slowest examples: $(cat "$work/out")"
 grep -q 'over its budget$' "$work/summary" || fail "the summary does not say over its budget: $(cat "$work/summary")"
 
 # 3b. Over its budget on a hosted runner while the budgets warn only (the
 # script's own setting): passes, with a warning naming the slowest.
-run RUNNER_ENVIRONMENT=github-hosted SLEEP=2 WIKI_SUITE_BUDGET=1 sh "$script" fake-suite "$work/suite"
+run RUNNER_ENVIRONMENT=github-hosted FAKE_TIMES="100 105" WIKI_SUITE_BUDGET=1 sh "$script" fake-suite "$work/suite"
 [ "$status" -eq 0 ] || fail "a suite over its budget, budgets warning only, exited $status"
 grep -q '^::warning title=fake-suite over its budget::.*9.0 s /A/the slowest/' "$work/out" || fail "no warning naming the slowest examples: $(cat "$work/out")"
 if grep -q '::error' "$work/out"; then fail "an error while the budgets warn only"; fi
 grep -q 'warns only until the budgets bind$' "$work/summary" || fail "the summary does not say the budget warns only: $(cat "$work/summary")"
 
 # 4. Over its budget on another runner: passes, and says so.
-run RUNNER_ENVIRONMENT=self-hosted WIKI_SUITE_BUDGETS_FAIL=true SLEEP=2 WIKI_SUITE_BUDGET=1 sh "$script" fake-suite "$work/suite"
+run RUNNER_ENVIRONMENT=self-hosted WIKI_SUITE_BUDGETS_FAIL=true FAKE_TIMES="100 105" WIKI_SUITE_BUDGET=1 sh "$script" fake-suite "$work/suite"
 [ "$status" -eq 0 ] || fail "a suite over its budget on the owner's runner exited $status"
 grep -q 'which binds on the hosted runners only' "$work/summary" || fail "the summary does not say the budget binds on hosted runners only: $(cat "$work/summary")"
 if grep -q '::error' "$work/out"; then fail "an error on the owner's runner"; fi
@@ -103,7 +120,7 @@ if grep -q '::error' "$work/out"; then fail "an error on the owner's runner"; fi
 # 5. A suite with no budget and no slow items; and no summary file at all.
 run sh "$script" no-such-suite true
 [ "$status" -eq 0 ] || fail "a suite without a budget exited $status"
-grep -q '^- `no-such-suite`: [0-9]* s, budget none, passed$' "$work/summary" || fail "a suite without a budget: $(cat "$work/summary")"
+grep -q '^- `no-such-suite`: 0 s, budget none, passed$' "$work/summary" || fail "a suite without a budget: $(cat "$work/summary")"
 status=0
 env -u GITHUB_STEP_SUMMARY sh "$script" no-such-suite false >"$work/out" 2>&1 || status=$?
 [ "$status" -eq 1 ] || fail "without a summary file, a failing command exited $status"
