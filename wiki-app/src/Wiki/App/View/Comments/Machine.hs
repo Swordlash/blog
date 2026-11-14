@@ -19,14 +19,32 @@
 -- was. The comments view holds what is being written, asks for a write
 -- ('Write'), and is told its answer by the page view.
 --
--- The rules here are the page view's as they were before the machine,
--- unchanged: an answer to a read of the threads is taken only if no answer
--- to a later read was ("Wiki.App.View.Latest"), and only for the page
--- shown; the subscription's answer puts every read out behind it; an
--- event of the live channel and a write's result are applied to the
--- threads shown.
+-- = What an answer says
+--
+-- The machine infers nothing about what an answer covers from what its
+-- threads and comments hold: no id, time or order says whether a read's
+-- or a write's answer was made before or after a change the live channel
+-- told. The live channel tells every change in the order it was made, and
+-- its answer to the page's subscription is the threads as they were when
+-- it subscribed, before every change it tells after. So:
+--
+-- * an event the channel tells is applied to the threads shown, a thread
+--   or a reply added only when no thread or comment has its id;
+-- * the subscription's answer replaces the threads and puts every read out
+--   behind it;
+-- * a read's answer is taken only if no answer to a later read was
+--   ("Wiki.App.View.Latest"), and only for the page shown; what the
+--   channel told since the read was asked is applied to it again, in the
+--   order told ('taking'). A failed read is shown only where no threads
+--   are;
+-- * a write's answer is taken only on the visit of the page it was sent
+--   on. When the channel told of what it made or changed since it was
+--   sent, the threads have it already; otherwise it is applied only when
+--   the threads are as they were when it was sent, and a read asked after
+--   it follows, which puts it in its place ('wrote').
 module Wiki.App.View.Comments.Machine
   ( Model (..)
+  , Writing (..)
   , Threads (..)
   , Request (..)
   , Event (..)
