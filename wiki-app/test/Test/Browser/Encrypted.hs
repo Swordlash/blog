@@ -114,7 +114,7 @@ import Wiki.Core.User (Login (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (..))
 
 $( browserJS
-     ["jsbits/test-encrypted.js"]
+     ["jsbits/test-encrypted.js", "jsbits/test-slides.js"]
      [ ("js_start", "wiki_test_encrypted_start", Safe, [t|JSText -> JSText -> IO ()|])
      , ("js_as", "wiki_test_encrypted_as", Safe, [t|JSText -> IO ()|])
      , ("js_key_pairPromise", "wiki_test_encrypted_key_pair", Safe, [t|JSText -> IO (Promise ())|])
@@ -161,6 +161,7 @@ $( browserJS
      , ("js_reader_users", "wiki_test_encrypted_reader_users", Safe, [t|JSText -> IO ()|])
      , ("js_headings_asked", "wiki_test_encrypted_headings_asked", Safe, [t|IO JSText|])
      , ("js_decrypted", "wiki_test_encrypted_decrypted", Safe, [t|IO JSText|])
+     , ("js_fit_watches", "wiki_test_fit_watches", Safe, [t|IO Int|])
      ]
  )
 
@@ -593,7 +594,7 @@ spec m = do
       gate <- unsafeIOToPageM newGate
       armed <- unsafeIOToPageM (newIORef (Just gate))
       holdAt "GET" "api/v1/session"
-      ui <- startServerThrough m (closeAt tab armed) route
+      ui <- startServerThrough m (closeAt (ownersHeld tab) tab armed) route
       release
       registered <- unsafeIOToPageM (timeout 8_000_000 (takeMVar gate.registered))
       when (isNothing registered) $ expectationFailure ("No owner of addresses registered for " <> show route)
@@ -603,6 +604,36 @@ spec m = do
       settle
       (route,) <$> unsafeIOToPageM (ownersHeld tab)
     left `shouldBe` map (,0) routes
+
+  -- The editor's preview of a presentation closed at the instant it starts
+  -- measuring its cards ("Wiki.App.SlideFit"): the measuring, a callback
+  -- and the browser's observers, is made in the step that keeps it in the
+  -- preview's state, so the preview's finalizer stops it. Made on a thread
+  -- of its own and kept a step later, a close between the two left it
+  -- running for as long as the tab, the cards it measures held with it.
+  -- As above, 'closeAt' holds the action that started it until the test
+  -- has closed the editor.
+  it "leaves no measuring of slides behind an editor closed as it starts one" $ runPage $ do
+    void (encryptedSpace "user-admin")
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 =<< sessionOf "user-admin"
+    let docs = either (const (panic "not a slug")) identity . mkSlug
+        route = R.EditPage [docs "docs"] [docs "markdown-guide", docs "presentations"]
+        running = unsafeIOToPageM js_fit_watches
+    before <- running
+    tab <- unsafeIOToPageM (newHttpEnv browserTransport)
+    gate <- unsafeIOToPageM newGate
+    armed <- unsafeIOToPageM (newIORef (Just gate))
+    holdAt "GET" "api/v1/session"
+    ui <- startServerThrough m (closeAt js_fit_watches tab armed) route
+    release
+    started <- unsafeIOToPageM (timeout 8_000_000 (takeMVar gate.registered))
+    when (isNothing started) $ expectationFailure "The preview started no measuring"
+    unsafeIOToPageM (claimClose gate) >>= traverse_ (\why -> expectationFailure ("The editor was not closed at the hold: " <> why))
+    unmount ui
+    unsafeIOToPageM (writeIORef gate.phase Shut)
+    settle
+    running `shouldReturn` before
 
   -- The live channel says only that a page's threads changed: the page
   -- reads them again, and shows another reader's comment, decrypted,
@@ -2175,7 +2206,7 @@ secret =
     }
 
 -- | 'Gate' is what 'closeAt' holds the backend's action at: the test's
--- thread, which closes the view; told once an owner is registered; and
+-- thread, which closes the view; told once what it counts is made; and
 -- how far the close has got.
 data Gate = Gate {tester :: ThreadId, registered :: MVar (), phase :: IORef Phase}
 
@@ -2203,31 +2234,33 @@ holdLimit :: Double
 holdLimit = 5
 
 -- | Run a backend action, and when the gate is armed and the action has
--- registered an owner of addresses, hold its answer until the test has
--- closed the view (the close is done), or the test's thread is blocked
--- waiting for the view's components to run the close (they run it after
--- this action and what follows it in the same step). The gate is then
--- disarmed: one hold per view.
+-- made something the count given counts (an owner of addresses, a
+-- measuring of slides), hold its answer until the test has closed the
+-- view (the close is done), or the test's thread is blocked waiting for
+-- the view's components to run the close (they run it after this action
+-- and what follows it in the same step). The gate is then disarmed: one
+-- hold per view. Every action of the component's monad comes here, those
+-- of 'H.liftEffect' and of 'liftIO' too, not only the backend's own.
 --
 -- A hold on the test's own thread could never be released: the test's
 -- thread runs the components' work while it mounts them, and a view that
 -- registers then would hold the thread that is to close it. Such a hold,
 -- and one the test does not come to within 'holdLimit', gives up at once,
 -- with the reason, which the test reports.
-closeAt :: (MonadIO m) => HttpEnv -> IORef (Maybe Gate) -> HttpWiki m a -> m a
-closeAt tab armed act = do
-  owners <- liftIO (ownersHeld tab)
+closeAt :: (MonadIO m) => IO Int -> HttpEnv -> IORef (Maybe Gate) -> HttpWiki m a -> m a
+closeAt count tab armed act = do
+  before <- liftIO count
   answer <- runHttpWiki tab act
   liftIO $ do
-    now <- ownersHeld tab
-    when (now > owners) $ atomicModifyIORef' armed (Nothing,) >>= traverse_ hold
+    now <- count
+    when (now > before) $ atomicModifyIORef' armed (Nothing,) >>= traverse_ hold
   pure answer
   where
     hold gate = do
       putMVar gate.registered ()
       me <- myThreadId
       if me == gate.tester
-        then giveUp "the owner was registered on the test's own thread, while it mounted the view, where no close can come"
+        then giveUp "what it counts was made on the test's own thread, while it mounted the view, where no close can come"
         else (+ holdLimit) <$> getMonotonicTime >>= untilClosing
       where
         giveUp why = atomicModifyIORef' gate.phase (\p -> (case p of NotYet -> GaveUp why; _ -> p, ()))

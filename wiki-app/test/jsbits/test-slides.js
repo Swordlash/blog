@@ -358,3 +358,13 @@ function wiki_test_ids_report() {
   return JSON.stringify({ duplicates, outside, contents });
 }
 
+// How many measurings of slide cards run (wiki-app/jsbits/slide-fit.js),
+// and how many watches of an embedded presentation's link coming near the
+// window (wiki-app/jsbits/deck-viewer.js): 0 before either has run.
+function wiki_test_fit_watches() {
+  return globalThis.wikiFitWatching?.() ?? 0;
+}
+
+function wiki_test_deck_watches() {
+  return globalThis.wikiDeckWatching?.() ?? 0;
+}

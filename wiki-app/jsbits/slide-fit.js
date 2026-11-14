@@ -23,6 +23,11 @@ globalThis.wikiFitRelease = () => {
   for (const schedule of wikiFitSchedules) schedule();
 };
 
+// For the browser tests: how many measurings run, started and not stopped
+// (wiki_fit_watch, wiki_fit_stop). A view that closes stops its own, so
+// the count goes back to where it was.
+globalThis.wikiFitWatching = () => wikiFitWatches.size;
+
 // How far what a slide shows goes beyond where it may: its body's content
 // below and beside the body's room (down to the bottom of the body's
 // padding, where the body cuts it), and the title, the body and the footer
