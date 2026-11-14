@@ -1,6 +1,6 @@
 ---
 pr: 277
-title: Two tests that failed by chance wait for a condition or count, not a clock
+title: Tests that failed by chance wait for a condition or count, not a clock
 technical: true
 ---
 
@@ -15,3 +15,7 @@ technical: true
   in proportion to the slide now counts the memory the work takes, at
   three sizes, instead of timing it against three seconds, which a busy
   CI machine went over.
+- The demo's and the server's smoke tests count what a page asks for
+  only once the page before it is gone: a TikZ picture's files, still
+  being fetched by the page before, were counted as asked for by a page
+  without one.
