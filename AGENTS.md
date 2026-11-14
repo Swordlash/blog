@@ -111,7 +111,12 @@ was run locally first):
   `cabal.project` only, as in haskell-halogen; CPP gives each backend different code, so a
   warning in one does not show in the other.
 - Tests for what the package adds: native hspec for pure code (domain, Markdown rendering,
-  permission rules, backend contracts), hspec-halogen in a real browser for components.
+  permission rules, backend contracts, a view's machine), the real component on the in-memory
+  DOM where its logic is a machine, and hspec-halogen in a real browser for what needs one
+  (the islands, layout and measuring, focus, real HTTP and WebSocket, the service worker).
+- wiki-core's properties run a quarter of their cases on wasm, and coverage is enforced
+  natively only (`wiki-core/test/Test/Cases.hs`): the wasm run is there for what the
+  compiler makes different, and the native run keeps the count.
 
 All of CI runs on GitHub's runners: the repository variable `WASM_RUNNER` is `hosted`
 (#228). Locally, before the push, a package owes the type-check (`npm run build-native`,
@@ -167,6 +172,21 @@ Those of haskell-halogen's `AGENTS.md` apply unchanged, in short:
   in the state before the wait, so that `Finalize` releases it, or its late
   answer checks that it is still wanted (a token, the element's
   `isConnected`).
+- A view whose state takes more than one ask, a push, or a change of input is written as
+  a machine (the owner, 2026-11-14; decision 82 in `docs/PLAN.md`; `Wiki.App.View.Bell` is
+  the first): a pure `step :: Event -> Model -> (Model, [Effect])` in
+  `View/<Name>/Machine.hs`, which imports nothing of Halogen, and a component that runs
+  `step` in one `state` call and carries out the effects, each ask forked and its answer
+  raised back as an event. No step waits, so no step can check, wait and write. Its rules
+  are QuickCheck properties over generated orders of events and answers, against a model
+  of the server (and of the HTTP backend's cache, for a view over it), in `wiki-app-test`;
+  one spec mounts the real component on the in-memory DOM with its asks held. A plain
+  handler may still `lift` where there is one ask and no change of input.
+- A test that fails by chance shows a fault of design, in the program or in the test (the
+  owner, 2026-11-14): find what lets the race be written, or what the test cannot see, and
+  fix that. A longer wait is the last resort, and is said to be one. A test waits on the
+  program's signal or on a condition named for what it waits for, not on a clock; a check
+  that something is absent or unchanged is shown able to fail before it is trusted.
 - The browser's own objects are read and called through haskell-halogen's Web types and
   their fields (`w.history.go`, `event.key`; decision 30 in `docs/PLAN.md`), and the
   wiki's own objects through wiki newtypes with `jsFields`. JavaScript of the wiki's own
