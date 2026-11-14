@@ -205,7 +205,13 @@ component =
           modify (\s -> s {measured = Just now})
           H.raise (SlidesMeasured st.input.body fits)
 
-    -- Start measuring a presentation's cards, once they are rendered.
+    -- Start measuring a presentation's cards, once they are rendered. The
+    -- measuring starts on the loop, without a wait ('H.liftEffect'), in the
+    -- step that keeps it in the state and that found none kept. Started
+    -- through 'liftIO', on a thread of its own, and kept a step later, a
+    -- preview closed between the two left it running with nothing to stop
+    -- it, and a second start meanwhile (Initialize's and a Receive's)
+    -- started a second measuring.
     startWatch :: H.HalogenM State Action IslandSlots Output m ()
     startWatch = when inBrowser $ do
       st <- get
@@ -213,9 +219,9 @@ component =
         H.getRef st.root
           >>= traverse_
             ( \element -> do
-                channel <- liftIO HS.create
+                channel <- H.liftEffect (liftIO HS.create)
                 void (H.subscribe channel.emitter)
-                watch <- watchFits element (HS.notify channel.listener . Measured)
+                watch <- H.liftEffect (watchFits element (HS.notify channel.listener . Measured))
                 modify (\s -> s {watch})
             )
 

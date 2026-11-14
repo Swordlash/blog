@@ -73,3 +73,13 @@ function wiki_test_assistant_check_wait(ms) {
   script.checkWait = ms;
   return true;
 }
+
+// Click the first element a selector finds twice in one task, as a double
+// click does, with nothing of the page's run between: whether it found one.
+function wiki_test_click_twice(selector) {
+  const element = document.querySelector(selector);
+  if (!element) return false;
+  element.click();
+  element.click();
+  return true;
+}

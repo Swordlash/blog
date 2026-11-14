@@ -44,8 +44,13 @@ import Wiki.Core.Space (Space (id))
 $( browserJS
      ["jsbits/test-slides.js"]
      [ ("js_ids_report", "wiki_test_ids_report", Safe, [t|IO JSText|])
+     , ("js_deck_watches", "wiki_test_deck_watches", Safe, [t|IO Int|])
      ]
  )
+
+-- | How many watches of an embed's link coming near the window run.
+deckWatches :: PageM s Int
+deckWatches = unsafeIOToPageM js_deck_watches
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
@@ -113,7 +118,9 @@ spec m = do
     let refused = endpointUrl (\e -> e.spaces.pageAt docsId (slugs ["markdown-guide", "presentations"]))
     answerRaw "GET" refused 403 "{\"error\":\"forbidden\",\"message\":\"Forbidden\"}"
     ui <- startServer m (Page docs guide)
-    _ <- find ui "article.page-body h1"
+    -- The guide's first render over HTTP takes longer than 'find' waits on
+    -- a loaded machine.
+    _ <- eventuallyWithin 30000 $ find ui "article.page-body h1"
     bringNear ui
     -- The request starts when the browser's IntersectionObserver says the
     -- link has come near the window, which takes the browser its own time
@@ -186,6 +193,74 @@ spec m = do
     find ui ".user-menu button[data-login=admin]" >>= click
     find ui theLink >>= focus
     eventually $ find ui "article.page-body .deck-embed" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The merger closes on Friday.")
+
+  -- A change of reader starts the watch of the link again, after the
+  -- viewer has dropped what it showed. Changes that come close together
+  -- (a sign-in changes the session, then the wiki read again for the new
+  -- reader) each start one: the viewer keeps one watch, the one it stops
+  -- when it closes, and a second would watch on with nothing to stop it.
+  it "keeps one watch of its link however the reader changes, and none once the page closes" $ runPage $ do
+    before <- deckWatches
+    ui <- start m (Just "user-admin") (Page docs guide)
+    -- Far down the page: its link is watched.
+    _ <- find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child"
+    watching <- eventually $ do
+      n <- deckWatches
+      n `shouldSatisfy` (> before)
+      pure n
+    for_ (["reader", "admin", "editor", "admin"] :: [Text]) $ \login -> do
+      find ui ".user-switcher-toggle" >>= click
+      find ui (".user-menu button[data-login=" <> login <> "]") >>= click
+    settle
+    eventually $ deckWatches `shouldReturn` watching
+    -- The one watch is heard: near the window, the presentation is read
+    -- for the reader now, and the watch, having told, is gone.
+    bringNear ui
+    eventuallyWithin 30000 $ position ui `shouldReturn` "1 / 9"
+    deckWatches `shouldReturn` watching - 1
+    unmount ui
+    settle
+    deckWatches `shouldReturn` before
+
+  -- A change of reader as the viewer begins to watch its link: in memory,
+  -- another user chosen right after the page is mounted; over HTTP, the
+  -- answers that come after the first render (the session, the spaces),
+  -- which move the shell's revision on. The watch the viewer keeps then
+  -- tells with the reading it is for, so the presentation is read when its
+  -- link comes near, and no other watch runs.
+  it "reads the presentation near the window after the reader changes as the viewer starts watching" $ runPage $ do
+    before <- deckWatches
+    ui <- start m (Just "user-admin") (Page docs guide)
+    _ <- find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child"
+    find ui ".user-switcher-toggle" >>= click
+    find ui ".user-menu button[data-login=editor]" >>= click
+    settle
+    bringNear ui
+    eventuallyWithin 30000 $ position ui `shouldReturn` "1 / 9"
+    deckWatches `shouldReturn` before
+    unmount ui
+    settle
+    deckWatches `shouldReturn` before
+
+  it "reads the presentation near the window when the wiki's answers come after the first render, over HTTP" $ runPage $ do
+    serverStarts
+    serveDemo
+    before <- deckWatches
+    ui <- startServer m (Page docs guide)
+    -- The guide is long, and over HTTP on a loaded machine its first render
+    -- takes longer than 'find' waits.
+    _ <- eventuallyWithin 30000 $ find ui "article.page-body > p > a[href$='markdown-guide/presentations/']:only-child"
+    settle
+    docsId <- unsafeIOToPageM $ do
+      demo <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
+      runMemWiki demo ((\sp -> sp.id) . either (panic . show) identity <$> getSpace (slugs ["docs"]))
+    let deckAt = endpointUrl (\e -> e.spaces.pageAt docsId (slugs ["markdown-guide", "presentations"]))
+    bringNear ui
+    eventuallyWithin 30000 $ ((\r -> r.url) <$>) <$> asked >>= (`shouldSatisfy` elem deckAt)
+    eventuallyWithin 30000 $ position ui `shouldReturn` "1 / 9"
+    unmount ui
+    settle
+    deckWatches `shouldReturn` before
 
   it "keeps its ids apart from the page's and from another viewer's, its footnotes' links in itself, and the contents' links in the page" $ runPage $ do
     (opener, wiki) <- startWith m (Just "user-admin") (Page (slugs ["blog"]) (slugs ["hello-world"]))

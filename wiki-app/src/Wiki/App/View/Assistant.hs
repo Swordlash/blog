@@ -766,8 +766,13 @@ component =
                 md = s.chatMode
             body <- H.liftEffect (currentText host)
             decided <- outcomes host
-            sentAt <- liftIO getCurrentTime
-            shown <- clockTime sentAt
+            -- The clock read on the loop, without a wait ('H.liftEffect'):
+            -- from the check above to the turn begun below is one step.
+            -- Read through 'liftIO', the second click of a double click
+            -- came between, found the panel idle as well, and sent the
+            -- message again in a conversation of its own.
+            sentAt <- H.liftEffect (liftIO getCurrentTime)
+            shown <- H.liftEffect (clockTime sentAt)
             let context = pageContext st.input.title body (attached st)
                 (chip, cut) = case context of
                   Selected {lineRange} -> (Just (chipLabel lineRange), Nothing)
@@ -898,18 +903,22 @@ component =
     -- waitQuiet) would read the panel before the answer. The fork waits in
     -- a liftIO until 'endTurn' fills the turn's variable: when the turn
     -- ends ('finish': done, stopped or failed), the panel closes, or the
-    -- component goes.
+    -- component goes. Making the variable and filling it do not wait, and
+    -- run through 'H.liftEffect': 'send' begins the turn and sends the
+    -- message in one step, so a Stop clicked right after finds the message
+    -- sent, and stops its turn. Through 'liftIO' the message went out
+    -- after the wait, even when Stop had come in it.
     countTurn :: H.HalogenM State Action Empty Output m ()
     countTurn = do
       endTurn
-      ended <- liftIO newEmptyMVar
+      ended <- H.liftEffect (liftIO newEmptyMVar)
       modify (\st -> st {ended = Just ended})
       void (H.fork (liftIO (takeMVar ended)))
 
     -- Let the fork of 'countTurn' end, if a turn is counted.
     endTurn :: H.HalogenM State Action Empty Output m ()
     endTurn = do
-      gets (\st -> st.ended) >>= traverse_ (\ended -> liftIO (void (tryPutMVar ended ())))
+      gets (\st -> st.ended) >>= traverse_ (\ended -> H.liftEffect (liftIO (void (tryPutMVar ended ()))))
       modify (\st -> st {ended = Nothing})
 
     -- Read the time every second while the model is at work, for the

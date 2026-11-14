@@ -241,17 +241,32 @@ component =
         H.liftEffect (followArticleLink router target)
 
     -- An embed's link watched until it comes near the window, in a
-    -- browser.
+    -- browser, unless it is watched already. Two changes of reader close
+    -- together each ask for a watch ('Rewatch') once the link is
+    -- rendered; the second, kept in place of the first, left the first
+    -- running with nothing to stop it.
+    --
+    -- All of it is one step: whether a watch runs, the generation the
+    -- watch tells with, the watch, and the write that keeps it
+    -- ('H.liftEffect', nothing waits). A change of reader stops the watch
+    -- kept and moves the generation on in one step too ('Receive'), so a
+    -- watch kept always tells with the current generation. With a wait
+    -- here (the channel made through 'liftIO'), a change of reader in it
+    -- found no watch to stop, and the watch then kept told with the
+    -- generation before the change, which 'Near' drops: the guard then
+    -- kept that deaf watch, started no other, and the presentation never
+    -- loaded.
     watchNear :: H.HalogenM State Action Slots Void m ()
     watchNear = do
       st <- get
       case st.input.target of
         Linked {}
-          | inBrowser ->
+          | inBrowser
+          , isNothing st.near ->
               H.getRef st.root
                 >>= traverse_
                   ( \element -> do
-                      channel <- liftIO HS.create
+                      channel <- H.liftEffect (liftIO HS.create)
                       void (H.subscribe channel.emitter)
                       -- The watch starts on the loop, without a wait, in the
                       -- step that keeps it in the state: through 'liftIO' a
@@ -264,9 +279,13 @@ component =
                   )
         _ -> pass
 
+    -- The watch stopped and forgotten in one step, on the loop. Stopped
+    -- through 'liftIO' and forgotten a step later, a 'Rewatch' in between
+    -- found the old watch still kept and started none ('watchNear'), and
+    -- the link was then watched by nothing.
     stopNear :: H.HalogenM State Action Slots Void m ()
     stopNear = do
-      gets (\st -> st.near) >>= traverse_ (liftIO . js_stop)
+      gets (\st -> st.near) >>= traverse_ (H.liftEffect . liftIO . js_stop)
       modify (\st -> st {near = Nothing})
 
     -- 'Near', for the reading watched now.

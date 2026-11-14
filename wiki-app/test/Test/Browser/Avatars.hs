@@ -39,8 +39,12 @@ import Wiki.Core.Space qualified as S
 $( browserJS
      ["jsbits/test-files.js"]
      [ ("js_choose_filePromise", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO (Promise ())|])
+     , ("js_crop_detachedPromise", "wiki_test_crop_detached", Safe, [t|JSText -> IO (Promise Int)|])
      ]
  )
+
+js_crop_detached :: JSText -> IO Int
+js_crop_detached a = if inBrowser then wait =<< js_crop_detachedPromise a else pure inert
 
 js_choose_file :: JSText -> JSText -> JSText -> JSText -> IO ()
 js_choose_file a1 a2 a3 a4 = if inBrowser then wait =<< js_choose_filePromise a1 a2 a3 a4 else pure inert
@@ -138,6 +142,16 @@ spec m = do
     -- The panel is still open, with nothing to say.
     _ <- find ui ".demo-account-panel"
     length <$> findAll ui ".account-avatar .avatar-error" `shouldReturn` 0
+    unmount ui
+
+  -- The cropper's module is fetched the first time a picture is chosen,
+  -- and the account's panel may close meanwhile, its dialog taken off the
+  -- page with it. The cropper then puts nothing in the dialog's element:
+  -- nothing would take it out again, and the picture, held by the object
+  -- URL the cropper shows it through, would stay until the tab closes.
+  it "puts no cropper in a dialog taken off the page while the cropper loaded" $ runPage $ do
+    ui <- start m (Just "user-editor") Home
+    unsafeIOToPageM (js_crop_detached (toJSText dotPng)) `shouldReturn` 0
     unmount ui
 
   it "shows a comment's author with their avatar, or their initials" $ runPage $ do

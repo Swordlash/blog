@@ -29,7 +29,16 @@ const element = (name, attributes) => {
 // and `destroy()`, which lets the picture go. The promise returned settles
 // once the picture is loaded (or failed to load), for the application to
 // place the selection on it ("Wiki.App.View.Avatar").
+//
+// A `host` no longer in the page gets nothing. This module is fetched the
+// first time a picture is chosen, and the account's panel may close while
+// it loads, its dialog with it. The panel's finalizer
+// (Wiki.App.View.Avatar) has then already taken out what the host held,
+// which was nothing yet: a cropper put in after that is never taken out,
+// and its object URL keeps the picture until the tab closes. The editor's
+// CodeMirror is put in place with the same check (editor.js's attach).
 export const crop = async (host, file) => {
+  if (!host.isConnected) return;
   host.wikiAvatar?.destroy();
   const url = URL.createObjectURL(file);
   // The canvas is a square the page's CSS sizes; its checked background
