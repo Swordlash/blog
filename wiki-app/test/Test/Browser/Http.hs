@@ -41,6 +41,8 @@ module Test.Browser.Http
   , listening
   , answersTaken
   , hangUp
+  , pressNow
+  , guideLoaded
   )
 where
 
@@ -137,6 +139,7 @@ $( browserJS
      , ("js_server_hang_up", "wiki_test_server_hang_up", Safe, [t|IO ()|])
      , ("js_server_said", "wiki_test_server_said", Safe, [t|IO JSText|])
      , ("js_hide_clipboard", "wiki_test_hide_clipboard", Safe, [t|Bool -> IO ()|])
+     , ("js_click_now", "wiki_test_click_now", Safe, [t|JSText -> IO ()|])
      ]
  )
 
@@ -851,9 +854,12 @@ views m = describe "the application over it" $ do
         listsAsked = length . filter (\r -> "/pages" `T.isSuffixOf` r.url) <$> asked
     fetchesOf tourAt `shouldReturn` 1
     lists <- listsAsked
-    -- Another page of the space: fetched, the space's list kept.
-    find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/markdown-guide/']" >>= click
-    find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
+    -- Another page of the space: fetched, the space's list kept. It is the
+    -- Markdown guide, whose load keeps the program busy for longer than an
+    -- action waits ('pressNow', 'guideLoaded').
+    pressNow ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/markdown-guide/']"
+    eventuallyWithin guideLoaded $ find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
+    waitQuietWithin guideLoaded
     -- Someone else saves the tour meanwhile, in another session. Nothing
     -- tells this tab: it no longer shows the tour.
     answerWith "GET" tourAt 200 tourPage {P.body = "# Tour\n\nSaved by someone else."}
@@ -1590,3 +1596,28 @@ overtaken m space page at url change shown = do
   answersTaken 20000
   shown ui
   unmount ui
+
+-- | Press an element with the page's own @click()@, once it is there, and
+-- wait for nothing after it: an action of the harness waits for the
+-- program, and fails when the program is still busy five seconds after
+-- it. The Markdown guide is long: its load over HTTP, and a change of
+-- reader on it ("Test.Browser.DeckViewer"), which renders it again for
+-- each step of its load, keep the program busy for longer than that. The
+-- example then waits for the program itself, with the deadline it
+-- measured ('guideLoaded').
+pressNow :: Mounted s q o m -> Text -> PageM s ()
+pressNow ui selector = do
+  _ <- find ui selector
+  unsafeIOToPageM (js_click_now (toJSText selector))
+
+-- | How long the guide's load over HTTP may keep the program busy once its
+-- first text is shown, in milliseconds. Measured from the start of the
+-- load to the program quiet (2026-11-14, 16 cores, a busy loop on every
+-- core, two pages side by side): 3.7 to 12.7 s over 10 runs for the
+-- embedded presentation's example after the first render, 7.9 to 16.3 s
+-- over 10 runs for its example refused over HTTP
+-- ("Test.Browser.DeckViewer"), and 5.8 to 15.4 s over 7 runs for the
+-- guide opened from the sidebar here (in 3 runs more, that example
+-- failed before it). The deadline is twice the longest.
+guideLoaded :: Int
+guideLoaded = 33000
