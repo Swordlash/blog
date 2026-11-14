@@ -3,6 +3,9 @@
 # test-wasm.sh runs this first, on a two-line program that exits with the
 # status it is asked for, through the same wrapper the suites run through.
 set -eu
+# The check program is no hspec suite: it is run without CI's timing,
+# which would give it hspec's arguments (toolchain/wasm-test-wrapper.sh).
+unset WIKI_SUITE_TIMES
 runner_test_dir=$(mktemp -d)
 trap 'rm -rf "$runner_test_dir"' EXIT HUP INT TERM
 cat > "$runner_test_dir/Main.hs" <<'EOF'

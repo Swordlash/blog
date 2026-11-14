@@ -11,6 +11,18 @@ set -eu
 
 wasm_binary=$1
 shift
+suite=$(basename "$wasm_binary" .wasm)
+
+# In CI (WIKI_SUITE_TIMES=1) a suite runs through toolchain/ci-suite-time.sh,
+# which times it, asks hspec for its five slowest examples and holds it to
+# its budget; elsewhere it runs as it is.
+timed() {
+  if [ "${WIKI_SUITE_TIMES:-}" = 1 ]; then
+    sh "$(dirname "$0")/ci-suite-time.sh" "$suite" "$@" --print-slow-items=5
+  else
+    "$@"
+  fi
+}
 wasm_ghc=$(command -v wasm32-wasi-ghc)
 wasm_libdir=$($wasm_ghc --print-libdir)
 temp_dir=$(mktemp -d)
@@ -25,7 +37,7 @@ if node -e '
   const names = WebAssembly.Module.exports(new WebAssembly.Module(bytes)).map((e) => e.name);
   process.exit(names.includes("hs_start") ? 0 : 1);
 ' "$wasm_binary"; then
-  "${HSPEC_HALOGEN:?build it first: HSPEC_HALOGEN=\$(sh toolchain/build-hspec-halogen.sh)}" test "$wasm_binary" "$@"
+  timed "${HSPEC_HALOGEN:?build it first: HSPEC_HALOGEN=\$(sh toolchain/build-hspec-halogen.sh)}" test "$wasm_binary" "$@"
   exit
 fi
 
@@ -36,7 +48,7 @@ node "$wasm_libdir/post-link.mjs" \
 browser_test_dir=$temp_dir
 . "$(dirname "$0")/browser-test-env.sh"
 
-node "$(dirname "$0")/wasm-test-runner.mjs" \
+timed node "$(dirname "$0")/wasm-test-runner.mjs" \
   "$wasm_binary" \
   "$temp_dir/ghc_wasm_jsffi.mjs" \
   "$@"

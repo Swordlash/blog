@@ -6,9 +6,10 @@ module Test.SlideRows (spec) where
 import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
 import Protolude
+import Test.Cases (coverage)
 import Test.Hspec
 import Test.Hspec.QuickCheck (modifyMaxSuccess, prop)
-import Test.QuickCheck (Gen, Property, checkCoverage, choose, conjoin, counterexample, cover, elements, forAll, oneof, property, suchThat, vectorOf, (.&&.), (===))
+import Test.QuickCheck (Gen, Property, choose, conjoin, counterexample, cover, elements, forAll, oneof, property, suchThat, vectorOf, (.&&.), (===))
 import Test.Slides (aDeck, aMove)
 import Wiki.Core.Markdown.Problems (Checked (..), checkText)
 import Wiki.Core.PageKind (PageKind (..))
@@ -103,7 +104,7 @@ spec = describe "SlideRows" $ do
 
   describe "recut" $ do
     prop "keeps every other row's key and text when a row leaves a fence, a spoiler box or an HTML comment open" $
-      checkCoverage $
+      coverage $
         forAll ((,,) <$> aDeck `suchThat` ((>= 3) . length . (.rows) . cut) <*> elements openBlocks <*> elements [False, True]) $ \(source, block, focused) ->
           let rows0 = cut source
            in forAll (choose (1, length rows0.rows - 2)) $ \k ->
@@ -238,7 +239,7 @@ spec = describe "SlideRows" $ do
                       ]
 
     prop "move as 'moveSlide' moves, wherever it moves, but for a blank line after a preamble that is not a slide" $
-      checkCoverage $
+      coverage $
         forAll aMove $ \(source, i, j) ->
           let r = cut source
               spans = slideSpans source
@@ -334,7 +335,7 @@ spec = describe "SlideRows" $ do
       diffUTCTime done started `shouldSatisfy` (< 3)
 
     prop "says no row is taken in exactly when the rows are where a fresh cut puts them" $
-      checkCoverage $
+      coverage $
         forAll anyDeck $ \source ->
           let rows0 = cut source
               -- Half the time, a block left open in a row with rows below.

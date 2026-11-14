@@ -50,6 +50,15 @@
 # this is run from: it is made absolute from there before the suite runs
 # from wiki-smoke/ (toolchain/caller-paths.sh), and a program's bare name
 # (WIKI_SERVER=wiki-server) is left for PATH.
+#
+# WIKI_SMOKE_PROGRAM names the suite's test program already built, which
+# then runs from wiki-smoke/, as cabal runs it, without cabal: the
+# arguments go to the program (hspec's options) rather than to cabal test.
+# toolchain/smoke-test.sh builds every suite once and runs them so, side
+# by side: cabal itself must not run twice at once in one build directory.
+# With WIKI_SUITE_TIMES=1 (CI), the suite runs through
+# toolchain/ci-suite-time.sh, which times it, lists its five slowest
+# examples and holds it to its budget.
 set -eu
 called_from=$(pwd)
 . "$(dirname "$0")/caller-paths.sh"
@@ -66,6 +75,7 @@ unset CC CXX LD AR NM RANLIB STRIP OBJCOPY OBJDUMP SIZE STRINGS
 
 suite=${1:?usage: smoke-suite.sh <screenshots|waits|demo|passkeys|server|server-postgres> [cabal test args...]}
 shift
+name=smoke-$suite
 case "$suite" in
   screenshots | waits | demo | passkeys | server) ;;
   server-postgres)
@@ -120,5 +130,16 @@ if [ "$suite" = passkeys ] || [ "$suite" = server ]; then
   WIKI_SERVER=${WIKI_SERVER:-$(cabal list-bin -v0 --project-file="$native_project" --builddir="$native_build_dir" wiki-server:exe:wiki-server)}
   WIKI_PRERENDER=${WIKI_PRERENDER:-$(cabal list-bin -v0 --project-file="$native_project" --builddir="$native_build_dir" wiki-app:exe:wiki-app-prerender)}
   export WIKI_SERVER WIKI_PRERENDER
+fi
+program=$(program_from_caller "${WIKI_SMOKE_PROGRAM:-}")
+if [ -n "$program" ]; then
+  cd wiki-smoke
+  if [ "${WIKI_SUITE_TIMES:-}" = 1 ]; then
+    exec sh ../toolchain/ci-suite-time.sh "$name" "$program" "$@" --print-slow-items=5
+  fi
+  exec "$program" "$@"
+fi
+if [ "${WIKI_SUITE_TIMES:-}" = 1 ]; then
+  exec sh toolchain/ci-suite-time.sh "$name" cabal test "wiki-smoke:test:wiki-smoke-$suite" --project-file="$native_project" --builddir="$native_build_dir" --test-show-details=direct "$@" --test-option=--print-slow-items=5
 fi
 exec cabal test "wiki-smoke:test:wiki-smoke-$suite" --project-file="$native_project" --builddir="$native_build_dir" --test-show-details=direct "$@"
