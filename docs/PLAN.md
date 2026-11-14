@@ -1910,21 +1910,31 @@ which the wiki pins since #227.
   card by its slide's content, its islands inside, now that a skipped
   node keeps its child components (a kept child gets no `Receive`
   while its node is skipped: check what the islands need from one).
-- **WP5.95 No view takes an older answer over a newer one (found by
-  Codex on #243, rounds 12 and 13; left there on purpose).** The page view
-  drops a fetched page older than the one it shows (`takesPage`, by
-  `updatedAt`). The same mechanism is open elsewhere, and was before
-  #243: the comments' threads (`loadThreads` checks the page's id, not the
-  order of answers), the space's tree in the side panel (`loadHere`), the
-  backlinks (`loadBacklinks`), and the shell's session, spaces and users
-  (`loadWorld`) each take an answer whenever it comes. And one case in the
-  page view itself: a save's own answer, arriving after the reader chose
-  to see a newer version another editor saved meanwhile, replaces the
-  page the ticks are staged on before `takesPage` looks, so the article
-  shows the older text under the newer title until the next reload. One
-  rule for all of them, stated once (an answer of a kind is taken only if
-  no newer answer of that kind was taken already), rather than a counter
-  for each request.
+- **WP5.95 No view takes an older answer over a newer one, the rest
+  (the first part is #279).** The rule is in `Wiki.App.View.Latest`,
+  stated once: an answer of a kind is taken only if no newer answer of
+  that kind was taken already; newer by content where the answer has
+  an order of its own (a page, by `updatedAt`: `takesPage`), newer by
+  the ask where it has none (`Asks`, a ticket taken in the step that
+  asks and compared in the step that takes the answer; `supersede`
+  where something newer is put in place of every ask out). #279
+  brought under it the page's comments and fetches, the shell's
+  session and spaces, the side panel's tree, "Linked from", and the
+  ticks' staging after "show the new version". Left, about forty asks
+  that are open or guarded only against a change of input (#279's
+  description has the table): the history, the source, the slides, the
+  blog, the directory's counts, stars and watches, the bell and
+  starred, the activity, the pickers, the live preview, a user's
+  spaces, the personal space, the administration's lists and forms,
+  the settings of a space, of the editor and of the assistant, the
+  sign-in's identities, the encrypted spaces' keys, the editor's
+  reload and its conflict view, and in the page the chain's check, the
+  avatars, the people and the space chooser. Each takes one `Asks` of
+  its kind; where a load and a write share a field (stars, watches,
+  the bell, the personal space) the write supersedes; the busy flags
+  that a load clears while a write is out are a small fault beside it.
+  And: a comment's event applied while a list of the threads is out
+  can be overwritten by that list's answer.
 - **WP5.92 A day's page: entries with a time, all-day entries, highlights
   (#204, the second of three; after the plugins' interface, see WP5.93).** As other tools do it (Obsidian's Day
   Planner, Logseq's journal), the time belongs to the entry, not to a
@@ -2990,6 +3000,25 @@ needs. Each was true when its package merged; check before relying on one.
   (38 pairs of an action and a read that does not wait, 3 fixed, #268)
   and the server's, the passkeys' and the shared modules (218
   actions, 7 such pairs, 1 fixed, #270).
+- **The HTTP backend's cache and the spaces' list, after #279.** The
+  cache stored an answer whenever it came, so a read sent before a
+  write, an event or a sign-in and answered after it put the older
+  state into the emptied cache. Now an answer is stored only if the
+  cache has not changed since its read was sent, other than by stores
+  (`Http/Cache.hs`, `Stored`); who edits or reads a page changes
+  nothing kept, and a page saved counts only for reads of a page's
+  content. Coarse on purpose: a comment's event, a notice or a draft's
+  autosave drops the store of an unrelated read out then, which costs
+  a request and never an old answer. **The spaces' list has one
+  record**, `heldListed`, read by the gate, the search's choice of
+  backend and the page's write alike; the cache's list only says
+  whether it may be used without asking. Each read of it takes a
+  ticket and is learnt only if no list asked for later was taken, in
+  one step with what is held for the encrypted spaces: an older list
+  answered late changes nothing and lets go of nothing, and a refresh
+  made on purpose is never dropped for an unrelated change (Codex's
+  P1 on #279's first form: a space encrypted meanwhile was still
+  searched in plain text).
 - **A view's resources and its late writes, after #275 and #276
   (WP5.109).** Every component was read for the two rules now in
   AGENTS.md's conventions: a resource a `Finalize` releases is made
