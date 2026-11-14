@@ -1854,6 +1854,41 @@ and 67); WP5.79, the browser's OPAQUE client from opaque-hs (#230,
 decision 59); #212 (WP5.74a2b), closed in opaque-hs's own repository,
 which the wiki pins since #227.
 
+**The order (the owner, 2026-11-14: "Chciałbym się skupić przed
+kolejnymi featurami nad flaky testami / timing issues oraz czasem
+wykonania").** Before any new feature (plugins, the calendar), in
+this order: tests that fail by chance and faults of timing, then how
+long things take. The packages below marked for it come first; WP5.84,
+WP5.92 and WP5.93 wait.
+
+- **WP5.114 The browser suite searched for races on purpose (for the
+  order above).** The smoke suites have a throttled job that finds a
+  race again once it has found it; the browser suite has none, and its
+  races were met by chance on pull requests (2026-11-13 and 14: five
+  different examples). A job, nightly or weekly and by hand, that runs
+  `wiki-app-browser-test` several times under a load that is the same
+  every time (the pages' processor slowed through the driver if
+  hspec-halogen can; otherwise more pages side by side than cores),
+  and reports every example that failed with its seed; a failure there
+  is a finding with a package of its own, not a re-run.
+- **WP5.115 Why the Markdown parser is 10 to 28 times slower on wasm
+  than natively without optimisation (for the order above; a measure
+  first).** It allocates about 54 KB a line, and its time on wasm
+  grows a little faster than linearly, which looks like the collector.
+  Measure a parse on wasm with the RTS's allocation area enlarged and
+  with the collector's statistics; if the collector is the cost, set
+  the flags in the build. Then, if a long deck's pause is still felt:
+  parse only the slides that changed (the editor cuts the deck into
+  rows already). A parser in C (cmark-gfm, linked by GHC's wasm
+  backend) was weighed with the owner and is not taken: the wiki's
+  dialect, its source ranges and 1400 tests stand on commonmark-hs's
+  extension points.
+- **WP5.116 The browser suite's own time (for the order above).** It
+  sets the `wasm` job's length (two shards of five to seven minutes)
+  and doubled in two days. A third shard if the runner's four cores
+  carry it; the dearest examples made cheaper (the long deck's 66
+  seconds, the three random walks, the search's table); and what
+  WP5.106 moves out of it.
 - **WP5.111 The pin of haskell-halogen past its pull request 118 (the
   owner, 2026-11-14, with the library's answer to the wiki's lists).**
   Its own pull request, with the reason in the pin's commit, and
