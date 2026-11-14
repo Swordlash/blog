@@ -178,6 +178,8 @@ else
     running=${running#"$oldest"}
     running=${running# }
     eval "pid=\$pid_$(var_of "$oldest")"
+    # Set by the eval above.
+    # shellcheck disable=SC2154
     wait "$pid" || true
     report "$oldest" "$(cat "$logs/$oldest.status" 2>/dev/null || echo "no status")" "$logs/$oldest.log"
   }

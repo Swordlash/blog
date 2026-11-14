@@ -54,8 +54,9 @@
 # WIKI_SMOKE_PROGRAM names the suite's test program already built, which
 # then runs from wiki-smoke/, as cabal runs it, without cabal: the
 # arguments go to the program (hspec's options) rather than to cabal test.
-# toolchain/smoke-test.sh builds every suite once and runs them so, side
-# by side: cabal itself must not run twice at once in one build directory.
+# toolchain/smoke-test.sh builds every suite once and runs them so, one
+# after another or, with WIKI_SMOKE_JOBS, side by side, where cabal itself
+# must not run twice at once in one build directory.
 # With WIKI_SUITE_TIMES=1 (CI), the suite runs through
 # toolchain/ci-suite-time.sh, which times it, lists its five slowest
 # examples and holds it to its budget.
