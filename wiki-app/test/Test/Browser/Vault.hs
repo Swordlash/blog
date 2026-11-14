@@ -326,6 +326,44 @@ signing m = describe "signing in with a passkey" $ do
     eventually $ unsafeIOToPageM (fromJSText <$> js_unregistered) `shouldReturn` "[]"
     closedSignedIn ui
 
+  -- The panel reopened, and another passkey begun, while the first one's
+  -- registration, sent again from the closed panel, waits: the server
+  -- refuses that late answer to a challenge the new one replaced, and
+  -- leaves the new one's challenge for its own answer. The new passkey is
+  -- the account's; the first stays on the authenticator unknown to the
+  -- wiki, as one did before the panel sent it again.
+  it "registers a passkey begun in the panel reopened while the closed panel's registration waits" $ runOwn $ do
+    serverStarts
+    serveDemo
+    me <- signedInAs "user-editor"
+    answerWith "GET" "api/v1/session" 200 me
+    answerAccount
+    unsafeIOToPageM js_vault_server
+    unsafeIOToPageM (js_install True True)
+    _ <- unsafeIOToPageM js_existing
+    ui <- startServer m Home
+    let finishes = length . filter (\r -> r.method == "PUT" && r.url == "api/v1/account/passkeys/registration") <$> asked
+        addPasskey name = do
+          find ui ".passkey-add input[name=passkey-name]" >>= (`typeText` name)
+          find ui ".passkey-add input[name=passkey-password]" >>= (`typeText` "editor's password")
+          find ui ".passkey-add button[type=submit]" >>= click
+    find ui ".account-toggle" >>= click
+    eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 1
+    holdAt "PUT" "api/v1/account/passkeys/registration"
+    addPasskey "My phone"
+    eventually $ finishes `shouldReturn` 1
+    -- Closed: its finalizer sends the registration again, held too.
+    find ui ".account-toggle" >>= click
+    eventually $ finishes `shouldReturn` 2
+    find ui ".account-toggle" >>= click
+    eventually $ length <$> findAll ui ".passkey-item" `shouldReturn` 1
+    addPasskey "My tablet"
+    eventually $ finishes `shouldReturn` 3
+    release
+    settle
+    eventually $ map T.strip <$> (findAll ui ".passkey-name" >>= traverse textContent) `shouldReturn` ["My laptop", "My tablet"]
+    closedSignedIn ui
+
   it "offers no passkey on a page served over plain HTTP, and says why" $ runOwn $ do
     serverStarts
     serveDemo

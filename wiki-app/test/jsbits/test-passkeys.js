@@ -223,7 +223,7 @@ function wiki_test_passkeys_cancel_after(touches) {
 // The vault's server: one user's vault (its salt, its items by name and
 // the password's wrap of its key), their passkeys with each one's wrap,
 // and their current public key in the directory.
-const wikiTestVault = { vault: null, revision: 0, passkeys: [], publicKey: null };
+const wikiTestVault = { vault: null, revision: 0, passkeys: [], publicKey: null, registering: null };
 
 function wikiTestJson(status, value, headers = {}) {
   return { status, body: JSON.stringify(value), headers };
@@ -300,6 +300,9 @@ function wikiTestVaultServer(request) {
   }
   if (path === "passkeys" && request.method === "GET") return wikiTestJson(200, wikiTestVault.passkeys.map(wikiTestInfo));
   if (path === "passkeys/registration" && request.method === "POST") {
+    // One registration waits for the session, its challenge replacing the
+    // one before, as the server keeps it (Wiki.Server.Vault's ceremonies).
+    wikiTestVault.registering = challenge;
     return wikiTestJson(200, {
       challenge,
       rpId: location.hostname,
@@ -312,6 +315,17 @@ function wikiTestVaultServer(request) {
   }
   if (path === "passkeys/registration" && request.method === "PUT") {
     const sent = JSON.parse(request.body);
+    // Taken only by the answer to the challenge waiting, as the server
+    // takes it: an answer to another one is refused and leaves it.
+    let answered = null;
+    try {
+      answered = JSON.parse(atob(sent.clientDataJSON.replace(/-/g, "+").replace(/_/g, "/"))).challenge;
+    } catch {
+      answered = null;
+    }
+    if (wikiTestVault.registering === null) return wikiTestJson(400, { error: "Invalid", text: "No passkey is being made or used in this session, or it took more than five minutes: start again." });
+    if (answered !== wikiTestVault.registering) return wikiTestJson(400, { error: "Invalid", text: "The passkey was refused: it answers another challenge than the one the wiki gave." });
+    wikiTestVault.registering = null;
     const p = { id: sent.id, name: sent.name ?? `Passkey ${wikiTestVault.passkeys.length + 1}`, wrapped: null };
     wikiTestVault.passkeys.push(p);
     return wikiTestJson(200, wikiTestInfo(p));
@@ -337,7 +351,7 @@ function wikiTestVaultServer(request) {
 // Start the vault's server, empty, in fetch's place (after the test's
 // server has started: Test.Browser.Http's serverStarts).
 function wiki_test_vault_server_start() {
-  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [], publicKey: null });
+  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [], publicKey: null, registering: null });
   globalThis.wikiTestHandlers = [...(globalThis.wikiTestHandlers ?? []), wikiTestVaultServer];
 }
 
@@ -480,7 +494,7 @@ let wikiTestStashed = null;
 
 function wiki_test_vault_server_stash() {
   wikiTestStashed = JSON.parse(JSON.stringify(wikiTestVault));
-  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [], publicKey: null });
+  Object.assign(wikiTestVault, { vault: null, revision: 0, passkeys: [], publicKey: null, registering: null });
 }
 
 function wiki_test_vault_server_unstash() {
