@@ -58,6 +58,7 @@ module Wiki.Server.Vault
   , newCeremonies
   , beginCeremony
   , takeCeremony
+  , Taking (..)
   , beginSignIn
   , takeSignIn
   , maxSignInsPerAddress
@@ -548,13 +549,35 @@ beginCeremony ceremonies now session u purpose = do
     (Map.insert (session, purpose) (u, challenge, addUTCTime ceremonyLifetime now) (bounded now (\(_, _, e) -> e) m), ())
   pure challenge
 
--- | The challenge waiting for a session, a user and a purpose, if it has
--- not expired; it is used up.
-takeCeremony :: Ceremonies -> UTCTime -> Text -> UserId -> Purpose -> IO (Maybe ByteString)
-takeCeremony ceremonies now session u purpose =
+-- | What 'takeCeremony' found for an answer.
+data Taking
+  = -- | The challenge waiting, which the answer answers: used up.
+    Taken ByteString
+  | -- | A challenge waiting, which the answer does not answer: left for
+    -- its own answer.
+    AnotherChallenge
+  | -- | None waiting for this user, or one expired.
+    NoneWaiting
+  deriving stock (Eq, Show)
+
+-- | The challenge waiting for a session, a user and a purpose, used up by
+-- the answer that answers it: the challenge its client data names (as
+-- 'Wiki.Server.WebAuthn.challengeOf' reads it). One challenge waits for a
+-- session and a purpose; a new one replaces it ('beginCeremony'). An
+-- answer to another challenge leaves the waiting one alone: taken before
+-- it was checked, a late answer to an earlier ceremony (a registration
+-- sent again after its panel closed, another tab of the session) used up
+-- the one begun since, and that ceremony's own answer was then refused.
+takeCeremony :: Ceremonies -> UTCTime -> Text -> UserId -> Purpose -> Maybe ByteString -> IO Taking
+takeCeremony ceremonies now session u purpose answered =
   atomicModifyIORef' ceremonies.held $ \m -> case Map.lookup (session, purpose) m of
-    Just (owner, challenge, expires) | owner == u, expires > now -> (Map.delete (session, purpose) m, Just challenge)
-    _ -> (Map.delete (session, purpose) m, Nothing)
+    Just (owner, challenge, expires)
+      | owner == u
+      , expires > now ->
+          if Just challenge == answered
+            then (Map.delete (session, purpose) m, Taken challenge)
+            else (m, AnotherChallenge)
+    _ -> (Map.delete (session, purpose) m, NoneWaiting)
 
 -- | A new challenge for a sign-in with a passkey, asked for from an
 -- address; 'Nothing' when the address has 'maxSignInsPerAddress' waiting
