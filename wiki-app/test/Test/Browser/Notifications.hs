@@ -151,10 +151,10 @@ demo m = describe "over the demo" $ do
 
 live :: forall m -> (Specs m) => Spec
 live m = describe "over the backend over HTTP" $ do
-  -- #213, the review's P2: the server's list is the truth for every
-  -- notification told before it was asked for. One whose page the reader
-  -- may no longer read, which the server leaves out, goes; one told while
-  -- the list was fetched, which the answer cannot hold yet, stays.
+  -- #213, the review's P2, and #282: a notification told is shown at
+  -- once, and the read that follows it is the truth. One whose page the
+  -- reader may no longer read, which the server leaves out, goes; one told
+  -- while the list was fetched stays, and the server's list has it.
   it "keeps of what the live channel told only what came while the list was fetched" $
     runPage $ do
       serverStarts
@@ -180,27 +180,27 @@ live m = describe "over the backend over HTTP" $ do
       -- Told once the bell's socket is open: what the server says before
       -- reaches nothing ('listening').
       listening socketOpens
-      tellServer (Notified (told "n1" "Lost since"))
-      find ui ".notifications-count" >>= (`shouldHaveText` "1")
-      -- The channel opens again; the list is fetched again, without it.
+      -- Told, and left out of the server's list: the read that follows
+      -- takes it away.
       before <- fetches
-      hangUp
-      eventuallyWithin 5000 (fetches >>= (`shouldSatisfy` (> before)))
-      eventually (length <$> findAll ui ".notifications-count" `shouldReturn` 0)
-      -- Told while the list is fetched: kept.
+      tellServer (Notified (told "n1" "Lost since"))
+      answersTaken 20000
+      fetches >>= (`shouldSatisfy` (> before))
+      length <$> findAll ui ".notifications-count" `shouldReturn` 0
+      -- Told while the list is fetched: kept, and in the server's list.
       holdAt "GET" "api/v1/notifications"
       again <- fetches
       hangUp
       eventuallyWithin 5000 (fetches >>= (`shouldSatisfy` (> again)))
       listening socketOpens
+      answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 1, items = [told "n2" "Told meanwhile"]}
       tellServer (Notified (told "n2" "Told meanwhile"))
       find ui ".notifications-count" >>= (`shouldHaveText` "1")
-      -- The list's answer taken, it still counts the one told meanwhile.
+      -- The answers taken, it is counted once.
       release
       answersTaken 20000
       (traverse textContent =<< findAll ui ".notifications-count") `shouldReturn` ["1"]
-      -- The server has it now: opened, the list holds it once.
-      answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 1, items = [told "n2" "Told meanwhile"]}
+      -- Opened, the list holds it once.
       find ui ".notifications-toggle" >>= click
       eventually ((traverse textContent =<< findAll ui ".notification-page") `shouldReturn` ["Told meanwhile"])
       unmount ui
@@ -227,14 +227,12 @@ live m = describe "over the backend over HTTP" $ do
               , location = Just PageLocation {space = slugs ["blog"], page = slugs ["hello-world"]}
               }
       listening socketOpens
+      -- The server's list holds it once it is made. Told, it is counted at
+      -- once; the read that follows (the backend's cache forgot its list)
+      -- and the bell opened read it from the server.
+      answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 1, items = [told]}
       tellServer (Notified told)
       find ui ".notifications-count" >>= (`shouldHaveText` "1")
-      -- The server's list holds it now. Opened, the bell reads the list
-      -- again: from the backend's cache, which added the notification to
-      -- the list it kept, or from the server when the cache kept no list
-      -- (the notification came while the first list was read, so that
-      -- list was not stored).
-      answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 1, items = [told]}
       find ui ".notifications-toggle" >>= click
       find ui ".notification-list .notification-what" >>= (`shouldHaveText` "Rita Reader replied in a thread of yours")
       unmount ui
