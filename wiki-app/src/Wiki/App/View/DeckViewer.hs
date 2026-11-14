@@ -52,7 +52,7 @@ import Web.Event.Event (EventType (..))
 import Web.Event.Event qualified as Web
 import Web.UIEvent.KeyboardEvent (KeyboardEvent (..))
 import Data.Map.Strict qualified as Map
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session, UrlOwner)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), UrlOwner)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
@@ -95,12 +95,13 @@ data Target
 type Slots = IslandSlots
 
 -- | The viewer's machine ("Wiki.App.View.DeckViewer.Machine"), for this
--- view: a reading's session is the context's, its page the embed's link; a
+-- view: a reading's session is the context's number of it (the same user
+-- out and in again is another), its page the embed's link; a
 -- read needs the place of the page that embeds it; what is shown is a
 -- page in its place.
-type Model = M.Model Session PageLink Place (Place, Page)
+type Model = M.Model Int PageLink Place (Place, Page)
 
-type Event = M.Event Session PageLink Place (Place, Page)
+type Event = M.Event Int PageLink Place (Place, Page)
 
 data State = State
   { input :: Input
@@ -269,9 +270,9 @@ component =
 
 -- | What the input asks the viewer to show: an embedded page, for this
 -- reading; or the page view's own page, a presentation shown as one.
-targetOf :: Input -> M.Target Session PageLink Place (Place, Page)
+targetOf :: Input -> M.Target Int PageLink Place (Place, Page)
 targetOf input = case input.target of
-  Linked named host -> M.Linked M.Reading {session = input.context.session, revision = input.context.revision, link = named} host
+  Linked named host -> M.Linked M.Reading {session = input.context.sessionNumber, revision = input.context.revision, link = named} host
   Shown place page
     | isPresentation page.kind -> M.Shown (M.Ready (place, page) (deckOfPage page))
     | otherwise -> M.Shown M.Link

@@ -125,6 +125,11 @@ import Wiki.Core.Version (Author (..))
 data Context = Context
   { router :: Router Route
   , session :: Session
+  , sessionNumber :: Int
+  -- ^ Which session of the reader's this is, counted by the shell: the
+  -- same user signed out and in again is another session, with an equal
+  -- 'session'. A view that keeps what it read for one session compares
+  -- this number, not the session.
   , spaces :: [Space]
   , icons :: Map SpaceId Text
   , revision :: Int

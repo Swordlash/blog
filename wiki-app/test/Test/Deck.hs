@@ -68,9 +68,9 @@ import Test.QuickCheck qualified as QC
 import Wiki.App.View.DeckViewer.Machine
 import Wiki.Core.Slides (Deck (..), Slide (..), defaultDeckOptions)
 
--- | What a reading's session is, as the viewer compares it: the user
--- signed in, a value.
-type S = Maybe Int
+-- | What a reading's session is, as the viewer compares it: the number of
+-- the reader's session, as the shell counts them.
+type S = Int
 
 -- | What the deck shown is in the model: the page, its version, and the
 -- version of the list of pages its links were laid out against.
@@ -235,7 +235,7 @@ shrinkRun = shrinkList $ \case
 
 -- | The reading the viewer is given for a context.
 readingOf :: Context -> Reading S Int
-readingOf c = Reading {session = c.user, revision = c.rev, link = c.named}
+readingOf c = Reading {session = c.sessionNo, revision = c.rev, link = c.named}
 
 -- | A run from its start: the viewer of page 0 for user 1, mounted.
 start :: World

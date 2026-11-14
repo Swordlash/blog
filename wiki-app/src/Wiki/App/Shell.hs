@@ -381,6 +381,10 @@ data State m = State
   , generation :: Int
   -- ^ The views' 'revision': how many times the wiki has been reloaded
   -- after a change.
+  , sessionNumber :: Int
+  -- ^ The views' 'sessionNumber': how many times the session changed for
+  -- another one (a sign-in, a sign-out, an invitation, a session ended, or
+  -- the server answering with another user).
   , menuOpen :: Bool
   -- ^ Whether the demo's menu of users is open.
   , menuHolder :: H.RefLabel
@@ -567,6 +571,7 @@ component =
                   , sidebarFolded = False
                   , chosenWidth = Compact
                   , generation = 0
+                  , sessionNumber = 0
                   , menuOpen = False
                   , menuHolder
                   , menuWatch = Nothing
@@ -1797,7 +1802,7 @@ component =
       demo <- gets (\st -> st.demo)
       ticket <- Latest.asking worldAsksOf setWorldAsks
       lift (attempt (fetchWorld demo)) >>= \case
-        Right w -> whenM (Latest.answered worldAsksOf setWorldAsks ticket (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady, stale = Nothing})) $ do
+        Right w -> whenM (Latest.answered worldAsksOf setWorldAsks ticket (\st -> st {session = w.asking, sessionNumber = if sameUser st.session w.asking then st.sessionNumber else st.sessionNumber + 1, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady, stale = Nothing})) $ do
           -- The server says nobody is signed in in this browser: no user's
           -- keys stay on the device, as after a sign-out, even when the
           -- session ended with no tab open. Not from a copy kept offline,
@@ -2050,10 +2055,17 @@ setHereAsks a st = st {hereAsks = a}
 -- gave, in place of the one shown: newer than the answer to any load of
 -- the wiki still out, which is not taken after it ('worldAsks').
 newSession :: Session -> State m -> State m
-newSession s = Latest.superseded worldAsksOf setWorldAsks (\st -> st {session = s, settled = False, panel = Actions Nothing})
+newSession s = Latest.superseded worldAsksOf setWorldAsks (\st -> st {session = s, sessionNumber = st.sessionNumber + 1, settled = False, panel = Actions Nothing})
+
+-- | Whether two sessions are of the same user, or both of nobody: a load
+-- of the wiki answering with the session the shell holds is the same
+-- session. The server tells nothing finer: a sign-out and sign-in of the
+-- same user in another tab between two loads is not seen here.
+sameUser :: Session -> Session -> Bool
+sameUser a b = ((\u -> u.id) <$> a.user) == ((\u -> u.id) <$> b.user)
 
 context :: State m -> Context
-context st = Context {router = st.router, session = st.session, spaces = available, icons = st.icons, revision = st.generation, pageWidth = st.chosenWidth}
+context st = Context {router = st.router, session = st.session, sessionNumber = st.sessionNumber, spaces = available, icons = st.icons, revision = st.generation, pageWidth = st.chosenWidth}
   where
     available =
       st.spaces <> case st.here of

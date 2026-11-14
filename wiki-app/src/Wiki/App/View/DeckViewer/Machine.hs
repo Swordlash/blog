@@ -15,10 +15,18 @@
 -- the model gives them; whether a watch runs, which reads are out and
 -- whose addresses are shown are the model's.
 --
--- The rules are main's as they were, translated without a change, but for
--- two guards taken out to show the races they closed: a watch is started
--- whenever one is asked for, and the answer to a read is taken whatever
--- reading it was made for.
+-- = Identities
+--
+-- Everything that can come twice in time is told apart by a number, never
+-- by an equal value:
+--
+-- * a reading is numbered by the generation, moved on at each new one;
+-- * a watch is numbered, and tells its number: only the watch running is
+--   heard, so a telling of one stopped since starts nothing;
+-- * a read is numbered, with the generation it was made in: its answer is
+--   shown only for the reading it was made for, and its owner of
+--   addresses is let go either way;
+-- * one watch runs at a time: none is started while one runs.
 module Wiki.App.View.DeckViewer.Machine
   ( Model (..)
   , Reading (..)
