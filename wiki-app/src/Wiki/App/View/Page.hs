@@ -172,7 +172,7 @@ import Wiki.App.View.Star qualified as StarView
 import Wiki.App.View.Ticking (Clearing (..), Staging (..), TickNote (..))
 import Wiki.App.View.Ticking qualified as Ticking
 import Wiki.App.View.Watch qualified as WatchView
-import Wiki.Core.Anchor (Anchor, BlockText (..), Located (..), Marking (Marking), Range (..), highlight, locate, renderedBlocks, renderedText, textFragment)
+import Wiki.Core.Anchor (BlockText (..), Located (..), Marking (Marking), Range (..), highlight, locate, renderedBlocks, renderedText, textFragment)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..))
 import Wiki.Core.Blog (Neighbours (..), neighbours)
 import Wiki.Core.Comment (Comment (..), Thread (..), isInline, mayComment)
@@ -240,12 +240,8 @@ data State = State
   -- every change to them is a 'Threads.step' ('threadsStep').
   , panelOpen :: Bool
   -- ^ Whether the panel of inline threads is shown.
-  , focused :: Maybe CommentThreadId
-  -- ^ The thread the reader chose, its quote marked as chosen.
   , selected :: Maybe Selected
   -- ^ Text selected in the page, which may be commented on.
-  , quoting :: Maybe Anchor
-  -- ^ A quote being commented on, in a new thread in the panel.
   , watching :: Maybe PageId
   -- ^ The page the live channel is watching.
   , subscription :: Maybe H.SubscriptionId
@@ -279,6 +275,9 @@ data State = State
   -- ^ Which visit of an address the view is on: one more each time it
   -- shows another page or version. An answer to a write asked for on an
   -- earlier visit changes nothing of this one.
+  , avatarAsks :: Asks
+  -- ^ The lookups of the avatars started: an answer is taken only if no
+  -- later lookup's was.
   , fetches :: Asks
   -- ^ The fetches of the page the view has started: an answer is shown
   -- only if no later fetch's answer was ("Wiki.App.View.Latest"). Another
@@ -377,9 +376,7 @@ component =
               , problem = Nothing
               , discussion
               , panelOpen = False
-              , focused = Nothing
               , selected = Nothing
-              , quoting = Nothing
               , watching = Nothing
               , subscription = Nothing
               , editors = []
@@ -394,6 +391,7 @@ component =
               , staging = maybe Ticking.unstaged (\p -> Ticking.step (Ticking.Offered p) Ticking.unstaged) (pageOf loaded)
               , visit = 0
               , fetches = noAsks
+              , avatarAsks = noAsks
               , lastBox = Nothing
               , writing = False
               , chainProblem = Nothing
@@ -721,8 +719,8 @@ component =
               ThreadsFailed e -> CommentsView.CommentsFailed e
               ThreadsReady ts -> CommentsView.CommentsReady (shownIn text placement ts)
           , behind = st.discussion.behind
-          , focused = st.focused
-          , quoting = st.quoting
+          , focused = st.discussion.focused
+          , quoting = st.discussion.quoting
           , avatars = st.avatars
           }
         (FromComments placement)
@@ -874,7 +872,7 @@ component =
           modify (\st -> st {lastBox = Nothing, writing = False})
           -- The page left, and its threads, are not taken after this.
           threadsStep Threads.Left'
-          modify (\st -> st {loaded = Loading, fetches = Latest.supersede st.fetches, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
+          modify (\st -> st {loaded = Loading, fetches = Latest.supersede st.fetches, panelOpen = False, selected = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
           -- The people mentioned are looked up again: the current user may
           -- be someone else now.
@@ -975,10 +973,10 @@ component =
         -- the step of the render that shows them ('H.liftEffect'), not on
         -- a thread of their own after whatever ran meanwhile.
         CommentsView.Focus tid -> do
-          modify (\st -> st {focused = Just tid})
+          threadsStep (Threads.Chose tid)
           H.liftEffect (reveal ("mark.comment-mark[data-thread=\"" <> tid.text <> "\"]"))
-        CommentsView.StopQuoting -> modify (\st -> st {quoting = Nothing})
-        CommentsView.Close -> modify (\st -> st {panelOpen = False, quoting = Nothing})
+        CommentsView.StopQuoting -> threadsStep Threads.GaveUp
+        CommentsView.Close -> modify (\st -> st {panelOpen = False}) >> threadsStep Threads.Closed
         CommentsView.Reload -> threadsStep Threads.Reload
       ThreadsHappened event -> threadsStep event
       Heard heard -> do
@@ -1000,8 +998,7 @@ component =
           -- The server's answer to the subscription: the threads as they
           -- are now, replacing what was shown, including whatever changed
           -- since the page was read (or the channel was lost). A focused
-          -- thread that no longer exists is unfocused: the machine names
-          -- the threads that remain ('Threads.Remaining').
+          -- thread that no longer exists is unfocused, by the machine.
           -- A page of an encrypted space: the server's answer has none of
           -- its threads, which are read and decrypted.
           -- They are newer than the answer to any read of them still out,
@@ -1018,12 +1015,16 @@ component =
         gets (\st -> mfilter (const (mayCommentHere st)) st.selected)
           >>= traverse_
             ( \s -> do
-                modify (\st -> st {quoting = Just s.anchor, selected = Nothing, panelOpen = True, focused = Nothing})
+                modify (\st -> st {selected = Nothing, panelOpen = True})
+                threadsStep (Threads.Quoted s.anchor)
                 H.liftEffect (reveal ".comments-panel .new-thread")
             )
-      ToggleComments -> modify (\st -> st {panelOpen = not st.panelOpen, quoting = if st.panelOpen then Nothing else st.quoting})
+      ToggleComments -> do
+        wasOpen <- state (\st -> (st.panelOpen, st {panelOpen = not st.panelOpen}))
+        when wasOpen (threadsStep Threads.Closed)
       ClickedQuote tid -> do
-        modify (\st -> st {panelOpen = True, focused = Just tid})
+        modify (\st -> st {panelOpen = True})
+        threadsStep (Threads.Chose tid)
         H.liftEffect (reveal ("#" <> CommentsView.threadElementId tid))
       -- The shell reloads what it shows, including the page and its tree.
       -- With unsaved ticks, the page as it is now is shown here, with
@@ -1135,8 +1136,11 @@ component =
         H.raise Loaded
 
     -- One step of the threads' machine, in one step of the program, and
-    -- then its effects. A read is forked and its answer comes back as an
-    -- event ('ThreadsHappened'), so that nothing after it waits for it.
+    -- then its effects, which never wait: each is a write of state, a tell
+    -- that does not wait, or a fork. A read, a write and the lookup of the
+    -- people are forked; the answer to a read or a write comes back as an
+    -- event ('ThreadsHappened'). So no effect of a step is carried out
+    -- after a later event.
     threadsStep :: Threads.Event (CommentsView.Placement, CommentsView.Mount) -> H.HalogenM State Action Slots ViewOutput m ()
     threadsStep event = do
       effects <- state (\st -> let (discussion, fx) = Threads.step event st.discussion in (fx, st {discussion}))
@@ -1144,9 +1148,9 @@ component =
         Threads.Load ticket page -> void . H.fork $ listThreads page >>= handleAction . ThreadsHappened . Threads.Loaded ticket page
         Threads.Send placement n page request -> void . H.fork $ sendWrite page request >>= handleAction . ThreadsHappened . Threads.Wrote placement n request
         Threads.Answered (placement, asker) request failure -> void (H.tell "comments" placement (CommentsView.Answered asker request failure))
-        Threads.Opened tid -> modify (\st -> st {quoting = Nothing, focused = Just tid})
-        Threads.Remaining tids -> modify (\st -> st {focused = mfilter (`elem` tids) st.focused})
-        Threads.Changed -> resolvePeople
+        -- The lookup waits, so it is forked: the effects after it are not
+        -- carried out after a later event.
+        Threads.Changed -> void (H.fork resolvePeople)
 
     -- Look up the people the page and its comments mention, for the
     -- logins not looked up yet.
@@ -1161,12 +1165,16 @@ component =
       resolveAvatars
 
     -- The URLs of the avatars of the people shown: who wrote the page,
-    -- the comments' authors and the readers.
+    -- the comments' authors and the readers. Lookups run beside each other
+    -- (the threads' machine forks them), so the answer of one is taken only
+    -- if no later one's was ("Wiki.App.View.Latest").
     resolveAvatars :: H.HalogenM State Action Slots ViewOutput m ()
     resolveAvatars = do
-      st <- get
-      avatars <- lift (avatarUrls (peopleOf st.loaded st.discussion.threads st.readers))
-      modify (\s -> s {avatars})
+      (ticket, people) <- state $ \st ->
+        let (t, asks') = Latest.newAsk st.avatarAsks
+         in ((t, peopleOf st.loaded st.discussion.threads st.readers), st {avatarAsks = asks'})
+      avatars <- lift (avatarUrls people)
+      void (Latest.answered (\st -> st.avatarAsks) (\a st -> st {avatarAsks = a}) ticket (\s -> s {avatars}))
 
     -- Watch the page shown, and nothing else.
     watch :: H.HalogenM State Action Slots ViewOutput m ()
@@ -1562,7 +1570,7 @@ bodiesOf loaded threads = case loaded of
 -- in it, a quote being commented on, or a rename or a move begun. A new
 -- version of the page would discard that.
 busy :: State -> Bool
-busy st = isJust st.selected || isJust st.quoting || not viewing || unsaved st
+busy st = isJust st.selected || isJust st.discussion.quoting || not viewing || unsaved st
   where
     viewing = case st.mode of
       Viewing -> True
@@ -1664,7 +1672,7 @@ locatedIn text ts = [(t, maybe Orphaned (locate text) t.anchor) | t <- ts, isInl
 markings :: State -> Text -> [Marking]
 markings st text = case st.discussion.threads of
   ThreadsReady ts ->
-    [ Marking t.id range (st.focused == Just t.id)
+    [ Marking t.id range (st.discussion.focused == Just t.id)
     | (t, Found range) <- locatedIn text ts
     , not t.resolved
     ]

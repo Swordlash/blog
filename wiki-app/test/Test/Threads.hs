@@ -371,11 +371,6 @@ data World = World
   , asksOfView :: [ViewAsk]
   -- ^ What the page view was asked to do on the comments' view and its
   -- page for writes' answers, the oldest first.
-  , quotingNow :: Maybe Anchor
-  -- ^ The quote of the page the reader is commenting on, as the page view
-  -- keeps it.
-  , focusedNow :: Maybe CommentThreadId
-  -- ^ The thread chosen, as the page view keeps it.
   , waiting :: Bool
   -- ^ Whether the page view's runner of the machine's effects waits (on a
   -- lookup of people), with effects of a step still to carry out.
@@ -389,7 +384,7 @@ startOver :: Maybe Stored -> World
 startOver cache =
   checked Nothing . fromTheCache $
     let (view, fx) = step (Fetched pageA True False) (initial (Just pageA) True False Nothing)
-        w0 = World {view, server = emptyServer {watched = Just pageA, untold = [MReplaced pageA []]}, outs = [], shownPage = pageA, finished = False, tabCache = cache, trace = [], faults = [], seen = mempty, owed = False, visit = 0, mounted = 0, asksOfView = [], quotingNow = Nothing, focusedNow = Nothing, waiting = False, held = []}
+        w0 = World {view, server = emptyServer {watched = Just pageA, untold = [MReplaced pageA []]}, outs = [], shownPage = pageA, finished = False, tabCache = cache, trace = [], faults = [], seen = mempty, owed = False, visit = 0, mounted = 0, asksOfView = [], waiting = False, held = []}
      in effected "mounted on page A" fx w0
 
 start, startCached :: World
@@ -407,8 +402,9 @@ event what e w = checked (Just w.view.threads) . fromTheCache $ effected what fx
 -- | The view's effects carried out by the page view's runner
 -- ("Wiki.App.View.Page"'s @threadsStep@), in order: a read or a write is
 -- an ask out (a read answered at once by the cache when it can be). The
--- runner looks up the people the threads mention on 'Changed', and waits
--- for the lookup before it carries out the effects after it.
+-- runner looks up the people the threads mention on 'Changed' in a fork
+-- of its own, and carries out the effects after it at once: it never
+-- waits between effects ('Waited').
 effected :: Text -> [Effect Int] -> World -> World
 effected what fx w0 = noted (what <> (if null made then "" else " -> " <> T.intercalate ", " made)) w1
   where
@@ -423,9 +419,7 @@ carry what e w
       Load t p -> asking (show (t, p)) (readOut t p)
       Send sender n p r -> asking ("write " <> show n) Out {asked = AWrite n p r w.visit sender, answer = Nothing, sent = Nothing}
       Answered asker _ _ -> (w {asksOfView = w.asksOfView <> [TellForm | asker == w.mounted]}, [])
-      Opened tid -> (w {quotingNow = Nothing, focusedNow = Just tid}, [])
-      Remaining tids -> (w {focusedNow = mfilter (`elem` tids) w.focusedNow}, [])
-      Changed -> (w {waiting = True}, [])
+      Changed -> (w, [])
   where
     asking name o = (w {outs = w.outs <> [o], faults = w.faults <> [(AfterClose, "asked after the view went away: " <> what) | w.finished]}, [name])
     readOut t p = case w.tabCache of
@@ -508,7 +502,7 @@ play w = \case
             -- The page view stops watching the old page and watches the new
             -- one: the server answers the new subscription after what it
             -- had queued.
-            w' = event "goes to the other page" Left' (changing (forgetThreads w.shownPage) (elsewhereNow w) {shownPage = next, owed = False, visit = w.visit + 1})
+            w' = event "goes to the other page" Left' (changing (forgetThreads w.shownPage) w {shownPage = next, owed = False, visit = w.visit + 1})
             w'' = w' {server = w'.server {watched = Just next, untold = w'.server.untold <> [MReplaced next (threadsOn next w'.server)]}}
          in event ("shows " <> show next) (Fetched next True False) w''
   PageAgain
@@ -535,30 +529,25 @@ play w = \case
       ThreadsReady _ -> True
       _ -> False
 
--- | The quote the reader comments on, and the thread chosen, as the page
--- view keeps them.
+-- | The quote the reader comments on, and the thread chosen: the
+-- machine's.
 quotingOf :: World -> Maybe Anchor
-quotingOf w = w.quotingNow
+quotingOf w = w.view.quoting
 
 focusedOf :: World -> Maybe CommentThreadId
-focusedOf w = w.focusedNow
+focusedOf w = w.view.focused
 
 -- | The reader comments on a quote: the page view's @CommentOnSelection@.
 quoted :: Anchor -> World -> World
-quoted a w = noted ("the reader comments on " <> a.exact) w {quotingNow = Just a, focusedNow = Nothing}
+quoted a = event ("the reader comments on " <> a.exact) (Quoted a)
 
 -- | The reader chooses a thread: the comments view's @Focus@.
 chosen :: CommentThreadId -> World -> World
-chosen tid w = noted ("the reader chooses " <> show tid) w {focusedNow = Just tid}
+chosen tid = event ("the reader chooses " <> show tid) (Chose tid)
 
--- | The panel closed: the page view's @Close@, which stops the quoting.
+-- | The panel closed: the page view's @Close@.
 closed :: World -> World
-closed w = w {quotingNow = Nothing}
-
--- | The view gone to another page: the page view's change of route, which
--- stops the quoting and chooses no thread.
-elsewhereNow :: World -> World
-elsewhereNow w = w {quotingNow = Nothing, focusedNow = Nothing}
+closed = event "the panel closes" Closed
 
 -- | The channel closed and open again: what it had to tell is lost, the
 -- page is subscribed to again, and the backend drops its threads.

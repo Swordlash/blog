@@ -43,10 +43,16 @@
 --   sent, the threads have it already; otherwise it is applied only when
 --   the threads are as they were when it was sent, and a read asked after
 --   it follows, which puts it in its place ('wrote'). What the answer does
---   beside the threads is asked by the machine too, and only then: the
---   comments view that asked is told it ('Answered'), and a thread opened
---   about a quote is chosen ('Opened'). The page view carries these out
---   and decides nothing of its own after the wait.
+--   beside the threads is the machine's too, and only then: the comments
+--   view that asked is told it ('Answered'), and a thread opened about the
+--   quote still being commented on stops the quoting and is chosen
+--   ('opened').
+--
+-- The quote being commented on and the thread chosen are the model's
+-- ('quoting', 'focused'): the reader's own changes to them are events
+-- ('Quoted', 'GaveUp', 'Closed', 'Chose'), and the page view renders them
+-- from here. So the step that takes an answer sees what it would
+-- overwrite, and nothing else writes them.
 module Wiki.App.View.Comments.Machine
   ( Model (..)
   , Writing (..)
@@ -105,6 +111,12 @@ data Model = Model
   , writtenSince :: Bool
   -- ^ Whether another write was answered after that read was asked: one
   -- more read follows when its answer comes.
+  , quoting :: Maybe Anchor
+  -- ^ The quote of the page the reader is commenting on: a new thread
+  -- about it is being written, in the panel beside the page.
+  , focused :: Maybe CommentThreadId
+  -- ^ The thread the reader has chosen, by clicking its quote in the page
+  -- or the thread itself, or that the reader's write opened.
   , behind :: Bool
   -- ^ Whether the threads shown are known to be behind the server's: a
   -- read whose answer was needed failed, and no read's or subscription's
@@ -174,6 +186,15 @@ data Event a
     Replaced PageId [Thread]
   | -- | The reader asked to read the threads again (after a failure).
     Reload
+  | -- | The reader comments on this quote of the page: the panel opens with
+    -- a new thread about it, and no thread chosen.
+    Quoted Anchor
+  | -- | The reader gave up the new thread about the quote.
+    GaveUp
+  | -- | The panel beside the page closed: the quote is given up.
+    Closed
+  | -- | The reader chose this thread.
+    Chose CommentThreadId
   deriving stock (Eq, Show)
 
 -- | 'Effect' is what a step asks the page view to do.
@@ -187,13 +208,6 @@ data Effect a
     -- asked for: its form emptied, or why the write failed shown. Asked
     -- only on the visit of the page the write was sent on.
     Answered a Request (Maybe WikiError)
-  | -- | The write opened this thread about a quote: stop quoting, and
-    -- choose the thread. Asked only on the visit of the page the write was
-    -- sent on.
-    Opened CommentThreadId
-  | -- | The subscription's answer replaced the threads shown with these: a
-    -- thread chosen that is not among them is chosen no more.
-    Remaining [CommentThreadId]
   | -- | The threads shown changed: look up the people they mention.
     Changed
   deriving stock (Eq, Show)
@@ -203,7 +217,7 @@ data Effect a
 -- read at once if the backend could.
 initial :: Maybe PageId -> Bool -> Bool -> Maybe (Either WikiError [Thread]) -> Model
 initial page comments encrypted read' =
-  Model {page, comments, encrypted, threads = maybe ThreadsLoading (either ThreadsFailed ThreadsReady) (read' >>= \r -> r <$ guard comments), asks = noAsks, written = 0, writes = mempty, heard = [], following = Nothing, writtenSince = False, behind = False, closed = False}
+  Model {page, comments, encrypted, threads = maybe ThreadsLoading (either ThreadsFailed ThreadsReady) (read' >>= \r -> r <$ guard comments), asks = noAsks, written = 0, writes = mempty, heard = [], following = Nothing, writtenSince = False, quoting = Nothing, focused = Nothing, behind = False, closed = False}
 
 -- | The threads after an event, and what the page view is asked to do.
 step :: Event a -> Model -> (Model, [Effect a])
@@ -219,6 +233,10 @@ step event m
       Fetched page comments encrypted ->
         reading (if m.page == Just page then m {comments, encrypted} else (elsewhere m) {page = Just page, comments, encrypted})
       Left' -> ((elsewhere m) {page = Nothing, threads = ThreadsLoading, asks = supersede m.asks}, [])
+      Quoted a -> (m {quoting = Just a, focused = Nothing}, [])
+      GaveUp -> (m {quoting = Nothing}, [])
+      Closed -> (m {quoting = Nothing}, [])
+      Chose tid -> (m {focused = Just tid}, [])
       -- The ticket is taken whichever page the answer is for; its threads
       -- only for the page shown.
       Loaded asked page answer -> case takes asked m.asks of
@@ -237,8 +255,8 @@ step event m
       Wrote place n request answer -> case Map.lookup n m.writes of
         Just w
           | m.page == Just w.page ->
-              let (m', fx) = wrote w answer m {writes = Map.delete n m.writes}
-               in (m', fx <> [Answered place request (leftToMaybe answer)] <> [Opened t.id | Right (ThreadOpened t) <- [answer], isJust t.anchor])
+              let (m', fx) = wrote w answer (opened request answer m {writes = Map.delete n m.writes})
+               in (m', fx <> [Answered place request (leftToMaybe answer)])
         _ -> (m {writes = Map.delete n m.writes}, [])
       Heard page e
         | m.page /= Just page -> (m, [])
@@ -247,13 +265,22 @@ step event m
       Replaced page ts
         | m.page /= Just page -> (m, [])
         | m.encrypted -> reading m
-        | otherwise -> (unquiet m {threads = ThreadsReady ts, asks = supersede m.asks, heard = [], behind = False}, [Changed, Remaining (map (\t -> t.id) ts)])
+        | otherwise -> (unquiet m {threads = ThreadsReady ts, asks = supersede m.asks, heard = [], behind = False, focused = mfilter (\f -> any (\t -> t.id == f) ts) m.focused}, [Changed])
       Reload -> reading m
 
 -- | The model on another visit, or none: what was kept about the last
 -- one's reads and writes forgotten.
 elsewhere :: Model -> Model
-elsewhere m = m {writes = mempty, heard = [], following = Nothing, writtenSince = False, behind = False}
+elsewhere m = m {writes = mempty, heard = [], following = Nothing, writtenSince = False, behind = False, quoting = Nothing, focused = Nothing}
+
+-- | The model after the answer to a write sent on this visit: a thread
+-- opened about the quote the reader still comments on stops the quoting,
+-- and is chosen. A thread about a quote given up since, or another quote,
+-- changes neither.
+opened :: Request -> Either WikiError PageEvent -> Model -> Model
+opened request answer m = case (request, answer) of
+  (OpenThread (Just a) _, Right (ThreadOpened t)) | m.quoting == Just a -> m {quoting = Nothing, focused = Just t.id}
+  _ -> m
 
 -- | The writes out, with the threads shown changed since they were sent.
 unquiet :: Model -> Model
