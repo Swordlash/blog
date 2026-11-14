@@ -38,6 +38,7 @@ module Wiki.App.View.Latest
   , newAsk
   , takes
   , madeAfter
+  , stillAnswerable
   , supersede
   , asking
   , answered
@@ -88,6 +89,13 @@ takes (Ask n) a
 -- newer than the answer to an ask made before.
 madeAfter :: Ask -> Asks -> Bool
 madeAfter (Ask n) a = n > a.asked
+
+-- | Whether the answer to an ask made by the time the asks were as first
+-- given can still be taken, the asks being now as second given: what the
+-- view learnt another way then is kept while it may be newer than an
+-- answer still to come.
+stillAnswerable :: Asks -> Asks -> Bool
+stillAnswerable then' now = then'.asked > now.taken
 
 -- | The asks after something newer than the answer to every ask out was
 -- put in their place: a whole answer that came another way (the live

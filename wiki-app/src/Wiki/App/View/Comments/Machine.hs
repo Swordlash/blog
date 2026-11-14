@@ -41,7 +41,7 @@ import Data.Map.Strict qualified as Map
 import Protolude hiding (State)
 import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.App.Backend (WikiError)
-import Wiki.App.View.Latest (Ask, Asks, newAsk, noAsks, supersede, takes)
+import Wiki.App.View.Latest (Ask, Asks, madeAfter, newAsk, noAsks, stillAnswerable, supersede, takes)
 import Wiki.Core.Anchor (Anchor)
 import Wiki.Core.Comment (Thread)
 import Wiki.Core.Id (CommentId, CommentThreadId, PageId)
@@ -73,6 +73,10 @@ data Model = Model
   , writes :: Map Int PageId
   -- ^ The writes sent on this visit of the page that have not been
   -- answered, by number, with the page each is for.
+  , heard :: [(PageEvent, Asks)]
+  -- ^ What the live channel told on this visit, the newest first, with
+  -- the reads as they were then, while a read is out whose answer may be
+  -- older ('taking').
   , closed :: Bool
   -- ^ Whether the page view has gone away: after that nothing changes and
   -- nothing is asked.
@@ -142,7 +146,7 @@ data Effect a
 -- read at once if the backend could.
 initial :: Maybe PageId -> Bool -> Bool -> Maybe (Either WikiError [Thread]) -> Model
 initial page comments encrypted read' =
-  Model {page, comments, encrypted, threads = maybe ThreadsLoading (either ThreadsFailed ThreadsReady) (read' >>= \r -> r <$ guard comments), asks = noAsks, written = 0, writes = mempty, closed = False}
+  Model {page, comments, encrypted, threads = maybe ThreadsLoading (either ThreadsFailed ThreadsReady) (read' >>= \r -> r <$ guard comments), asks = noAsks, written = 0, writes = mempty, heard = [], closed = False}
 
 -- | The threads after an event, and what the page view is asked to do.
 step :: Event a -> Model -> (Model, [Effect a])
@@ -156,12 +160,12 @@ step event m
       -- Another page is another visit: the answers to the writes sent on
       -- the last one are not taken.
       Fetched page comments encrypted ->
-        reading m {page = Just page, comments, encrypted, writes = if m.page == Just page then m.writes else mempty}
-      Left' -> (m {page = Nothing, threads = ThreadsLoading, asks = supersede m.asks, writes = mempty}, [])
+        reading (if m.page == Just page then m {comments, encrypted} else m {page = Just page, comments, encrypted, writes = mempty, heard = []})
+      Left' -> (m {page = Nothing, threads = ThreadsLoading, asks = supersede m.asks, writes = mempty, heard = []}, [])
       -- The ticket is taken whichever page the answer is for; its threads
       -- only for the page shown.
       Loaded asked page answer -> case takes asked m.asks of
-        Just after -> (m {asks = after, threads = if m.page == Just page then either ThreadsFailed ThreadsReady answer else m.threads}, [Changed])
+        Just after -> (taking asked page answer m {asks = after}, [Changed])
         Nothing -> (m, [Changed])
       Write place page request ->
         let n = m.written + 1
@@ -174,12 +178,38 @@ step event m
       Heard page e
         | m.page /= Just page -> (m, [])
         | e == ThreadsChanged -> reading m
-        | otherwise -> (m {threads = applied e m.threads}, [Changed])
+        | otherwise -> (m {threads = applied e m.threads, heard = heardNow e m}, [Changed])
       Replaced page ts
         | m.page /= Just page -> (m, [])
         | m.encrypted -> reading m
-        | otherwise -> (m {threads = ThreadsReady ts, asks = supersede m.asks}, [Changed])
+        | otherwise -> (m {threads = ThreadsReady ts, asks = supersede m.asks, heard = []}, [Changed])
       Reload -> reading m
+
+-- | The answer to a read taken: for the page shown, its threads, with
+-- what the live channel told since the read was asked applied again, in
+-- the order told. The answer may have been read before or after each of
+-- those changes was made, and nothing in it says which. Applied again, an
+-- addition the answer holds is kept as the answer has it, a deletion is
+-- one again, and an edit or a resolution is as told, which a later one
+-- still on its way corrects.
+taking :: Ask -> PageId -> Either WikiError [Thread] -> Model -> Model
+taking asked page answer m
+  | m.page /= Just page = m'
+  | otherwise = case answer of
+      Right ts -> m' {threads = ThreadsReady (foldr applyEvent ts [e | (e, at) <- m.heard, not (asked `madeAfter` at)])}
+      Left e -> m' {threads = ThreadsFailed e}
+  where
+    m' = m {heard = stillWanted m.asks m.heard}
+
+-- | The channel's event kept, if a read is out whose answer it may be newer
+-- than.
+heardNow :: PageEvent -> Model -> [(PageEvent, Asks)]
+heardNow e m = stillWanted m.asks ((e, m.asks) : m.heard)
+
+-- | What the channel told that an answer still to be taken may be older
+-- than: told while a read whose answer can still be taken was out.
+stillWanted :: Asks -> [(PageEvent, Asks)] -> [(PageEvent, Asks)]
+stillWanted now = filter (\(_, at) -> stillAnswerable at now)
 
 -- | A read of the threads begun, for the page shown. A page with no
 -- comments has none, at once, under its own ticket.
