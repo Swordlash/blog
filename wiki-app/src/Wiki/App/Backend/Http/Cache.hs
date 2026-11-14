@@ -554,13 +554,15 @@ withNotices n c = c {notices = Just n}
 
 -- | The cache after the answer to a mark of notifications read: the
 -- notifications as the server had them once it marked them, put in place
--- of the cached ones if the cache did not change since the mark was sent
--- ('sent'); otherwise the cached ones are forgotten, since what changed
--- them (a notification the live channel told of meanwhile) may be missing
--- from the answer, and the next read asks the server. Either way a change.
+-- of the cached ones if the cache did not change and no read of them was
+-- sent since the mark was sent ('sent'); otherwise the cached ones are
+-- forgotten, and the next read asks the server. What changed the cache (a
+-- notification the live channel told of meanwhile) may be missing from the
+-- answer, and a read sent after the mark brings a newer list, which the
+-- change the answer makes keeps out of the cache. Either way a change.
 markedAnswer :: Stored -> Either WikiError Notifications -> Stored -> Stored
 markedAnswer sent result now
-  | now.changes == sent.changes = changedBy (withNotices result) now
+  | now.changes == sent.changes && now.noticeReads == sent.noticeReads = changedBy (withNotices result) now
   | otherwise = changedBy forgetNotices now
 
 -- | A read of the notifications sent to the server: its number, and the
