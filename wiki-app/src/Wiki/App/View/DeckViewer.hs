@@ -241,13 +241,18 @@ component =
         H.liftEffect (followArticleLink router target)
 
     -- An embed's link watched until it comes near the window, in a
-    -- browser.
+    -- browser, unless it is watched already. Two changes of reader close
+    -- together each ask for a watch ('Rewatch') once the link is
+    -- rendered; the second, kept in place of the first, left the first
+    -- running with nothing to stop it. Whether a watch runs is read in the
+    -- step that starts one: nothing below waits.
     watchNear :: H.HalogenM State Action Slots Void m ()
     watchNear = do
       st <- get
       case st.input.target of
         Linked {}
-          | inBrowser ->
+          | inBrowser
+          , isNothing st.near ->
               H.getRef st.root
                 >>= traverse_
                   ( \element -> do
@@ -264,9 +269,13 @@ component =
                   )
         _ -> pass
 
+    -- The watch stopped and forgotten in one step, on the loop. Stopped
+    -- through 'liftIO' and forgotten a step later, a 'Rewatch' in between
+    -- found the old watch still kept and started none ('watchNear'), and
+    -- the link was then watched by nothing.
     stopNear :: H.HalogenM State Action Slots Void m ()
     stopNear = do
-      gets (\st -> st.near) >>= traverse_ (liftIO . js_stop)
+      gets (\st -> st.near) >>= traverse_ (H.liftEffect . liftIO . js_stop)
       modify (\st -> st {near = Nothing})
 
     -- 'Near', for the reading watched now.
