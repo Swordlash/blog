@@ -103,9 +103,10 @@ data Input = Input
   , focused :: Maybe CommentThreadId
   -- ^ The thread the reader has chosen, by clicking its quote in the page
   -- or the thread itself.
-  , quoting :: Maybe Anchor
-  -- ^ A quote of the page the reader chose to comment on: a new inline
-  -- thread, in the panel beside the page.
+  , quoting :: Maybe Threads.Quoting
+  -- ^ A quote of the page the reader chose to comment on, in its session
+  -- of quoting: a new inline thread, in the panel beside the page. Its
+  -- write names the session.
   , avatars :: Map UserId Text
   -- ^ The URLs of the comments' authors' avatars, by user, which the page
   -- view keeps ('avatarUrls').
@@ -374,7 +375,7 @@ component =
             |]
 
     newInline :: State -> Maybe (H.ComponentHTML Action Slots m)
-    newInline st = case st.input.quoting of
+    newInline st = case (\q -> q.anchor) <$> st.input.quoting of
       Just a
         | canComment st ->
             Just

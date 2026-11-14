@@ -720,7 +720,7 @@ component =
               ThreadsReady ts -> CommentsView.CommentsReady (shownIn text placement ts)
           , behind = st.discussion.behind
           , focused = st.discussion.focused
-          , quoting = (\q -> q.anchor) <$> st.discussion.quoting
+          , quoting = st.discussion.quoting
           , avatars = st.avatars
           }
         (FromComments placement)
@@ -1695,7 +1695,7 @@ shownIn text placement ts = case placement of
 -- deleted, which removes the thread too when it was the thread's only one.
 sendWrite :: (MonadComments m) => PageId -> Threads.Request -> m (Either WikiError PageEvent)
 sendWrite page = \case
-  Threads.OpenThread anchor body -> fmap ThreadOpened <$> openThread page anchor body
+  Threads.OpenThread quoted body -> fmap ThreadOpened <$> openThread page ((\q -> q.anchor) <$> quoted) body
   Threads.Reply tid body -> fmap CommentAdded <$> reply page tid body
   Threads.EditComment tid cid body -> fmap CommentEdited <$> editComment page tid cid body
   Threads.DeleteComment tid cid -> (CommentDeleted tid cid <$) <$> deleteComment page tid cid

@@ -160,9 +160,10 @@ data Writing = Writing
 -- | 'Request' is a write to a page's threads that the reader asks for in
 -- the comments view.
 data Request
-  = -- | Open a thread, about a quote of the page or about the whole page,
-    -- with its first comment.
-    OpenThread (Maybe Anchor) Text
+  = -- | Open a thread, about the quote of a session of quoting or about
+    -- the whole page, with its first comment. The session is the one the
+    -- comments view's form was opened in, as its input named it.
+    OpenThread (Maybe Quoting) Text
   | Reply CommentThreadId Text
   | EditComment CommentThreadId CommentId Text
   | -- | Delete a comment. The only comment of a thread stands for the
@@ -264,10 +265,9 @@ step event m
         Nothing -> second (Changed :) (followed asked m)
       Write place page request ->
         let n = m.written + 1
-            -- A thread about the quote of the session open is that
-            -- session's.
-            session = case (request, m.quoting) of
-              (OpenThread (Just a) _, Just q) | q.anchor == a -> Just q.session
+            -- A thread about a quote is of the session its request names.
+            session = case request of
+              OpenThread (Just q) _ -> Just q.session
               _ -> Nothing
             writing = Writing {page, session, told = [], quiet = True}
          in (m {written = n, writes = if m.page == Just page then Map.insert n writing m.writes else m.writes}, [Send place n page request])

@@ -189,8 +189,9 @@ committed p e s
 -- its event, or why it was refused.
 handleWrite :: Text -> PageId -> Request -> Server -> (Server, Either WikiError PageEvent)
 handleWrite who p w s = case w of
-  OpenThread anchor _ ->
+  OpenThread session _ ->
     let k = s.count + 1
+        anchor = (\q -> q.anchor) <$> session
         tid = CommentThreadId ("t" <> show k)
         t = Thread {id = tid, page = p, anchor, resolved = False, createdAt = at k, comments = [commentOf k tid who]}
      in done (ThreadOpened t) s {count = k}
@@ -468,14 +469,15 @@ summary m = case m.threads of
 -- | The world after a step.
 play :: World -> Step -> World
 play w = \case
-  OtherOpens inline -> other (OpenThread (if inline then Just (quoteOf 0) else Nothing) "")
+  OtherOpens inline -> other (OpenThread (if inline then Just Quoting {session = 0, anchor = quoteOf 0} else Nothing) "")
   OtherReplies i -> onServerThread i $ \t -> other (Reply t.id "")
   OtherEdits i -> onServerComment i $ \t c -> other (EditComment t.id c.id "")
   OtherResolves i -> onServerThread i $ \t -> other (Resolve t.id (not t.resolved))
   OtherDeletesComment i -> onServerComment i $ \t c -> other (DeleteComment t.id c.id)
   OtherDeletesThread i -> onServerThread i $ \t -> other (DeleteThread t.id)
   ReaderOpens False -> byReader (OpenThread Nothing "")
-  ReaderOpens True -> maybe w (\a -> byReader (OpenThread (Just a) "")) (quotingOf w)
+  -- The form names the session it was opened in.
+  ReaderOpens True -> maybe w (\q -> byReader (OpenThread (Just q) "")) w.view.quoting
   Quote k
     | w.finished || not (isReady w.view) -> w
     | otherwise -> quoted (quoteOf k) w
