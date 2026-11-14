@@ -1035,19 +1035,19 @@ instance (MonadIO m) => MonadComments (HttpWiki m) where
     writeOnce $
       sealedPage pid >>= \case
         Just (sid, _) -> renewingThen sid (sealedOpenThread sid pid anchor body)
-        Nothing -> commentWrite pid ThreadOpened ((endpoints.comments pid).open NewThread {anchor, body})
+        Nothing -> commentWrite pid ((endpoints.comments pid).open NewThread {anchor, body})
   reply pid tid body =
     writeOnce $
       sealedPage pid >>= \case
         Just (sid, _) -> renewingThen sid (sealedComment sid pid tid Nothing body)
-        Nothing -> commentWrite pid CommentAdded ((endpoints.comments pid).reply tid CommentText {body})
+        Nothing -> commentWrite pid ((endpoints.comments pid).reply tid CommentText {body})
   editComment pid tid cid body =
     writeOnce $
       sealedPage pid >>= \case
         Just (sid, _) -> renewingThen sid (sealedComment sid pid tid (Just cid) body)
-        Nothing -> commentWrite pid CommentEdited ((endpoints.comments pid).edit tid cid CommentText {body})
-  deleteComment pid tid cid = commentWrite_ pid (CommentDeleted tid cid) ((endpoints.comments pid).deleteComment tid cid)
-  deleteThread pid tid = commentWrite_ pid (ThreadDeleted tid) ((endpoints.comments pid).delete tid)
+        Nothing -> commentWrite pid ((endpoints.comments pid).edit tid cid CommentText {body})
+  deleteComment pid tid cid = commentWrite_ pid ((endpoints.comments pid).deleteComment tid cid)
+  deleteThread pid tid = commentWrite_ pid ((endpoints.comments pid).delete tid)
   setResolved pid tid resolved =
     sealedPage pid >>= \case
       Just (sid, _) ->
@@ -1055,24 +1055,24 @@ instance (MonadIO m) => MonadComments (HttpWiki m) where
           Left e -> pure (Left e)
           -- The thread as the server answers it has no text: read again.
           Right _ -> sealedListThreads sid pid <&> (>>= maybe (Left NotFound) Right . find (\t -> t.id == tid))
-      Nothing -> commentWrite pid (\t -> ThreadResolved t.id t.resolved) ((endpoints.comments pid).resolve tid ThreadResolution {resolved})
+      Nothing -> commentWrite pid ((endpoints.comments pid).resolve tid ThreadResolution {resolved})
 
--- | A write to a page's comments, whose result is applied to the page's
--- cached threads. Refused here for a page of an encrypted space
+-- | A write to a page's comments, after which the page's cached threads are
+-- removed ('afterComment'). Refused here for a page of an encrypted space
 -- ('plainPageWrite').
-commentWrite :: (MonadIO m) => PageId -> (a -> PageEvent) -> HttpWiki IO a -> HttpWiki m (Either WikiError a)
-commentWrite pid event endpoint = do
+commentWrite :: (MonadIO m) => PageId -> HttpWiki IO a -> HttpWiki m (Either WikiError a)
+commentWrite pid endpoint = do
   result <- plainPageWrite pid (send endpoint)
-  modifyCache (afterComment pid (event <$> result))
+  modifyCache (afterComment pid)
   pure result
 
 -- | The same, for a write whose response has no body.
-commentWrite_ :: (MonadIO m) => PageId -> PageEvent -> HttpWiki IO NoContent -> HttpWiki m (Either WikiError ())
-commentWrite_ pid event endpoint = do
+commentWrite_ :: (MonadIO m) => PageId -> HttpWiki IO NoContent -> HttpWiki m (Either WikiError ())
+commentWrite_ pid endpoint = do
   -- A deletion carries no text: sent for a page of an encrypted space too.
   encrypted <- isJust <$> sealedPage pid
   result <- if encrypted then send_ endpoint else plainPageWrite pid (send_ endpoint)
-  modifyCache (afterComment pid (event <$ result))
+  modifyCache (afterComment pid)
   pure result
 
 -- | Notifications, over the API's @notifications…@ endpoints. The

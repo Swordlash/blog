@@ -62,8 +62,8 @@
 -- ("Wiki.App.Backend.Http.Cache"), and the model's tab does the same with
 -- the cache's own functions: a read the cache can answer is answered at
 -- once from it; one sent is stored if the cache did not change since; a
--- write's answer goes through 'afterComment'; the live channel's events
--- through 'afterEvent', its subscription's answer replaces them
+-- write removes the page's threads ('afterComment'); the live channel's
+-- events go through 'afterEvent', its subscription's answer replaces them
 -- ('withThreads'), and a lost channel drops them ('forgetThreads').
 --
 -- = The rules
@@ -489,10 +489,10 @@ deliver k w = case atMay w.outs k of
           -- page view takes it.
           (AWrite n p r, Right (Right e)) ->
             let e' = answerOf r e
-             in event ("the answer to write " <> show n <> ": " <> show e') (Wrote n (Right e')) (changing (afterComment p (Right e')) w')
+             in event ("the answer to write " <> show n <> ": " <> show e') (Wrote n (Right e')) (changing (afterComment p) w')
           -- A write is never answered with a list.
           (AWrite _ _ _, Right (Left _)) -> w'
-          (AWrite n p _, Left e) -> event ("write " <> show n <> " refused: " <> show e) (Wrote n (Left e)) (changing (afterComment p (Left e)) w')
+          (AWrite n p _, Left e) -> event ("write " <> show n <> " refused: " <> show e) (Wrote n (Left e)) (changing (afterComment p) w')
   _ -> w
 
 -- | The world with what the view shows checked against the rules, given

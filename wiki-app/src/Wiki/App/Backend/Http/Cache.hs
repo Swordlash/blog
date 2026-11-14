@@ -74,12 +74,13 @@
 --
 -- A page's comment threads ("Wiki.Core.Comment") are cached by page, and
 -- writing a comment is the second exception to emptying the cache. A
--- comment changes its page's threads and nothing else, so the write's
--- result is applied to the cached threads ('Wiki.Api.Events.applyEvent').
--- Emptying the cache would make the page itself load again. Comment
--- changes made elsewhere arrive over the live channel ("Wiki.App.Live"),
--- which updates the cached threads, and removes a page's threads
--- ('forgetThreads') when it stops listening to that page.
+-- comment changes its page's threads and nothing else, so the write
+-- removes that page's threads alone ('afterComment'): its answer cannot
+-- say where it falls among the changes others made meanwhile. Emptying
+-- the cache would make the page itself load again. Comment changes arrive
+-- over the live channel ("Wiki.App.Live") in the order they were made,
+-- which updates the cached threads ('afterThreadEvent'), and removes a
+-- page's threads ('forgetThreads') when it stops listening to that page.
 --
 -- The cache also holds:
 --
@@ -181,6 +182,7 @@ module Wiki.App.Backend.Http.Cache
   , withStars
   , cachedPeople
   , afterComment
+  , afterThreadEvent
   , afterEvent
   , changesKept
   , forgetThreads
@@ -589,18 +591,23 @@ withWatch t w c = c {watches = Map.insert t w c.watches}
 withStars :: Either WikiError [StarredPage] -> Cache -> Cache
 withStars s c = c {stars = Just s}
 
--- | The cache after a write to a page's comments. If the write succeeded,
--- its event is applied to the page's cached threads, if any are cached.
--- If it failed or was refused, its outcome is not known, so the page's
--- threads are removed. The posts' details count comments, so they are
--- removed in both cases.
-afterComment :: PageId -> Either WikiError PageEvent -> Cache -> Cache
-afterComment pid outcome c = case outcome of
-  Right event -> c {threads = Map.adjust (fmap (applyEvent event)) pid c.threads, postDetails = mempty}
-  Left _ -> forgetThreads pid c {postDetails = mempty}
+-- | The cache after a write to a page's comments: the page's threads are
+-- removed. Nothing in a write's answer says where the write falls among
+-- the changes the live channel tells of, so applying it could put it
+-- out of its place for good; a read after it is answered by the server,
+-- which has it in its place. A write that failed may have been made too.
+-- The posts' details count comments, so they are removed as well.
+afterComment :: PageId -> Cache -> Cache
+afterComment pid c = forgetThreads pid c {postDetails = mempty}
+
+-- | The cache after the live channel tells of a change to a page's
+-- comments: the change is applied to the page's cached threads, if any
+-- are cached. The channel tells the changes in the order they were made.
+afterThreadEvent :: PageId -> PageEvent -> Cache -> Cache
+afterThreadEvent pid event c = c {threads = Map.adjust (fmap (applyEvent event)) pid c.threads, postDetails = mempty}
 
 -- | The cache after the live channel reports an event on a page. A change
--- to the page's comments is applied to its threads ('afterComment'). A
+-- to the page's comments is applied to its threads ('afterThreadEvent'). A
 -- save of the page, by anyone and in any tab, removes every cached page,
 -- and the other entries a save changes: the lists of pages (they show
 -- titles), the searches (they match the text), the version lists and the
@@ -613,7 +620,7 @@ afterEvent :: PageId -> PageEvent -> Cache -> Cache
 afterEvent pid = \case
   PageChanged _ -> \c -> c {pageAt = mempty, pages = mempty, searches = [], versionLists = mempty, stars = Nothing}
   event
-    | changesKept event -> afterComment pid (Right event)
+    | changesKept event -> afterThreadEvent pid event
     | otherwise -> identity
 
 -- | Whether the live channel's event changes anything the cache keeps:
