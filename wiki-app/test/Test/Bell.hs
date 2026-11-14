@@ -13,27 +13,46 @@
 -- later, and the responses travel back on their own. The in-memory
 -- backend is the case where each ask is handled at once. Runs where the
 -- server handles asks in any order ('HandleOut', 'genUnordered') break
--- one rule, as the group of examples for them says.
+-- two rules, as the group of examples for them says.
 --
--- What the bell shows is read from the model after every step, and must
--- hold:
+-- = The model's answers have the real answers' shape
 --
--- * a notification shown read is never shown unread again: the server
---   never marks one unread, so an unread one shown after a read one is an
---   older answer taken over a newer one, or the reader's own mark undone;
--- * a notification once listed stays listed while it is among the
---   server's newest (an answer lists the newest 'limit'; this server
---   never drops one);
--- * the count is at least the number of unread notifications listed (the
---   server counts every unread one, and lists only the newest);
--- * the buttons that mark are disabled exactly while a mark is out;
--- * nothing is asked or listened to after the bell went away;
--- * every ask is made under a new ticket, which the state names;
--- * once everything out has come back and one more read is answered, the
---   bell shows the server's list;
--- * once everything out has come back, the bell shows the server's list
---   with no read more, when every change of the server was the reader's
---   own or told over the live channel.
+-- A rule can only find what the model can make. Codex found the bell's
+-- badge at 50 with no unread row, after this model had passed millions of
+-- runs: its server answered with the whole list, where the real one lists
+-- the newest 50 and counts every unread one beside them, so no run could
+-- make the count and the rows differ. So, for whoever models the next
+-- server: give each answer of the model the real answer's shape, its
+-- limits, counts and order included, and read the real handler (here
+-- @wiki-server@'s @notificationsTx@ and @Events.notify@) for it, not the
+-- client's types alone. For the bell, against what the real answers hold:
+--
+-- * the list: the newest 'Wiki.Core.Notification.maxListed' (50) about
+--   pages the reader may read, newest first; the model lists its newest
+--   'limit' (3), newest first;
+-- * the count: every unread notification about such pages, listed or
+--   not; the model counts every unread one;
+-- * a notification about a page the reader may no longer read leaves the
+--   list and the count: the model's 'Forget' (nothing tells the tab);
+-- * each notification's place (where its page is now), title, excerpt,
+--   time and read mark: the model's are fixed, but for the read mark and
+--   the time, which orders them. The title of a page of an encrypted
+--   space is the server's sealed one, decrypted by the HTTP backend: the
+--   model has none, and no rule reads a title (a new revision seals the
+--   titles at once and puts every ask out behind it, as on main; a rule
+--   for titles decrypted under an older revision is not written);
+-- * a mark's answer is the list and count after the mark, as a read's;
+-- * the live channel's message is one notification, made and located by
+--   the server and told after it is made, unread, at any time later; the
+--   channel reopened tells nothing it lost ('Reconnect'); the model's are
+--   the same;
+-- * a failed answer (the network, a refusal) is not made by the model:
+--   the bell shows a failed read as an error in place of the list, a
+--   choice of the view's and not a race, and a failed mark changes
+--   nothing;
+-- * a bell started over the server's page has its list from the preload
+--   and asks nothing: the state of a run whose first read was answered
+--   before anything else, which the generator makes.
 module Test.Bell
   ( spec
 
@@ -51,12 +70,14 @@ module Test.Bell
   , made
   , handleRead
   , handleMark
+  , forgotten
   , noticeOf
   )
 where
 
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Protolude
@@ -123,6 +144,11 @@ noticeOf k =
 handleRead :: Server -> Notifications
 handleRead s = Notifications {unread = length (filter (\n -> not n.read) s.notes), items = take s.limit s.notes}
 
+-- | The server with a notification no longer listed (its page no longer
+-- readable): gone from its list, and from what the channel has to tell.
+forgotten :: NotificationId -> Server -> Server
+forgotten i s = s {notes = filter (\n -> n.id /= i) s.notes, untold = filter (\n -> n.id /= i) s.untold}
+
 -- | A mark handled by the server: its list after the mark, and the answer.
 handleMark :: ReadMark -> Server -> (Server, Notifications)
 handleMark r s = (s', handleRead s')
@@ -149,6 +175,9 @@ data Step
   | -- | The reader marks the unread notification at this place read in
     -- another tab: the server changes, and nothing tells this tab.
     ReadElsewhere Int
+  | -- | The notification at this place leaves the server's list: its page
+    -- is one the reader may no longer read. Nothing tells the tab.
+    Forget Int
   | -- | The live channel tells the oldest notification it has to tell.
     Tell
   | -- | The live channel closes and opens again: what it had to tell is
@@ -187,6 +216,7 @@ genStep more =
          , (1, ClickLink <$> chooseInt (0, 3))
          , (4, pure Make)
          , (2, ReadElsewhere <$> chooseInt (0, 3))
+         , (1, Forget <$> chooseInt (0, 3))
          , (4, pure Tell)
          , (1, pure Reconnect)
          , (6, pure Handle)
@@ -202,6 +232,7 @@ shrinkRun = shrinkList shrinkStep
       ClickMark i -> ClickMark <$> [0 .. i - 1]
       ClickLink i -> ClickLink <$> [0 .. i - 1]
       ReadElsewhere i -> ReadElsewhere <$> [0 .. i - 1]
+      Forget i -> Forget <$> [0 .. i - 1]
       Deliver i -> Deliver <$> [0 .. i - 1]
       HandleOut i -> Handle : (HandleOut <$> [0 .. i - 1])
       _ -> []
@@ -251,6 +282,12 @@ data World = World
   , seenRead :: Map NotificationId Bool
   -- ^ Every notification listed so far, and whether it was ever listed
   -- read.
+  , leftNewest :: Set NotificationId
+  -- ^ The notifications that have been out of the server's newest at some
+  -- time since they were made: an answer handled then may leave them out,
+  -- whatever the server lists now (after a notification newer than them
+  -- is no longer listed). One never out of them is in every answer
+  -- handled after it was made.
   , tab :: Maybe Tab
   -- ^ The HTTP backend's cache, when the bell is over it; 'Nothing' for a
   -- backend that asks the server every time.
@@ -266,7 +303,7 @@ startCached :: World
 startCached = startOver (Just Tab {stored = storedOf emptyCache, told = []})
 
 startOver :: Maybe Tab -> World
-startOver tab = afterEvent "mounted" Started World {bell = initial Nothing 0, server = emptyServer, outs = [], listening = 0, finished = False, revisions = 0, trace = [], faults = [], seenRead = mempty, tab}
+startOver tab = afterEvent "mounted" Started World {bell = initial Nothing 0, server = emptyServer, outs = [], listening = 0, finished = False, revisions = 0, trace = [], faults = [], seenRead = mempty, leftNewest = mempty, tab}
 
 -- | The tab's cache after a change.
 changing :: (Cache -> Cache) -> World -> World
@@ -291,6 +328,9 @@ play w = \case
   Make -> noted ("the server makes n" <> show (w.server.count + 1)) w {server = made w.server}
   ReadElsewhere i -> case atMay [n | n <- w.server.notes, not n.read] i of
     Just n -> noted ("another tab marks " <> idText n <> " read") w {server = fst (handleMark ReadMark {ids = [n.id], everything = False} w.server)}
+    Nothing -> w
+  Forget i -> case atMay w.server.notes i of
+    Just n -> noted ("the server no longer lists " <> idText n) w {server = forgotten n.id w.server}
     Nothing -> w
   Tell -> case w.server.untold of
     n : rest -> afterEvent ("told " <> idText n) (Told n) (changing (withNotice n) w {server = w.server {untold = rest}, tab = fmap (\t -> t {told = take 50 (n : t.told)}) w.tab})
@@ -387,7 +427,7 @@ checked w = w {faults = w.faults <> problems, seenRead = Map.unionWith (||) w.se
     marksOut = not w.finished && any (\o -> case o.ask of MarkRead _ _ -> True; _ -> False) w.outs
     problems =
       [(ReadStaysRead, idText n <> " was shown read, and is shown unread again") | n <- shown, not n.read, Map.lookup n.id w.seenRead == Just True]
-        <> [(NothingLost, "listed before and gone: " <> T.intercalate ", " gone) | let gone = [unId i | i <- Map.keys w.seenRead, i `notElem` map (\n -> n.id) shown, i `elem` map (\n -> n.id) (take w.server.limit w.server.notes)], not (null gone), isJust (rightNotices w.bell)]
+        <> [(NothingLost, "listed before and gone: " <> T.intercalate ", " gone) | let gone = [unId i | i <- Map.keys w.seenRead, i `notElem` map (\n -> n.id) shown, i `elem` map (\n -> n.id) (take w.server.limit w.server.notes), i `Set.notMember` w.leftNewest], not (null gone), isJust (rightNotices w.bell)]
         <> [(CountMatches, "the count says " <> show (unreadCount w.bell) <> ", and " <> show (length (filter (\n -> not n.read) shown)) <> " are listed unread") | isJust (rightNotices w.bell), unreadCount w.bell < length (filter (\n -> not n.read) shown)]
         <> [(BusyWhileMarking, "the buttons that mark are " <> (if busy w.bell then "disabled with no mark out" else "enabled with a mark out")) | not w.finished, busy w.bell /= marksOut]
         <> [(ListedOnce, "a notification is listed twice") | let ids = map (\n -> n.id) shown, nub ids /= ids]
@@ -411,7 +451,7 @@ rightNotices m = case m.notices of
   _ -> Nothing
 
 noted :: Text -> World -> World
-noted what w = w {trace = (what <> "    [" <> summary w.bell <> "]") : w.trace}
+noted what w = w {trace = (what <> "    [" <> summary w.bell <> "]") : w.trace, leftNewest = w.leftNewest <> Set.fromList (map (\n -> n.id) (drop w.server.limit w.server.notes))}
 
 -- | What the bell shows, in short: the count, and each notification with
 -- a star when unread.
@@ -583,6 +623,7 @@ settles settle w0 =
 elsewhere :: Step -> Bool
 elsewhere = \case
   ReadElsewhere _ -> True
+  Forget _ -> True
   _ -> False
 
 -- | What a rule says, as an example's name.

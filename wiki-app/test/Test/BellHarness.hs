@@ -41,7 +41,7 @@ import Halogen.Router qualified as Router
 import Halogen.Subscription qualified as HS
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude hiding (State)
-import Test.Bell (Server (..), Step (..), World (..), emptyServer, handleMark, handleRead, made, play, start)
+import Test.Bell (Server (..), Step (..), World (..), emptyServer, forgotten, handleMark, handleRead, made, play, start)
 import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki, WikiError, anonymousIn)
 import Wiki.App.Backend.Mem (MemWiki, runMemWiki)
@@ -215,6 +215,7 @@ drive rig ui ref gone s = do
     ClickMarkAll -> ui.clickMarkAll
     ClickLink i -> unless gone (ui.clickLink i)
     Make -> modifyIORef' ref made
+    Forget i -> modifyIORef' ref $ \server -> maybe server (\n -> forgotten n.id server) (atMay server.notes i)
     ReadElsewhere i -> modifyIORef' ref $ \server -> case atMay [n | n <- server.notes, not n.read] i of
       Just n -> fst (handleMark ReadMark {ids = [n.id], everything = False} server)
       Nothing -> server
@@ -261,7 +262,7 @@ data Check = BesideMachine | RulesOnly
 runSteps :: Check -> Rig -> Ui -> [Step] -> IO (Maybe Text)
 runSteps how rig ui run = do
   ref <- newIORef emptyServer
-  let go _ _ _ [] = pure Nothing
+  let go _ w _ [] = pure (Nothing, w.finished)
       go done w seen (s : rest) = do
         drive rig ui ref w.finished s
         let w' = play w s
@@ -275,7 +276,8 @@ runSteps how rig ui run = do
             asksOut = if w'.finished then holding else length w'.outs
             -- Every notification listed so far, and whether it was ever
             -- listed read.
-            newest = [k | n <- take server.limit server.notes, let NotificationId t = n.id, Just k <- [readMaybe (T.drop 1 t)]]
+            numbers ns = [k | NotificationId t <- ns, Just k <- [readMaybe (T.drop 1 t)]]
+            newest = [k | k <- numbers (map (\n -> n.id) (take server.limit server.notes)), k `notElem` numbers (toList w'.leftNewest)]
             seen' = if page.open then Map.unionWith (||) seen (Map.fromList [(k, not unread) | (k, unread) <- page.rows]) else seen
             beside =
               ["the page shows " <> show page <> ", the machine " <> show expected | page /= expected]
@@ -292,9 +294,12 @@ runSteps how rig ui run = do
             problems = rules <> (if how == BesideMachine then beside else [])
         if null problems
           then go (done <> [s]) w' seen' rest
-          else pure (Just (T.unlines (("after " <> show (done <> [s])) : problems)))
-  outcome <- go [] start mempty (filter (/= PressOutside) run)
+          else pure (Just (T.unlines (("after " <> show (done <> [s])) : problems)), w'.finished)
+  (outcome, gone) <- go [] start mempty (filter (/= PressOutside) run)
   -- The asks still held are let go, so that no worker waits for ever.
   readTVarIO rig.gate >>= traverse_ (\h -> tryPutMVar h.answer (Right Notifications {unread = 0, items = []}))
-  unless (Finish `elem` run) rig.dispose
+  -- A run that stopped at a fault before its Finish leaves the bell
+  -- mounted: disposed of here, or its tree would count in the next run's
+  -- activity.
+  unless gone rig.dispose
   pure outcome
