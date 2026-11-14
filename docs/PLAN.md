@@ -3019,15 +3019,23 @@ needs. Each was true when its package merged; check before relying on one.
   coverage is checked natively only (`wiki-core/test/Test/Cases.hs`
   holds the rule: the wasm run is for what the compiler makes
   different, the native run keeps the count); the smoke suites run in
-  a job of their own, `smoke test`, beside `wasm` and side by side
+  a job of their own, `smoke test`, beside `wasm`, one after another
   (`npm run smoke-test` builds every suite's program once, then runs
-  them together); `toolchain/ci-suite-time.sh` writes each wasm and
+  them in a row; #274 ran them side by side, where each ran twice as
+  slow on four cores and the job failed twice in six runs by races no
+  one had seen in a row; #278 put them back, since a race is to be
+  found by the throttled job on purpose (decision 81) and side by side
+  bought no time: the job takes 10 minutes in a row; `WIKI_SMOKE_JOBS`
+  runs them side by side on a machine with cores to spare);
+  `toolchain/ci-suite-time.sh` writes each wasm and
   smoke suite's time, budget and five slowest examples to the run's
   summary. In that run: wiki-core on wasm 195 s, the browser shards
   311 and 333 s, the demo 151 s, the server 161 s and 167 s on
   PostgreSQL; `wasm` 13.2 minutes, `smoke test` 8.3, the native jobs 9
-  to 12. Left: the budgets warn only (`budgets_fail=false`), to be set
-  from a few hosted runs and then made to fail; `smoke` saves no
+  to 12. Left: the budgets, set from six hosted runs at about one and
+  a half times the longest seen (#278), warn only
+  (`budgets_fail=false`): making them fail is the owner's to say;
+  `smoke` saves no
   cache, so a change that compiles from cold compiles in both jobs,
   and a dependency bump is paid twice, once; the browser suite now
   sets the `wasm` job's length and has doubled in two days (481 to 678
