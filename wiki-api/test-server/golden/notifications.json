@@ -22,7 +22,6 @@
         ]
       },
       "page": "p1",
-      "position": 2,
       "read": false,
       "thread": "t1",
       "title": "Tour"
@@ -42,7 +41,6 @@
       "kind": "changed",
       "location": null,
       "page": "p1",
-      "position": 1,
       "read": true,
       "thread": null,
       "title": "Tour"

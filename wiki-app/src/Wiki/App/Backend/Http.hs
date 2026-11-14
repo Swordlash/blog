@@ -129,7 +129,7 @@ import Wiki.Api.Export (dispositionFileName, formatExtension, formatMediaType)
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (searchParameters)
 import Wiki.Api.Links qualified as Links
-import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..), Watching (..), searchable, withTold)
+import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..), Watching (..), searchable)
 import Wiki.Api.Opaque (LoginChallenge (..), LoginFinish (..), LoginStart (..), Message, NewAccountRecord (..), OldPasswordProof (..), PasswordRecord (..), PasswordRecordChange (..), PasswordWrapChange (..), ProofStart (..), RegistrationChallenge (..), RegistrationFor (..), RegistrationStart (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
@@ -219,10 +219,6 @@ data HttpEnv = HttpEnv
   -- ^ What the page holds of encrypted spaces (see "Encrypted spaces"):
   -- their keys, and their pages decrypted for the search. Shared by every
   -- copy of the environment, and emptied whenever who is signed in changes.
-  , told :: IORef [Notification]
-  -- ^ The last notifications the live channel told of, the latest first:
-  -- those told while the list is fetched are added to the server's answer,
-  -- which cannot hold them yet ('fetchedNotices').
   }
 
 -- | 'Awaiting' is what a password sign-in that waits for its second factor
@@ -266,13 +262,17 @@ newHttpEnvWith transport start = liftIO $ do
         case event of
           PageChanged _ -> atomicModifyIORef' held (\h -> (h {heldFound = mempty}, ()))
           _ -> pass
-  told <- newIORef []
-  let notice n = change (withNotice n) >> atomicModifyIORef' told (\ns -> (take 50 (n : ns), ()))
+  -- A notification told: the cached notifications are forgotten, and the
+  -- next read asks the server. Which notifications a cached list counts
+  -- cannot be told from it (the server lists only its newest), so the
+  -- cache keeps none it could count wrong; the bell shows the notification
+  -- at once and reads again ("Wiki.App.View.Bell.Machine").
+  let notice _ = change forgetNotices
   feed <- newFeed heard (\page threads -> change (withThreads page (Right threads))) (change . forgetThreads) notice (change forgetNotices)
   preloading <- newIORef True
   awaiting <- newIORef noneAwaiting
   passwordKey <- newIORef Nothing
-  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, rechecks = True, changes, feed, preloading, awaiting, passwordKey, held, told}
+  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, rechecks = True, changes, feed, preloading, awaiting, passwordKey, held}
 
 -- | A backend over a transport that answers at once: the server's
 -- application in the same process. 'atOnce' sends requests to it instead
@@ -1192,11 +1192,11 @@ withSealedTitles stars = do
             | s <- stars
             ]
 
--- | The user's notifications, cached as the server answered them and kept
--- up to date by the live channel ('withNotice'). Those the channel told of
--- while the list was fetched are added to the answer, which cannot hold
--- them yet; those told before the request are the server's to give or
--- leave out (a page the reader may no longer read).
+-- | The user's notifications, cached as the server answered them until the
+-- live channel tells of one ('forgetNotices'). A read sent to the server
+-- is numbered, and its answer stored only if no read was sent after it and
+-- the cache did not change since ('storedNotices'). What was told while a
+-- read was out is the bell's to add ("Wiki.App.View.Bell.Machine").
 fetchedNotices :: (MonadIO m) => HttpWiki m (Either WikiError Notifications)
 fetchedNotices = do
   first' <- readStored
@@ -1204,13 +1204,9 @@ fetchedNotices = do
     Just known -> pure known
     Nothing -> do
       (asked, stored) <- HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.cache (\c -> let (n, c') = askingNotices c in (c', (n, c')))))
-      toldRef <- HttpWiki (asks (\env -> env.told))
-      before <- liftIO (map (\n -> n.id) <$> readIORef toldRef)
       result <- send endpoints.notifications.list
-      during <- liftIO (filter (\n -> n.id `notElem` before) <$> readIORef toldRef)
-      let merged = withTold during <$> result
-      when (kept merged) (HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.cache (\c -> (storedNotices asked stored (withNotices merged) c, ())))))
-      pure merged
+      when (kept result) (HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.cache (\c -> (storedNotices asked stored (withNotices result) c, ())))))
+      pure result
 
 -- | The notifications with the titles of pages of encrypted spaces
 -- decrypted ('sealedTitles'), where this tab can: the server names such a

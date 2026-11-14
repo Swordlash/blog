@@ -23,11 +23,29 @@
 -- ('supersede') and reads again: a list read under the old revision may
 -- name pages by titles decrypted for a space the reader has left.
 --
--- A list taken keeps the notifications the live channel told of after
--- its ask was made and that it does not have yet: the server sent the
--- message after it had answered. For those told of before the ask was
--- made, the list is the truth, and may leave one out (a page the reader
--- may no longer read).
+-- = What the live channel told
+--
+-- The bell never guesses which notifications an answer counts: the server
+-- lists only its newest and counts every unread one beside them, and no
+-- property of a notification says whether an answer was given before or
+-- after it was made (not how many are listed, not their times, not the
+-- database's numbers, which are given again after a delete). So:
+--
+-- * a notification told is shown at once, added by its id if the list
+--   does not hold it, and counted if unread;
+-- * an answer taken (a read's, a mark's) replaces the list, and then what
+--   was told since that answer's ask is added again by id, counted if
+--   unread and not listed;
+-- * after a notification is told, a read asked after it follows: one at a
+--   time, and one more when its answer comes if more were told meanwhile
+--   ('following'). Its answer was asked after everything told so far was
+--   made, so it is exact, and it replaces everything.
+--
+-- So the only wrong state is a count too high for one request's time: a
+-- notification told after an answer's ask, which the answer counts and
+-- does not list. A notification is never left out. A follow-up read that
+-- fails leaves the list as it is; the next notification told, the bell
+-- opened, or the channel reopened asks again.
 --
 -- What any answer says was read stays shown read ('known'), whichever list
 -- is taken: the server never marks a notification unread, and a list taken
@@ -62,7 +80,7 @@ where
 import Data.Set qualified as Set
 import Protolude hiding (State)
 import Text.Show (Show (showsPrec))
-import Wiki.Api.Notifications (Notifications (..), ReadMark (..), counts, withTold)
+import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
 import Wiki.App.Backend (WikiError)
 import Wiki.App.View.Latest (Ask, Asks, madeAfter, newAsk, noAsks, supersede, takes)
 import Wiki.Core.Id (NotificationId)
@@ -84,6 +102,11 @@ data Model = Model
   -- ^ The notifications some answer said were read, taken or not. The
   -- server never marks one unread again, so they are shown read whatever
   -- list is taken.
+  , following :: Maybe Ask
+  -- ^ The read asked after a notification was told, while it is out.
+  , toldSince :: Bool
+  -- ^ Whether a notification was told after that read was asked: one more
+  -- read follows when its answer comes.
   , heard :: [(Notification, Asks)]
   -- ^ The notifications the live channel told of that no answer to an ask
   -- made after them has been taken for, each with the asks as they were
@@ -161,7 +184,7 @@ data Effect a
 -- | The bell before it is mounted, with the notifications read at once if
 -- the backend could ('Nothing' otherwise), under a revision of the wiki.
 initial :: Maybe (Either WikiError Notifications) -> Int -> Model
-initial notices revision = Model {notices, open = False, asks = noAsks, marking = 0, known = mempty, heard = [], revision, closed = False}
+initial notices revision = Model {notices, open = False, asks = noAsks, marking = 0, known = mempty, following = Nothing, toldSince = False, heard = [], revision, closed = False}
 
 -- | The bell after an event, and what it asks to be done.
 step :: Event a -> Model -> (Model, [Effect a])
@@ -181,14 +204,16 @@ step event m
         | otherwise -> (Watch :) <$> reading m {open = True}
       Dismissed -> close m
       Told n ->
-        ( m
-            { notices = fmap (\ns -> if counts ns n then ns else withRead m.known (withTold [n] ns)) <$> m.notices
-            , heard = (n, m.asks) : filter (\(x, _) -> x.id /= n.id) m.heard
-            }
-        , []
-        )
+        let told' =
+              m
+                { notices = fmap (withRead m.known . withHeard [n]) <$> m.notices
+                , heard = (n, m.asks) : filter (\(x, _) -> x.id /= n.id) m.heard
+                }
+         in case m.following of
+              Nothing -> let (m', fx) = reading told' in (m' {following = askOf fx}, fx)
+              Just _ -> (told' {toldSince = True}, [])
       Reopened -> reading m
-      Loaded asked answer -> (taking asked answer (learning answer m), [])
+      Loaded asked answer -> followed asked (taking asked answer (learning answer m))
       MarkClicked i -> marking ReadMark {ids = [i], everything = False} m
       MarkAllClicked -> marking ReadMark {ids = [], everything = True} m
       -- A mark the server took, whose answer a later ask's answer was
@@ -211,20 +236,43 @@ step event m
          in (marked, unwatched <> [Follow target] <> marks)
 
 -- | The answer to an ask taken, if no answer to a later ask was: the list
--- with what the live channel told after the ask was made and the list
--- does not have. What the channel told is kept until an answer to an ask
--- made after it is taken, even when a list taken meanwhile has it: an
--- answer taken later may be one handled before the notification was made
--- (a mark answered last, over a backend that merged the channel's
--- messages into a read's answer).
+-- with what the live channel told since the ask was made added again by
+-- id ('withHeard'). What the channel told is kept until an answer to an
+-- ask made after it is taken, even when a list taken meanwhile has it. A
+-- failure is shown only where no list is held: a list the bell holds is
+-- kept, and asked for again later.
 taking :: Ask -> Either WikiError Notifications -> Model -> Model
 taking asked answer m = case takes asked m.asks of
   Nothing -> m
   Just after -> case answer of
     Right ns ->
       let kept = [(n, at) | (n, at) <- m.heard, not (asked `madeAfter` at)]
-       in m {asks = after, notices = Just (Right (withRead m.known (withTold (map fst kept) ns))), heard = kept}
-    Left _ -> m {asks = after, notices = Just answer}
+       in m {asks = after, notices = Just (Right (withRead m.known (withHeard (map fst kept) ns))), heard = kept}
+    Left _ -> case m.notices of
+      Just (Right _) -> m {asks = after}
+      _ -> m {asks = after, notices = Just answer}
+
+-- | The bell after the answer to an ask came, taken or not: when it was the
+-- read that followed a notification told, one more read follows if more
+-- were told since it was asked.
+followed :: Ask -> Model -> (Model, [Effect a])
+followed asked m
+  | m.following /= Just asked = (m, [])
+  | m.toldSince = let (m', fx) = reading m {toldSince = False} in (m' {following = askOf fx}, fx)
+  | otherwise = (m {following = Nothing}, [])
+
+-- | The read a step asked, if it asked one.
+askOf :: [Effect a] -> Maybe Ask
+askOf fx = head [t | Load t <- fx]
+
+-- | The list with these notifications told by the live channel added, the
+-- newest first, each by its id if the list does not hold it, and counted
+-- if unread. A notification the list counts but does not list (the server
+-- lists only its newest) is counted again, until the read that follows.
+withHeard :: [Notification] -> Notifications -> Notifications
+withHeard told ns = Notifications {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}
+  where
+    missing = [n | n <- told, all (\x -> x.id /= n.id) ns.items]
 
 -- | What an answer says was read learnt, and shown on the list as it is,
 -- whether the answer is taken or not: an answer dropped as older may be

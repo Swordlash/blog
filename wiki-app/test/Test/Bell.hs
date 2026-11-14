@@ -21,22 +21,42 @@
 -- badge at 50 with no unread row, after this model had passed millions of
 -- runs: its server answered with the whole list, where the real one lists
 -- the newest 50 and counts every unread one beside them, so no run could
--- make the count and the rows differ. So, for whoever models the next
--- server: give each answer of the model the real answer's shape, its
--- limits, counts and order included, and read the real handler (here
--- @wiki-server@'s @notificationsTx@ and @Events.notify@) for it, not the
--- client's types alone. For the bell, against what the real answers hold:
+-- make the count and the rows differ. Then twice more the client inferred
+-- what an answer counts from a property of its items (their times, then
+-- the database's numbers), and the model, whose server never deleted and
+-- never told more than the client's own bounds keep, could not show it
+-- wrong. So, for whoever models the next server: give each answer of the
+-- model the real answer's shape, its limits, counts and order included,
+-- every way the server deletes, and every bounded buffer between the
+-- server and the view; read the real handler (here @wiki-server@'s
+-- @notificationsTx@, @Events.notify@, @pruneNotifications@ and the
+-- migrations' cascades) for it, not the client's types alone; and let
+-- the client infer nothing the server does not state. For the bell,
+-- against what the real answers hold:
 --
 -- * the list: the newest 'Wiki.Core.Notification.maxListed' (50) about
 --   pages the reader may read, newest first; the model lists its newest
 --   'limit' (3), newest first;
 -- * the count: every unread notification about such pages, listed or
 --   not; the model counts every unread one;
--- * a notification about a page the reader may no longer read leaves the
---   list and the count: the model's 'Forget' (nothing tells the tab);
--- * each notification's place (where its page is now), title, excerpt,
---   time and read mark: the model's are fixed, but for the read mark and
---   the time, which orders them. The title of a page of an encrypted
+-- * a notification leaves the list and the count when its page may no
+--   longer be read, when its page is deleted (the delete cascades), when
+--   its user is removed, and when the retention drops it (older than 90
+--   days, beyond the newest 500): the model's 'Forget'; nothing tells the
+--   tab;
+-- * the server's order is the order it commits notifications in (@seq@),
+--   and a notification's time can be taken before its transaction waits
+--   for the writer: the model also makes one timed before its newest
+--   ('MakeEarly'). Nothing on the client reads either: SQLite gives a
+--   deleted notification's number again, and the time is no order;
+-- * every bounded buffer between the server and the view: the list's
+--   limit (the model's 'limit'); the HTTP backend no longer keeps what was
+--   told (a notification told forgets the cached list), and the bell keeps
+--   what was told since an answer's ask whole; the model's server can make
+--   51 at once ('MakeMany', in 'genBursts'), more than the 50 the backend
+--   kept before;
+-- * each notification's place (where its page is now), title, excerpt and
+--   read mark: the model's are fixed, but for the read mark. The title of a page of an encrypted
 --   space is the server's sealed one, decrypted by the HTTP backend: the
 --   model has none, and no rule reads a title (a new revision seals the
 --   titles at once and puts every ask out behind it, as on main; a rule
@@ -47,12 +67,29 @@
 --   channel reopened tells nothing it lost ('Reconnect'); the model's are
 --   the same;
 -- * a failed answer (the network, a refusal) is not made by the model:
---   the bell shows a failed read as an error in place of the list, a
---   choice of the view's and not a race, and a failed mark changes
---   nothing;
+--   the bell shows a failed read as an error only where it holds no list,
+--   and a failed mark changes nothing;
 -- * a bell started over the server's page has its list from the preload
 --   and asks nothing: the state of a run whose first read was answered
 --   before anything else, which the generator makes.
+--
+-- And what the model takes of the server's order and atomicity, each from
+-- the server's code:
+--
+-- * a read's count and list come from one state: @notificationsTx@ runs in
+--   one read transaction, @REPEATABLE READ@ on PostgreSQL and SQLite's
+--   read transaction ('handleRead' reads one 'Server');
+-- * a mark's answer is the state just after it: @markReadTx@ marks and
+--   reads in one write transaction ('handleMark');
+-- * a notification is told after it is committed, before any later write
+--   commits, and the notifications of one write in the order they were
+--   made (@transactThenFrom@ calls @notify@ after the commit); a
+--   connection's messages go out in order, and a tab that falls behind is
+--   dropped and reconnects ('Make' then 'Tell', first in first out;
+--   'Reconnect');
+-- * reads run on the readers, beside the one writer: a read sent after a
+--   mark can be handled before the mark commits (the runs of 'HandleOut',
+--   which break the two rules their examples hold).
 module Test.Bell
   ( spec
 
@@ -86,8 +123,8 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (modifyMaxSuccess)
 import Test.QuickCheck (Gen, Property, chooseInt, counterexample, forAllShrinkShow, frequency, listOf, shrinkList, (.&&.), (===))
 import Test.QuickCheck qualified as QC
-import Wiki.Api.Notifications (Notifications (..), ReadMark (..), withTold)
-import Wiki.App.Backend.Http.Cache (Cache (notices), Stored (..), askingNotices, changedBy, emptyCache, forgetNotices, markedAnswer, storedNotices, storedOf, withNotice, withNotices)
+import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
+import Wiki.App.Backend.Http.Cache (Cache (notices), Stored (..), askingNotices, changedBy, emptyCache, forgetNotices, markedAnswer, storedNotices, storedOf, withNotices)
 import Wiki.App.View.Bell.Machine
 import Wiki.App.View.Latest (madeAfter)
 import Wiki.Core.Id (NotificationId (..), PageId (..), UserId (..))
@@ -121,13 +158,7 @@ emptyServer = Server {count = 0, notes = [], untold = [], limit = 3}
 made :: Server -> Server
 made s = s {count = s.count + 1, notes = n : s.notes, untold = s.untold <> [n]}
   where
-    n = (noticeOf (s.count + 1)) {position = Just (nextSeq s)}
-
--- | The number SQLite gives the next notification: one more than the
--- greatest it holds (@seq@ is @INTEGER PRIMARY KEY@ with no
--- @AUTOINCREMENT@), so the number of one deleted last is given again.
-nextSeq :: Server -> Int64
-nextSeq s = 1 + fromMaybe 0 (maximumMay (mapMaybe (\n -> n.position) s.notes))
+    n = noticeOf (s.count + 1)
 
 -- | The server after it made this many notifications at once, told one
 -- after the other: more than any bound on the client's side (an answer's
@@ -144,7 +175,7 @@ madeMany k s = foldl' (\x _ -> made x) s [1 .. k]
 madeEarly :: Server -> Server
 madeEarly s = s {count = s.count + 1, notes = n : s.notes, untold = s.untold <> [n]}
   where
-    n = (noticeOf (s.count + 1)) {createdAt = maybe (noticeOf (s.count + 1)).createdAt (\x -> addUTCTime (-0.5) x.createdAt) (head s.notes), position = Just (nextSeq s)}
+    n = (noticeOf (s.count + 1)) {createdAt = maybe (noticeOf (s.count + 1)).createdAt (\x -> addUTCTime (-0.5) x.createdAt) (head s.notes)}
 
 -- | The notification numbered so.
 noticeOf :: Int -> Notification
@@ -160,7 +191,6 @@ noticeOf k =
     , createdAt = UTCTime (fromGregorian 2026 11 14) (fromIntegral k)
     , read = False
     , location = Just PageLocation {space = [slug "blog"], page = [slug ("page-" <> show k)]}
-    , position = Just (fromIntegral k)
     }
   where
     slug = either (panic . show) identity . mkSlug
@@ -233,6 +263,11 @@ data Step
 genRun :: Gen [Step]
 genRun = listOf (genStep [])
 
+-- | A run's steps with bursts of notifications longer than every bound on
+-- the client's side ('MakeMany'). Long runs cost: these run fewer cases.
+genBursts :: Gen [Step]
+genBursts = listOf (genStep [(1, pure MakeMany)])
+
 -- | A run's steps, the server handling asks in any order.
 genUnordered :: Gen [Step]
 genUnordered = listOf (genStep [(4, HandleOut <$> chooseInt (0, 3))])
@@ -248,7 +283,6 @@ genStep more =
          , (1, ClickLink <$> chooseInt (0, 3))
          , (4, pure Make)
          , (1, pure MakeEarly)
-         , (1, pure MakeMany)
          , (2, ReadElsewhere <$> chooseInt (0, 3))
          , (1, Forget <$> chooseInt (0, 3))
          , (4, pure Tell)
@@ -275,26 +309,24 @@ shrinkRun = shrinkList shrinkStep
 data Out = Out
   { ask :: Effect ()
   , answer :: Maybe Notifications
-  , sent :: Maybe (Int, Stored, [NotificationId])
+  , sent :: Maybe (Int, Stored)
   -- ^ Over the HTTP backend's cache, for a read sent to the server: the
-  -- cache as it was when the read was sent, and the notifications the
-  -- live channel had told of then ("Wiki.App.Backend.Http"'s
-  -- @fetchedNotices@).
+  -- cache as it was when the read was sent, and the read's number
+  -- ("Wiki.App.Backend.Http"'s @fetchedNotices@).
   }
   deriving stock (Show)
 
 -- | 'Tab' is what the HTTP backend keeps in the tab for the bell: its
--- cache, with the changes counted ("Wiki.App.Backend.Http.Cache"), and
--- every notification the live channel told of. A read is answered from
--- the cache when the cache has the notifications; otherwise it is sent,
--- and its answer, with what the channel told while it was out, is stored
--- if the cache did not change meanwhile. A message of the channel adds
--- its notification to the cached ones ('withNotice'), the channel
--- reopened forgets them ('forgetNotices'), a mark's answer replaces them
--- ('withNotices'): each a change.
-data Tab = Tab
+-- cache, with the changes counted ("Wiki.App.Backend.Http.Cache"). A read
+-- is answered from the cache when the cache has the notifications;
+-- otherwise it is sent, numbered, and its answer stored if no read was
+-- sent after it and the cache did not change meanwhile ('storedNotices').
+-- A message of the channel forgets the cached notifications, and so does
+-- the channel reopened ('forgetNotices'); a mark's answer replaces them,
+-- or forgets them if the cache changed or a read went out meanwhile
+-- ('markedAnswer'): each a change.
+newtype Tab = Tab
   { stored :: Stored
-  , told :: [Notification]
   }
   deriving stock (Show)
 
@@ -334,7 +366,7 @@ start = startOver Nothing
 
 -- | A run from its start, over the HTTP backend's cache, empty.
 startCached :: World
-startCached = startOver (Just Tab {stored = storedOf emptyCache, told = []})
+startCached = startOver (Just Tab {stored = storedOf emptyCache})
 
 startOver :: Maybe Tab -> World
 startOver tab = afterEvent "mounted" Started World {bell = initial Nothing 0, server = emptyServer, outs = [], listening = 0, finished = False, revisions = 0, trace = [], faults = [], seenRead = mempty, leftNewest = mempty, tab}
@@ -369,7 +401,7 @@ play w = \case
     Just n -> noted ("the server no longer lists " <> idText n) w {server = forgotten n.id w.server}
     Nothing -> w
   Tell -> case w.server.untold of
-    n : rest -> afterEvent ("told " <> idText n) (Told n) (changing (withNotice n) w {server = w.server {untold = rest}, tab = fmap (\t -> t {told = take 50 (n : t.told)}) w.tab})
+    n : rest -> toldNow n (afterEvent ("told " <> idText n) (Told n) (changing forgetNotices w {server = w.server {untold = rest}}))
     [] -> w
   Reconnect -> afterEvent "reconnected" Reopened (changing forgetNotices w {server = w.server {untold = []}})
   Handle -> handleAt 0 w
@@ -379,15 +411,14 @@ play w = \case
       let w' = w {outs = [x | (j, x) <- zip [0 ..] w.outs, j /= k]}
        in case o.ask of
             Load f -> case (w'.tab, o.sent) of
-              -- Over the cache, a read sent to the server: its answer
-              -- with what the channel told meanwhile, stored if the cache
-              -- did not change since it was sent.
-              (Just t, Just (asked, sentAt, toldBefore)) ->
-                let merged = withTold [n | n <- t.told, n.id `notElem` toldBefore] a
-                    t' = t {stored = storedNotices asked sentAt (withNotices (Right merged)) t.stored}
-                 in afterEvent ("answer to " <> askText o.ask <> ": " <> listText merged) (Loaded f (Right merged)) w' {tab = Just t'}
+              -- Over the cache, a read sent to the server: its answer,
+              -- stored if no read was sent after it and the cache did not
+              -- change since it was sent.
+              (Just t, Just (asked, sentAt)) ->
+                let t' = t {stored = storedNotices asked sentAt (withNotices (Right a)) t.stored}
+                 in afterEvent ("answer to " <> askText o.ask) (Loaded f (Right a)) w' {tab = Just t'}
               _ -> afterEvent ("answer to " <> askText o.ask) (Loaded f (Right a)) w'
-            MarkRead m _ -> afterEvent ("answer to " <> askText o.ask) (Marked m (Right a)) w' {tab = (\t -> t {stored = maybe identity (\(_, sentAt, _) -> markedAnswer sentAt (Right a)) o.sent t.stored}) <$> w'.tab}
+            MarkRead m _ -> afterEvent ("answer to " <> askText o.ask) (Marked m (Right a)) w' {tab = (\t -> t {stored = maybe identity (\(_, sentAt) -> markedAnswer sentAt (Right a)) o.sent t.stored}) <$> w'.tab}
             _ -> w
     Nothing -> w
   Revise -> afterEvent ("revision " <> show (w.revisions + 1)) (Revised (w.revisions + 1) (Sealer identity)) w {revisions = w.revisions + 1}
@@ -431,8 +462,8 @@ afterEvent what event w =
     outOf e = case (e, w.tab) of
       (Load _, Just t) -> case t.stored.cache.notices of
         Just (Right known) -> Out {ask = e, answer = Just known, sent = Nothing}
-        _ -> let (asked, sentAt) = askingNotices t.stored in Out {ask = e, answer = Nothing, sent = Just (asked, sentAt, map (\n -> n.id) t.told)}
-      (MarkRead _ _, Just t) -> Out {ask = e, answer = Nothing, sent = Just (0, t.stored, [])}
+        _ -> let (asked, sentAt) = askingNotices t.stored in Out {ask = e, answer = Nothing, sent = Just (asked, sentAt)}
+      (MarkRead _ _, Just t) -> Out {ask = e, answer = Nothing, sent = Just (0, t.stored)}
       _ -> Out {ask = e, answer = Nothing, sent = Nothing}
     effectsText = if null effects then "" else " -> " <> T.intercalate ", " (map effectText effects)
     isAsk = isJust . ticketOf
@@ -454,6 +485,11 @@ fromTheCache w = case [k | (k, o) <- zip [0 :: Int ..] w.outs, isJust w.tab, isN
     isLoad = \case
       Load _ -> True
       _ -> False
+
+-- | The world with the rule that a notification told is shown at once
+-- checked, after the bell took it.
+toldNow :: Notification -> World -> World
+toldNow n w = w {faults = w.faults <> [(ShownWhenTold, idText n <> " was told and is not listed") | not w.finished, Just (Right ns) <- [w.bell.notices], all (\x -> x.id /= n.id) ns.items]}
 
 -- | The world with what the bell shows checked against the rules.
 checked :: World -> World
@@ -479,6 +515,7 @@ data Rule
   | ListedOnce
   | QuietAfterClose
   | AsksNamed
+  | ShownWhenTold
   deriving stock (Eq, Show, Enum, Bounded)
 
 rightNotices :: Model -> Maybe Notifications
@@ -561,7 +598,10 @@ cases :: Int
 cases = 20_000
 
 spec :: Spec
-spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (max cases) $ do
+spec = describe "Wiki.App.View.Bell.Machine" $ bursts >> modifyMaxSuccess (max cases) properties
+
+properties :: Spec
+properties = do
   for_ [minBound .. maxBound] $ \rule ->
     it (ruleText rule) $
       QC.property $
@@ -634,12 +674,28 @@ spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (max cases) $ do
 
     it "is known to show an older count until the next read"
       $ QC.once . QC.expectFailure
-      $ settles quieted (foldl' play start [Make, Make, Handle, Make, Make, ClickBell, ClickBell, ClickBell, Deliver 0, ClickLink 1, Handle, ClickBell, HandleOut 2])
+      $ settles quieted (foldl' play start [ClickBell, Handle, ClickBell, Make, MakeEarly, ClickBell, Make, Make, Reconnect, Handle, Handle, Deliver 1, ClickMarkAll, ClickBell, ClickBell, HandleOut 2])
 
     it "shows the server's list once everything out has come back and one more read is answered" $
       QC.property $
         forAllShrinkShow genUnordered shrinkRun show $ \run ->
           settles settled (foldl' play start (filter (/= Finish) run))
+
+-- | The runs with bursts longer than the client's bounds, on both backends'
+-- models, at fewer cases than the rest (long runs cost).
+bursts :: Spec
+bursts = describe "with bursts longer than every bound on the client's side" $
+  modifyMaxSuccess (const 2000) $
+    for_ [("", start), (", over the HTTP backend's cache", startCached)] $ \(how, w0) -> do
+      for_ [NothingLost, CountMatches, ListedOnce, ShownWhenTold] $ \rule ->
+        it (ruleText rule <> how) $
+          QC.property $
+            forAllShrinkShow genBursts shrinkRun show $ \run ->
+              verdict rule (foldl' play w0 run)
+      it ("shows the server's list once everything out has come back, when every change was the reader's or told" <> how) $
+        QC.property $
+          forAllShrinkShow genBursts shrinkRun show $ \run ->
+            settles quieted (foldl' play w0 (filter (`notElem` [Finish]) (filter (not . elsewhere) run)))
 
 -- | Whether a run, settled, shows the server's list and count, with no
 -- mark out.
@@ -674,3 +730,4 @@ ruleText = \case
   ListedOnce -> "lists each notification once, on any run"
   QuietAfterClose -> "asks nothing and stops listening once it has gone away"
   AsksNamed -> "makes every ask under a new ticket its state names, on any run"
+  ShownWhenTold -> "lists a notification the live channel tells of at once, on any run"

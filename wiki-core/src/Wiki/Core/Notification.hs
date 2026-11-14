@@ -156,26 +156,19 @@ data Notification = Notification
   , location :: Maybe PageLocation
   -- ^ Where the page is now, if the backend knows: a notification is read
   -- with it, since a page may move after the notification is created.
-  , position :: Maybe Int64
-  -- ^ Its place in the order the backend made the user's notifications
-  -- in: a notification made later has a greater one. The server's is the
-  -- order it committed them in (its @seq@), which its list follows; a
-  -- notification's time may be taken before its transaction waits for the
-  -- writer, and is no order. 'Nothing' where the backend did not say (a
-  -- server from before it did, a notification kept from then).
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
 -- | A notification with where its page is now.
 withLocation :: Maybe PageLocation -> Notification -> Notification
-withLocation location n = Notification {id = n.id, kind = n.kind, page = n.page, thread = n.thread, actor = n.actor, title = n.title, excerpt = n.excerpt, createdAt = n.createdAt, read = n.read, location, position = n.position}
+withLocation location n = Notification {id = n.id, kind = n.kind, page = n.page, thread = n.thread, actor = n.actor, title = n.title, excerpt = n.excerpt, createdAt = n.createdAt, read = n.read, location}
 
 -- | A notification with another title for its page: one decrypted in the
 -- browser, for a page of an encrypted space, which the server names by
 -- what it is.
 withTitle :: Text -> Notification -> Notification
-withTitle title n = Notification {id = n.id, kind = n.kind, page = n.page, thread = n.thread, actor = n.actor, title, excerpt = n.excerpt, createdAt = n.createdAt, read = n.read, location = n.location, position = n.position}
+withTitle title n = Notification {id = n.id, kind = n.kind, page = n.page, thread = n.thread, actor = n.actor, title, excerpt = n.excerpt, createdAt = n.createdAt, read = n.read, location = n.location}
 
 -- | What a notification says, in words for a person to read: "Ada
 -- mentioned you".

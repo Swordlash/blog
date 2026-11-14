@@ -29,7 +29,6 @@ module Wiki.Server.Storage.Notifications
 
     -- * Notifications
   , insertNotification
-  , insertedNotification
   , loadNewest
   , unreadBySpace
   , markNotificationsRead
@@ -255,20 +254,9 @@ insertNotification u n mail =
           }
       ]
 
--- | Add a notification for a user, as 'insertNotification' does: the
--- notification with its place in the order the database numbered it in
--- ('seq'), which the client compares lists by. All writes run on the one
--- writer, one transaction at a time, so that order is the order they
--- commit in, on SQLite and on PostgreSQL alike.
-insertedNotification :: (Backend be) => UserId -> Notification -> Bool -> Db be Notification
-insertedNotification u n mail = do
-  insertNotification u n mail
-  position <- runSelectReturningOne (select ((\r -> r.seq) <$> filter_ (\r -> r.id ==. val_ n.id.text) (all_ wikiDb.notifications)))
-  pure n {position}
-
 notificationOf :: S.Notifications Identity -> Maybe Notification
 notificationOf r =
-  (\k -> Notification {id = NotificationId r.id, kind = k, page = PageId r.page_id, thread = CommentThreadId <$> r.thread_id, actor = Author {id = UserId r.actor, name = r.actor_name, avatar = Nothing}, title = r.title, excerpt = r.excerpt, createdAt = r.created_at, read = isJust r.read_at, location = Nothing, position = Just r.seq})
+  (\k -> Notification {id = NotificationId r.id, kind = k, page = PageId r.page_id, thread = CommentThreadId <$> r.thread_id, actor = Author {id = UserId r.actor, name = r.actor_name, avatar = Nothing}, title = r.title, excerpt = r.excerpt, createdAt = r.created_at, read = isJust r.read_at, location = Nothing})
     <$> readKind r.kind
 
 -- | Some of a user's notifications, the newest first, without where their

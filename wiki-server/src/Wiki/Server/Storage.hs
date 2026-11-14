@@ -5577,9 +5577,9 @@ tellTx pid sid title thread excerpt occasion logins = do
     time <- now
     for_ (recipients grants watchers happened) $ \(u, kind) -> do
       i <- NotificationId <$> newId
-      let n = Notification {id = i, kind, page = pid, thread, actor = actorAuthor, title, excerpt, createdAt = time, read = False, location = Just location, position = Nothing}
-      inserted <- db (Notifications.insertedNotification u n (Set.member u mailed))
-      liftIO (modifyIORef' ctx.told ((u, inserted) :))
+      let n = Notification {id = i, kind, page = pid, thread, actor = actorAuthor, title, excerpt, createdAt = time, read = False, location = Just location}
+      db (Notifications.insertNotification u n (Set.member u mailed))
+      liftIO (modifyIORef' ctx.told ((u, n) :))
 
 -- | A page's node and the nodes of the pages above it, by id: what
 -- 'pathOf' needs to find the page's path. Each node is read by its id, so

@@ -16,11 +16,11 @@ title: The bell keeps your "Mark read" and every notification it has shown
 - The bell's count no longer stays above zero after "Mark all read" when
   you have more unread notifications than the bell lists and open the
   bell again before the mark has gone through.
-- With more notifications than the bell lists, one told to your tab no
-  longer counts twice.
-- A notice that a space's key must be renewed, made by a password reset
-  while other notifications arrive, now always shows under the bell and
-  in its count.
+- Every notification told to your tab now shows under the bell at once
+  and stays in its count, however many arrive together, also a notice
+  that a space's key must be renewed made by a password reset, and after
+  older notifications were deleted. The bell then reads its list again,
+  so its count is the server's a moment later.
 - The "Mark read" buttons stay disabled until every mark you started has
   come back, also when you follow a notification's link while "Mark all
   read" is still under way.

@@ -101,9 +101,10 @@
 --   of the mentioned logins belong to users: the server prerenders the
 --   header and the page with them.
 --
--- A notification received over the live channel is added at the front of
--- the cached ones ('withNotice'). Marking notifications read puts the
--- server's response in the cache and changes nothing else. Choosing a
+-- A notification received over the live channel forgets the cached ones
+-- ('forgetNotices'): which of them a list counts cannot be told from it.
+-- Marking notifications read puts the server's response in the cache,
+-- unless the cache changed or a read went out meanwhile ('markedAnswer'). Choosing a
 -- watch removes every cached watch, then caches the server's response:
 -- watching a space changes whether the pages in it are watched, so the
 -- other cached watches may be out of date. Changing the notification
@@ -175,7 +176,6 @@ module Wiki.App.Backend.Http.Cache
   , markedAnswer
   , askingNotices
   , storedNotices
-  , withNotice
   , forgetNotices
   , withWatch
   , withStars
@@ -197,7 +197,7 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (Directory, Invitations, ServerStatus, TexEngine, UserPage, UserQuery, WikiSettings)
 import Wiki.Api.Backups (Backups)
 import Wiki.Api.Events (PageEvent (..), applyEvent)
-import Wiki.Api.Notifications (Notifications (..), withTold)
+import Wiki.Api.Notifications (Notifications (..))
 import Wiki.Api.ServerSettings (ServerSettings)
 import Wiki.Api.Stars (StarredPage)
 import Wiki.Api.WhatsNew (WhatsNew)
@@ -207,7 +207,7 @@ import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Comment (Thread)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
-import Wiki.Core.Notification (Notification (..), PageLocation, Watch, WatchTarget)
+import Wiki.Core.Notification (PageLocation, Watch, WatchTarget)
 import Wiki.Core.Page (Page, PageSummary)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
@@ -578,14 +578,6 @@ storedNotices :: Int -> Stored -> (Cache -> Cache) -> Stored -> Stored
 storedNotices asked sent keep now
   | now.noticeReads == asked = storedAnswer PlainRead sent keep now
   | otherwise = now
-
--- | Add a notification received over the live channel at the front of the
--- cached notifications, unless they count it already
--- ('Wiki.Api.Notifications.counts'): the server sends the message after
--- the notification is made, so a read it answered in between counted it,
--- and listed it if it was among the newest.
-withNotice :: Notification -> Cache -> Cache
-withNotice n c = c {notices = fmap (withTold [n]) <$> c.notices}
 
 -- | Remove the cached notifications, because some may have been missed.
 forgetNotices :: Cache -> Cache

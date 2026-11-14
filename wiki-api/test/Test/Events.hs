@@ -11,7 +11,6 @@ import Data.Time (UTCTime (..), fromGregorian)
 import Protolude
 import Test.Hspec
 import Wiki.Api.Events
-import Wiki.Api.Notifications (Notifications (..), counts)
 import Wiki.Core.Attachment (MimeType (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id
@@ -34,21 +33,6 @@ thread = Thread {id = CommentThreadId "t", page = PageId "p", anchor = Nothing, 
 
 spec :: Spec
 spec = describe "Events" $ do
-  it "reads a notification from a server from before positions as having none" $ do
-    let old = "{\"id\":\"n\",\"kind\":\"mentioned\",\"page\":\"p\",\"thread\":null,\"actor\":{\"id\":\"u\",\"name\":\"U\",\"avatar\":null},\"title\":\"P\",\"excerpt\":\"\",\"createdAt\":\"2026-10-25T00:00:00Z\",\"read\":false,\"location\":null}"
-    ((\(n :: Notification) -> n.position) <$> eitherDecode old) `shouldBe` Right Nothing
-
-  it "counts a told notification by the server's order, not by its time" $ do
-    let at k = UTCTime (fromGregorian 2026 10 25) k
-        notice i k p = Notification {id = NotificationId i, kind = Mentioned, page = PageId "p", thread = Nothing, actor = Author {id = UserId "u", name = "U", avatar = Nothing}, title = "P", excerpt = "", createdAt = at k, read = False, location = Nothing, position = p}
-        listed = Notifications {unread = 2, items = [notice "n2" 20 (Just 2)]}
-    -- Made after the list's newest, though timed before it: not counted.
-    counts listed (notice "n3" 10 (Just 3)) `shouldBe` False
-    -- Made before it, though timed after it: counted, listed or not.
-    counts listed (notice "n1" 30 (Just 1)) `shouldBe` True
-    -- No position known: not counted, so never left out.
-    counts listed (notice "n0" 5 Nothing) `shouldBe` False
-    counts listed (notice "n2" 20 Nothing) `shouldBe` True
   it "reads back every message it writes" $ do
     let messages =
           [ Subscribed (PageId "p") [thread] [] noReaders
@@ -65,7 +49,7 @@ spec = describe "Events" $ do
           , Event (PageId "p") (Reading Readers {some = [ada], total = 1, visitors = 0})
           , Event (PageId "p") (Reading noReaders)
           , Event (PageId "p") (PageChanged time)
-          , Notified Notification {id = NotificationId "n", kind = Mentioned, page = PageId "p", thread = Nothing, actor = Author {id = UserId "u", name = "U", avatar = Nothing}, title = "P", excerpt = "", createdAt = time, read = False, location = Nothing, position = Nothing}
+          , Notified Notification {id = NotificationId "n", kind = Mentioned, page = PageId "p", thread = Nothing, actor = Author {id = UserId "u", name = "U", avatar = Nothing}, title = "P", excerpt = "", createdAt = time, read = False, location = Nothing}
           ]
     decode (encode messages) `shouldBe` Just messages
     let said = [Subscribe (PageId "p"), Unsubscribe (PageId "p"), StartEditing (PageId "p"), StopEditing (PageId "p")]

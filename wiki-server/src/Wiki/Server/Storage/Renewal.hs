@@ -39,7 +39,7 @@ import Wiki.Core.User (Membership, User (..))
 import Wiki.Core.Vault (KeyId (..))
 import Wiki.Core.Version (Author)
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Notifications (insertedNotification)
+import Wiki.Server.Storage.Notifications (insertNotification)
 import Wiki.Server.Storage.Rows (PageNode (..), loadAccountFlags, loadGrants, loadMembership, loadSpaces, loadUsers, pageNodes, settingValue, storeSetting)
 import Wiki.Server.Storage.Sealed (currentPublicKeys, grantsOfKey, spaceKind)
 
@@ -109,7 +109,8 @@ noticeRenewals actor now = do
               Just page -> do
                 made <- for (administratorsIn grants membership users disabled c) $ \u -> do
                   i <- liftIO (UUID.toText <$> generateV4)
-                  let n = Notification {id = NotificationId i, kind = KeyToRenew, page = page.id, thread = Nothing, actor, title = s.name, excerpt = "", createdAt = now, read = False, location = Nothing, position = Nothing}
-                  (u,) <$> insertedNotification u n False
+                  let n = Notification {id = NotificationId i, kind = KeyToRenew, page = page.id, thread = Nothing, actor, title = s.name, excerpt = "", createdAt = now, read = False, location = Nothing}
+                  insertNotification u n False
+                  pure (u, n)
                 storeSetting (renewalToldSetting s.id) k.text
                 pure made

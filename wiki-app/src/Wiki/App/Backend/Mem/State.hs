@@ -1788,7 +1788,6 @@ removeUserIn uid st = do
               , Notice.createdAt = n.createdAt
               , Notice.read = n.read
               , Notice.location = n.location
-              , Notice.position = n.position
               }
         | otherwise = n
       notUser :: Subject -> Bool
@@ -2220,11 +2219,10 @@ tell now p thread excerpt occasion logins st = case currentUserId st of
             , Notice.createdAt = now
             , Notice.read = False
             , Notice.location = Nothing
-            , Notice.position = Nothing
             }
         add s (u, k) =
           let (i, s') = newId "notification" s
-           in insertNotification u ((made (i, k)) {Notice.position = Just (fromIntegral s.counter)}) s'
+           in insertNotification u (made (i, k)) s'
      in foldl' add st (recipients st.grants watchers happened)
 
 -- | Notify of a comment in a thread whose comments so far are by these

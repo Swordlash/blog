@@ -1391,7 +1391,6 @@ spec m = do
             , createdAt = demoNow
             , read = False
             , location = Just PageLocation {space = [secretSlug], page = [made.slug]}
-            , position = Nothing
             }
         bellOf tab = do
           run tab endPreload
@@ -1477,7 +1476,6 @@ spec m = do
             , createdAt = demoNow
             , read = False
             , location = Just PageLocation {space = [secretSlug], page = [made.slug]}
-            , position = Nothing
             }
         held = unsafeIOToPageM js_decryptions_held
         -- Every decryption held let go, and done, and what it gave handed

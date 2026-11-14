@@ -662,14 +662,13 @@ notification =
     , createdAt = later
     , read = False
     , location = Just PageLocation {space = [slug "docs"], page = [slug "tour"]}
-    , position = Just 2
     }
 
 notifications :: Notifications
 notifications =
   Notifications
     { unread = 1
-    , items = [notification, notification {id = NotificationId "n0", kind = Changed, thread = Nothing, excerpt = "", createdAt = time, read = True, location = Nothing, position = Just 1}]
+    , items = [notification, notification {id = NotificationId "n0", kind = Changed, thread = Nothing, excerpt = "", createdAt = time, read = True, location = Nothing}]
     }
 
 notificationSettings :: NotificationSettings
