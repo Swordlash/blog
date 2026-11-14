@@ -23,6 +23,7 @@ import Data.Aeson.Types (Parser, parseMaybe)
 import Data.IORef (IORef)
 import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
+import Halogen.Activity (activity, idle)
 import Halogen.JSBits (Inert (..), JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
 import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
@@ -53,6 +54,7 @@ $( browserJS
      , ("js_slide_invariants", "wiki_test_slide_invariants", Safe, [t|IO JSText|])
      , ("js_slide_drag", "wiki_test_slide_drag", Safe, [t|Int -> Int -> Int -> Int -> Int -> Bool -> IO Int|])
      , ("js_open_rows", "wiki_test_open_rows", Safe, [t|IO JSText|])
+     , ("js_row_count", "wiki_test_row_count", Safe, [t|IO Int|])
      , ("js_master_layout", "wiki_test_master_layout", Safe, [t|IO JSText|])
      , ("js_master_problems", "wiki_test_master_problems", Safe, [t|IO ()|])
      , ("js_stall", "wiki_test_stall", Safe, [t|IO Int|])
@@ -1613,12 +1615,17 @@ spec m = do
               (label, predicted) <- walkStep ui n lay open model (r1 `mod` 100) r2 r3
               let done' = done <> [label]
                   failing what = expectationFailure (T.unlines (("seed " <> show seed <> ", step " <> show n <> ": " <> what) : "steps:" : map ("  " <>) done'))
-              -- Quiet: the re-cut and the check after the pause in the
-              -- typing; after typing, long enough that what is typed next is
-              -- another entry of the history, not joined to this one.
+              -- Settled: the rows cut again for the text as the step left it
+              -- ('rowsSettled'); after typing, also long enough that what is
+              -- typed next is another entry of CodeMirror's history, not
+              -- joined to this one (its newGroupDelay, 500 ms, on its own
+              -- clock).
               let typing = any (`T.isPrefixOf` label) ["type", "split", "Backspace"]
               settle
-              unsafeIOToPageM (threadDelay (if typing then 600_000 else 300_000))
+              stepped <- unsafeIOToPageM getCurrentTime
+              rowsSettled 5000
+              waited <- unsafeIOToPageM ((`diffUTCTime` stepped) <$> getCurrentTime)
+              when (typing && waited < 0.6) (unsafeIOToPageM (threadDelay (ceiling ((0.6 - waited) * 1_000_000))))
               broken <- unsafeIOToPageM (fromJSText <$> js_slide_invariants)
               unless (T.null broken) (failing broken)
               shown <- markdown ui
@@ -2190,3 +2197,31 @@ cardTitles ui = findAll ui ".editor-preview .slides-preview .slide-frame:not(.sl
 -- characters are UTF-16 units).
 lineStart :: Text -> Int -> Int
 lineStart text n = sum (map ((+ 1) . T.length) (take (n - 1) (T.splitOn "\n" text)))
+
+-- | Wait until the slides' rows are settled: the program idle
+-- ("Halogen.Activity": no tree has work running or queued), the master's
+-- layout one that a re-cut of every row leaves as it is
+-- ("Wiki.Core.SlideRows.recut"), and the list showing as many rows. A step
+-- that changed a row's text leaves the rows as they were until the re-cut
+-- after the check's pause (Editor's 'recutRows'); a walk that reads the
+-- layout and the rows' list before it reads two different cuts. It waited
+-- 300 or 600 ms instead, which a loaded machine did not always give: with
+-- a busy loop on every core and two pages side by side, seed 11 failed 6
+-- runs in 30 and seed 47 3, each a step that typed or dragged where the
+-- layout, read before its re-cut, had fewer rows than the list. Measured
+-- on that load, 4500 steps settled in 0.09 s on average and 1.3 s at
+-- most. Within the given milliseconds.
+rowsSettled :: Int -> PageM s ()
+rowsSettled within =
+  eventuallyWithin within $ do
+    busy <- (\a -> not (idle a)) <$> unsafeIOToPageM activity
+    when busy (expectationFailure "the program is not idle")
+    lay <- walkLayout
+    shown <- unsafeIOToPageM js_row_count
+    case SlideRows.fromLayout lay.text lay.starts of
+      Nothing -> expectationFailure ("no rows in the layout: " <> show lay.starts)
+      Just rows -> do
+        let everyRow = [r.key | r <- rows.rows]
+            again = fst (SlideRows.recut (RowKey 0) Nothing everyRow rows)
+        unless (SlideRows.rowStarts again == SlideRows.rowStarts rows) (expectationFailure ("the rows are not cut again yet: " <> show (SlideRows.rowStarts rows)))
+        unless (shown == length rows.rows) (expectationFailure ("the list shows " <> show shown <> " rows, the layout has " <> show (length rows.rows)))
