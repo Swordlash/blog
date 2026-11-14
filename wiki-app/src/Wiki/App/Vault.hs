@@ -260,9 +260,14 @@ data Settled = Settled
 -- unlocks is unlocked with it (a new device). A vault it does not unlock
 -- is unlocked as 'settleKeys' does, and the password is offered as one
 -- more way to unlock it, once per device.
-afterSignIn :: (MonadAssistant m, MonadVault m) => UserId -> m (Either Text Settled)
-afterSignIn u = do
-  key <- takePasswordKey
+--
+-- The key is the caller's, taken from the backend ('takePasswordKey')
+-- before: a view that waits on this keeps the key in its state, in the
+-- step it takes it, and lets go of it if it closes before the answer
+-- (the sign-in's view, "Wiki.App.View.SignIn"). Taken here, after a
+-- wait, a key would be held by nothing once the caller had gone.
+afterSignIn :: (MonadAssistant m, MonadVault m) => UserId -> Maybe KeyRef -> m (Either Text Settled)
+afterSignIn u key = do
   -- Where the browser offers no WebCrypto (a page over plain HTTP), there
   -- are no keys to settle: the panel says why.
   here <- sealingHere
