@@ -91,7 +91,7 @@ data Canary = Canary
   -- ^ The watched pages still open, by a number of their own, and how many
   -- of each one's frames are already in 'seen'.
   , next :: IORef Int
-  , asked :: IORef (Seq Asked)
+  , asked :: IORef (Seq BrowserRequest)
   -- ^ Every request the watched browsers made of the server, oldest
   -- first.
   , wiki :: Wiki
@@ -99,7 +99,7 @@ data Canary = Canary
 
 -- | A request a watched browser made of the server: its method, its
 -- address, and whose session the browser had when it asked.
-data Asked = Asked {method :: Text, url :: Text, who :: Maybe Session}
+data BrowserRequest = BrowserRequest {method :: Text, url :: Text, who :: Maybe Session}
 
 -- | A page watched, to stop watching it.
 newtype Watched = Watched Int
@@ -151,7 +151,7 @@ watch c ctx = do
       let who = case jar of
             Right cs -> (\k -> Session k.value) <$> find (\k -> k.name == "wiki_session") cs
             Left (_ :: PlaywrightError) -> Nothing
-      atomicModifyIORef' c.asked (\a -> (a |> Asked {method = request.method, url = request.url, who}, ()))
+      atomicModifyIORef' c.asked (\a -> (a |> BrowserRequest {method = request.method, url = request.url, who}, ()))
     pure Continue
   pure ()
 
