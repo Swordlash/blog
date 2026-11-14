@@ -621,7 +621,7 @@ answeredOnce sentOn sentFrom sentIn answer was now
   | otherwise = now {faults = now.faults <> [(AnsweredOnce, "the answer to a write sent on visit " <> show sentOn <> " by comments view " <> show sentFrom <> ", taken on visit " <> show now.visit <> " with comments view " <> show now.mounted <> ", asked the view for " <> show made <> ", not " <> show wanted)]}
   where
     made = drop (length was.asksOfView) now.asksOfView <> [ChooseOpened | (quotingOf was, focusedOf was) /= (quotingOf now, focusedOf now)]
-    wanted = if sentOn == now.visit then [TellForm | sentFrom == now.mounted] <> [ChooseOpened | Just a <- [anchorOf answer], quotingOf was == Just a, isJust sentIn, sentIn == was.quoteSession] else []
+    wanted = if sentOn == now.visit then [TellForm | sentFrom == now.mounted, isNothing (anchorOf answer) || (isJust sentIn && sentIn == was.quoteSession)] <> [ChooseOpened | Just a <- [anchorOf answer], quotingOf was == Just a, isJust sentIn, sentIn == was.quoteSession] else []
 
 -- | Whether the answer to this read of this page is the view's to take: on
 -- the page shown, and no answer to a later read taken.
