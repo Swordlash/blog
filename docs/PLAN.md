@@ -1774,7 +1774,18 @@ confirms it against reality and the plan is amended if it does not hold.
     of the server takes from the real code the answers' shape, limits,
     counts, order and atomicity, every way the server deletes, and
     every bounded buffer between the server and the view; its header
-    lists them with where each was read. The bell is the first; the
+    lists them with where each was read. **Three rules for the shell
+    and the model, from #284's rounds.** The shell's effect runner
+    never waits between the effects of one step: an effect is a write
+    of state, a tell or a raise that does not wait, or a fork; what
+    goes through `lift` is forked, so no effect of a step runs after a
+    later event. State that the machine's effects write lives in the
+    model (the comments' quote and chosen thread moved out of the page
+    view's state), with the reader's changes to it as events, so that
+    the step sees what it overwrites and a property covers it. And
+    "the same one" is a number or a ticket, never an equal value: a
+    visit of a page, a mounted view, a quoting of the same text twice
+    are told apart by identity. The bell is the first; the
     views that raced follow in the order under "Open work".
 
 ## Repository layout
@@ -1903,10 +1914,15 @@ WP5.92 and WP5.93 wait.
 
 - **WP5.121 The views that raced, as machines (decision 82; for the
   order above), one pull request each, in this order.** (1) The
-  page's comments (`Comments.hs` and their part of `Page.hs`), with
-  the open race a property must find first: a comment's event applied
-  while a list of the threads is out is overwritten by that list's
-  answer; about a day and a half. (2) The embedded deck
+  page's comments: the machine and its properties are merged (#284);
+  left, after WP5.123's harness: the page view and the comments view
+  on the in-memory DOM with held waits (first cases: the runner
+  carrying out `Answered` and the forked lookup; a panel closed and
+  opened again while a write is out; the reader's quote, give-up,
+  close and choice reaching the machine), and then the browser
+  examples it replaces cut (four of nine in `Test/Browser/Comments.hs`,
+  two in `Test/Browser/Http.hs`, one shrunk to its wiring). (2) The
+  embedded deck
   (`DeckViewer.hs`: the watch, the generation, the fetch); a day. (3)
   The sign-in's keys (`SignIn.hs`); two days. (4) The assistant's
   panel; two days. (5) The shell's world (the session, the spaces, the
@@ -3196,6 +3212,24 @@ needs. Each was true when its package merged; check before relying on one.
   `pages`). Nothing changed for the wiki's behaviour on wasm. The two
   things asked of the library on 2026-11-14 are on its master (its
   pull requests 119 and 120): WP5.117.
+- **The page's comments as a machine (#284, WP5.121's first).**
+  `View/Comments/Machine.hs`, held in the page view's state; the
+  comments view asks for a write and is told its answer. Costs: one
+  GET for a write whose answer comes before its echo, and one for a
+  failed write; the HTTP cache drops a page's threads after the
+  reader's own write. Left and known. (1) The shell is covered only by
+  the model's copy of its runner and by the browser groups until the
+  in-memory DOM spec exists (WP5.121, above). (2) While a write is out
+  the reader can press the button again and send it twice; it was so
+  before. (3) Not in the model: encrypted pages' threads (the channel
+  says only that they changed, and they are read again), a page's own
+  deletion. (4) A message of an earlier visit's subscription to the
+  same page can be applied for a moment; the new subscription's answer
+  corrects it. (5) Two resolutions of one thread with equal values
+  cannot be told apart in a write's answer; a wrong match only delays
+  the answer until its echo. (6) When a read the view needed fails,
+  the threads stay with "Comments could not be refreshed." and "Try
+  again"; nothing asks again by itself.
 - **The pin at 68c0a79 and the browser suite on the harness's waits
   (#285, WP5.120).** hspec-halogen's actions and `settle` wait for the
   program, a history step and the next frame; `answersTaken` and
