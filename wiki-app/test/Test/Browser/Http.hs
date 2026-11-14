@@ -39,7 +39,7 @@ module Test.Browser.Http
   , release
   , releaseHolding
   , listening
-  , allAnswered
+  , answersTaken
   , hangUp
   )
 where
@@ -51,6 +51,7 @@ import Data.NT (type (~>) (..))
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Halogen qualified as H
+import Halogen.Activity qualified as Activity
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.Router (Router)
 import Halogen.Router qualified as Router
@@ -178,11 +179,27 @@ releaseHolding method url = unsafeIOToPageM (js_server_release_holding (toJSText
 listening :: Int -> PageM s ()
 listening within = eventuallyWithin within (unsafeIOToPageM js_server_open_sockets >>= (`shouldSatisfy` (> 0)))
 
--- | Wait until the server has answered every request it was given, within
--- the given milliseconds, and let the page take the answers ('settle'):
--- after a 'release', what the page did with the answers held is then done.
-allAnswered :: Int -> PageM s ()
-allAnswered within = eventuallyWithin within (unsafeIOToPageM js_server_pending `shouldReturn` 0) >> settle
+-- | Wait until the server has answered every request it was given and the
+-- program has taken the answers: no request pending, and the program quiet
+-- ("Halogen.Activity": no tree has work running or queued, and no fiber
+-- waits on a worker, the reading of an answer and what follows it
+-- included). The server's answer alone is not that: the program decodes
+-- it and acts on it later, and a check made in between finds the state
+-- from before the answer, whatever the answer then does. After a
+-- 'release', a check that something is still as it was is then a check of
+-- what the answers did.
+--
+-- Quiet is the signal for a view that reads and shows (the bell, a page,
+-- a list). Not for an editor after typing: its draft's autosave keeps a
+-- fiber waiting for seconds. Nor for what the live channel pushes, which
+-- no fiber waits for. The milliseconds given only guard against a hang.
+answersTaken :: Int -> PageM s ()
+answersTaken within =
+  eventuallyWithin within $ do
+    unsafeIOToPageM js_server_pending `shouldReturn` 0
+    settle
+    a <- unsafeIOToPageM Activity.activity
+    unless (Activity.quiet a) (expectationFailure ("the program has not taken the answers yet: " <> show a))
 
 -- | Answer the requests held.
 release :: PageM s ()
@@ -1572,9 +1589,8 @@ overtaken m space page at url change shown = do
     readsAt >>= (`shouldSatisfy` (> before + 1))
   eventually (shown ui)
   release
-  -- Nothing on the page says the first answer was dropped: a while for it
-  -- to come.
-  unsafeIOToPageM (threadDelay 2000000)
-  settle
+  -- Nothing on the page says the first answer was dropped: the check is
+  -- made once the program has taken it.
+  answersTaken 20000
   shown ui
   unmount ui

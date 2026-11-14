@@ -14,7 +14,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Http (Asked (..), allAnswered, answerWith, asked, hangUp, holdAt, listening, release, serveDemo, serverStarts, serverStops, startServer, tellServer)
+import Test.Browser.Http (Asked (..), answerWith, answersTaken, asked, hangUp, holdAt, listening, release, serveDemo, serverStarts, serverStops, startServer, tellServer)
 import Test.Browser.Mount (clickButton, slugs, start, startChanged)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
@@ -197,7 +197,7 @@ live m = describe "over the backend over HTTP" $ do
       find ui ".notifications-count" >>= (`shouldHaveText` "1")
       -- The list's answer taken, it still counts the one told meanwhile.
       release
-      allAnswered 2000
+      answersTaken 20000
       (traverse textContent =<< findAll ui ".notifications-count") `shouldReturn` ["1"]
       -- The server has it now: opened, the list holds it once.
       answerWith "GET" "api/v1/notifications" 200 Notifications {unread = 1, items = [told "n2" "Told meanwhile"]}

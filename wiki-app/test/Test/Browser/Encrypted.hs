@@ -64,7 +64,7 @@ import Halogen.JSBits.Promise (Promise (..), wait)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find, wait)
 import System.Timeout (timeout)
-import Test.Browser.Http (Asked (..), answerWith, asked, holdAt, offline, release, said, serveDemo, serverStarts, startServer, startServerOver, startServerThrough, tellServer)
+import Test.Browser.Http (Asked (..), answerWith, answersTaken, asked, holdAt, offline, release, said, serveDemo, serverStarts, startServer, startServerOver, startServerThrough, tellServer)
 import Test.Browser.Mount (clickButton)
 import Test.Browser.Text (editorText)
 import Test.Hspec.Halogen
@@ -453,8 +453,9 @@ spec m = do
     go ui "Two"
     eventually (find ui ".page-view .page-title-row" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Two"))
     twoAgain <- imageOf ui
+    -- The third page's answer, taken: the second stays.
     release
-    unsafeIOToPageM (threadDelay 500_000)
+    answersTaken 20000
     find ui ".page-view .page-title-row" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Two")
     unsafeIOToPageM (js_image_width (toJSText twoAgain)) `shouldReturn` 4
     -- Its links, the file's and the attachments list's, still lead to its

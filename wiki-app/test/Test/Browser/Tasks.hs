@@ -21,7 +21,7 @@ import Data.Time (addUTCTime)
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Http (Asked (..), answerRaw, answerWith, asked, holdAt, release, releaseHolding, serveDemo, serverStarts, serverStops, startServer, tellServer)
+import Test.Browser.Http (Asked (..), answerRaw, answerWith, answersTaken, asked, holdAt, release, releaseHolding, serveDemo, serverStarts, serverStops, startServer, tellServer)
 import Test.Browser.Mount (adopt, clickButton, slugs, start, startChangedWith)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
@@ -449,11 +449,10 @@ spec m = describe "tasks ticked in a page" $ do
     boxes ui `shouldReturn` ["true", "false"]
     -- The reads answer now, with the version before the save: the page
     -- shown is newer, and stays.
-    -- Nothing on the page says the answers were dropped: a while for
-    -- them to come.
+    -- Nothing on the page says the answers were dropped: the check is
+    -- made once the program has taken them.
     release
-    unsafeIOToPageM (threadDelay 2000000)
-    settle
+    answersTaken 20000
     eventually $ length <$> findAll ui ".page-body input[data-task]" `shouldReturn` 2
     boxes ui `shouldReturn` ["true", "false"]
     length <$> findAll ui ".page-ticks-count, .page-ticks-note" `shouldReturn` 0
@@ -493,8 +492,7 @@ spec m = describe "tasks ticked in a page" $ do
     (find ui ".page-body" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Added by another editor.")
     find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide, newer")
     release
-    unsafeIOToPageM (threadDelay 1000000)
-    settle
+    answersTaken 20000
     (find ui ".page-body" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Added by another editor.")
     serverStops
 
