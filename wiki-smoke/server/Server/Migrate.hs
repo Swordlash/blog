@@ -149,8 +149,8 @@ spec smoke = describe "the demo's pages brought into the server" $ do
       paths `shouldBe` nub paths
       sort <$> slugsOf smoke "blog" `shouldReturn` ["hello-world", "home", "notes-on-haskell"]
       counts <- forM ["blog", "docs", "team", "team/projects"] $ \space -> do
-        pages <- pagesOf smoke space
-        slugs <- forM pages $ \p -> (\parent slug -> parent <> "/" <> slug) <$> pure (textOr "" (p .! "parent")) <*> text (p .! "slug")
+        spacePages <- pagesOf smoke space
+        slugs <- forM spacePages $ \p -> (\parent slug -> parent <> "/" <> slug) <$> pure (textOr "" (p .! "parent")) <*> text (p .! "slug")
         unless (slugs == nub slugs) $ expectationFailure ("a page of " <> Text.unpack space <> " is there twice: " <> show slugs)
         pure (length slugs)
       sum counts `shouldBe` 12

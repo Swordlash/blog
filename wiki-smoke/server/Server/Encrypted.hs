@@ -239,8 +239,8 @@ sealedPages w who sid = as w who "GET" ("encrypted/spaces/" <> escape sid <> "/p
 -- when the server has no such page yet.
 sealedVersions :: Walk -> Browser -> Text -> Text -> IO Int
 sealedVersions w who sid slug = do
-  pages <- sealedPages w who sid
-  case find (\p -> p .! "slug" == String slug) pages of
+  sealed <- sealedPages w who sid
+  case find (\p -> p .! "slug" == String slug) sealed of
     Nothing -> pure 0
     Just p -> do
       pid <- text (p .! "id")
@@ -1043,8 +1043,8 @@ pageIdAt w who sid pageAddress = do
   let slug = case reverse (filter (not . Text.null) (Text.splitOn "/" pageAddress)) of
         s : _ -> s
         [] -> ""
-  pages <- sealedPages w who sid
-  orFail ("no sealed page at " <> Text.unpack slug) (find (\p -> p .! "slug" == String slug) pages) >>= text . (.! "id")
+  sealed <- sealedPages w who sid
+  orFail ("no sealed page at " <> Text.unpack slug) (find (\p -> p .! "slug" == String slug) sealed) >>= text . (.! "id")
 
 threadCount :: Walk -> Browser -> Text -> IO Int
 threadCount w who pid = length <$> (threadsOf w who pid)
