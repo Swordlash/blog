@@ -144,7 +144,7 @@ import Halogen.Router.Duplex (encodeComponent)
 import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Web.Event.Event (EventType (..))
-import Wiki.Api.Events (PageEvent (..), Readers (..), applyEvent, noReaders)
+import Wiki.Api.Events (PageEvent (..), Readers (..), noReaders)
 import Wiki.Api.Export (ExportFormat, pageFormats)
 import Wiki.App.Backend (ExportTarget (..), MonadLoad (..), MonadWiki (..), Session (exports, user), UrlOwner, WikiError (..), noUrlOwner)
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -159,6 +159,8 @@ import Wiki.App.Live qualified as Live
 import Wiki.App.Route (Against (..), Route (..), pageRoute)
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Comments qualified as CommentsView
+import Wiki.App.View.Comments.Machine (Threads (..))
+import Wiki.App.View.Comments.Machine qualified as Threads
 import Wiki.App.View.Common
 import Wiki.App.View.DeckViewer qualified as DeckViewer
 import Wiki.App.View.Export qualified as ExportView
@@ -209,12 +211,6 @@ data Input = Input
 
 type Slots = Body.IslandSlots .+ ("deck" .== H.Slot (Const Void) Void Md.IslandKey) .+ ("deckView" .== H.Slot (Const Void) Void ()) .+ ("comments" .== H.Slot (Const Void) CommentsView.Output CommentsView.Placement) .+ ("watch" .== H.Slot (Const Void) Void ()) .+ ("star" .== H.Slot (Const Void) Void ()) .+ ("export" .== H.Slot (Const Void) Void ())
 
--- | The page's threads, as far as they have been loaded.
-data Threads
-  = ThreadsLoading
-  | ThreadsFailed WikiError
-  | ThreadsReady [Thread]
-
 data Loaded
   = Loading
   | Failed WikiError
@@ -237,10 +233,9 @@ data State = State
   , loaded :: Loaded
   , mode :: Mode
   , problem :: Maybe WikiError
-  , threads :: Threads
-  , threadAsks :: Asks
-  -- ^ The reads of the page's threads ('loadThreads'): an answer is taken
-  -- only if no newer one was ("Wiki.App.View.Latest").
+  , discussion :: Threads.Model
+  -- ^ The page's threads, with their reads ("Wiki.App.View.Comments.Machine"):
+  -- every change to them is a 'Threads.step' ('threadsStep').
   , panelOpen :: Bool
   -- ^ Whether the panel of inline threads is shown.
   , focused :: Maybe CommentThreadId
@@ -333,6 +328,8 @@ data Action
   | Retry
   | Finalize
   | FromComments CommentsView.Output
+  | -- | An answer to a read of the threads, as the threads' machine takes it.
+    ThreadsHappened Threads.Event
   | Heard Heard
   | Selecting
   | CommentOnSelection
@@ -359,9 +356,11 @@ component =
         -- over a backend that can ('atOnce'); otherwise in 'Initialize'.
         initialState = \input -> do
           loaded <- fromMaybe Loading <$> atOnce (fetch noUrlOwner input)
-          threads <- case loaded of
-            Ready page _ _ _ | commentsHere input -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
-            _ -> pure ThreadsLoading
+          read' <- case loaded of
+            Ready page _ _ _ | commentsHere input -> atOnce (listThreads page.id)
+            _ -> pure Nothing
+          let discussion = Threads.initial ((\p -> p.id) <$> pageOf loaded) (commentsHere input) (isJust input.space.encryption) read'
+              threads = discussion.threads
           let logins = Body.unasked Body.noPeople (bodiesOf loaded threads)
           people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople input.space logins)
           avatars <- fromMaybe mempty <$> atOnce (avatarUrls (peopleOf loaded threads noReaders))
@@ -373,8 +372,7 @@ component =
               , loaded
               , mode = Viewing
               , problem = Nothing
-              , threads
-              , threadAsks = noAsks
+              , discussion
               , panelOpen = False
               , focused = Nothing
               , selected = Nothing
@@ -715,7 +713,7 @@ component =
           , page = page.id
           , space = page.space
           , placement
-          , comments = case st.threads of
+          , comments = case st.discussion.threads of
               ThreadsLoading -> CommentsView.CommentsLoading
               ThreadsFailed e -> CommentsView.CommentsFailed e
               ThreadsReady ts -> CommentsView.CommentsReady (shownIn text placement ts)
@@ -796,7 +794,7 @@ component =
         </button>
       |]
       where
-        label = case st.threads of
+        label = case st.discussion.threads of
           ThreadsReady ts -> "Comments (" <> show (length [t | t <- ts, isInline t, not t.resolved]) <> ")" :: Text
           _ -> "Comments"
 
@@ -837,15 +835,14 @@ component =
             H.liftEffect revealFragment
             watch
             resolvePeople
-            gets (\st -> st.threads) >>= \case
-              ThreadsLoading -> loadThreads
-              _ -> pass
+            threadsStep Threads.Started
       -- The browser's question before closing the tab is the view's only
       -- while it has ticks: the editor sets it too, and may be the next
       -- view.
       -- The view closes: every owner of addresses it registered is let go,
       -- and none is registered in their place.
       Finalize -> do
+        threadsStep Threads.Finished
         Body.releaseOwned ownersOf' setOwners
         disconnectFeed
         whenM (gets unsaved) (H.liftEffect (guardUnload False))
@@ -872,7 +869,8 @@ component =
           stage (Ticking.Clear LeftConfirmed)
           modify (\st -> st {lastBox = Nothing, writing = False})
           -- The page left, and its threads, are not taken after this.
-          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, threadAsks = Latest.supersede st.threadAsks, fetches = Latest.supersede st.fetches, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
+          threadsStep Threads.Left'
+          modify (\st -> st {loaded = Loading, fetches = Latest.supersede st.fetches, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
           -- The people mentioned are looked up again: the current user may
           -- be someone else now.
@@ -969,8 +967,7 @@ component =
             _ -> pass
       FromComments out -> case out of
         CommentsView.Did event -> do
-          modify (\st -> st {threads = applied event st.threads})
-          resolvePeople
+          threadsStep (Threads.Did event)
           case event of
             ThreadOpened t | isInline t -> modify (\st -> st {quoting = Nothing, focused = Just t.id})
             _ -> pass
@@ -982,7 +979,8 @@ component =
           H.liftEffect (reveal ("mark.comment-mark[data-thread=\"" <> tid.text <> "\"]"))
         CommentsView.StopQuoting -> modify (\st -> st {quoting = Nothing})
         CommentsView.Close -> modify (\st -> st {panelOpen = False, quoting = Nothing})
-        CommentsView.Reload -> loadThreads
+        CommentsView.Reload -> threadsStep Threads.Reload
+      ThreadsHappened event -> threadsStep event
       Heard heard -> do
         here <- gets (\st -> st.watching)
         encrypted <- gets (\st -> isJust st.input.space.encryption)
@@ -999,25 +997,18 @@ component =
                 False -> H.raise (Changed Nothing)
           -- A thread of an encrypted page changed: the event carries no
           -- text, so the threads are read again and decrypted.
-          Live.Heard page ThreadsChanged | Just page == here -> loadThreads
-          Live.Heard page event | Just page == here -> modify (\st -> st {threads = applied event st.threads}) >> resolvePeople
+          Live.Heard page event | Just page == here -> threadsStep (Threads.Heard page event)
           -- The server's answer to the subscription: the threads as they
           -- are now, replacing what was shown, including whatever changed
           -- since the page was read (or the channel was lost). A focused
           -- thread that no longer exists is unfocused.
           -- A page of an encrypted space: the server's answer has none of
           -- its threads, which are read and decrypted.
-          Live.Replaced page _ | Just page == here, encrypted -> loadThreads
           -- They are newer than the answer to any read of them still out,
           -- which is not taken after them.
           Live.Replaced page threads | Just page == here -> do
-            modify $ \st ->
-              st
-                { threads = ThreadsReady threads
-                , threadAsks = Latest.supersede st.threadAsks
-                , focused = st.focused >>= \f -> f <$ find (\t -> t.id == f) threads
-                }
-            resolvePeople
+            threadsStep (Threads.Replaced page threads)
+            unless encrypted $ modify (\st -> st {focused = st.focused >>= \f -> f <$ find (\t -> t.id == f) threads})
           _ -> pass
       -- Anyone may copy a link to what they select; who may comment is
       -- asked when the buttons are shown.
@@ -1145,28 +1136,22 @@ component =
         void (takeFetched owner loaded)
         H.raise Loaded
 
-    -- Fetch the page's comments (again).
-    loadThreads :: H.HalogenM State Action Slots ViewOutput m ()
-    --
-    -- Two reads can be out at once (two reloads, the live channel saying
-    -- the threads changed twice), and their answers can come in the other
-    -- order: an answer is taken only if no newer one was
-    -- ("Wiki.App.View.Latest"), and only if it is still the page shown.
-    loadThreads = withPage $ \page -> do
-      input <- gets (\st -> st.input)
-      ticket <- Latest.asking (\st -> st.threadAsks) (\a st -> st {threadAsks = a})
-      threads <- if commentsHere input then threadsOf <$> listThreads page.id else pure (ThreadsReady [])
-      void . Latest.answered (\st -> st.threadAsks) (\a st -> st {threadAsks = a}) ticket $ \st -> case st.loaded of
-        Ready now _ _ _ | now.id == page.id -> st {threads}
-        _ -> st
-      resolvePeople
+    -- One step of the threads' machine, in one step of the program, and
+    -- then its effects. A read is forked and its answer comes back as an
+    -- event ('ThreadsHappened'), so that nothing after it waits for it.
+    threadsStep :: Threads.Event -> H.HalogenM State Action Slots ViewOutput m ()
+    threadsStep event = do
+      effects <- state (\st -> let (discussion, fx) = Threads.step event st.discussion in (fx, st {discussion}))
+      for_ effects $ \case
+        Threads.Load ticket page -> void . H.fork $ listThreads page >>= handleAction . ThreadsHappened . Threads.Loaded ticket page
+        Threads.Changed -> resolvePeople
 
     -- Look up the people the page and its comments mention, for the
     -- logins not looked up yet.
     resolvePeople :: H.HalogenM State Action Slots ViewOutput m ()
     resolvePeople = do
       st <- get
-      let logins = Body.unasked st.people (bodiesOf st.loaded st.threads)
+      let logins = Body.unasked st.people (bodiesOf st.loaded st.discussion.threads)
       unless (null logins) $
         lift (attempt (Body.askPeople st.input.space logins)) >>= \case
           Right found -> modify (\s -> s {people = Body.answered logins found s.people})
@@ -1178,7 +1163,7 @@ component =
     resolveAvatars :: H.HalogenM State Action Slots ViewOutput m ()
     resolveAvatars = do
       st <- get
-      avatars <- lift (avatarUrls (peopleOf st.loaded st.threads st.readers))
+      avatars <- lift (avatarUrls (peopleOf st.loaded st.discussion.threads st.readers))
       modify (\s -> s {avatars})
 
     -- Watch the page shown, and nothing else.
@@ -1256,7 +1241,7 @@ component =
     -- its text and its comments mention, and their avatars
     -- ('resolvePeople'); the shell told which page is shown ('Showing');
     -- the live channel watching it ('watch'); its comments
-    -- ('loadThreads'). Both fetches ('load', 'catchUp') go through here,
+    -- ('Threads.Fetched'). Both fetches ('load', 'catchUp') go through here,
     -- so that none of these is forgotten by one of them.
     --
     -- An older version of the page shown is dropped here, with nothing
@@ -1275,7 +1260,8 @@ component =
           resolvePeople
           gets (\st -> pageOf st.loaded) >>= traverse_ (H.raise . Showing)
           watch
-          loadThreads
+          st <- get
+          for_ (pageOf st.loaded) $ \page -> threadsStep (Threads.Fetched page.id (commentsHere st.input) (isJust st.input.space.encryption))
           pure True
 
     -- What the backend found wrong with the versions of the page shown, in
@@ -1552,15 +1538,6 @@ shownReaders :: Int
 shownReaders = 5
 
 -- | The threads a fetch's result shows.
-threadsOf :: Either WikiError [Thread] -> Threads
-threadsOf = either ThreadsFailed ThreadsReady
-
--- | The threads after an event, if they are loaded.
-applied :: PageEvent -> Threads -> Threads
-applied event = \case
-  ThreadsReady ts -> ThreadsReady (applyEvent event ts)
-  other -> other
-
 -- | The page loaded, if it has been.
 pageOf :: Loaded -> Maybe Page
 pageOf = \case
@@ -1683,7 +1660,7 @@ locatedIn text ts = [(t, maybe Orphaned (locate text) t.anchor) | t <- ts, isInl
 -- | The quotes to highlight in the page's text: those of the unresolved
 -- inline threads that are found.
 markings :: State -> Text -> [Marking]
-markings st text = case st.threads of
+markings st text = case st.discussion.threads of
   ThreadsReady ts ->
     [ Marking t.id range (st.focused == Just t.id)
     | (t, Found range) <- locatedIn text ts
