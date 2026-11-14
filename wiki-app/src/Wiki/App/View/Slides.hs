@@ -416,7 +416,12 @@ component =
       Print -> H.liftEffect (liftIO (HTMLWindow.window >>= \w -> w.print))
 
     -- Show a slide at a step, and put them in the address, replacing the
-    -- ones there.
+    -- ones there. The address is written on the loop, without a wait, in
+    -- the step that decided it ('H.liftEffect'). Written through 'liftIO',
+    -- on a thread of its own, it came after whatever ran meanwhile: a
+    -- reader who had left the slides (Back, a link) was taken back to
+    -- them, as the router takes a write to the address for a route to go
+    -- to.
     goTo :: (Int, Int) -> H.HalogenM State Action Slots ViewOutput m ()
     goTo wanted = do
       st <- get
@@ -424,7 +429,7 @@ component =
       when ((n, k) /= (st.current, st.step)) $ do
         put st {current = n, step = k, asked = take 20 ((n, k) : st.asked)}
         let input = st.input
-        Router.redirect input.context.router (documentRoute input.context input.space.id (PageSlides (spacePathOf input.context.spaces input.space.id) input.path n k))
+        H.liftEffect (Router.redirect input.context.router (documentRoute input.context input.space.id (PageSlides (spacePathOf input.context.spaces input.space.id) input.path n k)))
 
     -- Focus into the view, where Tab then finds its controls.
     ownersOf' :: State -> Body.Owners
