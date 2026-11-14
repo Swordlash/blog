@@ -270,11 +270,12 @@ spec m = do
     markdown ui `shouldReturn` original
     length <$> findAll ui ".cm-wiki-inserted" `shouldReturn` 0
 
-  -- Send clicked twice before anything else runs, as a double click does:
-  -- the panel decides that a turn has begun in the click's own step, so
-  -- the second click finds the box empty and the model at work. Deciding
-  -- it after reading the clock on a thread of its own, both clicks found
-  -- the panel idle, and each opened a conversation and sent the message.
+  -- Send clicked twice before anything else runs, as a double click is
+  -- when the page is busy: the panel decides that a turn has begun in the
+  -- first click's own step, so the second finds the turn under way (the
+  -- button under it is Stop by then). Deciding it after reading the clock
+  -- on a thread of its own, both clicks found the panel idle, and each
+  -- opened a conversation and sent the message.
   it "sends the message once for Send clicked twice at once" $ runPage $ do
     script [[text "Once."], [text "Twice."]]
     ui <- openAssistant m
@@ -285,7 +286,6 @@ spec m = do
     settle
     length <$> requests `shouldReturn` 1
     length <$> findAll ui ".assistant-message.from-user" `shouldReturn` 1
-    eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "Once.")
 
   it "stops a turn with Stop, and keeps the change made by then" $ runPage $ do
     script [[replace "## Why a wiki" "## Why", text "Working", hold, text "never"]]
