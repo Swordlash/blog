@@ -175,6 +175,7 @@ live m = describe "over the backend over HTTP" $ do
               , createdAt = UTCTime (fromGregorian 2026 10 26) 0
               , read = False
               , location = Just PageLocation {space = slugs ["blog"], page = slugs ["hello-world"]}
+              , position = Nothing
               }
           fetches = length . filter (\r -> r.method == "GET" && "api/v1/notifications" `T.isSuffixOf` r.url) <$> asked
       -- Told once the bell's socket is open: what the server says before
@@ -225,6 +226,7 @@ live m = describe "over the backend over HTTP" $ do
               , createdAt = UTCTime (fromGregorian 2026 10 26) 0
               , read = False
               , location = Just PageLocation {space = slugs ["blog"], page = slugs ["hello-world"]}
+              , position = Nothing
               }
       listening socketOpens
       tellServer (Notified told)

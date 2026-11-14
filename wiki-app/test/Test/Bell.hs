@@ -148,6 +148,7 @@ noticeOf k =
     , createdAt = UTCTime (fromGregorian 2026 11 14) (fromIntegral k)
     , read = False
     , location = Just PageLocation {space = [slug "blog"], page = [slug ("page-" <> show k)]}
+    , position = Just (fromIntegral k)
     }
   where
     slug = either (panic . show) identity . mkSlug

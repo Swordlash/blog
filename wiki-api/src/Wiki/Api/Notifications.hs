@@ -134,13 +134,19 @@ data Notifications = Notifications
   deriving anyclass (FromJSON, ToJSON)
 
 -- | Whether a list of notifications counts this one already: it lists it,
--- or lists a newer one, so the server answered after this one was made.
--- The server lists only its newest ('Wiki.Core.Notification.maxListed')
--- and counts every unread one beside them, so a notification older than
--- the newest listed is counted, listed or not; one the list does not count
--- was made after the server answered (told over the live channel since).
+-- or lists one made after it in the server's order ('position'), so the
+-- server answered after this one was made. The server lists only its
+-- newest ('Wiki.Core.Notification.maxListed') and counts every unread one
+-- beside them, so a notification made before the newest listed is
+-- counted, listed or not; one the list does not count was made after the
+-- server answered (told over the live channel since). The times do not
+-- say this: a notification's time may be taken before its transaction
+-- waits for the writer, so one made later may be timed earlier. Where a
+-- position is not known (a server or a list from before positions), the
+-- notification is taken as not counted: at worst counted twice until the
+-- next read, never left out.
 counts :: Notifications -> Notification -> Bool
-counts ns n = any (\x -> x.id == n.id || x.createdAt > n.createdAt) ns.items
+counts ns n = any (\x -> x.id == n.id || maybe False (\p -> maybe False (>= p) x.position) n.position) ns.items
 
 -- | The list with the notifications the live channel told of that it does
 -- not count ('counts') put first, the unread among them counted.

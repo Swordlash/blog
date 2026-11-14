@@ -321,7 +321,16 @@ overTheChannel backing = describe "over the live channel" $
           void (heardWithin 5_000_000 c)
         _ :: Thread <- asWith r (Just people.editor) methodPost (links.comments notes.id).open NewThread {anchor = Nothing, body = "For @reader."} >>= jsonAs 201
         heardWithin 5_000_000 reading >>= \case
-          Just (Notified n) -> (n.kind, n.actor.name, n.page, n.excerpt) `shouldBe` (Mentioned, "Edgar Editor", notes.id, "For @reader.")
+          Just (Notified n) -> do
+            (n.kind, n.actor.name, n.page, n.excerpt) `shouldBe` (Mentioned, "Edgar Editor", notes.id, "For @reader.")
+            -- Told with its place in the server's order, as the list has
+            -- it: the newest first, each place greater than the next's.
+            listed <- toldOver r people.reader
+            n.position `shouldSatisfy` isJust
+            (\x -> x.position) <$> head listed.items `shouldBe` Just n.position
+            let places = map (\x -> x.position) listed.items
+            places `shouldSatisfy` all isJust
+            and (zipWith (>) places (drop 1 places)) `shouldBe` True
           other -> expectationFailure ("not a notification: " <> show other)
         heardWithin 500_000 editing `shouldReturn` Nothing
         heardWithin 500_000 anyone `shouldReturn` Nothing
@@ -500,6 +509,7 @@ inTheStorage backing = describe "in the storage" $ do
             , createdAt = addUTCTime (fromIntegral i) now
             , read = False
             , location = Nothing
+            , position = Nothing
             }
         titles = maybe (pure []) (\xml -> map textOf . concatMap (children "title") . children "entry" <$> parsed xml)
         feedNow secret = notificationFeed st "https://wiki.example/" secret
