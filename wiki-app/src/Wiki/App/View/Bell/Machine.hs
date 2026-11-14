@@ -34,6 +34,16 @@
 -- may be older than an answer dropped (a read the HTTP backend's cache
 -- answered at once while the reader's mark was out).
 --
+-- These rules assume the server handles the bell's asks in the order they
+-- were sent, as one server over one connection does: then a later ask's
+-- answer is never an older list from the server (the cache aside, which
+-- 'known' covers for the read marks). Over HTTP/2 or two connections a read
+-- may be handled after a later one: the read marks still hold, through
+-- 'known', but the bell may take a list that lacks a notification it had
+-- listed, until the live channel tells of it ("Test.Bell", "when the server
+-- handles asks in any order"). Only an order of the server's own on the
+-- list would close that.
+--
 -- The buttons that mark are disabled while any mark is out ('busy'), and
 -- enabled again only when the last one has come back.
 module Wiki.App.View.Bell.Machine

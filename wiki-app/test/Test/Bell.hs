@@ -9,9 +9,11 @@
 -- answer comes back. The server handles asks in the order they were sent,
 -- at any time before their answers come back; the answers come back in
 -- any order ('Handle', 'Deliver'). That is the HTTP backend with one
--- server: a request sent later reaches the server later, and the
--- responses travel back on their own. The in-memory backend is the case
--- where each ask is handled at once.
+-- server over one connection: a request sent later reaches the server
+-- later, and the responses travel back on their own. The in-memory
+-- backend is the case where each ask is handled at once. Runs where the
+-- server handles asks in any order ('HandleOut', 'genUnordered') break
+-- one rule, as the group of examples for them says.
 --
 -- What the bell shows is read from the model after every step, and must
 -- hold:
@@ -146,6 +148,10 @@ data Step
     Reconnect
   | -- | The server handles the oldest ask it has not handled.
     Handle
+  | -- | The server handles the ask at this place among those it has not
+    -- handled, out of the order they were sent: only in the runs of
+    -- 'genUnordered'.
+    HandleOut Int
   | -- | The handled answer at this place among those handled comes back.
     Deliver Int
   | -- | The bell is given a new revision of the wiki.
@@ -156,24 +162,30 @@ data Step
 
 -- | A run's steps.
 genRun :: Gen [Step]
-genRun = listOf genStep
-  where
-    genStep =
-      frequency
-        [ (4, pure ClickBell)
-        , (1, pure PressOutside)
-        , (3, ClickMark <$> chooseInt (0, 3))
-        , (1, pure ClickMarkAll)
-        , (1, ClickLink <$> chooseInt (0, 3))
-        , (4, pure Make)
-        , (2, ReadElsewhere <$> chooseInt (0, 3))
-        , (4, pure Tell)
-        , (1, pure Reconnect)
-        , (6, pure Handle)
-        , (6, Deliver <$> chooseInt (0, 3))
-        , (1, pure Revise)
-        , (1, pure Finish)
-        ]
+genRun = listOf (genStep [])
+
+-- | A run's steps, the server handling asks in any order.
+genUnordered :: Gen [Step]
+genUnordered = listOf (genStep [(4, HandleOut <$> chooseInt (0, 3))])
+
+genStep :: [(Int, Gen Step)] -> Gen Step
+genStep more =
+  frequency $
+    more
+      <> [ (4, pure ClickBell)
+         , (1, pure PressOutside)
+         , (3, ClickMark <$> chooseInt (0, 3))
+         , (1, pure ClickMarkAll)
+         , (1, ClickLink <$> chooseInt (0, 3))
+         , (4, pure Make)
+         , (2, ReadElsewhere <$> chooseInt (0, 3))
+         , (4, pure Tell)
+         , (1, pure Reconnect)
+         , (6, pure Handle)
+         , (6, Deliver <$> chooseInt (0, 3))
+         , (1, pure Revise)
+         , (1, pure Finish)
+         ]
 
 shrinkRun :: [Step] -> [[Step]]
 shrinkRun = shrinkList shrinkStep
@@ -183,6 +195,7 @@ shrinkRun = shrinkList shrinkStep
       ClickLink i -> ClickLink <$> [0 .. i - 1]
       ReadElsewhere i -> ReadElsewhere <$> [0 .. i - 1]
       Deliver i -> Deliver <$> [0 .. i - 1]
+      HandleOut i -> Handle : (HandleOut <$> [0 .. i - 1])
       _ -> []
 
 -- | An ask the bell made, and its answer once the server handled it.
@@ -275,13 +288,8 @@ play w = \case
     n : rest -> afterEvent ("told " <> idText n) (Told n) (changing (withNotice n) w {server = w.server {untold = rest}, tab = fmap (\t -> t {told = take 50 (n : t.told)}) w.tab})
     [] -> w
   Reconnect -> afterEvent "reconnected" Reopened (changing forgetNotices w {server = w.server {untold = []}})
-  Handle -> case break (isNothing . (.answer)) w.outs of
-    (handled, o : rest) ->
-      let (server, answer) = case o.ask of
-            MarkRead _ r -> handleMark r w.server
-            _ -> (w.server, handleRead w.server)
-       in noted ("the server handles " <> askText o.ask <> ": " <> listText answer) w {server, outs = handled <> (o {answer = Just answer} : rest)}
-    _ -> w
+  Handle -> handleAt 0 w
+  HandleOut i -> handleAt i w
   Deliver i -> case atMay [(k, o, a) | (k, o) <- zip [0 :: Int ..] w.outs, Just a <- [o.answer]] i of
     Just (k, o, a) ->
       let w' = w {outs = [x | (j, x) <- zip [0 ..] w.outs, j /= k]}
@@ -301,6 +309,18 @@ play w = \case
     Nothing -> w
   Revise -> afterEvent ("revision " <> show (w.revisions + 1)) (Revised (w.revisions + 1) (Sealer identity)) w {revisions = w.revisions + 1}
   Finish -> afterEvent "goes away" Finished w {finished = True}
+
+-- | The world after the server handled the ask at this place among those
+-- it has not handled: a read takes the list as it is, a mark changes it.
+handleAt :: Int -> World -> World
+handleAt i w = case atMay [k | (k, o) <- zip [0 :: Int ..] w.outs, isNothing o.answer] i of
+  Just k
+    | Just o <- atMay w.outs k ->
+        let (server, answer) = case o.ask of
+              MarkRead _ r -> handleMark r w.server
+              _ -> (w.server, handleRead w.server)
+         in noted ("the server handles " <> askText o.ask <> ": " <> listText answer) w {server, outs = [if j == k then x {answer = Just answer} else x | (j, x) <- zip [0 ..] w.outs]}
+  _ -> w
 
 -- | The world after the bell took an event, with its effects carried out
 -- and the rules checked.
@@ -442,8 +462,23 @@ verdict rule w =
     . counterexample (toS (T.unlines ("Broken:" : [t | (r, t) <- w.faults, r == rule])))
     $ null [() | (r, _) <- w.faults, r == rule]
 
+-- | How many runs each property tries, at least: more when hspec is given
+-- @--qc-max-success@ (a nightly run with many more, say 1,000,000, takes
+-- the same option). Fewer let real faults through. At 2,000 runs, 30 runs
+-- of the suite found the mark's answer stored while a later read was out
+-- (fixed in ba46d6c1) twice, about once in 30,000 runs of that property:
+-- the 12,000 runs 76d971ff's message counts had missed it. And no count
+-- would have found what fefbc37b broke over the HTTP backend's cache,
+-- whatever its message says of 160,000 runs: the cache was not in the
+-- model yet. The rule a run checks matters more than how many runs. The
+-- whole module costs about a second natively per 2,000 runs of each
+-- property; the suite is native only (the machine is pure, and wasm would
+-- check nothing the compiler makes different).
+cases :: Int
+cases = 20_000
+
 spec :: Spec
-spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (const 2000) $ do
+spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (max cases) $ do
   for_ [minBound .. maxBound] $ \rule ->
     it (ruleText rule) $
       QC.property $
@@ -483,6 +518,32 @@ spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (const 2000) $ d
       QC.property $
         forAllShrinkShow genRun shrinkRun show $ \run ->
           settles quieted (foldl' play startCached (filter (`notElem` [Finish]) (filter (not . elsewhere) run)))
+
+  -- What the model assumes of the server: it handles the asks in the
+  -- order they were sent ('Handle'), as one server reached over one
+  -- connection does. Over HTTP/2, or two connections, a read and a mark
+  -- sent in that order may be handled the other way round ('HandleOut').
+  -- Then every rule but one still holds: the bell takes the answer to the
+  -- later ask, which may be the older list, and a notification it listed
+  -- goes until the live channel tells of it (the run below). A read
+  -- flag cannot go back ('known' in the machine), but a list's members
+  -- can: the server may drop one (a page no longer readable), so the bell
+  -- cannot keep what an answer leaves out. Only an order of the server's
+  -- own (a version on the list) would close it.
+  describe "when the server handles asks in any order" $ do
+    it "is known to lose a notification it listed until the channel tells of it" $
+      [t | (NothingLost, t) <- (foldl' play start [ClickBell, HandleOut 1, Make, Handle, Deliver 0, Deliver 0]).faults] `shouldNotBe` []
+
+    for_ [rule | rule <- [minBound .. maxBound], rule /= NothingLost] $ \rule ->
+      it (ruleText rule) $
+        QC.property $
+          forAllShrinkShow genUnordered shrinkRun show $ \run ->
+            verdict rule (foldl' play start (if rule == QuietAfterClose then run <> [Finish] <> run else run))
+
+    it "shows the server's list once everything out has come back, when every change was the reader's or told" $
+      QC.property $
+        forAllShrinkShow genUnordered shrinkRun show $ \run ->
+          settles quieted (foldl' play start (filter (`notElem` [Finish]) (filter (not . elsewhere) run)))
 
 -- | Whether a run, settled, shows the server's list and count, with no
 -- mark out.

@@ -228,6 +228,7 @@ drive rig ui ref gone s = do
     Reconnect -> do
       modifyIORef' ref (\server -> server {untold = []})
       HS.notify rig.channel.listener Reopened
+    HandleOut _ -> pass
     Handle -> do
       server <- readIORef ref
       waiting <- readTVarIO rig.gate
