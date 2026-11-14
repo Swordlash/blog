@@ -1,5 +1,5 @@
 ---
-pr: 0
+pr: 278
 title: The smoke tests run one after another again, in their own CI job
 technical: true
 ---
