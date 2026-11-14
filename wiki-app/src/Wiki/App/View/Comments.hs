@@ -36,6 +36,7 @@ module Wiki.App.View.Comments
   , Shown (..)
   , Input (..)
   , Output (..)
+  , Mount (..)
   , Query (..)
   , Slots
   , component
@@ -43,10 +44,11 @@ module Wiki.App.View.Comments
   )
 where
 
-import Control.Monad.UUID (MonadUUID)
+import Control.Monad.UUID (MonadUUID (..))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Data.UUID.Types (UUID)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -109,10 +111,18 @@ data Input = Input
   -- view keeps ('avatarUrls').
   }
 
+-- | 'Mount' is one mounting of the comments view: made when the component
+-- is, and new when the panel is closed and opened again. A write's answer
+-- names the mount that asked for it ('Answered'), so that a view mounted
+-- since leaves its own forms alone.
+newtype Mount = Mount UUID
+  deriving stock (Eq, Show)
+
 -- | What the comments view sends to the page view.
 data Output
-  = -- | The reader asked for a write to this page's threads.
-    Write PageId Threads.Request
+  = -- | The reader asked, in this mount of the view, for a write to this
+    -- page's threads.
+    Write Mount PageId Threads.Request
   | -- | The reader chose a thread.
     Focus CommentThreadId
   | -- | The reader abandoned the new inline thread.
@@ -123,12 +133,13 @@ data Output
     Reload
 
 -- | 'Query' is what the page view tells the comments view: the answer to
--- a write it asked for, and why it failed if it did. The threads' machine
--- decides when ("Wiki.App.View.Comments.Machine"'s @Answered@): only on
--- the visit of the page the write was sent on. The component no longer
--- checks the page itself: a page's id cannot tell one visit of it from
--- the next, which is how an answer emptied a new visit's draft.
-data Query a = Answered Threads.Request (Maybe WikiError) a
+-- a write a mount of it asked for, and why it failed if it did. The
+-- threads' machine decides when ("Wiki.App.View.Comments.Machine"'s
+-- @Answered@): only on the visit of the page the write was sent on. A
+-- mount other than the one that asked changes nothing ('handleQuery'):
+-- the machine cannot know which mount is shown, since a mount reaches the
+-- page view only as an output its loop handles later.
+data Query a = Answered Mount Threads.Request (Maybe WikiError) a
 
 -- | A deletion awaiting confirmation.
 data Deleting
@@ -138,6 +149,8 @@ data Deleting
 
 data State = State
   { input :: Input
+  , self :: Mount
+  -- ^ This mount of the view.
   , drafted :: Text
   -- ^ The new thread's first comment.
   , replies :: Map CommentThreadId Text
@@ -173,7 +186,9 @@ component :: forall m. (MonadIslands m, MonadUUID m) => H.Component Query Input 
 component =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \input -> pure State {input, drafted = "", replies = mempty, editing = Nothing, deleting = Nothing, problem = Nothing}
+      { initialState = \input -> do
+          self <- Mount <$> generateV4
+          pure State {input, self, drafted = "", replies = mempty, editing = Nothing, deleting = Nothing, problem = Nothing}
       , render
       , eval = H.mkEval H.defaultEval {H.handleAction = handleAction, H.handleQuery = handleQuery, H.receive = Just . Receive}
       }
@@ -422,7 +437,7 @@ component =
               Beside -> st.input.quoting
               Below -> Nothing
         unless (blank st.drafted || (st.input.placement == Beside && isNothing anchor)) $
-          H.raise (Write st.input.page (Threads.OpenThread anchor st.drafted))
+          H.raise (Write st.self st.input.page (Threads.OpenThread anchor st.drafted))
       GiveUp -> do
         modify (\st -> st {drafted = "", problem = Nothing})
         H.raise StopQuoting
@@ -431,37 +446,40 @@ component =
         st <- get
         let text = Map.findWithDefault "" tid st.replies
         unless (blank text) $
-          H.raise (Write st.input.page (Threads.Reply tid text))
+          H.raise (Write st.self st.input.page (Threads.Reply tid text))
       Edit c -> modify (\st -> st {editing = Just (c.id, c.body), deleting = Nothing, problem = Nothing})
       Editing t -> modify (\st -> st {editing = (\(cid, _) -> (cid, t)) <$> st.editing})
       SaveEdit tid -> do
         st <- get
         for_ st.editing $ \(cid, text) ->
-          H.raise (Write st.input.page (Threads.EditComment tid cid text))
+          H.raise (Write st.self st.input.page (Threads.EditComment tid cid text))
       StopEditing -> modify (\st -> st {editing = Nothing})
       AskDelete what -> modify (\st -> st {deleting = Just what, editing = Nothing, problem = Nothing})
       KeepIt -> modify (\st -> st {deleting = Nothing})
       Delete -> do
         st <- get
         case st.deleting of
-          Just (DeletingComment tid cid) -> H.raise (Write st.input.page (Threads.DeleteComment tid cid))
-          Just (DeletingThread tid) -> H.raise (Write st.input.page (Threads.DeleteThread tid))
+          Just (DeletingComment tid cid) -> H.raise (Write st.self st.input.page (Threads.DeleteComment tid cid))
+          Just (DeletingThread tid) -> H.raise (Write st.self st.input.page (Threads.DeleteThread tid))
           Nothing -> pass
       Resolve tid resolved -> do
-        page <- gets (\st -> st.input.page)
-        H.raise (Write page (Threads.Resolve tid resolved))
+        st <- get
+        H.raise (Write st.self st.input.page (Threads.Resolve tid resolved))
       Choose tid -> H.raise (Focus tid)
       CloseIt -> H.raise Close
       TryAgain -> H.raise Reload
 
     -- A write's answer: the form it came from emptied, or why it failed
-    -- shown. The threads' machine tells it only on the visit of the page
-    -- the write was sent on.
+    -- shown, if this mount asked for it. The threads' machine tells it only
+    -- on the visit of the page the write was sent on.
     handleQuery :: Query a -> H.HalogenM State Action Slots Output m (Maybe a)
-    handleQuery (Answered request failure next) = do
-      modify $ \st -> case failure of
-        Just e -> st {problem = Just e}
-        Nothing -> emptied request st {problem = Nothing}
+    handleQuery (Answered asker request failure next) = do
+      modify $ \st ->
+        if asker /= st.self
+          then st
+          else case failure of
+            Just e -> st {problem = Just e}
+            Nothing -> emptied request st {problem = Nothing}
       pure (Just next)
 
     emptied :: Threads.Request -> State -> State

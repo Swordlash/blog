@@ -191,6 +191,9 @@ data Effect a
     -- choose the thread. Asked only on the visit of the page the write was
     -- sent on.
     Opened CommentThreadId
+  | -- | The subscription's answer replaced the threads shown with these: a
+    -- thread chosen that is not among them is chosen no more.
+    Remaining [CommentThreadId]
   | -- | The threads shown changed: look up the people they mention.
     Changed
   deriving stock (Eq, Show)
@@ -244,7 +247,7 @@ step event m
       Replaced page ts
         | m.page /= Just page -> (m, [])
         | m.encrypted -> reading m
-        | otherwise -> (unquiet m {threads = ThreadsReady ts, asks = supersede m.asks, heard = [], behind = False}, [Changed])
+        | otherwise -> (unquiet m {threads = ThreadsReady ts, asks = supersede m.asks, heard = [], behind = False}, [Changed, Remaining (map (\t -> t.id) ts)])
       Reload -> reading m
 
 -- | The model on another visit, or none: what was kept about the last

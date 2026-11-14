@@ -372,28 +372,29 @@ start = startOver Nothing
 startCached = startOver (Just (storedOf emptyCache))
 
 -- | The world after the view took an event.
-event :: Text -> Event () -> World -> World
+event :: Text -> Event Int -> World -> World
 event what e w = checked (Just w.view.threads) . fromTheCache $ effected what fx w {view}
   where
     (view, fx) = step e w.view
 
 -- | The view's effects carried out: a read or a write is an ask out (a
 -- read answered at once by the cache when it can be).
-effected :: Text -> [Effect ()] -> World -> World
+effected :: Text -> [Effect Int] -> World -> World
 effected what fx w =
   noted (what <> (if null outsMade then "" else " -> " <> T.intercalate ", " (map fst outsMade))) $
     w
       { outs = w.outs <> map snd outsMade
-      , asksOfView = w.asksOfView <> [TellForm | Answered {} <- fx] <> [ChooseOpened | Opened _ <- fx]
+      , asksOfView = w.asksOfView <> [TellForm | Answered asker _ _ <- fx, asker == w.mounted] <> [ChooseOpened | Opened _ <- fx]
       , faults = w.faults <> [(AfterClose, "asked after the view went away: " <> what) | w.finished, not (null outsMade)]
       }
   where
     outsMade = mapMaybe outOf fx
     outOf = \case
       Load t p -> Just (show (t, p), readOut t p)
-      Send () n p r -> Just ("write " <> show n, Out {asked = AWrite n p r w.visit w.mounted, answer = Nothing, sent = Nothing})
+      Send sender n p r -> Just ("write " <> show n, Out {asked = AWrite n p r w.visit sender, answer = Nothing, sent = Nothing})
       Answered {} -> Nothing
       Opened _ -> Nothing
+      Remaining _ -> Nothing
       Changed -> Nothing
     readOut t p = case w.tabCache of
       Just c | Just cached <- Map.lookup p c.cache.threads -> Out {asked = ARead t p, answer = Just (Left <$> cached), sent = Nothing}
@@ -474,7 +475,7 @@ play w = \case
     other wr = noted ("someone else: " <> show wr) w {server = fst (handleWrite "other" w.shownPage wr w.server)}
     byReader wr
       | w.finished || not (isReady w.view) = w
-      | otherwise = event ("the reader asks for " <> show wr) (Write () w.shownPage wr) w
+      | otherwise = event ("the reader asks for " <> show wr) (Write w.mounted w.shownPage wr) w
     onServerThread i f = maybe w f (atMay (threadsOn w.shownPage w.server) i)
     onServerComment i f = maybe w (uncurry f) (atMay [(t, c) | t <- threadsOn w.shownPage w.server, c <- t.comments] i)
     onShownThread i f
@@ -521,10 +522,10 @@ deliver k w = case atMay w.outs k of
           -- page view takes it.
           (AWrite n p r v sender, Right (Right e)) ->
             let e' = answerOf r e
-             in answeredOnce v sender (Right e') w' (event ("the answer to write " <> show n <> ": " <> show e') (Wrote () n r (Right e')) (changing (afterComment p) w'))
+             in answeredOnce v sender (Right e') w' (event ("the answer to write " <> show n <> ": " <> show e') (Wrote sender n r (Right e')) (changing (afterComment p) w'))
           -- A write is never answered with a list.
           (AWrite {}, Right (Left _)) -> w'
-          (AWrite n p r v sender, Left e) -> answeredOnce v sender (Left e) w' (event ("write " <> show n <> " refused: " <> show e) (Wrote () n r (Left e)) (changing (afterComment p) w'))
+          (AWrite n p r v sender, Left e) -> answeredOnce v sender (Left e) w' (event ("write " <> show n <> " refused: " <> show e) (Wrote sender n r (Left e)) (changing (afterComment p) w'))
   _ -> w
 
 -- | 'ViewAsk' is what a write's answer asks of the page view beside its

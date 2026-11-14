@@ -332,7 +332,7 @@ data Action
   | FromComments CommentsView.Placement CommentsView.Output
   | -- | An answer to a read or a write of the threads, as the threads'
     -- machine takes it.
-    ThreadsHappened (Threads.Event CommentsView.Placement)
+    ThreadsHappened (Threads.Event (CommentsView.Placement, CommentsView.Mount))
   | Heard Heard
   | Selecting
   | CommentOnSelection
@@ -970,7 +970,7 @@ component =
                     >>= done visit (\moved -> Just (Page (spacePathOf ctx.spaces target.id) (maybe [] (fromMaybe [] . pagePathOf target ps) parent <> [moved.slug])))
             _ -> pass
       FromComments placement out -> case out of
-        CommentsView.Write page request -> threadsStep (Threads.Write placement page request)
+        CommentsView.Write asker page request -> threadsStep (Threads.Write (placement, asker) page request)
         -- The scrolls to a thread or its mark ('reveal') run on the loop, in
         -- the step of the render that shows them ('H.liftEffect'), not on
         -- a thread of their own after whatever ran meanwhile.
@@ -983,7 +983,6 @@ component =
       ThreadsHappened event -> threadsStep event
       Heard heard -> do
         here <- gets (\st -> st.watching)
-        encrypted <- gets (\st -> isJust st.input.space.encryption)
         case heard of
           Live.Heard page (Editing editors) | Just page == here -> modify (\st -> st {editors})
           Live.Heard page (Reading readers) | Just page == here -> modify (\st -> st {readers}) >> resolveAvatars
@@ -1001,14 +1000,13 @@ component =
           -- The server's answer to the subscription: the threads as they
           -- are now, replacing what was shown, including whatever changed
           -- since the page was read (or the channel was lost). A focused
-          -- thread that no longer exists is unfocused.
+          -- thread that no longer exists is unfocused: the machine names
+          -- the threads that remain ('Threads.Remaining').
           -- A page of an encrypted space: the server's answer has none of
           -- its threads, which are read and decrypted.
           -- They are newer than the answer to any read of them still out,
           -- which is not taken after them.
-          Live.Replaced page threads | Just page == here -> do
-            threadsStep (Threads.Replaced page threads)
-            unless encrypted $ modify (\st -> st {focused = st.focused >>= \f -> f <$ find (\t -> t.id == f) threads})
+          Live.Replaced page threads | Just page == here -> threadsStep (Threads.Replaced page threads)
           _ -> pass
       -- Anyone may copy a link to what they select; who may comment is
       -- asked when the buttons are shown.
@@ -1139,14 +1137,15 @@ component =
     -- One step of the threads' machine, in one step of the program, and
     -- then its effects. A read is forked and its answer comes back as an
     -- event ('ThreadsHappened'), so that nothing after it waits for it.
-    threadsStep :: Threads.Event CommentsView.Placement -> H.HalogenM State Action Slots ViewOutput m ()
+    threadsStep :: Threads.Event (CommentsView.Placement, CommentsView.Mount) -> H.HalogenM State Action Slots ViewOutput m ()
     threadsStep event = do
       effects <- state (\st -> let (discussion, fx) = Threads.step event st.discussion in (fx, st {discussion}))
       for_ effects $ \case
         Threads.Load ticket page -> void . H.fork $ listThreads page >>= handleAction . ThreadsHappened . Threads.Loaded ticket page
         Threads.Send placement n page request -> void . H.fork $ sendWrite page request >>= handleAction . ThreadsHappened . Threads.Wrote placement n request
-        Threads.Answered placement request failure -> void (H.tell "comments" placement (CommentsView.Answered request failure))
+        Threads.Answered (placement, asker) request failure -> void (H.tell "comments" placement (CommentsView.Answered asker request failure))
         Threads.Opened tid -> modify (\st -> st {quoting = Nothing, focused = Just tid})
+        Threads.Remaining tids -> modify (\st -> st {focused = mfilter (`elem` tids) st.focused})
         Threads.Changed -> resolvePeople
 
     -- Look up the people the page and its comments mention, for the
