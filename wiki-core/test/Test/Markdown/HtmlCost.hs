@@ -23,6 +23,14 @@
 -- Each input is read and written out again at four sizes, 50, 100, 200
 -- and 400 KB. Linear cost makes the largest allocate about eight times the
 -- smallest, quadratic cost sixty-four times; the test fails above sixteen.
+--
+-- Deep nesting is read at 5, 10, 20 and 40 KB instead, 1,024 to 8,192
+-- elements deep: past the depth's bound of 512 at every size, and the
+-- sizes the walk's regression was measured at above. Each of its start
+-- tags walks down up to 512 open elements, so a byte of it costs ten to
+-- twenty times what a byte of the other inputs costs: at 50 to 400 KB the
+-- example took two and a half to four minutes of CI's wasm job
+-- (2026-11-13), and the count does not need the size.
 module Test.Markdown.HtmlCost (spec) where
 
 import Data.Text qualified as T
@@ -33,12 +41,12 @@ import Wiki.Core.Markdown.Html
 
 spec :: Spec
 spec = describe "Markdown.Html, its cost" $ do
-  for_ shapes $ \(name, make, work) ->
+  for_ shapes $ \(name, unit, make, work) ->
     it ("grows no faster than the HTML: " <> toS name) $ do
-      counts <- for [50, 100, 200, 400] $ \kb -> do
+      counts <- for [1, 2, 4, 8] $ \multiple -> do
         -- The input is made before the count starts: only the work is
         -- counted.
-        let input = make (kb * 1024)
+        let input = make (multiple * unit)
         _ <- evaluate (T.length input)
         allocated (work input)
       let smallest = fromMaybe 0 (head counts)
@@ -64,18 +72,21 @@ spec = describe "Markdown.Html, its cost" $ do
       left <- getAllocationCounter
       pure (fromIntegral (negate left))
 
--- | Each input by its name, made at about a length, and the work it is
--- given: read and written out again, its length forced.
-shapes :: [(Text, Int -> Text, Text -> Int)]
+-- | Each input by its name, the length in bytes of its smallest size, how
+-- it is made at about a length, and the work it is given: read and written
+-- out again, its length forced.
+shapes :: [(Text, Int, Int -> Text, Text -> Int)]
 shapes =
-  [ ("a style holding end tags of other elements, in a frame", \n -> "<style>/* " <> T.replicate (n `div` 4) "</x>" <> " */</style><p>after</p>", frame)
-  , ("a style holding end tags of other elements, in a page", \n -> "<style>/* " <> T.replicate (n `div` 4) "</x>" <> " */</style><p>after</p>", page)
-  , ("texts between comments", \n -> T.replicate (n `div` 8) "a<!---->", page)
-  , ("elements nested deep", \n -> T.replicate (n `div` 5) "<div>", page)
-  , ("a style never ended, holding </styleX", \n -> "<style>" <> T.replicate (n `div` 8) "</stylex", frame)
-  , ("many paragraphs, as text", \n -> T.replicate (n `div` 8) "<p>x</p>", T.length . htmlText . parseHtml)
-  , ("many elements side by side", \n -> T.replicate (n `div` 8) "<b>x</b>", page)
+  [ ("a style holding end tags of other elements, in a frame", kb50, \n -> "<style>/* " <> T.replicate (n `div` 4) "</x>" <> " */</style><p>after</p>", frame)
+  , ("a style holding end tags of other elements, in a page", kb50, \n -> "<style>/* " <> T.replicate (n `div` 4) "</x>" <> " */</style><p>after</p>", page)
+  , ("texts between comments", kb50, \n -> T.replicate (n `div` 8) "a<!---->", page)
+  , ("elements nested deep", 5 * 1024, \n -> T.replicate (n `div` 5) "<div>", page)
+  , ("a style never ended, holding </styleX", kb50, \n -> "<style>" <> T.replicate (n `div` 8) "</stylex", frame)
+  , ("many paragraphs, as text", kb50, \n -> T.replicate (n `div` 8) "<p>x</p>", T.length . htmlText . parseHtml)
+  , ("many elements side by side", kb50, \n -> T.replicate (n `div` 8) "<b>x</b>", page)
   ]
+  where
+    kb50 = 50 * 1024
 
 frame :: Text -> Int
 frame = T.length . renderHtml . parseFrameHtml

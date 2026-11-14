@@ -39,6 +39,9 @@ onWasm = False
 -- | The suite with its properties' count cut to a quarter on wasm, at
 -- least one case each, and unchanged natively. Applied once, to the whole
 -- suite, in its main.
+-- A property given its own count ('modifyMaxSuccess' on the property
+-- itself) keeps that count on both backends: that setting is applied
+-- after this one.
 wasmCases :: SpecWith a -> SpecWith a
 wasmCases
   | onWasm = modifyMaxSuccess (\n -> max 1 (n `div` 4))
