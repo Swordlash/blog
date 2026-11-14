@@ -191,9 +191,19 @@ step event m
       Loaded asked answer -> (taking asked answer (learning answer m), [])
       MarkClicked i -> marking ReadMark {ids = [i], everything = False} m
       MarkAllClicked -> marking ReadMark {ids = [], everything = True} m
+      -- A mark the server took, whose answer a later ask's answer was
+      -- taken over, is followed by a read: the later answer may be older
+      -- than the mark (a read the cache answered at once while the mark
+      -- was out), and the count beside a list is not a thing that only
+      -- goes one way, as read marks are. The read is asked after the
+      -- mark's answer came, so the server handles it after the mark.
       Marked asked answer ->
-        let m' = m {marking = max 0 (m.marking - 1)}
-         in (either (const m') (\_ -> taking asked answer (learning answer m')) answer, [])
+        let m' = learning answer m {marking = max 0 (m.marking - 1)}
+         in case answer of
+              Left _ -> (m', [])
+              Right _
+                | isJust (takes asked m'.asks) -> (taking asked answer m', [])
+                | otherwise -> reading m'
       Followed i target ->
         let (closedList, unwatched) = close m
             unread = any (\n -> n.id == i && not n.read) (listed m)

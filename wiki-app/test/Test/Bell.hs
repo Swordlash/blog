@@ -537,13 +537,15 @@ spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (max cases) $ do
   -- order they were sent ('Handle'), as one server reached over one
   -- connection does. Over HTTP/2, or two connections, a read and a mark
   -- sent in that order may be handled the other way round ('HandleOut').
-  -- Then every rule but one still holds: the bell takes the answer to the
-  -- later ask, which may be the older list, and a notification it listed
-  -- goes until the live channel tells of it (the run below). A read
-  -- flag cannot go back ('known' in the machine), but a list's members
-  -- can: the server may drop one (a page no longer readable), so the bell
-  -- cannot keep what an answer leaves out. Only an order of the server's
-  -- own (a version on the list) would close it.
+  -- Then the bell may take the answer to the later ask, which may be the
+  -- older state: a notification it listed goes until the live channel
+  -- tells of it, and the count may be the older one until the next read
+  -- (the two runs below). A read flag cannot go back ('known' in the
+  -- machine), but a list's members can (the server may drop one: a page no
+  -- longer readable) and the count can (new notifications raise it), so
+  -- neither can be kept the way read flags are. Only an order of the
+  -- server's own (a version on the list) would close these. Every other
+  -- rule holds, and so does the settled list after one more read.
   describe "when the server handles asks in any order" $ do
     it "is known to lose a notification it listed until the channel tells of it" $
       [t | (NothingLost, t) <- (foldl' play start [ClickBell, HandleOut 1, Make, Handle, Deliver 0, Deliver 0]).faults] `shouldNotBe` []
@@ -554,10 +556,14 @@ spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (max cases) $ do
           forAllShrinkShow genUnordered shrinkRun show $ \run ->
             verdict rule (foldl' play start (if rule == QuietAfterClose then run <> [Finish] <> run else run))
 
-    it "shows the server's list once everything out has come back, when every change was the reader's or told" $
+    it "is known to show an older count until the next read"
+      $ QC.once . QC.expectFailure
+      $ settles quieted (foldl' play start [Make, Make, Handle, Make, Make, ClickBell, ClickBell, ClickBell, Deliver 0, ClickLink 1, Handle, ClickBell, HandleOut 2])
+
+    it "shows the server's list once everything out has come back and one more read is answered" $
       QC.property $
         forAllShrinkShow genUnordered shrinkRun show $ \run ->
-          settles quieted (foldl' play start (filter (`notElem` [Finish]) (filter (not . elsewhere) run)))
+          settles settled (foldl' play start (filter (/= Finish) run))
 
 -- | Whether a run, settled, shows the server's list and count, with no
 -- mark out.
