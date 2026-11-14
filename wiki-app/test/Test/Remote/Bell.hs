@@ -1,3 +1,5 @@
+{-# LANGUAGE MultiWayIf #-}
+
 -- | The header's bell over haskell-halogen-remote: the real component,
 -- under the gated in-memory backend ("Test.BellHarness"), mounted in this
 -- process, its DOM shown in headless Chromium over a WebSocket, clicked
@@ -6,26 +8,25 @@
 --
 -- How a step settles: a click settles in the driver (the page's probe,
 -- answered by the session); an answer the test lets go from the gate is
--- not an action of the page's, so the test reads the session's activity
--- until it has nothing left to do but wait for the asks still held, and
--- then has the driver settle, which the page answers in order with the
--- batches the session sent.
+-- not an action of the page's, so the test waits on the session
+-- ('waitSession') until it has nothing left to do but wait for the asks
+-- still held, and then has the driver settle, which the page answers in
+-- order with the batches the session sent.
 module Test.Remote.Bell (spec) where
 
-import Control.Concurrent.STM (TVar, readTVarIO)
-import Data.IORef (readIORef)
 import Data.NT (type (~>) (..))
 import Data.Text qualified as T
 import Halogen qualified as H
-import Halogen.Activity (Activity (..))
+import Halogen.Activity (Activity (..), idle)
 import Halogen.Playwright (Locator, Page, Playwright, click, count, getAttribute, isDisabled, locator, nth, settle, textContent, visit)
 import Halogen.Playwright.Hspec (SpecWith, inPage, it, shouldBe)
 import Halogen.Remote.Session qualified as Session
-import Halogen.Remote.Test (Mounted (..), TestServer, mountingEach, queryComponent)
+import Halogen.Remote.Test (Mounted (..), TestServer, mountingEach, queryComponent, waitSession)
 import Halogen.Router qualified as Router
 import Protolude
 import Test.Bell (Step (..), genRun, shrinkRun)
-import Test.BellHarness (Check (..), Held, Query (..), Rig (..), Shown (..), Ui (..), newRig, parent, runGated, runSteps)
+import Test.BellHarness (Check (..), Query (..), Rig (..), Shown (..), Ui (..), newRig, parent, runGated, runSteps)
+import Test.Harness.MemDom (heldCount, within)
 import Test.QuickCheck (counterexample, forAllShrinkShow, ioProperty, withNumTests, (===))
 import Test.QuickCheck qualified as QC
 import Wiki.App.Backend.Mem (newMemWiki)
@@ -44,18 +45,9 @@ mount server page = do
     pure (H.hoist (NT (runGated gate wiki)) (parent feed router), ())
   visit page address
   mounted <- next
-  let rig = rigWith (\r -> void (queryComponent mounted (SetRevision r ()))) (disposed (rigWith (\_ -> pass) pass).listening)
-      -- The session disposed of, and then the bell's finalizer waited
-      -- for, read from the feed's listeners a millisecond apart: in two
-      -- runs of about a hundred the feed was still listened to just after
-      -- the session's dispose returned, and nothing else says when the
-      -- finalizer has run.
-      disposed ref = do
-        Session.dispose mounted.session
-        let pending k = do
-              n <- readIORef ref
-              unless (n == 0 || k > 2000) (threadDelay 1000 >> pending (k + 1))
-        pending (0 :: Int)
+  -- The session's dispose returns once the bell's finalizer has run, the
+  -- feed let go with it.
+  let rig = rigWith (\r -> void (queryComponent mounted (SetRevision r ()))) (Session.dispose mounted.session)
       at = locator page
       clickIf l = do
         n <- count l
@@ -72,27 +64,28 @@ mount server page = do
           , clickLink = \i -> do
               n <- count (at ".notification-link")
               when (i < n) (click (nth i (at ".notification-link")))
+          , pressOutside = Nothing
           , shown = shownOn page
-          , settle = settleOver mounted.session gate page
+          , settle = settleOver mounted (heldCount gate) page
           }
   ui.settle
   pure (rig, ui)
 
--- | Read the session until no work is left and the fibers that wait are
--- the asks held, a millisecond apart, then have the driver settle the
--- page.
-settleOver :: Session.Session -> TVar [Held] -> Page -> IO ()
-settleOver session gate page = go (0 :: Int)
+-- | Wait on the session until no work is left and the fibers that wait
+-- are the asks held, then have the driver settle the page. A fiber starts
+-- to wait before its ask reaches the gate, and its ask reaching the gate
+-- is no change of the session's activity: so until the two agree, the wait
+-- is on whichever changes first.
+settleOver :: Mounted q o -> STM Int -> Page -> IO ()
+settleOver mounted holding page = within (pure "the session to wait only for the asks held") go >> settle page
   where
-    go tries = do
-      a <- Session.activity session
-      waitingNow <- length <$> readTVarIO gate
-      if a.running == 0 && (a.waiting == waitingNow || a.trees == 0)
-        then settle page
-        else
-          if tries > 10_000
-            then panic ("the bell did not settle: " <> show a <> ", held " <> show waitingNow)
-            else threadDelay 1000 >> go (tries + 1)
+    go = do
+      waitSession mounted (\a -> idle a || a.trees == 0)
+      a <- Session.activity mounted.session
+      n <- atomically holding
+      if
+        | a.trees == 0 || (idle a && a.waiting == n) -> pass
+        | otherwise -> void (race (atomically (holding >>= \m -> check (m /= n))) (waitSession mounted (/= a))) >> go
 
 -- | What the bell shows, read from the page.
 shownOn :: Page -> IO Shown

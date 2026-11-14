@@ -346,6 +346,7 @@ test-suite wiki-app-test
         Test.DecryptedExport
         Test.Export
         Test.Favicon
+        Test.Harness.MemDom
         Test.Hydrate
         Test.Import
         Test.Islands
@@ -521,9 +522,11 @@ test-suite wiki-app-remote-test
     other-modules:
         Test.Bell
         Test.BellHarness
+        Test.Harness.MemDom
         Test.Remote.Bell
     build-depends:
         QuickCheck,
+        aeson,
         base,
         containers,
         hspec >= 2,
