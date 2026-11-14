@@ -166,9 +166,9 @@ step event m
 
 -- | The link watched, for an embedded page.
 watched :: Model s l h x -> (Model s l h x, [Effect l h])
-watched m = case m.target of
-  Linked _ _ -> let w = m.watches + 1 in (m {watching = Just w, watches = w}, [Watch w m.generation])
-  Shown _ -> (m, [])
+watched m = case (m.target, m.watching) of
+  (Linked _ _, Nothing) -> let w = m.watches + 1 in (m {watching = Just w, watches = w}, [Watch w m.generation])
+  _ -> (m, [])
 
 -- | The watch running stopped.
 unwatched :: Model s l h x -> (Model s l h x, [Effect l h])
