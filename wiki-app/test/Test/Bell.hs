@@ -35,6 +35,7 @@ module Test.Bell
   , World (..)
   , Rule (..)
   , start
+  , startCached
   , play
   , emptyServer
   , genRun
@@ -56,6 +57,7 @@ import Test.Hspec.QuickCheck (modifyMaxSuccess)
 import Test.QuickCheck (Gen, Property, chooseInt, counterexample, forAllShrinkShow, frequency, listOf, shrinkList, (.&&.), (===))
 import Test.QuickCheck qualified as QC
 import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
+import Wiki.App.Backend.Http.Cache (Cache (notices), Reading (..), Stored (..), changedBy, emptyCache, forgetNotices, storedAnswer, storedOf, withNotice, withNotices)
 import Wiki.App.View.Bell.Machine
 import Wiki.App.View.Latest (madeAfter)
 import Wiki.Core.Id (NotificationId (..), PageId (..), UserId (..))
@@ -184,6 +186,26 @@ shrinkRun = shrinkList shrinkStep
 data Out = Out
   { ask :: Effect ()
   , answer :: Maybe Notifications
+  , sent :: Maybe (Stored, [NotificationId])
+  -- ^ Over the HTTP backend's cache, for a read sent to the server: the
+  -- cache as it was when the read was sent, and the notifications the
+  -- live channel had told of then ("Wiki.App.Backend.Http"'s
+  -- @fetchedNotices@).
+  }
+  deriving stock (Show)
+
+-- | 'Tab' is what the HTTP backend keeps in the tab for the bell: its
+-- cache, with the changes counted ("Wiki.App.Backend.Http.Cache"), and
+-- every notification the live channel told of. A read is answered from
+-- the cache when the cache has the notifications; otherwise it is sent,
+-- and its answer, with what the channel told while it was out, is stored
+-- if the cache did not change meanwhile. A message of the channel adds
+-- its notification to the cached ones ('withNotice'), the channel
+-- reopened forgets them ('forgetNotices'), a mark's answer replaces them
+-- ('withNotices'): each a change.
+data Tab = Tab
+  { stored :: Stored
+  , told :: [Notification]
   }
   deriving stock (Show)
 
@@ -205,12 +227,26 @@ data World = World
   , seenRead :: Map NotificationId Bool
   -- ^ Every notification listed so far, and whether it was ever listed
   -- read.
+  , tab :: Maybe Tab
+  -- ^ The HTTP backend's cache, when the bell is over it; 'Nothing' for a
+  -- backend that asks the server every time.
   }
 
 -- | A run from its start: the bell mounted, over a backend that could not
 -- answer at once.
 start :: World
-start = afterEvent "mounted" Started World {bell = initial Nothing 0, server = emptyServer, outs = [], listening = 0, finished = False, revisions = 0, trace = [], faults = [], seenRead = mempty}
+start = startOver Nothing
+
+-- | A run from its start, over the HTTP backend's cache, empty.
+startCached :: World
+startCached = startOver (Just Tab {stored = storedOf emptyCache, told = []})
+
+startOver :: Maybe Tab -> World
+startOver tab = afterEvent "mounted" Started World {bell = initial Nothing 0, server = emptyServer, outs = [], listening = 0, finished = False, revisions = 0, trace = [], faults = [], seenRead = mempty, tab}
+
+-- | The tab's cache after a change.
+changing :: (Cache -> Cache) -> World -> World
+changing f w = w {tab = fmap (\t -> t {stored = changedBy f t.stored}) w.tab}
 
 -- | The world after a step.
 play :: World -> Step -> World
@@ -233,9 +269,9 @@ play w = \case
     Just n -> noted ("another tab marks " <> idText n <> " read") w {server = fst (handleMark ReadMark {ids = [n.id], everything = False} w.server)}
     Nothing -> w
   Tell -> case w.server.untold of
-    n : rest -> afterEvent ("told " <> idText n) (Told n) w {server = w.server {untold = rest}}
+    n : rest -> afterEvent ("told " <> idText n) (Told n) (changing (withNotice n) w {server = w.server {untold = rest}, tab = fmap (\t -> t {told = take 50 (n : t.told)}) w.tab})
     [] -> w
-  Reconnect -> afterEvent "reconnected" Reopened w {server = w.server {untold = []}}
+  Reconnect -> afterEvent "reconnected" Reopened (changing forgetNotices w {server = w.server {untold = []}})
   Handle -> case break (isNothing . (.answer)) w.outs of
     (handled, o : rest) ->
       let (server, answer) = case o.ask of
@@ -247,8 +283,17 @@ play w = \case
     Just (k, o, a) ->
       let w' = w {outs = [x | (j, x) <- zip [0 ..] w.outs, j /= k]}
        in case o.ask of
-            Load f -> afterEvent ("answer to " <> askText o.ask) (Loaded f (Right a)) w'
-            MarkRead m _ -> afterEvent ("answer to " <> askText o.ask) (Marked m (Right a)) w'
+            Load f -> case (w'.tab, o.sent) of
+              -- Over the cache, a read sent to the server: its answer
+              -- with what the channel told meanwhile, stored if the cache
+              -- did not change since it was sent.
+              (Just t, Just (sentAt, toldBefore)) ->
+                let missing = [n | n <- t.told, n.id `notElem` toldBefore, all (\x -> x.id /= n.id) a.items]
+                    merged = Notifications {unread = a.unread + length (filter (\n -> not n.read) missing), items = missing <> a.items}
+                    t' = t {stored = storedAnswer PlainRead sentAt (withNotices (Right merged)) t.stored}
+                 in afterEvent ("answer to " <> askText o.ask <> ": " <> listText merged) (Loaded f (Right merged)) w' {tab = Just t'}
+              _ -> afterEvent ("answer to " <> askText o.ask) (Loaded f (Right a)) w'
+            MarkRead m _ -> afterEvent ("answer to " <> askText o.ask) (Marked m (Right a)) (changing (withNotices (Right a)) w')
             _ -> w
     Nothing -> w
   Revise -> afterEvent ("revision " <> show (w.revisions + 1)) (Revised (w.revisions + 1) (Sealer identity)) w {revisions = w.revisions + 1}
@@ -262,7 +307,7 @@ afterEvent what event w =
     . noted (what <> effectsText)
     $ w
       { bell
-      , outs = w.outs <> [Out {ask = e, answer = Nothing} | e <- effects, isAsk e]
+      , outs = w.outs <> [outOf e | e <- effects, isAsk e]
       , listening = w.listening + length (filter (== Listen) effects) - length (filter (== Unlisten) effects)
       , faults =
           w.faults
@@ -271,6 +316,13 @@ afterEvent what event w =
       }
   where
     (bell, effects) = step event w.bell
+    -- An ask out. Over the cache, a read the cache can answer is answered
+    -- at once, from it, and goes to no server.
+    outOf e = case (e, w.tab) of
+      (Load _, Just t) -> case t.stored.cache.notices of
+        Just (Right known) -> Out {ask = e, answer = Just known, sent = Nothing}
+        _ -> Out {ask = e, answer = Nothing, sent = Just (t.stored, map (\n -> n.id) t.told)}
+      _ -> Out {ask = e, answer = Nothing, sent = Nothing}
     effectsText = if null effects then "" else " -> " <> T.intercalate ", " (map effectText effects)
     isAsk = isJust . ticketOf
     ticketOf = \case
@@ -350,7 +402,7 @@ settled w0 = finalRead (drain (tellAll w0))
       | null w.outs = w
       | any (isNothing . (.answer)) w.outs = drain (play w Handle)
       | otherwise = drain (play w (Deliver 0))
-    finalRead w = drain (afterEvent "reconnected, to settle" Reopened w)
+    finalRead w = drain (afterEvent "reconnected, to settle" Reopened (changing forgetNotices w))
 
 -- | A run's outcome against one rule, as QuickCheck shows it: the run,
 -- then what broke the rule.
@@ -371,10 +423,28 @@ spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (const 2000) $ d
   it "shows the server's list once everything out has come back and one more read is answered" $
     QC.property $
       forAllShrinkShow genRun shrinkRun show $ \run ->
-        let w = settled (foldl' play start (filter (/= Finish) run))
-            shown = [(n.id, n.read) | n <- listed w.bell]
-            truth = [(n.id, n.read) | n <- w.server.notes]
-         in counterexample (toS (T.unlines (reverse w.trace))) (shown === truth .&&. unreadCount w.bell === length (filter (not . snd) truth) .&&. busy w.bell === False)
+        settles (foldl' play start (filter (/= Finish) run))
+
+  describe "over the HTTP backend's cache" $ do
+    for_ [minBound .. maxBound] $ \rule ->
+      it (ruleText rule) $
+        QC.property $
+          forAllShrinkShow genRun shrinkRun show $ \run ->
+            verdict rule (foldl' play startCached (if rule == QuietAfterClose then run <> [Finish] <> run else run))
+
+    it "shows the server's list once everything out has come back and the channel reopened" $
+      QC.property $
+        forAllShrinkShow genRun shrinkRun show $ \run ->
+          settles (foldl' play startCached (filter (/= Finish) run))
+
+-- | Whether a run, settled, shows the server's list and count, with no
+-- mark out.
+settles :: World -> Property
+settles w0 = counterexample (toS (T.unlines (reverse w.trace))) (shown === truth .&&. unreadCount w.bell === length (filter (not . snd) truth) .&&. busy w.bell === False)
+  where
+    w = settled w0
+    shown = [(n.id, n.read) | n <- listed w.bell]
+    truth = [(n.id, n.read) | n <- w.server.notes]
 
 -- | What a rule says, as an example's name.
 ruleText :: Rule -> [Char]
