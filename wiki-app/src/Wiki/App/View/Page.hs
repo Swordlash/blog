@@ -116,7 +116,8 @@
 -- then stays until the answer. Each visit
 -- of an address has a number ('visit'), and an answer to a request of an
 -- earlier visit changes nothing of this one; a fetch's answer is shown
--- only if it is the latest fetch ('fetches'). The page shown is never
+-- only if no later fetch's answer was ('fetches', by
+-- "Wiki.App.View.Latest"'s rule). The page shown is never
 -- replaced by an older version of itself ('takesPage'), whatever asked
 -- for it and whenever the answer comes.
 module Wiki.App.View.Page
@@ -161,6 +162,8 @@ import Wiki.App.View.Comments qualified as CommentsView
 import Wiki.App.View.Common
 import Wiki.App.View.DeckViewer qualified as DeckViewer
 import Wiki.App.View.Export qualified as ExportView
+import Wiki.App.View.Latest (Asks, noAsks, takesPage)
+import Wiki.App.View.Latest qualified as Latest
 import Wiki.App.View.Star qualified as StarView
 import Wiki.App.View.Ticking (Clearing (..), Staging (..), TickNote (..))
 import Wiki.App.View.Ticking qualified as Ticking
@@ -235,6 +238,9 @@ data State = State
   , mode :: Mode
   , problem :: Maybe WikiError
   , threads :: Threads
+  , threadAsks :: Asks
+  -- ^ The reads of the page's threads ('loadThreads'): an answer is taken
+  -- only if no newer one was ("Wiki.App.View.Latest").
   , panelOpen :: Bool
   -- ^ Whether the panel of inline threads is shown.
   , focused :: Maybe CommentThreadId
@@ -276,9 +282,10 @@ data State = State
   -- ^ Which visit of an address the view is on: one more each time it
   -- shows another page or version. An answer to a write asked for on an
   -- earlier visit changes nothing of this one.
-  , fetches :: Int
-  -- ^ How many fetches of the page the view has started: only the answer
-  -- to the latest, on this visit, is shown.
+  , fetches :: Asks
+  -- ^ The fetches of the page the view has started: an answer is shown
+  -- only if no later fetch's answer was ("Wiki.App.View.Latest"). Another
+  -- visit puts something newer in place of every fetch out.
   , writing :: Bool
   -- ^ Whether a write of the page that the view started (a rename, a
   -- move, a delete, the template switch) is out, until its answer on
@@ -367,6 +374,7 @@ component =
               , mode = Viewing
               , problem = Nothing
               , threads
+              , threadAsks = noAsks
               , panelOpen = False
               , focused = Nothing
               , selected = Nothing
@@ -384,7 +392,7 @@ component =
               , copiedText
               , staging = maybe Ticking.unstaged (\p -> Ticking.step (Ticking.Offered p) Ticking.unstaged) (pageOf loaded)
               , visit = 0
-              , fetches = 0
+              , fetches = noAsks
               , lastBox = Nothing
               , writing = False
               , chainProblem = Nothing
@@ -863,7 +871,8 @@ component =
           -- ticks ('HasUnsaved'), and the reader chose Leave.
           stage (Ticking.Clear LeftConfirmed)
           modify (\st -> st {lastBox = Nothing, writing = False})
-          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
+          -- The page left, and its threads, are not taken after this.
+          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, threadAsks = Latest.supersede st.threadAsks, fetches = Latest.supersede st.fetches, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = [], readers = noReaders, visit = st.visit + 1})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
           -- The people mentioned are looked up again: the current user may
           -- be someone else now.
@@ -999,10 +1008,13 @@ component =
           -- A page of an encrypted space: the server's answer has none of
           -- its threads, which are read and decrypted.
           Live.Replaced page _ | Just page == here, encrypted -> loadThreads
+          -- They are newer than the answer to any read of them still out,
+          -- which is not taken after them.
           Live.Replaced page threads | Just page == here -> do
             modify $ \st ->
               st
                 { threads = ThreadsReady threads
+                , threadAsks = Latest.supersede st.threadAsks
                 , focused = st.focused >>= \f -> f <$ find (\t -> t.id == f) threads
                 }
             resolvePeople
@@ -1068,6 +1080,8 @@ component =
                 -- The Save button that had the focus is gone with the
                 -- ticks: the focus goes back to the box set last.
                 focusLastBox
+                -- A newer version shown meanwhile stays ('takesPage'),
+                -- as the staging keeps it.
                 modify $ \s ->
                   s
                     { loaded = case s.loaded of
@@ -1075,7 +1089,7 @@ component =
                         other -> other
                     , changed = False
                     }
-                H.raise (Showing saved)
+                gets (\now -> pageOf now.loaded) >>= traverse_ (H.raise . Showing)
                 H.raise (Changed Nothing)
               -- Saved elsewhere meanwhile: the page as it is now, with the
               -- ticks on it if it has the same tasks; otherwise the ticks
@@ -1125,19 +1139,26 @@ component =
     load = do
       latest <- startFetch
       (owner, loaded) <- fetchOwned
-      -- Only the answer to the latest fetch of this visit: another
-      -- navigation, or another reload, may have overtaken this one.
+      -- Not after a later fetch's answer: another navigation, or another
+      -- reload, may have overtaken this one.
       answering latest owner $ do
         void (takeFetched owner loaded)
         H.raise Loaded
 
     -- Fetch the page's comments (again).
     loadThreads :: H.HalogenM State Action Slots ViewOutput m ()
+    --
+    -- Two reads can be out at once (two reloads, the live channel saying
+    -- the threads changed twice), and their answers can come in the other
+    -- order: an answer is taken only if no newer one was
+    -- ("Wiki.App.View.Latest"), and only if it is still the page shown.
     loadThreads = withPage $ \page -> do
       input <- gets (\st -> st.input)
+      ticket <- Latest.asking (\st -> st.threadAsks) (\a st -> st {threadAsks = a})
       threads <- if commentsHere input then threadsOf <$> listThreads page.id else pure (ThreadsReady [])
-      -- Only if it is still the page shown.
-      withPage $ \now -> when (now.id == page.id) (modify (\st -> st {threads}))
+      void . Latest.answered (\st -> st.threadAsks) (\a st -> st {threadAsks = a}) ticket $ \st -> case st.loaded of
+        Ready now _ _ _ | now.id == page.id -> st {threads}
+        _ -> st
       resolvePeople
 
     -- Look up the people the page and its comments mention, for the
@@ -1309,11 +1330,12 @@ component =
       loaded <- gets (\st -> st.input) >>= fetch owner
       pure (owner, loaded)
 
-    -- Run what an answer to this fetch does, if it is still the latest
-    -- fetch of the visit; the addresses of an answer overtaken are let go.
-    answering :: (Int, Int) -> UrlOwner -> H.HalogenM State Action Slots ViewOutput m () -> H.HalogenM State Action Slots ViewOutput m ()
+    -- Run what an answer to this fetch does, if no later fetch's answer
+    -- was taken ("Wiki.App.View.Latest"); the addresses of an answer
+    -- overtaken are let go.
+    answering :: Latest.Ask -> UrlOwner -> H.HalogenM State Action Slots ViewOutput m () -> H.HalogenM State Action Slots ViewOutput m ()
     answering which owner act =
-      gets (\st -> (st.visit, st.fetches) == which) >>= \case
+      Latest.answered (\st -> st.fetches) (\a st -> st {fetches = a}) which identity >>= \case
         True -> act
         False -> Body.settleOwned ownersOf' setOwners owner False
 
@@ -1323,11 +1345,9 @@ component =
     setOwners :: Body.Owners -> State -> State
     setOwners owners st = st {owners}
 
-    -- A fetch of the page begins: its number, with the visit's.
-    startFetch :: H.HalogenM State Action Slots ViewOutput m (Int, Int)
-    startFetch = do
-      modify (\st -> st {fetches = st.fetches + 1})
-      gets (\st -> (st.visit, st.fetches))
+    -- A fetch of the page begins: its ticket.
+    startFetch :: H.HalogenM State Action Slots ViewOutput m Latest.Ask
+    startFetch = Latest.asking (\st -> st.fetches) (\a st -> st {fetches = a})
 
     -- Run what an answer to a request made on this visit does, if the view
     -- is still on it.
@@ -1546,26 +1566,6 @@ pageOf :: Loaded -> Maybe Page
 pageOf = \case
   Ready page _ _ _ -> Just page
   _ -> Nothing
-
--- | Whether the view takes a page it was given (a fetch's answer, a
--- save's), with the page it shows: not when the two are the same page
--- (the same 'Page.id') and the one given is an older version.
---
--- A version is the page's @updatedAt@, which the backend sets on every
--- save of the title or the text, later than the one before. Restoring an
--- old version saves it again, as a newer version, which is taken. A page
--- deleted and made again at the same address has another id, and is
--- taken. The same version is taken: it has the same title and text.
--- What a save does not version (the page's place in the tree, the
--- template mark, the attachments) comes as the answer has it, which a
--- late answer may have older.
---
--- So the order the answers come in cannot put an older version back: a
--- fetch asked for before a save and answered after it is dropped.
-takesPage :: Maybe Page -> Page -> Bool
-takesPage shown given = case shown of
-  Just page | page.id == given.id -> given.updatedAt >= page.updatedAt
-  _ -> True
 
 -- | The place the page's links, and its comments' links, are resolved
 -- from: where the page is.

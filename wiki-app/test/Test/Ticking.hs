@@ -189,6 +189,20 @@ ticking = describe "Wiki.App.View.Ticking" $ do
     let saving = step Saving s
     (step (Saved saving.save (pageOf "p" tasksText 6)) saving).ticks `shouldBe` mempty
 
+  it "keeps a newer version shown meanwhile when the save's answer comes after it, with the ticks it saved" $ do
+    -- The ticks are saved; the reader then asks for the version another
+    -- editor saved after them, which has them; the save's answer comes
+    -- last, with the version it made.
+    let s = step Saving (step (Clicked 0 True) (step (Offered (pageOf "p" tasksText 0)) unstaged))
+        ticked = "# Tasks\n\n- [x] a\n  - [x] b\n  - [x] c\n- [ ] d\n"
+        newer = pageOf "p" ("Intro.\n\n" <> ticked) 3
+        shown = step (Offered newer) s
+        next = step (Saved s.save (pageOf "p" ticked 2)) shown
+    next.page `shouldBe` Just newer
+    next.shown `shouldBe` newer.body
+    next.ticks `shouldBe` mempty
+    next.saving `shouldBe` False
+
   it "draws a box anew after a click it does not take" $ do
     let s = step (Offered (pageOf "p" tasksText 0)) unstaged
     (step (Refused 3) s).drawn `shouldBe` Map.fromList [(3, 1)]

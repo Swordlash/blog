@@ -160,6 +160,7 @@ import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (browserOnline, forgetReads, offlineCopy)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.Vault (identitySlot)
+import Wiki.App.View.Latest (Ask, Asks, newAsk, noAsks, takes)
 import Wiki.Core.Anchor (Anchor)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), distinctAttachments, mimeEssence, parseFileName, shownInBrowser, uploadedMimeType)
 import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody)
@@ -185,7 +186,8 @@ import Wiki.Core.Version (Version (..), VersionInfo (..), VersionsQuery (..), ma
 -- | The HTTP backend's state: where requests go, and the cache.
 data HttpEnv = HttpEnv
   { transport :: Transport
-  , cache :: IORef Cache
+  , cache :: IORef Stored
+  -- ^ The cache, with the counts of its changes ('storedAnswer').
   , immediate :: Bool
   -- ^ Whether the transport answers at once (inside the same process), so
   -- that 'atOnce' may send requests to it.
@@ -248,17 +250,19 @@ newHttpEnv transport = newHttpEnvWith transport emptyCache
 -- data the server prerendered the page with.
 newHttpEnvWith :: (MonadIO n) => Transport -> Cache -> n HttpEnv
 newHttpEnvWith transport start = liftIO $ do
-  cache <- newIORef start
+  cache <- newIORef (storedOf start)
   changes <- HS.create
   -- The list of spaces the page was rendered with is the first one the
   -- tab knows ('heldListed'), and its front page's space the first one
   -- known plain outside the list ('heldHome').
   held <- newIORef noneHeld {heldListed = start.spaces, heldHome = start.homeDocument >>= rightToMaybe >>= homeSpaceOf . fst}
-  let change f = atomicModifyIORef' cache (\c -> (f c, ()))
+  let change f = atomicModifyIORef' cache (\c -> (changedBy f c, ()))
       -- A page saved anywhere may be a page of an encrypted space, which the
       -- search holds decrypted ('heldFound'): those are fetched again.
       heard page event = do
-        change (afterEvent page event)
+        case event of
+          PageChanged _ -> atomicModifyIORef' cache (\c -> (contentChangedBy (afterEvent page event) c, ()))
+          _ -> when (changesKept event) (change (afterEvent page event))
         case event of
           PageChanged _ -> atomicModifyIORef' held (\h -> (h {heldFound = mempty}, ()))
           _ -> pass
@@ -281,7 +285,7 @@ newImmediateHttpEnv transport = (\env -> env {immediate = True}) <$> newHttpEnv 
 
 -- | The backend's cache, for the tests.
 cacheOf :: (MonadIO n) => HttpEnv -> n Cache
-cacheOf env = liftIO (readIORef env.cache)
+cacheOf env = liftIO ((\s -> s.cache) <$> readIORef env.cache)
 
 -- | The HTTP backend over a base monad.
 newtype HttpWiki m a = HttpWiki (ReaderT HttpEnv m a)
@@ -342,7 +346,7 @@ instance (MonadIO m) => RunClient (HttpWiki m) where
         Left why -> throwIO (noResponse why)
         Right response -> do
           when (statusCode response.responseStatusCode `elem` [401, 403] && env.rechecks && not env.immediate) $
-            readIORef env.cache >>= \c -> case c.session of
+            readIORef env.cache >>= \s -> case s.cache.session of
               Just before | before.standing == SignedIn -> recheckSession env before
               _ -> pass
           if declared accepted response.responseStatusCode
@@ -484,7 +488,7 @@ recheckSession env before = do
   for_ (rightToMaybe now) $ \info -> do
     let after = fromSessionInfo info
     when (after.user /= before.user) $ do
-      atomicModifyIORef' env.cache (const (withSession after emptyCache, ()))
+      atomicModifyIORef' env.cache (\c -> (changedBy (const (withSession after emptyCache)) c, ()))
       -- The keys of encrypted spaces were opened for someone else.
       forgetHeldOf env
       env.changes.listener.notify after
@@ -507,10 +511,23 @@ startOver s = do
   HttpWiki (ask >>= liftIO . forgetHeldOf)
 
 readCache :: (MonadIO m) => HttpWiki m Cache
-readCache = HttpWiki (ask >>= \env -> liftIO (readIORef env.cache))
+readCache = (\s -> s.cache) <$> readStored
 
+-- | The cache with the count of its changes, which a read takes as it is
+-- sent, for 'storeAnswer'.
+readStored :: (MonadIO m) => HttpWiki m Stored
+readStored = HttpWiki (ask >>= \env -> liftIO (readIORef env.cache))
+
+-- | A change to the cache that is not a read's answer stored: counted, so
+-- that a read sent before it does not store its answer ('storedAnswer').
 modifyCache :: (MonadIO m) => (Cache -> Cache) -> HttpWiki m ()
-modifyCache f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.cache (\c -> (f c, ()))))
+modifyCache f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.cache (\c -> (changedBy f c, ()))))
+
+-- | A read's answer stored in the cache, unless the cache changed, for
+-- what the read stores, since the read was sent, as it was then ('sent';
+-- 'storedAnswer').
+storeAnswer :: (MonadIO m) => Reading -> Stored -> (Cache -> Cache) -> HttpWiki m ()
+storeAnswer reading sent keep = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.cache (\c -> (storedAnswer reading sent keep c, ()))))
 
 -- | A read: from the cache, or sent to the server and then cached, if the
 -- response is one to cache ('kept').
@@ -520,12 +537,23 @@ cached
   -> HttpWiki IO a
   -> (Either WikiError a -> Cache -> Cache)
   -> HttpWiki m (Either WikiError a)
-cached look endpoint keep =
-  look <$> readCache >>= \case
+cached = cachedAs PlainRead
+
+-- | 'cached', for a read that stores what it reads ('Reading').
+cachedAs
+  :: (MonadIO m)
+  => Reading
+  -> (Cache -> Maybe (Either WikiError a))
+  -> HttpWiki IO a
+  -> (Either WikiError a -> Cache -> Cache)
+  -> HttpWiki m (Either WikiError a)
+cachedAs reading look endpoint keep = do
+  before <- readStored
+  case look before.cache of
     Just a -> pure a
     Nothing -> do
       result <- send endpoint
-      when (kept result) (modifyCache (keep result))
+      when (kept result) (storeAnswer reading before (keep result))
       pure result
 
 -- | A read of page content (see "Wiki.App.Backend.Http.Cache"): cached
@@ -543,7 +571,7 @@ pageContent look endpoint keep = do
   env <- HttpWiki ask
   preloading <- liftIO (readIORef env.preloading)
   if preloading || env.immediate
-    then cached look endpoint keep
+    then cachedAs ContentRead look endpoint keep
     else send endpoint
 
 -- | A read of something that changes on the server by itself (the audit
@@ -561,11 +589,12 @@ once
   -> HttpWiki m (Either WikiError a)
 once look forget endpoint keep = do
   immediate <- HttpWiki (asks (\env -> env.immediate))
-  look <$> readCache >>= \case
+  before <- readStored
+  case look before.cache of
     Just a -> unless immediate (modifyCache forget) $> a
     Nothing -> do
       result <- send endpoint
-      when (immediate && kept result) (modifyCache (keep result))
+      when (immediate && kept result) (storeAnswer PlainRead before (keep result))
       pure result
 
 -- | A read that cannot be refused: cached when it succeeds.
@@ -1055,17 +1084,18 @@ commentWrite_ pid event endpoint = do
 -- changing the settings can change other watches, so each removes the
 -- cached watches, and does not empty the rest of the cache.
 instance (MonadIO m) => MonadNotifications (HttpWiki m) where
-  mentionable logins =
-    cachedPeople logins <$> readCache >>= \case
+  mentionable logins = do
+    before <- readStored
+    case cachedPeople logins before.cache of
       Just found -> pure found
       Nothing -> do
         result <- send (endpoints.notifications.people logins)
         case result of
-          Right found -> modifyCache (withPeople logins found) $> found
+          Right found -> storeAnswer PlainRead before (withPeople logins found) $> found
           Left e@(Unreachable _) -> liftIO (throwIO e)
           -- Refused (by a server from before mentions existed): as far as
           -- this page can tell, no login belongs to anyone.
-          Left _ -> modifyCache (withPeople logins mempty) $> mempty
+          Left _ -> storeAnswer PlainRead before (withPeople logins mempty) $> mempty
 
   -- Not cached here: the editor's completion keeps the answers it has
   -- had for as long as the editor is open (@web/src/editor.js@). Too few
@@ -1167,8 +1197,9 @@ withSealedTitles stars = do
 -- them yet; those told before the request are the server's to give or
 -- leave out (a page the reader may no longer read).
 fetchedNotices :: (MonadIO m) => HttpWiki m (Either WikiError Notifications)
-fetchedNotices =
-  (\c -> c.notices) <$> readCache >>= \case
+fetchedNotices = do
+  stored <- readStored
+  case stored.cache.notices of
     Just known -> pure known
     Nothing -> do
       toldRef <- HttpWiki (asks (\env -> env.told))
@@ -1179,7 +1210,7 @@ fetchedNotices =
             result <&> \ns ->
               let missing = [n | n <- during, all (\x -> x.id /= n.id) ns.items]
                in Notifications {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}
-      when (kept merged) (modifyCache (withNotices merged))
+      when (kept merged) (storeAnswer PlainRead stored (withNotices merged))
       pure merged
 
 -- | The notifications with the titles of pages of encrypted spaces
@@ -1401,7 +1432,7 @@ instance (MonadUnliftIO m) => MonadLoad (HttpWiki m) where
     env <- ask
     liftIO $ do
       atomicModifyIORef' env.preloading (const (False, ()))
-      atomicModifyIORef' env.cache (\c -> (forgetPageContent c, ()))
+      atomicModifyIORef' env.cache (\c -> (contentChangedBy forgetPageContent c, ()))
 
 -- | What importing an archive (a zip file in "Wiki.Core.Export"'s format)
 -- into the server would do: its plan, which changes nothing
@@ -1708,14 +1739,21 @@ data Held = Held
   -- ('forgetHeldOf'): a key opened for the user before is not held after
   -- ('holdKeyIn').
   , heldListed :: Maybe [Space]
-  -- ^ The last list of spaces this tab read, or started with
-  -- ('learnListed'): which spaces are encrypted, which are converted,
-  -- and which ask for a passkey or the password each time they are opened
-  -- ('Wiki.Core.Space.gateOf'). A write empties the cache's list; this one
-  -- stays, so that a read after the write chooses its route, and checks
-  -- the space's gate, from what the tab knew before the write
-  -- ('knownSpaces'). Kept across a change of user: the state of a space is
-  -- the same for every user, and the shell lists the spaces again.
+  -- ^ The list of spaces this tab knows: the answer to the latest read
+  -- of the list taken ('learnListed'), or the one it started with. It
+  -- says which spaces are encrypted, which are converted, and which ask
+  -- for a passkey or the password each time they are opened
+  -- ('Wiki.Core.Space.gateOf'). It is the one record every reader of the
+  -- list reads ('knownSpaces', 'spacesNow'); the cache's list says only
+  -- whether it may be used without a read. A write empties the cache's
+  -- list; this one stays, so that a read after the write chooses its
+  -- route, and checks the space's gate, from what the tab knew before the
+  -- write. Kept across a change of user: the state of a space is the same
+  -- for every user, and the shell lists the spaces again.
+  , heldListAsks :: Asks
+  -- ^ The reads of the list of spaces ('fetchSpaces'). The list has no
+  -- version of its own, so the reads are ordered by their asks: an answer
+  -- is taken only if no later read's answer was ("Wiki.App.View.Latest").
   , heldHome :: Maybe SpaceId
   -- ^ The front page's space ('getHomeDocument'), which no list of spaces
   -- names: the server makes it plain, at the top, and nothing gates it
@@ -1727,7 +1765,7 @@ data Held = Held
   }
 
 noneHeld :: Held
-noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldOwners = mempty, heldNextOwner = 1, heldLowest = mempty, heldReaders = mempty, heldConfirmed = mempty, heldLeases = mempty, heldClosings = mempty, heldWasSealed = mempty, heldSession = 0, heldListed = Nothing, heldHome = Nothing}
+noneHeld = Held {heldKeys = mempty, heldPages = mempty, heldSpaces = mempty, heldFound = mempty, heldHeads = mempty, heldProblems = mempty, heldPageKeys = mempty, heldAttachments = mempty, heldUrls = mempty, heldOwners = mempty, heldNextOwner = 1, heldLowest = mempty, heldReaders = mempty, heldConfirmed = mempty, heldLeases = mempty, heldClosings = mempty, heldWasSealed = mempty, heldSession = 0, heldListed = Nothing, heldListAsks = noAsks, heldHome = Nothing}
 
 -- | Where the bytes of an attachment of an encrypted page are, and what
 -- decrypts them: its space and page, the key of its page's that encrypts
@@ -1938,18 +1976,40 @@ keepingSpaces pagesOf result = do
   for_ result $ \a -> modifyHeld (\h -> h {heldSpaces = Map.union (Map.fromList (pagesOf a)) h.heldSpaces})
   pure result
 
--- | The spaces the user may see, as 'listSpaces' reads them: the cached
--- list, or the list read now ('fetchSpaces').
+-- | The spaces the user may see, as 'listSpaces' reads them: the list the
+-- tab knows, when the cache holds a list (no write came since a read of
+-- it), or the list read now ('fetchSpaces').
 spacesNow :: (MonadIO m) => HttpWiki m (Either WikiError [Space])
-spacesNow = (\c -> c.spaces) <$> readCache >>= maybe fetchSpaces (pure . Right)
+spacesNow = cachedSpaces >>= maybe fetchSpaces (pure . Right)
 
--- | The list of spaces read from the server, put in the cache, and taken
--- as the truth about every space ('learnListed').
+-- | The list of spaces the tab knows ('heldListed'), when the cache holds
+-- a list, so that it may be used without a read. The cache's own list
+-- may be older than the one known: a read whose answer the cache did not
+-- store, for another change came meanwhile, was still learnt. So the
+-- cache says only whether a read is needed, and the list is the one
+-- known.
+cachedSpaces :: (MonadIO m) => HttpWiki m (Maybe [Space])
+cachedSpaces =
+  (\c -> c.spaces) <$> readCache >>= \case
+    Nothing -> pure Nothing
+    Just inCache -> Just . fromMaybe inCache . (\h -> h.heldListed) <$> readHeld
+
+-- | The list of spaces read from the server, taken as the truth about
+-- every space ('learnListed') unless a list asked for later was taken
+-- already, and then put in the cache, as a read's answer is
+-- ('storeAnswer'). The result is the list the tab knows after it: this
+-- read's answer, or the later one's, so that a caller routes by what the
+-- tab knows, never by an older list.
 fetchSpaces :: (MonadIO m) => HttpWiki m (Either WikiError [Space])
 fetchSpaces = do
-  result <- send endpoints.spaces.list
-  for_ result $ \spaces -> modifyCache (withSpaces spaces) >> learnListed spaces
-  pure result
+  before <- readStored
+  ticket <- atomicHeld (\h -> let (t, after) = newAsk h.heldListAsks in (h {heldListAsks = after}, t))
+  send endpoints.spaces.list >>= \case
+    Left e -> pure (Left e)
+    Right spaces ->
+      learnListed ticket spaces >>= \case
+        True -> storeAnswer PlainRead before (withSpaces spaces) $> Right spaces
+        False -> Right . fromMaybe spaces . (\h -> h.heldListed) <$> readHeld
 
 -- | What the tab does with a list of spaces read from the server. It is
 -- the last list known ('heldListed'), which outlives a write that empties
@@ -1960,23 +2020,31 @@ fetchSpaces = do
 -- readers, its attachments' object URLs. A space plain now no longer
 -- has its pages taken for encrypted ones ('heldWasSealed'). A gate the
 -- list no longer names is no longer confirmed.
-learnListed :: (MonadIO m) => [Space] -> HttpWiki m ()
-learnListed spaces = do
+--
+-- Only for the answer to the read with this ticket, if no read asked for
+-- later was answered first ('heldListAsks'): an older list answered late
+-- changes nothing, lets go of nothing, and says whether it was taken.
+learnListed :: (MonadIO m) => Ask -> [Space] -> HttpWiki m Bool
+learnListed ticket spaces = do
   let named = Set.fromList [s.id | s <- spaces]
       plain = Set.fromList [s.id | s <- spaces, isNothing s.encryption]
       gone sid = Set.member sid plain || Set.notMember sid named
-  dropped <- atomicHeld $ \h ->
-    let (h', dropped) = dropSpaces gone h
-        (wasSealed, kept') = Map.partition (\(sid, _) -> Set.member sid plain) h'.heldPages
-     in ( h'
-            { heldPages = kept'
-            , heldWasSealed = Set.union (Map.keysSet wasSealed) h'.heldWasSealed
-            , heldConfirmed = Set.filter (`Set.member` named) h'.heldConfirmed
-            , heldListed = Just spaces
-            }
-        , dropped
-        )
-  liftIO (letGo dropped)
+  taken <- atomicHeld $ \h -> case takes ticket h.heldListAsks of
+    Nothing -> (h, Nothing)
+    Just after ->
+      let (h', dropped) = dropSpaces gone h
+          (wasSealed, kept') = Map.partition (\(sid, _) -> Set.member sid plain) h'.heldPages
+       in ( h'
+              { heldPages = kept'
+              , heldWasSealed = Set.union (Map.keysSet wasSealed) h'.heldWasSealed
+              , heldConfirmed = Set.filter (`Set.member` named) h'.heldConfirmed
+              , heldListed = Just spaces
+              , heldListAsks = after
+              }
+          , Just dropped
+          )
+  for_ taken (liftIO . letGo)
+  pure (isJust taken)
 
 -- | The front page's space, given its record: known plain, at the top,
 -- behind no gate ('heldHome'). 'Nothing' for a record that does not say
@@ -1990,9 +2058,9 @@ homeSpaceOf home = guard (isNothing home.encryption && isNothing home.parent) $>
 -- read) does not depend on whether a write came between.
 knownSpaces :: (MonadIO m) => HttpWiki m (Maybe [Space])
 knownSpaces =
-  (\c -> c.spaces) <$> readCache >>= \case
+  (\h -> h.heldListed) <$> readHeld >>= \case
     Just spaces -> pure (Just spaces)
-    Nothing -> (\h -> h.heldListed) <$> readHeld
+    Nothing -> (\c -> c.spaces) <$> readCache
 
 -- | Whether a space is behind a gate, in the list given, that the reader
 -- has not confirmed in this tab ('heldConfirmed'): the one rule every
@@ -2095,7 +2163,7 @@ encryptedOr sid plain sealed = do
 -- teaches otherwise ('send', 'Stale').
 heldSealedOr :: (MonadIO m) => SpaceId -> HttpWiki m (Either WikiError a) -> (KeyId -> HttpWiki m (Either WikiError a)) -> HttpWiki m (Either WikiError a)
 heldSealedOr sid plain sealed =
-  (\c -> c.spaces) <$> readCache >>= \case
+  cachedSpaces >>= \case
     Just spaces -> maybe plain sealed (encryptionIn sid spaces)
     Nothing -> do
       h <- readHeld
@@ -3743,5 +3811,5 @@ instance (MonadIO m) => MonadEncryption (HttpWiki m) where
   -- What is cached was read in a session the other tab ended: the cache
   -- is emptied too, the session with it, which is asked for again.
   forgetEncrypted = HttpWiki . ReaderT $ \env -> liftIO $ do
-    atomicModifyIORef' env.cache (const (emptyCache, ()))
+    atomicModifyIORef' env.cache (\c -> (changedBy (const emptyCache) c, ()))
     forgetHeldOf env

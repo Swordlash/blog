@@ -138,6 +138,7 @@ library
       Wiki.App.View.Encrypted
       Wiki.App.View.Export
       Wiki.App.View.Import
+      Wiki.App.View.Latest
       Wiki.App.View.LinkDialog
       Wiki.App.View.NewKindDialog
       Wiki.App.View.NewPage
@@ -343,6 +344,7 @@ test-suite wiki-app-test
         Test.Hydrate
         Test.Import
         Test.Islands
+        Test.Latest
         Test.Licence
         Test.Link
         Test.Live

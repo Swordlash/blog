@@ -39,6 +39,7 @@ where
 
 import Data.Map.Strict qualified as Map
 import Protolude
+import Wiki.App.View.Latest (takesPage)
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Markdown.Tasks (Task (..), Ticks, allTasks, applyTicks, rebaseTicks, tasksOf, tick, tickErrorText)
 import Wiki.Core.Page (Page (body, id))
@@ -114,7 +115,8 @@ data Event
   | -- | A save of the ticks began: it is the save numbered one more than
     -- the staging's 'save'.
     Saving
-  | -- | The save with this number succeeded: the page as saved.
+  | -- | The save with this number succeeded: the page as saved. A newer
+    -- version of the page shown meanwhile stays shown.
     Saved Int Page
   | -- | The save with this number met a newer version of the page:
     -- nothing was saved, and the page as it is now is fetched next.
@@ -151,8 +153,14 @@ step event s = case event of
       Left e -> s {note = Just (TickProblem (tickErrorText e))}
   Refused i -> s {drawn = Map.insertWith (+) i 1 s.drawn}
   Saving -> s {saving = True, save = s.save + 1, note = Nothing}
+  -- The page shown stays when it is a newer version than the one the
+  -- save made: the reader asked for a version saved after the ticks
+  -- while the save was out ('takesPage'). That version was saved on the
+  -- one the save made, so it has the ticks.
   Saved n p
-    | answers n s -> cleared Nothing s {page = Just p, tasks = tasksIn p.body}
+    | answers n s ->
+        let kept = if takesPage s.page p then p else fromMaybe p s.page
+         in cleared Nothing s {page = Just kept, tasks = tasksIn kept.body}
     | otherwise -> s
   Conflicted n
     | answers n s -> s {saving = False}

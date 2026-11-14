@@ -47,7 +47,7 @@ import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http
-import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), afterEvent, cachedPage, emptyCache, withBacklinks, withDraft, withPageAt, withPageLocation, withPages, withSearch, withSession, withSpaceAt, withSpaces)
+import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), Reading (..), Stored (..), afterEvent, afterWrite, cachedPage, changedBy, contentChangedBy, emptyCache, storedAnswer, storedOf, withBacklinks, withDraft, withPageAt, withPageLocation, withPages, withSearch, withSession, withSpaceAt, withSpaces)
 import Wiki.App.Backend.Http.Client (endpointUrl, fromSessionInfo)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -554,6 +554,106 @@ caching = describe "what it keeps" $ do
     _ <- runHttpWiki env (deletePage (PageId "x"))
     runHttpWiki env (atOnce listSpaces) `shouldReturn` Nothing
     (\c -> Map.null c.pages) <$> cacheOf env `shouldReturn` True
+
+  it "routes a search by the list of spaces a refresh read, though a star changed the cache while it was out" $ do
+    -- The list is read plain; a save asks for it again, and that read
+    -- answers, once a star has changed the cache, that the blog is
+    -- encrypted now.
+    gate <- newEmptyMVar
+    count <- newIORef (0 :: Int)
+    let blogId = hello.space
+        older = Map.elems demo.spaces
+        newer = [if s.id == blogId then s {encryption = Just (KeyId "key-1")} else s | s <- older]
+        respond r
+          | methodOf r == "GET" && requestUrl r == "api/v1/spaces" =
+              atomicModifyIORef' count (\n -> (n + 1, n)) >>= \case
+                0 -> pure (ok older)
+                1 -> readMVar gate $> ok newer
+                _ -> pure (ok newer)
+          | methodOf r == "GET" && "/pages/at/" `T.isInfixOf` requestUrl r = pure (ok hello)
+          | "api/v1/stars" `T.isPrefixOf` requestUrl r = pure (ok ([] :: [StarredPage]))
+          | "api/v1/search" `T.isPrefixOf` requestUrl r = pure (ok ([] :: [SearchHit]))
+          | otherwise = pure (status 404 "{\"error\":\"NotFound\"}")
+        refresh = readIORef count >>= \n -> unless (n > 1) (threadDelay 1000 >> refresh)
+    asked <- newIORef []
+    env <- newHttpEnv (Transport (\r -> atomicModifyIORef' asked (\rs -> (r : rs, ())) >> respond r))
+    runHttpWiki env listSpaces `shouldReturn` older
+    runHttpWiki env (getPage blogId (slugs "hello-world")) `shouldReturn` Right hello
+    saving <- async (runHttpWiki env (savePage hello.id hello.updatedAt hello.title "Secret."))
+    refresh
+    _ <- runHttpWiki env (setStarred (PageId "page-x") True)
+    putMVar gate ()
+    -- The save is refused, and the search limited to the blog sends its
+    -- words nowhere: both from the list read last.
+    wait saving >>= (`shouldSatisfy` isLeft)
+    _ <- runHttpWiki env (searchPages SearchQuery {text = "secret", space = Just blogId, includeSubspaces = True, limit = 50, templates = False})
+    sent <- readIORef asked
+    [requestUrl r | r <- sent, "api/v1/search" `T.isPrefixOf` requestUrl r] `shouldBe` []
+    [requestUrl r | r <- sent, methodOf r == "PUT", requestUrl r == "api/v1/pages/" <> hello.id.text] `shouldBe` []
+
+  it "keeps the list of spaces asked for last when one asked for before answers after it" $ do
+    -- Two reads of the list cross: the first, from before the blog was
+    -- encrypted, answers last.
+    gate <- newEmptyMVar
+    count <- newIORef (0 :: Int)
+    let blogId = hello.space
+        older = Map.elems demo.spaces
+        newer = [if s.id == blogId then s {encryption = Just (KeyId "key-1")} else s | s <- older]
+        respond r
+          | methodOf r == "GET" && requestUrl r == "api/v1/spaces" =
+              atomicModifyIORef' count (\n -> (n + 1, n)) >>= \case
+                0 -> readMVar gate $> ok older
+                _ -> pure (ok newer)
+          | "api/v1/search" `T.isPrefixOf` requestUrl r = pure (ok ([] :: [SearchHit]))
+          | otherwise = pure (status 404 "{\"error\":\"NotFound\"}")
+        out = readIORef count >>= \n -> unless (n > 0) (threadDelay 1000 >> out)
+    asked <- newIORef []
+    env <- newHttpEnv (Transport (\r -> atomicModifyIORef' asked (\rs -> (r : rs, ())) >> respond r))
+    early <- async (runHttpWiki env listSpaces)
+    out
+    runHttpWiki env listSpaces `shouldReturn` newer
+    putMVar gate ()
+    -- The first read gets the list known: the later one's.
+    wait early `shouldReturn` newer
+    runHttpWiki env (atOnce listSpaces) `shouldReturn` Just newer
+    _ <- runHttpWiki env (searchPages SearchQuery {text = "secret", space = Just blogId, includeSubspaces = True, limit = 50, templates = False})
+    sent <- readIORef asked
+    [requestUrl r | r <- sent, "api/v1/search" `T.isPrefixOf` requestUrl r] `shouldBe` []
+
+  it "keeps no answer read before a write that came while the read was out" $ do
+    -- The first read of the spaces is answered with the list as it was,
+    -- and only once a write has come; every read after it, with the list
+    -- as the write left it.
+    gate <- newEmptyMVar
+    count <- newIORef (0 :: Int)
+    let older = take 1 (Map.elems demo.spaces)
+        newer = Map.elems demo.spaces
+        respond r
+          | methodOf r /= "GET" = pure (status 204 "")
+          | otherwise =
+              atomicModifyIORef' count (\n -> (n + 1, n)) >>= \case
+                0 -> readMVar gate $> ok older
+                _ -> pure (ok newer)
+        out = readIORef count >>= \n -> unless (n > 0) (threadDelay 1000 >> out)
+    env <- newHttpEnv (Transport respond)
+    early <- async (runHttpWiki env listSpaces)
+    out
+    _ <- runHttpWiki env (deletePage (PageId "x"))
+    putMVar gate ()
+    -- The read gets the answer it asked for; the cache does not keep it.
+    wait early `shouldReturn` older
+    runHttpWiki env listSpaces `shouldReturn` newer
+    (\c -> c.spaces) <$> cacheOf env `shouldReturn` Just newer
+
+  it "stores an answer of page content only if no page was saved while it was read, and any other across a save" $ do
+    let sent = storedOf emptyCache
+        saved = contentChangedBy (afterEvent hello.id (PageChanged demoNow)) sent
+        written = changedBy afterWrite sent
+        spaces = withSpaces (Map.elems demo.spaces)
+    (storedAnswer ContentRead sent spaces saved).cache `shouldBe` saved.cache
+    (storedAnswer PlainRead sent spaces saved).cache `shouldBe` spaces saved.cache
+    (storedAnswer PlainRead sent spaces written).cache `shouldBe` written.cache
+    (storedAnswer ContentRead sent spaces sent).cache `shouldBe` spaces sent.cache
 
   it "keeps the rest after a draft's write, which puts the draft in its place" $ do
     (env, asked) <- backend answering

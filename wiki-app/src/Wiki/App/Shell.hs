@@ -181,6 +181,8 @@ import Wiki.App.View.Help qualified as HelpView
 import Wiki.App.View.History qualified as HistoryView
 import Wiki.App.View.Import qualified as ImportView
 import Wiki.App.View.Invite qualified as InviteView
+import Wiki.App.View.Latest (Asks, noAsks)
+import Wiki.App.View.Latest qualified as Latest
 import Wiki.App.View.LivePreview qualified as LivePreviewView
 import Wiki.App.View.NewPage qualified as NewPageView
 import Wiki.App.View.NewSpace qualified as NewSpaceView
@@ -441,6 +443,14 @@ data State m = State
   -- ^ Whether changes not saved to a page of an encrypted space were
   -- taken off the screen with the space ('sealScreen'): said once, until
   -- the reader dismisses it. The text is kept nowhere.
+  , worldAsks :: Asks
+  , hereAsks :: Asks
+  , backlinkAsks :: Asks
+  -- ^ The reads of who is asking and the spaces ('loadWorld'), of the
+  -- space the route is in ('loadHere'), and of the page's backlinks
+  -- ('loadBacklinks'). Two of a kind can be out at once (two reloads),
+  -- and an answer is taken only if no newer one of its kind was
+  -- ("Wiki.App.View.Latest").
   }
 
 -- | Whose changes a route followed away would lose ('leaving'): what the
@@ -575,6 +585,9 @@ component =
                   , seen = Nothing
                   , stale = Nothing
                   , droppedUnsaved = False
+                  , worldAsks = noAsks
+                  , hereAsks = noAsks
+                  , backlinkAsks = noAsks
                   }
           -- The page's backlinks too, if the backend has them at once, so
           -- that the sidebar's first render is the prerendered one; else
@@ -1572,7 +1585,7 @@ component =
         -- A sign-in completed: a tab about to let go of every user's keys
         -- lets go of none.
         when (isJust s.user) (H.liftEffect (liftIO announceSignIn))
-        modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
+        modify (newSession s)
         restartFeed
         reload Nothing
       -- The user turned their personal space on or off, or changed their
@@ -1589,14 +1602,14 @@ component =
             gets (\st -> sameAsking st.session s) >>= \case
               -- (The generation, unchanged, tells the record updated: a
               -- view's context has a session too.)
-              True -> modify (\st -> st {session = s, generation = st.generation}) >> loadWorld
+              True -> modify (Latest.superseded worldAsksOf setWorldAsks (\st -> st {session = s, generation = st.generation})) >> loadWorld
               False -> sessionEnded s
         | otherwise -> sessionEnded s
       OpenSignIn -> H.tell "signIn" () (SignInView.Prompt "Sign in with your login and password.")
       -- An invitation created its account and signed the new user in: the
       -- wiki as them, from its front page.
       FromInvite (InviteView.Accepted s) -> do
-        modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
+        modify (newSession s)
         restartFeed
         reload (Just Home)
       -- A password set through a reset link: the sign-in form, to use it.
@@ -1638,7 +1651,7 @@ component =
     sessionEnded s = do
       sealScreen
       forgetFormer s
-      modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
+      modify (newSession s)
       restartFeed
       reload Nothing
       when (isNothing s.user) $
@@ -1741,7 +1754,9 @@ component =
       case st.here of
         InSpace path _ _ | encrypted path -> do
           dirty <- isJust <$> unsavedShown
-          modify (\s -> s {here = LoadingSpace path, shown = Nothing, stale = Nothing, leaving = Nothing, droppedUnsaved = s.droppedUnsaved || dirty})
+          -- No read of the space out now is taken after this: its answer
+          -- would put the space back on the screen.
+          modify (Latest.superseded hereAsksOf setHereAsks (\s -> s {here = LoadingSpace path, shown = Nothing, stale = Nothing, leaving = Nothing, droppedUnsaved = s.droppedUnsaved || dirty}))
         _ -> pass
       modify (\s -> s {generation = s.generation + 1})
       -- The tab's title, and the history's entry, named what was shown
@@ -1774,11 +1789,15 @@ component =
     -- they cannot be loaded, the route's content says why, with a button
     -- to try again.
     loadWorld :: H.HalogenM (State m) Action Slots output m ()
+    --
+    -- Two loads can be out at once (two reloads): an answer is taken only
+    -- if no newer one was ("Wiki.App.View.Latest"), and what follows it
+    -- runs only for an answer taken.
     loadWorld = do
       demo <- gets (\st -> st.demo)
+      ticket <- Latest.asking worldAsksOf setWorldAsks
       lift (attempt (fetchWorld demo)) >>= \case
-        Right w -> do
-          modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady, stale = Nothing})
+        Right w -> whenM (Latest.answered worldAsksOf setWorldAsks ticket (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, home = w.home, icons = w.icons, avatars = w.avatars, kept = w.kept, world = WorldReady, stale = Nothing})) $ do
           -- The server says nobody is signed in in this browser: no user's
           -- keys stay on the device, as after a sign-out, even when the
           -- session ended with no tab open. Not from a copy kept offline,
@@ -1800,8 +1819,9 @@ component =
         Left e -> do
           -- A reload that fails while what is shown has unsaved changes
           -- keeps it ('stale').
-          keep <- (&&) <$> gets (\st -> st.world == WorldReady) <*> (isJust <$> unsavedShown)
-          modify (\st -> if keep then st {stale = Just e} else st {world = WorldFailed e})
+          dirty <- isJust <$> unsavedShown
+          void . Latest.answered worldAsksOf setWorldAsks ticket $ \st ->
+            if dirty && st.world == WorldReady then st {stale = Just e} else st {world = WorldFailed e}
 
     -- Whose changes not saved the content shown holds, if any: an
     -- editor's, or a page view's ticks. Asked before a route away
@@ -1831,16 +1851,19 @@ component =
               -- Reloading the space being shown keeps it on screen
               -- meanwhile.
               unless (hereIs path st.here) $ modify (\s -> s {here = LoadingSpace path})
+              ticket <- Latest.asking hereAsksOf setHereAsks
               result <- fetchHere path
-              -- Unless the route has moved to another space meanwhile. A
+              -- Unless the route has moved to another space meanwhile, or
+              -- a newer answer was taken ("Wiki.App.View.Latest"). A
               -- reload of the space shown that fails while it has unsaved
               -- changes keeps it ('stale').
-              now <- gets (\s -> s.route)
               keep <- case result of
                 SpaceFailed _ _ e | hereIs path st.here -> unsavedShown >>= \u -> pure (e <$ u)
                 _ -> pure Nothing
-              when (spaceOfRoute now == Just path) $
-                modify (\s -> maybe s {here = result} (\e -> s {stale = Just e}) keep)
+              void . Latest.answered hereAsksOf setHereAsks ticket $ \s ->
+                if spaceOfRoute s.route == Just path
+                  then maybe s {here = result} (\e -> s {stale = Just e}) keep
+                  else s
       -- Loaded again, or loaded for the first time, as for the server's
       -- prerender: the backlinks are part of what settles. Otherwise
       -- the route has moved within what was shown, and is announced
@@ -1849,16 +1872,16 @@ component =
 
     -- Load the backlinks of the page the route shows ('backlinksOf'), or
     -- forget those of another. Unless the route has moved to another page
-    -- meanwhile.
+    -- meanwhile, or a newer answer was taken ("Wiki.App.View.Latest").
     loadBacklinks :: H.HalogenM (State m) Action Slots output m ()
     loadBacklinks =
       gets backlinksOf >>= \case
         Nothing -> modify (\s -> s {backlinks = Nothing})
         Just pid -> do
+          ticket <- Latest.asking (\st -> st.backlinkAsks) (\a st -> st {backlinkAsks = a})
           listed <- lift (listedBacklinks pid)
-          now <- get
-          when (backlinksOf now == Just pid) $
-            modify (\s -> s {backlinks = forced (Just (pid, listed))})
+          void . Latest.answered (\st -> st.backlinkAsks) (\a st -> st {backlinkAsks = a}) ticket $ \s ->
+            if backlinksOf s == Just pid then s {backlinks = forced (Just (pid, listed))} else s
 
     -- Ask where the page of a permanent address is, and go there: its own
     -- address replaces the permanent one in the history, so that Back
@@ -2008,6 +2031,26 @@ isAdministrator :: State m -> Bool
 isAdministrator st = hasGlobalPermission (principalOf ctx) (grantsOf ctx) Administer
   where
     ctx = context st
+
+-- | The shell's reads of who is asking and the spaces ('worldAsks').
+worldAsksOf :: State m -> Asks
+worldAsksOf st = st.worldAsks
+
+setWorldAsks :: Asks -> State m -> State m
+setWorldAsks a st = st {worldAsks = a}
+
+-- | The shell's reads of the space the route is in ('hereAsks').
+hereAsksOf :: State m -> Asks
+hereAsksOf st = st.hereAsks
+
+setHereAsks :: Asks -> State m -> State m
+setHereAsks a st = st {hereAsks = a}
+
+-- | The shell with the session a sign-in, a sign-out or an invitation
+-- gave, in place of the one shown: newer than the answer to any load of
+-- the wiki still out, which is not taken after it ('worldAsks').
+newSession :: Session -> State m -> State m
+newSession s = Latest.superseded worldAsksOf setWorldAsks (\st -> st {session = s, settled = False, panel = Actions Nothing})
 
 context :: State m -> Context
 context st = Context {router = st.router, session = st.session, spaces = available, icons = st.icons, revision = st.generation, pageWidth = st.chosenWidth}
