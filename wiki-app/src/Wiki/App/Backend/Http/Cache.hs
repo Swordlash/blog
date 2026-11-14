@@ -110,8 +110,24 @@
 -- settings also removes every cached watch, because one setting says
 -- whether a user watches the pages they create, which changes whether
 -- those pages are watched.
+--
+-- = Answers that come late
+--
+-- A read's answer is stored only if the cache has not changed since the
+-- read was sent, other than by storing other reads' answers ('Stored').
+-- Every other change (a write, the live channel's events, a sign-in or a
+-- sign-out, the first change of route) says something newer than what
+-- the server answered before it: a read sent before such a change and
+-- answered after it may carry the older state, and stored then, it would
+-- answer the next read, as of the reload after a write, with that older
+-- state. Such an answer still goes to the view that asked; it is not
+-- kept, and the next read asks the server.
 module Wiki.App.Backend.Http.Cache
   ( Cache (..)
+  , Stored (..)
+  , storedOf
+  , changedBy
+  , storedAnswer
   , CachedDraft (..)
   , draftAnswer
   , cachedDraft
@@ -278,6 +294,33 @@ data Cache = Cache
   -- changelog entries, which change only when the server is replaced.
   }
   deriving stock (Eq, Show)
+
+-- | 'Stored' is the cache with the number of changes made to it other
+-- than reads' answers stored. A read takes the number when it is sent,
+-- and its answer is stored only if the number is the same when the
+-- answer comes ('storedAnswer').
+data Stored = Stored
+  { changes :: Int
+  , cache :: Cache
+  }
+  deriving stock (Eq, Show)
+
+-- | A cache, with no changes counted yet.
+storedOf :: Cache -> Stored
+storedOf cache = Stored {changes = 0, cache}
+
+-- | The cache after a change that is not a read's answer stored: a write,
+-- an event, an entry dropped or replaced. It is counted.
+changedBy :: (Cache -> Cache) -> Stored -> Stored
+changedBy f s = Stored {changes = s.changes + 1, cache = f s.cache}
+
+-- | The cache with a read's answer stored, if it has not changed since
+-- the read was sent, when it counted this many changes; otherwise as it
+-- is.
+storedAnswer :: Int -> (Cache -> Cache) -> Stored -> Stored
+storedAnswer sent keep s
+  | s.changes == sent = s {cache = keep s.cache}
+  | otherwise = s
 
 -- | 'CachedDraft' is what the cache knows of the signed-in user's draft of
 -- one page. The cache has no entry for a page whose draft it does not
