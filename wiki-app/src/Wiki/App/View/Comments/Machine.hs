@@ -43,7 +43,7 @@ import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.App.Backend (WikiError)
 import Wiki.App.View.Latest (Ask, Asks, madeAfter, newAsk, noAsks, stillAnswerable, supersede, takes)
 import Wiki.Core.Anchor (Anchor)
-import Wiki.Core.Comment (Thread)
+import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id (CommentId, CommentThreadId, PageId)
 
 -- | A page's threads, as far as they have been read.
@@ -70,16 +70,33 @@ data Model = Model
   -- ^ The reads of the threads made, and which one's answer is shown.
   , written :: Int
   -- ^ How many writes were sent: the number of the latest.
-  , writes :: Map Int PageId
+  , writes :: Map Int Writing
   -- ^ The writes sent on this visit of the page that have not been
-  -- answered, by number, with the page each is for.
+  -- answered, by number.
   , heard :: [(PageEvent, Asks)]
   -- ^ What the live channel told on this visit, the newest first, with
   -- the reads as they were then, while a read is out whose answer may be
   -- older ('taking').
+  , following :: Maybe Ask
+  -- ^ The read asked after a write's answer, while it is out.
+  , writtenSince :: Bool
+  -- ^ Whether another write was answered after that read was asked: one
+  -- more read follows when its answer comes.
   , closed :: Bool
   -- ^ Whether the page view has gone away: after that nothing changes and
   -- nothing is asked.
+  }
+  deriving stock (Eq, Show)
+
+-- | 'Writing' is a write sent on this visit of the page, until its answer
+-- comes.
+data Writing = Writing
+  { page :: PageId
+  , told :: [PageEvent]
+  -- ^ What the live channel told about the page since the write was sent.
+  , quiet :: Bool
+  -- ^ Whether the threads shown are as they were when the write was sent:
+  -- nothing told, no read's answer taken, no subscription answered.
   }
   deriving stock (Eq, Show)
 
@@ -146,7 +163,7 @@ data Effect a
 -- read at once if the backend could.
 initial :: Maybe PageId -> Bool -> Bool -> Maybe (Either WikiError [Thread]) -> Model
 initial page comments encrypted read' =
-  Model {page, comments, encrypted, threads = maybe ThreadsLoading (either ThreadsFailed ThreadsReady) (read' >>= \r -> r <$ guard comments), asks = noAsks, written = 0, writes = mempty, heard = [], closed = False}
+  Model {page, comments, encrypted, threads = maybe ThreadsLoading (either ThreadsFailed ThreadsReady) (read' >>= \r -> r <$ guard comments), asks = noAsks, written = 0, writes = mempty, heard = [], following = Nothing, writtenSince = False, closed = False}
 
 -- | The threads after an event, and what the page view is asked to do.
 step :: Event a -> Model -> (Model, [Effect a])
@@ -160,30 +177,106 @@ step event m
       -- Another page is another visit: the answers to the writes sent on
       -- the last one are not taken.
       Fetched page comments encrypted ->
-        reading (if m.page == Just page then m {comments, encrypted} else m {page = Just page, comments, encrypted, writes = mempty, heard = []})
-      Left' -> (m {page = Nothing, threads = ThreadsLoading, asks = supersede m.asks, writes = mempty, heard = []}, [])
+        reading (if m.page == Just page then m {comments, encrypted} else (elsewhere m) {page = Just page, comments, encrypted})
+      Left' -> ((elsewhere m) {page = Nothing, threads = ThreadsLoading, asks = supersede m.asks}, [])
       -- The ticket is taken whichever page the answer is for; its threads
       -- only for the page shown.
       Loaded asked page answer -> case takes asked m.asks of
-        Just after -> (taking asked page answer m {asks = after}, [Changed])
-        Nothing -> (m, [Changed])
+        Just after ->
+          let m' = taking asked page answer m {asks = after}
+              (m'', fx) = followed asked (if m'.threads /= m.threads then unquiet m' else m')
+           in (m'', Changed : fx)
+        Nothing -> second (Changed :) (followed asked m)
       Write place page request ->
         let n = m.written + 1
-         in (m {written = n, writes = if m.page == Just page then Map.insert n page m.writes else m.writes}, [Send place n page request])
-      -- The answer to a write is taken only on the visit of the page it was
-      -- sent on.
-      Wrote n answer -> case (Map.lookup n m.writes, answer) of
-        (Just page, Right e) | m.page == Just page -> (m {writes = Map.delete n m.writes, threads = applied e m.threads}, [Changed])
+            writing = Writing {page, told = [], quiet = True}
+         in (m {written = n, writes = if m.page == Just page then Map.insert n writing m.writes else m.writes}, [Send place n page request])
+      Wrote n answer -> case Map.lookup n m.writes of
+        Just w | m.page == Just w.page -> wrote w answer m {writes = Map.delete n m.writes}
         _ -> (m {writes = Map.delete n m.writes}, [])
       Heard page e
         | m.page /= Just page -> (m, [])
         | e == ThreadsChanged -> reading m
-        | otherwise -> (m {threads = applied e m.threads, heard = heardNow e m}, [Changed])
+        | otherwise -> (m {threads = applied e m.threads, heard = heardNow e m, writes = map (\w -> w {told = e : w.told, quiet = False}) m.writes}, [Changed])
       Replaced page ts
         | m.page /= Just page -> (m, [])
         | m.encrypted -> reading m
-        | otherwise -> (m {threads = ThreadsReady ts, asks = supersede m.asks, heard = []}, [Changed])
+        | otherwise -> (unquiet m {threads = ThreadsReady ts, asks = supersede m.asks, heard = []}, [Changed])
       Reload -> reading m
+
+-- | The model on another visit, or none: what was kept about the last
+-- one's reads and writes forgotten.
+elsewhere :: Model -> Model
+elsewhere m = m {writes = mempty, heard = [], following = Nothing, writtenSince = False}
+
+-- | The writes out, with the threads shown changed since they were sent.
+unquiet :: Model -> Model
+unquiet m = m {writes = map (\w -> w {quiet = False}) m.writes}
+
+-- | The answer to a write sent on this visit, taken. Nothing says where
+-- the write's commit falls among what the channel told, so:
+--
+-- * when the channel told of the thread or the comment the write made or
+--   changed since the write was sent ('about'), the threads have it in its
+--   place already: nothing more;
+-- * otherwise, when the threads shown are as they were when the write was
+--   sent, its event is applied, so that the reader sees it at once;
+-- * either way, a read asked after the answer follows: its answer was read
+--   after the write was made, and it puts the write in its place among
+--   what others made meanwhile. A write that failed may have been made
+--   too, and is followed by a read as well.
+wrote :: Writing -> Either WikiError PageEvent -> Model -> (Model, [Effect a])
+wrote w answer m = case answer of
+  Right e
+    | any (about e) w.told -> (m, [])
+    | w.quiet -> second (Changed :) (follow m {threads = applied e m.threads, heard = heardNow e m})
+  _ -> follow m
+
+-- | Whether an event the channel told is about what a write's answer made
+-- or changed: the write's own event told back, or a later change to the
+-- same thread or comment, or its deletion.
+about :: PageEvent -> PageEvent -> Bool
+about answer told = case answer of
+  ThreadOpened t -> onThread t.id
+  CommentAdded c -> onComment c
+  CommentEdited c -> told == answer || gone c
+  CommentDeleted tid cid -> told == answer || told == CommentDeleted tid cid || told == ThreadDeleted tid
+  ThreadDeleted tid -> told == ThreadDeleted tid
+  ThreadResolved tid _ -> told == answer || told == ThreadDeleted tid
+  _ -> False
+  where
+    onThread tid = case told of
+      ThreadOpened t -> t.id == tid
+      CommentAdded c -> c.thread == tid
+      CommentEdited c -> c.thread == tid
+      CommentDeleted t _ -> t == tid
+      ThreadResolved t _ -> t == tid
+      ThreadDeleted t -> t == tid
+      _ -> False
+    onComment c = case told of
+      CommentAdded x -> x.id == c.id
+      CommentEdited x -> x.id == c.id
+      _ -> gone c
+    gone c = case told of
+      CommentDeleted _ cid -> cid == c.id
+      ThreadDeleted tid -> tid == c.thread
+      _ -> False
+
+-- | A read asked after a write's answer: one at a time, and one more when
+-- its answer comes if another write was answered meanwhile.
+follow :: Model -> (Model, [Effect a])
+follow m = case m.following of
+  Just _ -> (m {writtenSince = True}, [])
+  Nothing -> let (m', fx) = reading m in (m' {following = head [t | Load t _ <- fx]}, fx)
+
+-- | The model after the answer to a read came, taken or not: when it was
+-- the read that followed a write, one more follows if another write was
+-- answered since it was asked.
+followed :: Ask -> Model -> (Model, [Effect a])
+followed asked m
+  | m.following /= Just asked = (m, [])
+  | m.writtenSince = follow m {following = Nothing, writtenSince = False}
+  | otherwise = (m {following = Nothing}, [])
 
 -- | The answer to a read taken: for the page shown, its threads, with
 -- what the live channel told since the read was asked applied again, in
