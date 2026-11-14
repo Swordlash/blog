@@ -34,11 +34,14 @@
 --
 -- Every container is in the same document, and a component's listeners
 -- on the document and the window hear every event that reaches them,
--- from any view, as in one page. A popup open in one view closes on a
--- press in another view's container, and a router's address is the
--- process's one @location@. So 'withView' takes the document for its
--- body ('inTurn'): views mounted with it run one after another, beside
--- the rest of the native suite, which mounts nothing in the document.
+-- from any view, as in one page: a popup open in one view closes on a
+-- press in another view's container. So 'withView' takes the document for
+-- its body ('inTurn'): views mounted with it run one after another. The
+-- rest of the native suite runs beside them. What it mounts (the
+-- prerender's shell, "Wiki.App.Static") is on elements in no document,
+-- whose popups never act; but its routers write the address, which is
+-- the process's one @location@ too. So a spec reads where its view went
+-- from its own router's 'Halogen.Router.changes', not from the address.
 module Test.Harness.MemDom
   ( -- * A view mounted
     View (..)
@@ -212,11 +215,14 @@ settle view = within (("the view to be quiet; it is at " <>) . show <$> view.act
 
 -- | Wait until the view's program has done all it can but wait for the
 -- asks a gate holds: no work running or queued, and as many fibers waiting
--- as the gate holds asks. A fiber starts to wait before its ask reaches
--- the gate, and its ask reaching the gate is no change of the program's
--- activity: so until the two agree, the wait is on whichever changes
--- first, the gate or the activity. Once the view is disposed of, no tree
--- is left and its asks' fibers are cancelled.
+-- as the gate holds asks. The two disagree for a moment at each end of an
+-- ask: its fiber starts to wait before the ask reaches the gate, and an
+-- ask answered leaves the gate before its fiber stops waiting; a wait of
+-- the program's own, not an ask, ends without the gate changing. Neither
+-- a change of the gate nor the end of a wait is sure to change the
+-- activity the test last read, so until the two agree, the wait is on
+-- whichever changes first, the gate or the activity. Once the view is
+-- disposed of, no tree is left and its asks' fibers are cancelled.
 settleHolding :: View q -> STM Int -> IO ()
 settleHolding view holding = within stateNow go
   where

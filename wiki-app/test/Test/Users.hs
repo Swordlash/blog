@@ -4,10 +4,17 @@
 -- ('Test.Harness.MemDom.withTestClock'). Its search box writes the words
 -- typed into the address once the typing has paused ('H.delayCounted'):
 -- the test moves the clock past the pause instead of sleeping through it.
+--
+-- The address is read from what the view's router tells of
+-- ('Router.changes'), not from the in-memory document's location: that is
+-- the process's one, and specs beside this one write it (the prerender's
+-- router, "Wiki.App.Static").
 module Test.Users (spec) where
 
-import Halogen.Activity (idle)
+import Data.IORef (modifyIORef', newIORef, readIORef)
+import Halogen.Activity (Activity (..), idle)
 import Halogen.Router qualified as Router
+import Halogen.Subscription qualified as HS
 import Halogen.VDom.DOM.Monad (MemDOM, runMemDOM)
 import Protolude hiding (find)
 import Test.Harness.MemDom (View (..), advance, settle, typeInto, withTestClock, withView)
@@ -31,23 +38,26 @@ spec = describe "Wiki.App.View.Users, mounted on the in-memory DOM" $
           run = runMemDOM . runMemWiki wiki
           listing search = UserListing {search, page = 1, only = Everyone}
       router <- run (Router.newRouter "/" Unknown route)
-      let at = Router.current router
-          ctx = Context {router, session = anonymousIn Open, spaces = [], icons = mempty, revision = 0, pageWidth = Compact}
+      went <- newIORef []
+      _ <- HS.subscribe (Router.changes router) (\r -> modifyIORef' went (<> [r]))
+      let ctx = Context {router, session = anonymousIn Open, spaces = [], icons = mempty, revision = 0, pageWidth = Compact}
       withView run Users.component Users.Input {context = ctx, listing = listing ""} $ \view -> do
         settle view
-        unsearched <- at
         -- Typed, and typed again before the pause is over: the pause
-        -- starts again from the last keystroke.
+        -- starts again from the last keystroke. The pause counts as the
+        -- program waiting, so a wait for the program to be quiet waits
+        -- for it.
         typeInto view ".users-search-input" "ad" `shouldReturn` True
         view.waitActivity idle
+        (\a -> a.waiting) <$> view.activity `shouldReturn` 1
         advance clock 0.2
         typeInto view ".users-search-input" "ada" `shouldReturn` True
         view.waitActivity idle
         advance clock 0.2
-        at `shouldReturn` unsearched
+        readIORef went `shouldReturn` []
         -- The pause is over: the address is written as the clock moves,
         -- with nothing slept.
         advance clock 0.1
-        at `shouldReturn` Admin (Users (listing "ada"))
+        readIORef went `shouldReturn` [Admin (Users (listing "ada"))]
         settle view
       Router.stop router
