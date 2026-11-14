@@ -1955,8 +1955,12 @@ WP5.92 and WP5.93 wait.
   the draft's autosave, the backups' re-look), so that
   `withTestClock` and `advance` move it; one spec shows a debounce
   advanced by the test's clock with no real sleep. The README says
-  both; AGENTS.md's sentences on it are put to the owner with the
-  pull request. To settle in it: whether `wiki-app-remote-test`
+  both, and AGENTS.md's machine rule gains two sentences, written by
+  the session on this branch (the owner, 2026-11-14: "Jak uważasz że
+  tak to spoko"): a view infers nothing about what an answer covers
+  from a property of its items and a model takes every delete and
+  bounded buffer from the real code; a pause a test waits for is
+  `H.delayCounted`. To settle in it: whether `wiki-app-remote-test`
   is kept (then a native CI job runs it) or dropped (WP5.122's fourth
   point); what the ambient document being one for the process means
   for specs run side by side (two bells both hear a press on the
