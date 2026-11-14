@@ -1086,17 +1086,17 @@ livePreviewHref input
 
 -- | How long the typing must stop before the preview follows: long enough
 -- not to re-render a long page on every keystroke, short enough to feel
--- live.
-previewDelay :: Int
-previewDelay = 200_000
+-- live. A pause a test waits for: 'H.delayCounted'.
+previewDelay :: NominalDiffTime
+previewDelay = 0.2
 
 -- | How long the typing must stop before the work is saved as a draft:
 -- long enough that a draft is not written at every pause between words,
 -- short enough that a closed tab loses little. The wait restarts while the
 -- typing continues, so a draft is written between one and two of these
--- after the last change.
-draftDelay :: Int
-draftDelay = 2_000_000
+-- after the last change. A pause a test waits for: 'H.delayCounted'.
+draftDelay :: NominalDiffTime
+draftDelay = 2
 
 -- | How long the "Saved" notice stays: long enough to be read in passing.
 savedNoticeTime :: NominalDiffTime
@@ -2847,7 +2847,7 @@ component =
     schedulePreview = do
       cancelPreview
       waiting <- H.fork $ do
-        liftIO (threadDelay previewDelay)
+        H.delayCounted previewDelay
         modify (\st -> st {pending = Nothing})
         modifyWork (\w -> w {shownTitle = w.title, shownBody = w.body})
         modify keepDrawnFailures
@@ -3077,17 +3077,17 @@ component =
       traverse_ (H.liftEffect . restoreFocus) shown
 
     -- Check the text for problems once the typing has stopped for the
-    -- given time (in microseconds), as the preview follows it: a wait of
+    -- given time (in seconds), as the preview follows it: a wait of
     -- its own, which the next change kills. The check runs on a worker
     -- thread ('liftIO'), so a long page does not hold up the typing. The
     -- same check, from the same parse, finds the spoilers CodeMirror
     -- offers to fold (WP5.96), which it takes only for the text they were
     -- found in.
-    scheduleCheck :: Int -> H.HalogenM State Action Slots ViewOutput m ()
+    scheduleCheck :: NominalDiffTime -> H.HalogenM State Action Slots ViewOutput m ()
     scheduleCheck delay = do
       gets (\st -> st.checkWait) >>= traverse_ H.kill
       waiting <- H.fork $ do
-        when (delay > 0) $ liftIO (threadDelay delay)
+        when (delay > 0) $ H.delayCounted delay
         gets (\st -> st.loaded) >>= \case
           Ready w -> do
             found <- liftIO (evaluate (force (Problems.checkText w.page.kind w.body)))
@@ -3205,7 +3205,7 @@ component =
     autosaveAfterQuiet :: H.HalogenM State Action Slots ViewOutput m ()
     autosaveAfterQuiet = do
       before <- gets (\st -> st.edits)
-      liftIO (threadDelay draftDelay)
+      H.delayCounted draftDelay
       quiet <- gets (\st -> st.edits)
       if quiet /= before
         then autosaveAfterQuiet
