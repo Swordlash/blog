@@ -189,7 +189,7 @@ spec smoke = describe "the demo's pages brought into the server" $ do
           _ :: Value <- evaluateOn (locator reader "#app article.page-body > p > a[href$='markdown-guide/presentations/']:only-child") "(link) => { link.scrollIntoView(); return null; }" ()
           waitFor (first (locator reader "#app article.page-body .deck-embed .slide-title")) Visible
           waitQuiet reader
-          viewer <- filter (`viewerAsks` embedded) <$> askedSince loads
+          viewer <- filter (`viewerAsks` embedded) <$> askedSince reader
           length viewer `shouldBe` 1
       count (locator reader "#app .page-body nav.toc") `shouldReturn` 1
       count (locator reader "#app .page-contents") `shouldReturn` 0
