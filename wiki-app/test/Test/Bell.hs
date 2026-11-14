@@ -23,6 +23,7 @@
 -- * the count is the number of unread notifications listed;
 -- * the buttons that mark are disabled exactly while a mark is out;
 -- * nothing is asked or listened to after the bell went away;
+-- * every ask is made under a new ticket, which the state names;
 -- * once everything out has come back and one more read is answered, the
 --   bell shows the server's list.
 module Test.Bell
@@ -56,6 +57,7 @@ import Test.QuickCheck (Gen, Property, chooseInt, counterexample, forAllShrinkSh
 import Test.QuickCheck qualified as QC
 import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
 import Wiki.App.View.Bell.Machine
+import Wiki.App.View.Latest (madeAfter)
 import Wiki.Core.Id (NotificationId (..), PageId (..), UserId (..))
 import Wiki.Core.Notification (Kind (..), Notification (..), PageLocation (..))
 import Wiki.Core.Slug (mkSlug)
@@ -218,10 +220,10 @@ play w = \case
     | w.bell.open -> afterEvent "presses outside" Dismissed w
     | otherwise -> w
   ClickMark i
-    | w.bell.open && not w.bell.busy, Just n <- atMay [n | n <- listed w.bell, not n.read] i -> afterEvent ("marks " <> idText n <> " read") (MarkClicked n.id) w
+    | w.bell.open && not (busy w.bell), Just n <- atMay [n | n <- listed w.bell, not n.read] i -> afterEvent ("marks " <> idText n <> " read") (MarkClicked n.id) w
     | otherwise -> w
   ClickMarkAll
-    | w.bell.open && not w.bell.busy && unreadCount w.bell > 0 -> afterEvent "marks all read" MarkAllClicked w
+    | w.bell.open && not (busy w.bell) && unreadCount w.bell > 0 -> afterEvent "marks all read" MarkAllClicked w
     | otherwise -> w
   ClickLink i
     | w.bell.open, Just n <- atMay (listed w.bell) i -> afterEvent ("follows " <> idText n) (Followed n.id ()) w
@@ -262,15 +264,19 @@ afterEvent what event w =
       { bell
       , outs = w.outs <> [Out {ask = e, answer = Nothing} | e <- effects, isAsk e]
       , listening = w.listening + length (filter (== Listen) effects) - length (filter (== Unlisten) effects)
-      , faults = w.faults <> [(QuietAfterClose, what <> ": " <> show effects <> " after the bell went away") | w.finished, not (null effects), what /= "goes away"]
+      , faults =
+          w.faults
+            <> [(QuietAfterClose, what <> ": " <> show effects <> " after the bell went away") | w.finished, not (null effects), what /= "goes away"]
+            <> [(AsksNamed, what <> ": " <> show e <> " is not a new ask the state names") | e <- effects, Just t <- [ticketOf e], not (t `madeAfter` w.bell.asks) || t `madeAfter` bell.asks]
       }
   where
     (bell, effects) = step event w.bell
     effectsText = if null effects then "" else " -> " <> T.intercalate ", " (map effectText effects)
-    isAsk = \case
-      Load _ -> True
-      MarkRead _ _ -> True
-      _ -> False
+    isAsk = isJust . ticketOf
+    ticketOf = \case
+      Load t -> Just t
+      MarkRead t _ -> Just t
+      _ -> Nothing
 
 -- | The world with what the bell shows checked against the rules.
 checked :: World -> World
@@ -282,7 +288,7 @@ checked w = w {faults = w.faults <> problems, seenRead = Map.unionWith (||) w.se
       [(ReadStaysRead, idText n <> " was shown read, and is shown unread again") | n <- shown, not n.read, Map.lookup n.id w.seenRead == Just True]
         <> [(NothingLost, "listed before and gone: " <> T.intercalate ", " gone) | let gone = [unId i | i <- Map.keys w.seenRead, i `notElem` map (\n -> n.id) shown], not (null gone), isJust (rightNotices w.bell)]
         <> [(CountMatches, "the count says " <> show (unreadCount w.bell) <> ", and " <> show (length (filter (\n -> not n.read) shown)) <> " are listed unread") | isJust (rightNotices w.bell), unreadCount w.bell /= length (filter (\n -> not n.read) shown)]
-        <> [(BusyWhileMarking, "the buttons that mark are " <> (if w.bell.busy then "disabled with no mark out" else "enabled with a mark out")) | not w.finished, w.bell.busy /= marksOut]
+        <> [(BusyWhileMarking, "the buttons that mark are " <> (if busy w.bell then "disabled with no mark out" else "enabled with a mark out")) | not w.finished, busy w.bell /= marksOut]
         <> [(ListedOnce, "a notification is listed twice") | let ids = map (\n -> n.id) shown, nub ids /= ids]
         <> [(QuietAfterClose, "listening after the bell went away") | w.finished, w.listening /= 0]
 
@@ -295,6 +301,7 @@ data Rule
   | BusyWhileMarking
   | ListedOnce
   | QuietAfterClose
+  | AsksNamed
   deriving stock (Eq, Show, Enum, Bounded)
 
 rightNotices :: Model -> Maybe Notifications
@@ -309,7 +316,7 @@ noted what w = w {trace = (what <> "    [" <> summary w.bell <> "]") : w.trace}
 -- a star when unread.
 summary :: Model -> Text
 summary m =
-  "count " <> show (unreadCount m) <> ", list " <> listText Notifications {unread = 0, items = listed m} <> (if m.busy then ", busy" else "") <> (if m.open then ", open" else "")
+  "count " <> show (unreadCount m) <> ", list " <> listText Notifications {unread = 0, items = listed m} <> (if busy m then ", busy" else "") <> (if m.open then ", open" else "")
 
 listText :: Notifications -> Text
 listText ns = "[" <> T.intercalate " " [idText n <> (if n.read then "" else "*") | n <- ns.items] <> "]"
@@ -367,7 +374,7 @@ spec = describe "Wiki.App.View.Bell.Machine" $ modifyMaxSuccess (const 2000) $ d
         let w = settled (foldl' play start (filter (/= Finish) run))
             shown = [(n.id, n.read) | n <- listed w.bell]
             truth = [(n.id, n.read) | n <- w.server.notes]
-         in counterexample (toS (T.unlines (reverse w.trace))) (shown === truth .&&. unreadCount w.bell === length (filter (not . snd) truth) .&&. w.bell.busy === False)
+         in counterexample (toS (T.unlines (reverse w.trace))) (shown === truth .&&. unreadCount w.bell === length (filter (not . snd) truth) .&&. busy w.bell === False)
 
 -- | What a rule says, as an example's name.
 ruleText :: Rule -> [Char]
@@ -378,3 +385,4 @@ ruleText = \case
   BusyWhileMarking -> "disables the buttons that mark exactly while a mark is out, on any run"
   ListedOnce -> "lists each notification once, on any run"
   QuietAfterClose -> "asks nothing and stops listening once it has gone away"
+  AsksNamed -> "makes every ask under a new ticket its state names, on any run"

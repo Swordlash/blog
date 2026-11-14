@@ -37,6 +37,7 @@ module Wiki.App.View.Latest
   , noAsks
   , newAsk
   , takes
+  , madeAfter
   , supersede
   , asking
   , answered
@@ -80,6 +81,13 @@ takes :: Ask -> Asks -> Maybe Asks
 takes (Ask n) a
   | n > a.taken = Just a {taken = n}
   | otherwise = Nothing
+
+-- | Whether an ask was made after the asks were as given: what the view
+-- learnt another way while the asks were so (a message of the live
+-- channel) is older than the answer to an ask made after it, and may be
+-- newer than the answer to an ask made before.
+madeAfter :: Ask -> Asks -> Bool
+madeAfter (Ask n) a = n > a.asked
 
 -- | The asks after something newer than the answer to every ask out was
 -- put in their place: a whole answer that came another way (the live

@@ -50,7 +50,7 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Live (Feed (..))
 import Wiki.App.Live qualified as Live
 import Wiki.App.Route (Route (..), pageRoute)
-import Wiki.App.View.Bell.Machine (Effect (Listen, Load, Unlisten, Unwatch, Watch), Event (..), Model (..), Sealer (..), initial, step, unreadCount)
+import Wiki.App.View.Bell.Machine (Effect (Listen, Load, Unlisten, Unwatch, Watch), Event (..), Model (..), Sealer (..), busy, initial, step, unreadCount)
 import Wiki.App.View.Bell.Machine qualified as M
 import Wiki.App.View.Comments (threadElementId)
 import Wiki.App.View.Common hiding (Loaded)
@@ -128,7 +128,7 @@ component =
             <section class="notifications-panel" aria-label="Notifications">
               <div class="notifications-head">
                 <h2>Notifications</h2>
-                <button type="button" class="notifications-read-all" disabled={{ st.busy || unread == 0 }} onClick={{ const MarkAllRead }}>Mark all read</button>
+                <button type="button" class="notifications-read-all" disabled={{ busy st || unread == 0 }} onClick={{ const MarkAllRead }}>Mark all read</button>
               </div>
               {{ listView input st }}
             </section>
@@ -157,7 +157,7 @@ component =
                   <li class="notification{% if not n.read %} unread{% end %}" data-kind={{ kindClass n }}>
                     {{ noticeLink input n }}
                     {% if not n.read %}
-                      <button type="button" class="notification-read" disabled={{ st.busy }} onClick={{ const (MarkRead n.id) }}>Mark read</button>
+                      <button type="button" class="notification-read" disabled={{ busy st }} onClick={{ const (MarkRead n.id) }}>Mark read</button>
                     {% end %}
                   </li>
                 {% end %}

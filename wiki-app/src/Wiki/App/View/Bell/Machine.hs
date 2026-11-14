@@ -12,19 +12,33 @@
 -- remember across an ask is in the ask's effect and comes back in its
 -- answer's event, where the step that takes the answer decides.
 --
--- The rules in this module are the component's as they were before the
--- machine, unchanged: an answer to a read is dropped when the wiki's
--- revision changed while the read was out, and the list it brings keeps
--- the notifications the live channel told of while the read was out.
+-- = Which answer is taken
+--
+-- A read of the notifications and a mark of some read both answer with
+-- the whole list, so they are one kind of ask ("Wiki.App.View.Latest"):
+-- an answer is taken only if no answer to a later ask was taken already.
+-- So an older list never replaces a newer one, and a read sent before the
+-- reader's mark and answered after it does not put the notification back
+-- unread. A new revision of the wiki puts every ask out behind it
+-- ('supersede') and reads again: a list read under the old revision may
+-- name pages by titles decrypted for a space the reader has left.
+--
+-- A list taken keeps the notifications the live channel told of after
+-- its ask was made and that it does not have yet: the server sent the
+-- message after it had answered. For those told of before the ask was
+-- made, the list is the truth, and may leave one out (a page the reader
+-- may no longer read).
+--
+-- The buttons that mark are disabled while any mark is out ('busy'), and
+-- enabled again only when the last one has come back.
 module Wiki.App.View.Bell.Machine
   ( Model (..)
   , Event (..)
   , Effect (..)
-  , Fetch (..)
-  , Mark (..)
   , Sealer (..)
   , initial
   , step
+  , busy
   , unreadCount
   , listed
   )
@@ -34,6 +48,7 @@ import Protolude hiding (State)
 import Text.Show (Show (showsPrec))
 import Wiki.Api.Notifications (Notifications (..), ReadMark (..))
 import Wiki.App.Backend (WikiError)
+import Wiki.App.View.Latest (Ask, Asks, madeAfter, newAsk, noAsks, supersede, takes)
 import Wiki.Core.Id (NotificationId)
 import Wiki.Core.Notification (Notification (..))
 
@@ -45,14 +60,13 @@ data Model = Model
   -- not be read; 'Nothing' until the first answer.
   , open :: Bool
   -- ^ Whether the list is open under the bell.
-  , busy :: Bool
-  -- ^ Whether a mark of notifications read is out: the buttons that mark
-  -- are disabled.
-  , heard :: [Notification]
+  , asks :: Asks
+  -- ^ The reads and marks made, and which one's answer is shown.
+  , marking :: Int
+  -- ^ How many marks of notifications read are out.
+  , heard :: [(Notification, Asks)]
   -- ^ The notifications the live channel told of since the list was last
-  -- read. A read keeps those told of while it was out and not in its
-  -- answer yet; the answer is the truth for those told of before it was
-  -- asked.
+  -- taken, each with the asks as they were when it was told.
   , revision :: Int
   -- ^ The revision of the wiki the bell was last given
   -- ("Wiki.App.View.Common"'s 'Context').
@@ -64,20 +78,6 @@ data Model = Model
   }
   deriving stock (Eq, Show)
 
--- | 'Fetch' is what a read of the notifications remembers until its answer:
--- the revision it was asked under, and the notifications the live channel
--- had told of when it was asked.
-data Fetch = Fetch
-  { revision :: Int
-  , before :: [NotificationId]
-  }
-  deriving stock (Eq, Show)
-
--- | 'Mark' is what a mark of notifications read remembers until its
--- answer: the revision it was asked under.
-newtype Mark = Mark {revision :: Int}
-  deriving stock (Eq, Show)
-
 -- | 'Sealer' gives a notification its title as the server names it, for a
 -- page of an encrypted space: a new revision of the wiki may mean the
 -- reader left such a space. A function, shown by its name alone.
@@ -86,8 +86,8 @@ newtype Sealer = Sealer (Notification -> Notification)
 instance Show Sealer where
   showsPrec _ _ rest = "Sealer" <> rest
 
--- | 'Event' is everything that happens to the bell. @a@ is what a
--- followed link carries, for the component to follow it.
+-- | 'Event' is everything that happens to the bell. @a@ is what a followed
+-- link carries, for the component to follow it.
 data Event a
   = -- | The bell is mounted.
     Started
@@ -105,15 +105,15 @@ data Event a
   | -- | The live channel opened again after it had closed: what it told
     -- meanwhile was lost.
     Reopened
-  | -- | The answer to a read of the notifications.
-    Loaded Fetch (Either WikiError Notifications)
+  | -- | The answer to the read made under this ticket.
+    Loaded Ask (Either WikiError Notifications)
   | -- | The reader clicked "Mark read" on one notification.
     MarkClicked NotificationId
   | -- | The reader clicked "Mark all read".
     MarkAllClicked
-  | -- | The answer to a mark of notifications read: the notifications after
-    -- it.
-    Marked Mark (Either WikiError Notifications)
+  | -- | The answer to the mark made under this ticket: the notifications
+    -- after it.
+    Marked Ask (Either WikiError Notifications)
   | -- | The reader followed a notification's link.
     Followed NotificationId a
   deriving stock (Show)
@@ -127,10 +127,12 @@ data Effect a
   | -- | Watch for a press outside the list or Escape, until 'Unwatch'.
     Watch
   | Unwatch
-  | -- | Read the notifications; the answer comes back as 'Loaded'.
-    Load Fetch
-  | -- | Mark notifications read; the answer comes back as 'Marked'.
-    MarkRead Mark ReadMark
+  | -- | Read the notifications; the answer comes back as 'Loaded' with the
+    -- ticket.
+    Load Ask
+  | -- | Mark notifications read; the answer comes back as 'Marked' with
+    -- the ticket.
+    MarkRead Ask ReadMark
   | -- | Follow the link.
     Follow a
   deriving stock (Eq, Show)
@@ -138,60 +140,73 @@ data Effect a
 -- | The bell before it is mounted, with the notifications read at once if
 -- the backend could ('Nothing' otherwise), under a revision of the wiki.
 initial :: Maybe (Either WikiError Notifications) -> Int -> Model
-initial notices revision = Model {notices, open = False, busy = False, heard = [], revision, closed = False}
+initial notices revision = Model {notices, open = False, asks = noAsks, marking = 0, heard = [], revision, closed = False}
 
 -- | The bell after an event, and what it asks to be done.
 step :: Event a -> Model -> (Model, [Effect a])
 step event m
   | m.closed = (m, [])
   | otherwise = case event of
-      Started -> (m, Listen : [Load (fetchOf m) | isNothing m.notices])
+      Started
+        | isNothing m.notices -> (Listen :) <$> reading m
+        | otherwise -> (m, [Listen])
       Finished -> (m {closed = True}, [Unlisten])
       Revised revision (Sealer seal)
         | revision /= m.revision ->
-            let m' = m {revision, notices = fmap (\ns -> ns {items = map seal ns.items}) <$> m.notices}
-             in (m', [Load (fetchOf m')])
+            reading m {revision, asks = supersede m.asks, notices = fmap (\ns -> ns {items = map seal ns.items}) <$> m.notices}
         | otherwise -> (m, [])
       Toggled
         | m.open -> close m
-        | otherwise -> (m {open = True}, [Watch, Load (fetchOf m)])
+        | otherwise -> (Watch :) <$> reading m {open = True}
       Dismissed -> close m
       Told n ->
         ( m
             { notices = fmap (\ns -> if any (\x -> x.id == n.id) ns.items then ns else ns {unread = ns.unread + 1, items = n : ns.items}) <$> m.notices
-            , heard = n : filter (\x -> x.id /= n.id) m.heard
+            , heard = (n, m.asks) : filter (\(x, _) -> x.id /= n.id) m.heard
             }
         , []
         )
-      Reopened -> (m, [Load (fetchOf m)])
-      Loaded asked answer
-        | m.revision /= asked.revision -> (m, [])
-        | otherwise -> case answer of
-            Right ns ->
-              let missing = [n | n <- m.heard, n.id `notElem` asked.before, all (\x -> x.id /= n.id) ns.items]
-               in (m {notices = Just (Right ns {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}), heard = missing}, [])
-            Left _ -> (m {notices = Just answer}, [])
+      Reopened -> reading m
+      Loaded asked answer -> (taking asked answer m, [])
       MarkClicked i -> marking ReadMark {ids = [i], everything = False} m
       MarkAllClicked -> marking ReadMark {ids = [], everything = True} m
       Marked asked answer ->
-        (m {busy = False, notices = if m.revision /= asked.revision then m.notices else either (const m.notices) (Just . Right) answer}, [])
+        let m' = m {marking = max 0 (m.marking - 1)}
+         in (either (const m') (\_ -> taking asked answer m') answer, [])
       Followed i target ->
         let (closedList, unwatched) = close m
             unread = any (\n -> n.id == i && not n.read) (listed m)
             (marked, marks) = if unread then marking ReadMark {ids = [i], everything = False} closedList else (closedList, [])
          in (marked, unwatched <> [Follow target] <> marks)
 
+-- | The answer to an ask taken, if no answer to a later ask was: the list
+-- with what the live channel told after the ask was made and the list
+-- does not have.
+taking :: Ask -> Either WikiError Notifications -> Model -> Model
+taking asked answer m = case takes asked m.asks of
+  Nothing -> m
+  Just after -> case answer of
+    Right ns ->
+      let kept = [(n, at) | (n, at) <- m.heard, not (asked `madeAfter` at), all (\x -> x.id /= n.id) ns.items]
+          missing = map fst kept
+       in m {asks = after, notices = Just (Right ns {unread = ns.unread + length (filter (\n -> not n.read) missing), items = missing <> ns.items}), heard = kept}
+    Left _ -> m {asks = after, notices = Just answer}
+
 -- | The list closed, and the watch for a press outside ended.
 close :: Model -> (Model, [Effect a])
 close m = (m {open = False}, [Unwatch | m.open])
 
+-- | A read of the notifications begun.
+reading :: Model -> (Model, [Effect a])
+reading m = let (ticket, after) = newAsk m.asks in (m {asks = after}, [Load ticket])
+
 -- | A mark of notifications read begun.
 marking :: ReadMark -> Model -> (Model, [Effect a])
-marking r m = (m {busy = True}, [MarkRead (Mark m.revision) r])
+marking r m = let (ticket, after) = newAsk m.asks in (m {asks = after, marking = m.marking + 1}, [MarkRead ticket r])
 
--- | What a read asked now remembers.
-fetchOf :: Model -> Fetch
-fetchOf m = Fetch {revision = m.revision, before = map (\n -> n.id) m.heard}
+-- | Whether a mark is out: the buttons that mark are disabled.
+busy :: Model -> Bool
+busy m = m.marking > 0
 
 -- | How many notifications the bell counts as unread.
 unreadCount :: Model -> Int
